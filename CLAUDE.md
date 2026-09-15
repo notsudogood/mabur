@@ -41,6 +41,7 @@ page the task needs rather than carrying all of it.
 | shipping a binary or config to a device | `docs/deploy.md` |
 | calibrating a VTX's TX-power walls, maburcal, cal.log | `docs/calibration.md` |
 | a specific past investigation | the dated `docs/*-findings-*.md` / `docs/handover-*.md` |
+| a PROPOSED (unimplemented) three-tier rework of the control structure — drone-side reflex, FEC as the inner loop, `rate × (1 − 2L)` rung choice | `docs/link-adaptation-v2-proposal.md` |
 | airtime/serialization math, per-stream FEC overhead, why jitter ∝ frame size, encoder size knobs (max_ipprop, presets, dead SDK caps) | `docs/airtime-model.md` |
 | half-duplex timing: who transmits when, the slotter, airtime budget, why RCFs get lost | `docs/tx-rx-timing.md` |
 | boot time, the OpenIPC init chain, U-Boot/serial console on the drone | `docs/boot-time-findings-2026-09-07.md` |

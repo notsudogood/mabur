@@ -116,6 +116,15 @@ struct StatsCtlIn {
   // gate's live state is now StatsProbeIn / link.probe instead.
   uint64_t promotes_probed = 0, probe_holds = 0;
 
+  // Drone-initiated rate changes (FollowCfg, ladder_controller.h).
+  // observed_mcs is what the drone is ACTUALLY transmitting at (-1 =
+  // unheard); it disagreeing with rung_mcs is the whole signal. following is
+  // the transient confirm window. follow_above_ignored should stay 0 -- see
+  // its comment on CtlCounters.
+  int observed_mcs = -1;
+  bool following = false;
+  uint64_t follow_adopts = 0, follow_above_ignored = 0;
+
   // Per-rung EWMA store snapshot, index = rung index (spec 2026-08-13).
   std::vector<StatsRungIn> rungs;
 

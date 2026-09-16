@@ -73,6 +73,27 @@ struct ProbeCfg {
   int pin_mcs = -1;         // consumed by VrxController only
 };
 
+// Drone-initiated rate changes (docs/link-adaptation-v2-proposal.md §4,
+// "Fight B"). The drone can already change rate without being told --
+// apply_max_range() drops it to mcs0 after failsafe_ms of RCF silence --
+// and until now the GS kept scoring loss against the rung IT commanded.
+// That reads high by the ratio of the two rungs' budgets (a r4->r0 drop
+// reads ~2x), which demotes, which opens the fade regime, which cascades,
+// spending an IDR per step while the drone is already parked safely.
+struct FollowCfg {
+  bool enable = true;
+  // Consecutive off-command samples before the GS adopts the observed rung.
+  // Guards against a single mis-decoded descriptor.
+  int confirm_samples = 3;
+  // A GS-commanded change also makes observed != commanded until the drone
+  // applies it: measured p50 48 / p90 66 / max 88 ms
+  // (docs/switch-loss-findings-2026-09-05.md). Inside this window after a
+  // change, an observed rung matching the PREVIOUS command is that lag tail,
+  // not a drone decision -- the same distinction ProbeTrack draws with
+  // off_profile ("not scored", never "lost").
+  double lag_tail_ms = 120.0;
+};
+
 struct LadderCfg {
   std::vector<Rung> ladder;  // effective (post-filter), size >= 1; [0] = failsafe
   double down_util = 0.6, up_util = 0.15;
@@ -92,6 +113,9 @@ struct LadderCfg {
 
   // --- always-on probe stream (see ProbeCfg above) ---
   ProbeCfg probe;
+
+  // --- drone-initiated rate changes (see FollowCfg above) ---
+  FollowCfg follow;
 
   // --- s3 steady-state demotes (consumed by the s3-demote logic) ---
   bool s3_demote = true;
@@ -144,6 +168,16 @@ struct LinkHealth {
   // Part B fade trigger's joint condition. NaN = unsampled, which leaves it
   // inert.
   double rf_rssi_dbm = std::numeric_limits<double>::quiet_NaN();
+  // The RX MCS the drone is ACTUALLY transmitting at this window, as the
+  // mode of the window's per-frame RX PHY descriptors (-1 = unknown/none).
+  // Read off devourer's rx_pkt_attrib.data_rate, which node.h documents as
+  // "valid independent of the body CRC" -- so it still reads during the
+  // fade, which is exactly when the drone may have changed rate without
+  // being told to (apply_max_range(), and tier 0 of
+  // docs/link-adaptation-v2-proposal.md). Mode rather than mean: it is
+  // categorical, and the "unknown" code must be excluded, never averaged.
+  int observed_mcs = -1;
+
   // --- probe stream window (spec 2026-09-04), from ProbeTrack ---
   bool probe_valid = false;      // probe window had a sample
   double probe_loss = 0.0;       // union block loss over the window
@@ -153,7 +187,7 @@ struct LinkHealth {
 
 enum class CtlReason {
   None, Residual, Util, Probation, Starved, Timeout, Promote,
-  S3Residual, S3Util, Fade, PromoteProbed
+  S3Residual, S3Util, Fade, PromoteProbed, Follow
 };
 const char* to_string(CtlReason r);
 
@@ -210,6 +244,12 @@ struct CtlCounters {
   uint64_t promotes_probed = 0, probe_holds = 0;
   uint64_t demotes_s3_residual = 0, demotes_s3_util = 0;
   uint64_t demotes_fade = 0;
+  // Times the GS adopted a rung the drone had moved to on its own, and
+  // samples where the observed rung sat ABOVE the commanded one and was
+  // therefore ignored. The second should stay at 0: the drone only ever
+  // descends on its own authority, so a nonzero count means a mis-decoded
+  // descriptor, an off-ladder MCS, or a drone that is not honouring the RCF.
+  uint64_t follow_adopts = 0, follow_above_ignored = 0;
 };
 
 // Measured-loss ladder controller: walks a fixed, pre-filtered list of rungs
@@ -295,6 +335,18 @@ class LadderController {
   // the sideport). NaN until the corresponding signal has ever been sampled.
   double fade_drssi() const { return fade_rssi_.delta(); }
   double fade_dsnr() const { return fade_snr_.delta(); }
+
+  // True while the observed rung disagrees with the commanded one and the
+  // controller has withheld its decisions pending confirmation. Transient by
+  // design: it resolves within confirm_samples by ADOPTING the observed rung
+  // (after which observed == commanded and the normal ladder resumes and
+  // climbs back through the probe gate). It is not a latched mode.
+  bool following() const { return follow_confirm_ > 0; }
+  // The rung the GS was commanding when it last adopted, or -1. Remembered
+  // for the fast-restore path that tier 0 will need
+  // (docs/link-adaptation-v2-proposal.md §4, "Fast restore"); nothing acts
+  // on it yet, and the ladder climbs back the ordinary way.
+  int pre_adopt_rung() const { return pre_adopt_rung_; }
 
   const CtlCounters& counters() const { return counters_; }
   const CtlEvent& last_event() const { return last_event_; }
@@ -429,6 +481,14 @@ class LadderController {
   double s3_blank_until_ms_ = -1e18;
   double snr_now_ = std::numeric_limits<double>::quiet_NaN();
   double evm_now_ = std::numeric_limits<double>::quiet_NaN();
+
+  // --- drone-initiated rate changes (FollowCfg) ---
+  // Ladder index whose mcs equals `mcs`, or -1 when nothing matches (an
+  // off-ladder rate, or the unknown code).
+  int rung_for_mcs(int mcs) const;
+  int prev_idx_ = -1;          // rung commanded before the last change
+  int follow_confirm_ = 0;     // consecutive confirmed off-command samples
+  int pre_adopt_rung_ = -1;    // rung held when the last adopt happened
 
   CtlCounters counters_;
   CtlEvent last_event_;

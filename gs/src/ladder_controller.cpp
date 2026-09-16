@@ -22,6 +22,7 @@ const char* to_string(CtlReason r) {
     case CtlReason::S3Util: return "s3_util";
     case CtlReason::Fade: return "fade";
     case CtlReason::PromoteProbed: return "promote_probed";
+    case CtlReason::Follow: return "follow";
   }
   return "unknown";
 }
@@ -72,6 +73,13 @@ double LadderController::s3_util_threshold() const {
 bool LadderController::s3_usable(const LinkHealth& h) const {
   return h.s3_valid &&
          h.s3_expected_syms >= static_cast<uint64_t>(cfg_.s3_min_syms);
+}
+
+int LadderController::rung_for_mcs(int mcs) const {
+  if (mcs < 0) return -1;
+  for (std::size_t i = 0; i < cfg_.ladder.size(); ++i)
+    if (cfg_.ladder[i].mcs == mcs) return static_cast<int>(i);
+  return -1;  // off-ladder rate: not a rung we can score or adopt
 }
 
 void LadderController::mark_transition(double now_ms) {
@@ -161,6 +169,10 @@ void LadderController::reset_windows() {
 
 void LadderController::set_event(double now_ms, int from, int to,
                                   CtlReason reason, double u, double snr) {
+  // Every rung change routes through here, so this is the one place the
+  // "rung we were on before the current command" is guaranteed current --
+  // FollowCfg's lag-tail test compares the observed rung against it.
+  prev_idx_ = from;
   store_.on_transition(from, to, reason, now_ms);
   last_event_.t_ms = now_ms;
   last_event_.from = from;
@@ -286,7 +298,12 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
   last_feedback_ms_ = now_ms;
   // Before ANY decision block: this sample's loss numbers belong to the rung
   // the link is on right now, not to whatever a demote below steps us to.
-  measured_rung_ = idx_;
+  // "Right now" means the rung the drone is ACTUALLY transmitting at, which
+  // is not necessarily the one we commanded -- see FollowCfg. Scoring the
+  // observed rung is what keeps u_ honest across a drone-initiated change,
+  // including the confirm window before the adopt lands.
+  const int obs_rung = cfg_.follow.enable ? rung_for_mcs(h.observed_mcs) : -1;
+  measured_rung_ = obs_rung >= 0 ? obs_rung : idx_;
 
   // Part B EWMA feed. Kept HERE, above every decision block, and not next to
   // the trigger in 4b: the residual demote in block 4 returns early, which is
@@ -307,13 +324,62 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
   if (!std::isnan(h.rf_snr_db)) fade_snr_.feed(h.rf_snr_db, now_ms);
 
   pre_fec_loss_ = h.pre_fec_loss;
-  u_ = h.pre_fec_loss / budget_base();
+  // budget_base_for(measured_rung_), not budget_base() (which reads idx_):
+  // they differ exactly while the drone is on a rung we did not command.
+  u_ = h.pre_fec_loss / budget_base_for(measured_rung_);
 
   // 3. Probe verdict. Scored before every decision block: a demote below
   // returns early, and the gate (plus its RungStore column and its edge log)
   // must still reflect the sample that caused it. Nothing here decides
   // anything — only block 6 reads the verdict.
   update_probe_gate(h, now_ms);
+
+  // 3b. Adopt a rung the drone moved to on its own. Deliberately AFTER u_,
+  // the fade EWMAs and the probe verdict -- all three are exported state and
+  // must stay live through the confirm window, for the same reason the EWMA
+  // feed sits above every decision block -- and BEFORE every decision, since
+  // a disagreement being confirmed must not also demote or promote.
+  // No demote counter and no penalize_rung(): nothing was tried and failed.
+  if (obs_rung >= 0 && obs_rung != idx_) {
+    const bool lag_tail = obs_rung == prev_idx_ &&
+                          now_ms - last_change_ms_ < cfg_.follow.lag_tail_ms;
+    if (lag_tail) {
+      // The drone has not applied our last command yet. Neither a drone
+      // decision nor evidence against one: leave the confirm run alone.
+    } else if (obs_rung > idx_) {
+      // The drone only ever descends on its own authority, so this is a
+      // mis-decoded descriptor or a drone ignoring the RCF -- never a reason
+      // to let the air side talk the GS UP. Count it and score it, nothing
+      // more.
+      ++counters_.follow_above_ignored;
+    } else if (++follow_confirm_ >= cfg_.follow.confirm_samples) {
+      const int from = idx_;
+      pre_adopt_rung_ = idx_;
+      prev_idx_ = idx_;
+      idx_ = obs_rung;
+      measured_rung_ = obs_rung;
+      last_change_ms_ = now_ms;
+      // Deliberately NOT last_down_ms_, and no demote counter or
+      // penalize_rung(): nothing was tried and found wanting, so the
+      // hold_after_down gate and the penalty ledger must stay clear.
+      // Probation belongs to a rung we chose; this one we did not.
+      probation_active_ = false;
+      reset_windows();
+      // The drone's switch re-keyed its FEC stream just as a commanded one
+      // would, so the residual windows need the same settle blank.
+      mark_transition(now_ms);
+      follow_confirm_ = 0;
+      ++counters_.follow_adopts;
+      set_event(now_ms, from, idx_, CtlReason::Follow, u_, snr_now_);
+      return true;
+    } else {
+      // Confirming. Withhold this tick's decisions rather than act on a
+      // disagreement we have not established yet.
+      return false;
+    }
+  } else if (obs_rung == idx_) {
+    follow_confirm_ = 0;  // agreed: any confirm run in progress is over
+  }
 
   // Observe-only rung statistics (spec 2026-08-13): gated on the same
   // post-transition blank as s3 decisions — FEC re-key artifacts must not
@@ -443,10 +509,12 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
     // Since same-rate-fixed-pairs (Task 4), s3 rides sid 1's own literal
     // overhead_enh, not sid 0's — budget3_for() is gone, this is
     // budget_enh_for() directly.
-    const double b3 = budget_enh_for(idx_);
+    // measured_rung_, for the same reason u_ uses it: score the rung the
+    // drone is actually on.
+    const double b3 = budget_enh_for(measured_rung_);
     u3_ = b3 > 0.0 ? h.s3_pre_fec_loss / b3
                    : (h.s3_pre_fec_loss > 0.0 ? 1e9 : 0.0);
-    store_.observe_s3(idx_, u3_, h.s3_residual_loss > 0.0, now_ms);
+    store_.observe_s3(measured_rung_, u3_, h.s3_residual_loss > 0.0, now_ms);
   }
 
   // Same bookkeeping as the s1 util/probation demotes above, deliberately —
@@ -551,6 +619,11 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
   if (u_ < cfg_.up_util) {
     if (clean_start_ms_ < 0.0) clean_start_ms_ = now_ms;
 
+    // A promote into a disagreement is the oscillation FollowCfg exists to
+    // stop: the drone is below us, so commanding it higher either gets
+    // clamped by its own floor latch or bounces it straight back down.
+    if (following()) return false;
+
     const std::size_t next = static_cast<std::size_t>(idx_) + 1;
     if (next < cfg_.ladder.size() &&
         now_ms - clean_start_ms_ >= cfg_.clean_ms &&
@@ -603,7 +676,11 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
 bool LadderController::on_tick(double now_ms) {
   check_probation_survival(now_ms);
 
-  if (now_ms - last_feedback_ms_ > cfg_.feedback_timeout_ms && idx_ > 0) {
+  // following() means video IS arriving (the observed rung came off it), so
+  // the timeout should not be live -- but stating it keeps the blind-side
+  // backstop from stacking a second drop on top of an adopt in progress.
+  if (!following() &&
+      now_ms - last_feedback_ms_ > cfg_.feedback_timeout_ms && idx_ > 0) {
     const int from = idx_;
     idx_ = 0;
     last_down_ms_ = now_ms;

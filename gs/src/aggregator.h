@@ -6,6 +6,7 @@
 
 #include "mabur/node.h"
 #include "mabur/uep_decoder.h"
+#include "mcs_mode.h"
 #ifdef MABUR_LOSS_SIM
 #include "loss_sim.h"
 #endif
@@ -123,6 +124,12 @@ class Aggregator {
   mabur::UepDecoder& decoder() { return dec_; }
   uint16_t last_video_seq() const { return last_video_seq_; }
   uint64_t last_video_us() const { return last_video_us_; }
+  // Rolling mode of the MCS the drone is ACTUALLY transmitting the video
+  // streams at, or -1 when nothing usable has been heard. Aggregator-wide
+  // rather than per-card on purpose: it is a property of the drone's
+  // transmission, and both cards hear the same one. Consumed by the ladder's
+  // LinkHealth::observed_mcs (see FollowCfg in ladder_controller.h).
+  int observed_video_mcs() const { return video_mcs_.mode(); }
   uint64_t bad_card_msgs() const { return bad_card_msgs_; }
 
 #ifdef MABUR_LOSS_SIM
@@ -143,6 +150,7 @@ class Aggregator {
   ProbeSink probe_sink_;
   uint16_t last_video_seq_ = 0;
   uint64_t last_video_us_ = 0;
+  McsMode video_mcs_{};
   uint64_t bad_card_msgs_ = 0;
 };
 

@@ -1506,6 +1506,11 @@ static int run_radio(const maburgs::Config& cfg) {
     health.rf_snr_db = rf_snr_db;
     health.rf_evm_db = rf_evm_db;
     health.rf_rssi_dbm = rf_rssi_dbm;
+    // What the drone is ACTUALLY transmitting at, which is not necessarily
+    // what we commanded -- apply_max_range() already moves it on its own
+    // after failsafe_ms of RCF silence. See FollowCfg in
+    // ladder_controller.h and docs/link-adaptation-v2-proposal.md §4.
+    health.observed_mcs = agg.observed_video_mcs();
     if (auto out = vrx.step(now_ms, health)) {
       if (!out->is_disc) {
         prev_pkts_out = pkts_now;  // window == RCF period
@@ -1878,6 +1883,11 @@ static int run_radio(const maburgs::Config& cfg) {
         maburgs::StatsCtlIn ci;
         ci.rung_idx = c.rung();
         ci.rung_mcs = c.op().mcs;
+        // FollowCfg: what the drone is really on, vs what we commanded.
+        ci.observed_mcs = agg.observed_video_mcs();
+        ci.following = c.following();
+        ci.follow_adopts = c.counters().follow_adopts;
+        ci.follow_above_ignored = c.counters().follow_above_ignored;
         ci.rung_ov_base = c.op().overhead_base;
         ci.rung_ov_enh = c.op().overhead_enh;
         ci.util = c.util();

@@ -279,7 +279,15 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
                        {"probe_holds", c.probe_holds},
                        {"demotes_s3_residual", c.demotes_s3_residual},
                        {"demotes_s3_util", c.demotes_s3_util},
-                       {"demotes_fade", c.demotes_fade}};
+                       {"demotes_fade", c.demotes_fade},
+                       {"follow_adopts", c.follow_adopts},
+                       {"follow_above_ignored", c.follow_above_ignored}};
+    // Drone-initiated rate changes (FollowCfg). `observed_mcs` disagreeing
+    // with link.ctl.rung_mcs is the signal maburtop/flightreport want: it
+    // means the drone moved on its own authority. null when unheard.
+    ctl["following"] = c.following;
+    if (c.observed_mcs < 0) ctl["observed_mcs"] = nullptr;
+    else ctl["observed_mcs"] = c.observed_mcs;
     // last_event.u carries u3 (also sentinel-guardable) for S3Residual/
     // S3Util reasons -- clamp unconditionally, it's a no-op for the s1
     // reasons' ordinary [0,1]-ish values.

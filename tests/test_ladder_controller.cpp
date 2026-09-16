@@ -1312,3 +1312,220 @@ TEST(fade_regime_shortens_the_s3_util_confirm) {
   };
   CHECK(follow_on_demotes() > 0);
 }
+
+// ---------------------------------------------------------------------------
+// Drone-initiated rate changes (FollowCfg, docs/link-adaptation-v2-proposal.md
+// §4 "Fight B"). kLadder's rungs carry DIFFERENT overheads, so the observed
+// rung materially changes the budget u_ is scored against: rung 0 is ov 2.0
+// (budget 2/3) and rung 2 is ov 0.5 (budget 1/3).
+// ---------------------------------------------------------------------------
+
+namespace {
+// A sample carrying an observed RX MCS alongside the loss.
+LinkHealth ok_at(double pre, int observed_mcs) {
+  LinkHealth h = ok(pre);
+  h.observed_mcs = observed_mcs;
+  return h;
+}
+}  // namespace
+
+// The core scoring fix. Commanded rung 2 (mcs4, budget 1/3) while the drone
+// is actually on rung 0 (mcs0, budget 2/3). A 0.30 pre-FEC loss reads
+// u = 0.90 against the commanded rung -- over down_util 0.6, so the old code
+// demoted on it -- and u = 0.45 against the rung the drone is really on,
+// which is under. This is the phantom cascade apply_max_range() could
+// already provoke before FollowCfg existed.
+TEST(follow_scores_the_observed_rung_not_the_commanded_one) {
+  LadderController ctl(make_cfg_noprobe());
+  double t = 0;
+  promote_to(ctl, t, 2);
+  REQUIRE(ctl.rung() == 2);
+  const uint64_t demotes_before = ctl.counters().demotes_util +
+                                  ctl.counters().demotes_residual;
+
+  ctl.update(ok_at(0.30, 0), t);
+  t += 50;
+  CHECK(ctl.measured_rung() == 0);
+  CHECK(std::abs(ctl.util() - 0.30 / (2.0 / 3.0)) < 1e-9);
+  CHECK(ctl.util() < 0.6);  // under down_util: no demote pressure at all
+  CHECK(ctl.counters().demotes_util + ctl.counters().demotes_residual ==
+        demotes_before);
+}
+
+TEST(follow_adopts_the_observed_rung_after_confirm_samples) {
+  LadderCfg cfg = make_cfg_noprobe();
+  cfg.follow.confirm_samples = 3;
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 3);
+  REQUIRE(ctl.rung() == 3);
+
+  // Two confirming samples: withheld, not yet adopted.
+  for (int i = 0; i < 2; ++i) {
+    CHECK(!ctl.update(ok_at(0.0, 0), t));
+    t += 50;
+    CHECK(ctl.rung() == 3);
+    CHECK(ctl.following());
+  }
+  // Third crosses confirm_samples and adopts.
+  CHECK(ctl.update(ok_at(0.0, 0), t));
+  t += 50;
+  CHECK(ctl.rung() == 0);
+  CHECK(!ctl.following());  // transient: resolved BY adopting
+  CHECK(ctl.pre_adopt_rung() == 3);
+  CHECK(ctl.counters().follow_adopts == 1);
+  CHECK(ctl.last_event().reason == CtlReason::Follow);
+}
+
+// An adopt is not a demote: it must not book a demote counter, must not
+// penalize the rung it left (nothing was tried there and found wanting), and
+// must not arm the hold_after_down gate.
+TEST(follow_adopt_books_no_demote_and_no_penalty) {
+  LadderCfg cfg = make_cfg_noprobe();
+  cfg.follow.confirm_samples = 1;
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 3);
+  const CtlCounters before = ctl.counters();
+
+  CHECK(ctl.update(ok_at(0.0, 0), t));
+  t += 50;
+  REQUIRE(ctl.rung() == 0);
+  const CtlCounters after = ctl.counters();
+  CHECK(after.demotes_util == before.demotes_util);
+  CHECK(after.demotes_residual == before.demotes_residual);
+  CHECK(after.demotes_s3_util == before.demotes_s3_util);
+  CHECK(after.demotes_s3_residual == before.demotes_s3_residual);
+  CHECK(after.demotes_fade == before.demotes_fade);
+  CHECK(after.probation_fails == before.probation_fails);
+  CHECK(ctl.probation_ms_left(t) == 0);
+  CHECK(ctl.penalized(t).empty());
+}
+
+// The RCF lag tail: our own commanded change also makes observed != commanded
+// until the drone applies it (p90 66 ms, max 88 ms measured). Right after a
+// PROMOTE the drone is briefly still on the rung below -- observed sits below
+// commanded, which looks exactly like a drone-initiated drop. Inside
+// lag_tail_ms, and matching the PREVIOUS command, it is the tail.
+TEST(follow_ignores_the_rcf_lag_tail) {
+  LadderCfg cfg = make_cfg_noprobe();
+  cfg.follow.confirm_samples = 1;
+  cfg.follow.lag_tail_ms = 120.0;
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 2);
+  REQUIRE(ctl.rung() == 2);  // promote landed one 50 ms step ago
+
+  // Drone still emitting rung 1 (mcs2), the rung we were on before.
+  CHECK(!ctl.update(ok_at(0.0, 2), t));
+  CHECK(ctl.rung() == 2);
+  CHECK(!ctl.following());
+  CHECK(ctl.counters().follow_adopts == 0);
+}
+
+// Same disagreement, past the window: now it IS a drone decision, and the
+// exemption must not have latched.
+TEST(follow_adopts_once_past_the_lag_tail_window) {
+  LadderCfg cfg = make_cfg_noprobe();
+  cfg.follow.confirm_samples = 1;
+  cfg.follow.lag_tail_ms = 120.0;
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 2);
+  REQUIRE(ctl.rung() == 2);
+  t += 200;  // well past lag_tail_ms
+
+  CHECK(ctl.update(ok_at(0.0, 2), t));
+  CHECK(ctl.rung() == 1);
+  CHECK(ctl.counters().follow_adopts == 1);
+}
+
+// A drone sitting ABOVE the commanded rung past the lag window is not a
+// lagging drone, it is one not honouring the RCF. Refuse to adopt, and count
+// it -- follow_above_ignored is the signal that something is wrong upstream.
+TEST(follow_counts_but_ignores_a_drone_stuck_above_past_the_tail) {
+  LadderCfg cfg = make_cfg_noprobe();
+  cfg.follow.confirm_samples = 1;
+  cfg.follow.lag_tail_ms = 120.0;
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 2);
+  LinkHealth bad = ok(0.0);
+  bad.residual_loss = 0.5;
+  REQUIRE(ctl.update(bad, t));
+  REQUIRE(ctl.rung() == 1);
+  t += 200;  // past the tail
+
+  CHECK(!ctl.update(ok_at(0.0, 4), t));  // rung 2's mcs, above us
+  CHECK(ctl.rung() == 1);
+  CHECK(ctl.counters().follow_adopts == 0);
+  CHECK(ctl.counters().follow_above_ignored == 1);
+}
+
+// The air side must never be able to talk the GS UP a rung.
+TEST(follow_never_adopts_a_rung_above_the_commanded_one) {
+  LadderCfg cfg = make_cfg_noprobe();
+  cfg.follow.confirm_samples = 1;
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 1);
+  REQUIRE(ctl.rung() == 1);
+
+  for (int i = 0; i < 5; ++i) {
+    ctl.update(ok_at(0.0, 7), t);  // top rung's mcs, far above us
+    t += 50;
+  }
+  CHECK(ctl.rung() <= 1 + 1);  // may promote normally, never jump to mcs7
+  CHECK(ctl.counters().follow_adopts == 0);
+  CHECK(ctl.counters().follow_above_ignored > 0);
+}
+
+// A promote into an unresolved disagreement is the oscillation this exists to
+// prevent: the drone is below us, so commanding it higher bounces.
+TEST(follow_withholds_promotes_while_confirming) {
+  LadderCfg cfg = make_cfg_noprobe();
+  cfg.follow.confirm_samples = 1000;  // never resolves inside this test
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 2);
+  const int held = ctl.rung();
+  const uint64_t promotes_before = ctl.counters().promotes;
+
+  for (int i = 0; i < 200; ++i) {  // clean samples, would normally promote
+    ctl.update(ok_at(0.0, 0), t);
+    t += 50;
+  }
+  CHECK(ctl.rung() == held);
+  CHECK(ctl.counters().promotes == promotes_before);
+  CHECK(ctl.following());
+}
+
+// An MCS that is not on the ladder cannot be scored or adopted, so it must
+// leave the controller exactly as it was.
+TEST(follow_ignores_an_off_ladder_observed_mcs) {
+  LadderCfg cfg = make_cfg_noprobe();
+  cfg.follow.confirm_samples = 1;
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 2);
+  REQUIRE(ctl.rung() == 2);
+  // kLadder has no mcs3 rung.
+  CHECK(!ctl.update(ok_at(0.0, 3), t));
+  CHECK(ctl.measured_rung() == 2);  // fell back to the commanded rung
+  CHECK(ctl.counters().follow_adopts == 0);
+  CHECK(ctl.counters().follow_above_ignored == 0);
+}
+
+TEST(follow_disabled_leaves_scoring_on_the_commanded_rung) {
+  LadderCfg cfg = make_cfg_noprobe();
+  cfg.follow.enable = false;
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 2);
+  REQUIRE(ctl.rung() == 2);
+
+  ctl.update(ok_at(0.30, 0), t);
+  CHECK(ctl.measured_rung() == 2);  // commanded, not observed
+  CHECK(std::abs(ctl.util() - 0.30 / (1.0 / 3.0)) < 1e-9);
+  CHECK(ctl.counters().follow_adopts == 0);
+}

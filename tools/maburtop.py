@@ -997,9 +997,18 @@ def _ctl_row(ctl):
     u_s = _s(last_event.get("u"), 2)
     util_cell = f"u={_s(util, 2)}"
     budget_s = "--" if budget is None else f"{budget:.0%}"
+    # FollowCfg: the drone can change rate on its own authority, so the MCS
+    # it is OBSERVED transmitting at can differ from the commanded rung's.
+    # Only rendered on a disagreement -- in steady state it is noise.
+    obs = ctl.get("observed_mcs")
+    cmd_mcs = rung.get("mcs")
+    follow_cell = ""
+    if isinstance(obs, int) and isinstance(cmd_mcs, int) and obs != cmd_mcs:
+        follow_cell = f"  air=mcs{obs}{'*' if ctl.get('following') else ''}"
     text = (
-        f"  rung {_s(rung.get('idx'))} (mcs{_s(rung.get('mcs'))}"
+        f"  rung {_s(rung.get('idx'))} (mcs{_s(cmd_mcs)}"
         f" ov b{_s(rung.get('ov_base'), 2)}/e{_s(rung.get('ov_enh'), 2)})"
+        f"{follow_cell}"
         f"  {util_cell} of budget {budget_s}"
         f"  [{reason}@{u_s}]"
     )
@@ -1008,6 +1017,10 @@ def _ctl_row(ctl):
         style = "bad" if util >= 0.6 else ("warn" if util >= 0.4 else "good")
         idx = text.index(util_cell)
         spans.append((idx, len(util_cell), style))
+    if follow_cell:
+        # warn, not bad: a disagreement is expected and handled (the GS adopts
+        # it within follow.confirm_samples). It is only alarming if it sticks.
+        spans.append((text.index(follow_cell), len(follow_cell), "warn"))
     return (text, spans)
 
 

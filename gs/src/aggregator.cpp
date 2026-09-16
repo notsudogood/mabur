@@ -262,6 +262,14 @@ void Aggregator::on_rx_body(const mabur::node::RxBody& m) {
         pt.bytes += m.body.size();
         if (m.phy_valid) fold_rf(pt, rssi, snr, m.rssi, m.snr);
         fold_evm(pt, m.evm[0], m.evm[1]);
+        // Observed video MCS (FollowCfg): same base+enh scope as the pool,
+        // for the same reason -- msp/ctrl do not ride the ladder's rate, and
+        // the probe deliberately rides a DIFFERENT one, so folding either
+        // would corrupt the mode. Not gated on phy_valid or crc_ok: the rate
+        // lives in the RX descriptor, which node.h documents as valid
+        // independent of the body CRC, and that is the whole reason this
+        // signal survives a fade.
+        video_mcs_.feed(m.mcs);
       }
     }
   }

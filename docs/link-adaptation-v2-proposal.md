@@ -5,8 +5,17 @@
 bench session or source file is real; everything else is derived from the
 shipped formulas or is an explicit assumption, and is marked as such.
 
-Read `docs/link-adaptation.md` for what actually ships today. This page
-describes a replacement for its control structure, not for its plumbing —
+Read `docs/link-adaptation.md` for what actually ships today. Note when
+reading the code that there are TWO ladders: the 6-rung struct default in
+`gs/src/config.h:100` (mcs 0/2/4/5/6/7, per-rung overhead) is a fallback
+used only when the config omits `link.ladder`, and the SHIPPED flight
+ladder in `gs/bundle/maburgs.default.toml` (mcs 0-5, flat 1.0/0.5)
+replaces it wholesale. `common/src/profile.cpp`'s `profile_table()` is a
+third list and is NOT the ladder — it is reached only by tests and
+`apply_max_range()`. Every number in this page is the flight ladder.
+
+This page describes a replacement for the control structure, not for the
+plumbing —
 the wire formats, FEC scheme, probe stream and attribution machinery are
 all reused unchanged.
 
@@ -23,8 +32,8 @@ broadband shadowing.
 | | current |
 |---|---|
 | **Who decides** | GS only. Every demote input is measured GS-side on received video; `T_TELEM` is display-only and the ladder never reads it. |
-| **MCS** | 5 fixed rungs, mcs 0/1/2/4/5 (`common/src/profile.cpp:100`). Both streams ride the scored MCS (same-rate since 2026-08-30). |
-| **FEC overhead** | **Fixed per rung from config** (2.0/1.5/1.0/0.5/0.2, base==enh), carried in the RCF. Never adapted at runtime. |
+| **MCS** | 6 rungs, mcs 0/1/2/3/4/5, capped by `max_mcs = 5` (`gs/bundle/maburgs.default.toml:65-93`). Consecutive, so rung index == MCS here. Both streams ride the scored MCS (same-rate since 2026-08-30). |
+| **FEC overhead** | **Fixed, and FLAT across every rung**: `overhead_base` 1.0 / `overhead_enh` 0.5 on all six. Carried in the RCF, never adapted at runtime. So a rung is effectively just an MCS — the ladder has no FEC dimension at all today. |
 | **Bitrate** | Derived from overhead + rate against `encoder.airtime_budget` (0.5 shipped): `kbps = 1000·B / [f₀(1+ov_b)/rate_b + (1−f₀)(1+ov_e)/rate_e]`, `f₀ = 0.60` fixed (`drone/src/rc_agent.cpp:208`). |
 | **Demote triggers** | s1 util, s1 residual, enh util, enh residual, fade — all transition-attributed, all GS-measured. Confirms 250/500 ms, 100 ms inside the 2.5 s fade regime. |
 | **Promote** | Always-on +1 probe stream (SBI sid 5, one 1405 B body per enh AU), gated Clean/Lossy/NoInfo. ~3.1 s/rung measured on the bench climb. |
@@ -41,8 +50,9 @@ drone-side rate authority is a 1000 ms binary cliff to mcs0.
 
 ## 2. The unified objective (the core result)
 
-The shipped bitrate formula, with an equal overhead pair (which is what
-every shipped rung has, so `f₀` cancels exactly), is:
+Take the shipped bitrate formula with an equal overhead pair, where `f₀`
+cancels exactly (the shipped pair is NOT equal — see the caveat below —
+but the equal case is where the result is legible):
 
 ```
 kbps = 1000 · B · rate / (1 + ov)
@@ -68,32 +78,54 @@ the shipped formula, not an approximation, and it subsumes both control
 loops below — the inner loop sets `ov` from `L`, the outer loop picks the
 `rate` that maximises the product.
 
-Decision surface for the shipped ladder (kbps of video sustainable, at
-`B` = 0.60):
+**Caveat on the exact form.** `(1 − 2L)` above is the equal-protection
+case (`ov_base == ov_enh`, where `f₀` cancels). The shipped pair is
+unequal — 1.0 / 0.5 — so the general form is
 
 ```
-        L=  0%     2%     5%     8%    10%    15%    20%    25%
-r0 mcs0   3900   3744   3510   3276   3120   2730   2340   1950
-r1 mcs1   7800   7488   7020   6552   6240   5460   4680   3900
-r2 mcs2  11700  11232  10530   9828   9360   8190   7020   5850
-r3 mcs4  23400  22464  21060  19656  18720  16380  14040  11700
-r4 mcs5  31200  29952  28080  26208  24960  21840  18720  15600
+kbps = 1000 · B · rate / [ f₀/(1 − 2L_base) + (1 − f₀)/(1 − 2L_enh) ]
 ```
 
-**Consequence that reframes the whole design: demoting is almost never
-the right move.** Read across a row versus the row below it. At the
-mcs4→mcs2 step (2.0× rate ratio), mcs2 at *zero* loss scores 11700 — which
-mcs4 only falls to at `L` = 25 %. So the link should ride mcs4 with
-overhead climbing to 1.0 before dropping to mcs2 is even a tie. The
-current design, which pins overhead per rung and demotes on loss, gives
-away most of that headroom.
+which collapses to `rate · (1 − 2L)` when the two layers see the same
+loss and carry the same overhead. Still monotone in `rate` and decreasing
+in both losses, so the ranking logic is unchanged; only the constant
+moves. Use the simple form for reasoning, the general one for code.
 
-**Corollary — the ladder's MCS gaps are too wide.** The 2.0× steps
-(mcs4→mcs2, mcs1→mcs0) are where demotion is worst-valued. Inserting mcs3
-as a rung splits the mcs2↔mcs4 gap into 1.33× and 1.5× steps and makes
-demotion useful much earlier. Cheap to try: it is one config row, no code.
-(mcs6/mcs7 are a separate question — `docs/evm-sweep-findings-2026-08-10.md`
-shows mcs7 is noise-limited and must stay linear.)
+Where the shipped ladder actually sits (`B` = 0.5, `f₀` = 0.60, the flat
+1.0/0.5 pair, so no `L` term — today's overhead does not respond to loss
+at all):
+
+```
+rung/mcs  speed    video    step up from prev
+   0      6.5Mb   1.81Mb
+   1     13.0Mb   3.61Mb    2.00x
+   2     19.5Mb   5.42Mb    1.50x
+   3     26.0Mb   7.22Mb    1.33x
+   4     39.0Mb  10.83Mb    1.50x
+   5     52.0Mb  14.44Mb    1.33x
+```
+
+Every rung tolerates the same loss — base budget 50 %, enh budget 33 % —
+and `down_util` 0.35 demotes at a base pre-FEC loss above 17.5 %,
+identically on every rung.
+
+**Consequence that reframes the whole design: the ladder trades away rate
+without ever buying protection.** Dropping a rung cuts the video rate by
+1.33–2.0× and leaves the loss tolerance *exactly where it was*, because
+the overhead pair is flat. Under the objective above, a demote is
+therefore close to a pure loss whenever the current rung's `L` is still
+inside its budget: the right move is to spend airtime on FEC and hold the
+rate, which is precisely what the current design cannot express. That is
+the single strongest argument for tier 1 below.
+
+The rate steps themselves are fine — 2.0× at the very bottom, 1.33–1.5×
+everywhere else — and mcs3 is already a rung, so there is nothing to fix
+in the ladder's *spacing*. What is missing is its second dimension.
+
+(mcs6/mcs7 are excluded by `max_mcs = 5`, "mcs5 is unholdable at range".
+Raising that is a separate question, and
+`docs/evm-sweep-findings-2026-08-10.md` shows mcs7 is noise-limited and
+must stay linear.)
 
 ---
 
@@ -174,6 +206,11 @@ all verified in the source:
    continuous. There is no `n/12` quantisation — that framing came from
    block-RS links (e.g. WFB-ng) and does not apply here.
 
+**Ceiling:** `link.ladder[].overhead_*` validates to [0.1, 2.0]
+(`gs/src/config.cpp:274`), so the deepest expressible protection is
+ov 2.0 = a 67 % loss budget. That is a config range, not a wire or FEC
+limit, but tier 1 must respect it (or raise it deliberately).
+
 **Two traps, both drawn from things this repo already got wrong once:**
 
 - **Drive the loop from raw `pre_fec_loss`, never from `u`.** Today
@@ -213,9 +250,10 @@ inverse of the probe's rate, so downward probes are expensive:
 
 | op rung | +1 probe | −1 probe | −2 probe | all three |
 |---|---|---|---|---|
-| r1 (mcs1) | 3.7 % | 10.6 % | — | 14.3 % |
-| r2 (mcs2) | 2.0 % | 5.4 % | 10.6 % | 18.0 % |
-| r3 (mcs4) | 1.5 % | 3.7 % | 5.4 % | 10.7 % |
+| mcs1 | 3.70 % | 10.62 % | — | 14.3 % |
+| mcs2 | 2.83 % | 5.43 % | 10.62 % | 18.9 % |
+| mcs3 | 1.97 % | 3.70 % | 5.43 % | 11.1 % |
+| mcs4 | 1.54 % | 2.83 % | 3.70 % | 8.1 % |
 
 (Derived: 1405 B fixed body, 60/s, `bytes·8/rate` + ~40 µs PPDU overhead.)
 
@@ -234,9 +272,9 @@ measurable rather than at the floor.
 
 **Arm condition:** overhead deep enough that demotion is arguable — and
 from §2 that threshold is **a function of the rate ratio to the rung
-below**, not a constant. At a 2.0× step you need `L` ≈ 25 % before the
-lower rung ties even at zero loss; at the 1.33× mcs5→mcs4 step it pays far
-earlier. Also gate on residual: if `resid`/`resid3` is nonzero while
+below**, not a constant. On the shipped ladder that ratio is 1.33× or
+1.5× for every step except mcs1→mcs0 (2.0×), so the threshold is close to
+uniform in the middle of the ladder and much higher at the bottom. Also gate on residual: if `resid`/`resid3` is nonzero while
 overhead is deep, FEC is already failing — demote now, do not spend 2–3 s
 probing.
 
@@ -426,18 +464,16 @@ Each step is independently valuable and independently revertable.
    — no clock, no I/O, no radio types"). Fixes a real latent bug today:
    the existing `apply_max_range()` failsafe *already* creates the
    mis-scoring of Fight B, and nothing handles it.
-2. **Add mcs3 as a ladder rung.** One config row, no code. Tests §2's
-   claim that the 2.0× gaps are the problem.
-3. **Metrics as observe-only exports** (salvage density, FCS-vs-gap, EVM
+2. **Metrics as observe-only exports** (salvage density, FCS-vs-gap, EVM
    z-score, `fa + foreign`). Ship them to the sideport and
    `flightreport.py` and fly a few park sessions before any of them gates
    a decision.
-4. **Tier 1 inner loop**, behind a config flag, bitrate decoupled and
+3. **Tier 1 inner loop**, behind a config flag, bitrate decoupled and
    dead-banded from the start.
-5. **Tier 0 reflex**, observe-only first: log what it *would* have done
+4. **Tier 0 reflex**, observe-only first: log what it *would* have done
    against recorded flights before arming it. This is the staging pattern
    the air-clock gate used (`shed_ms` 0 = observe-only) and it worked.
-6. **Tier 2 restructure + armed −1 probe**, last, once §2's objective has
+5. **Tier 2 restructure + armed −1 probe**, last, once §2's objective has
    been checked against real per-rung `L` data.
 
 Gates, per CLAUDE.md: `tools/bench/ausniff.py` for anything touching

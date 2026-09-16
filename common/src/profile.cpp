@@ -98,6 +98,11 @@ std::array<LayerTxSpec, 2> ladder_from(PhyMode mode, uint8_t mcs, uint8_t bw) {
   return ladder;
 }
 
+// NOT the adaptive ladder, despite the shape. The GS's ladder is
+// `link.ladder` in its config (gs/bundle/maburgs.default.toml ships the
+// flown one; gs/src/config.h holds a failsafe-only fallback). This table is
+// reached only by tests and by the drone's apply_max_range(), which picks
+// MAX_RANGE_PROFILE out of it. Changing it does not change what flies.
 const std::array<ProfileRow, 5>& profile_table() {
   static const std::array<ProfileRow, 5> table = {{
       {0, 2.00, 2.00, 20},

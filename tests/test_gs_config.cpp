@@ -397,14 +397,15 @@ TEST(gs_load_config_reports_previously_invisible_defaults) {
   std::vector<std::string> defaulted;
   auto cfg = maburgs::load_config(path, &defaulted);
   CHECK(cfg.radio.auto_scan == true);
-  CHECK(cfg.link.ladder_cfg.ladder.size() == 6);
+  CHECK(cfg.link.ladder_cfg.ladder.size() == 1);  // failsafe-only default
 
   bool saw_cards = false, saw_symbol_size = false, saw_ladder = false,
        saw_s3_down_util = false, saw_probe_max_util = false;
   for (const std::string& d : defaulted) {
     if (d == "radio.cards=(auto-scan)") saw_cards = true;
     if (d == "fec.symbol_size=64") saw_symbol_size = true;
-    if (d == "link.ladder=(6 default rungs)") saw_ladder = true;
+    if (d == "link.ladder=(FAILSAFE ONLY - no ladder configured)")
+      saw_ladder = true;
     if (d == "link.s3_down_util=(defaults to link.down_util)") saw_s3_down_util = true;
     if (d == "link.probe.max_util=(defaults to link.down_util)") saw_probe_max_util = true;
     // The "report a fake number" trap: an absent link.s3_down_util must
@@ -539,27 +540,25 @@ TEST(video_frame_keys) {
 // thresholds (SDD 2026-07-27 ladder-controller Task 2).
 // Pins the C++ struct default (no "link.ladder" key at all -- config.cpp
 // never touches c.link.ladder_cfg.ladder in that case, so this is the
-// literal member-initializer in gs/src/config.h). Actual-air overhead
-// (airtime-balance-uep): old cmd-value defaults x2, same global rule as
-// the bundle json's ladder -- a regression back to half-scale values here
-// would parse and validate silently (all in-range), so this test exists
-// to catch exactly that.
-TEST(ladder_defaults_to_spec_six_rung_ladder) {
+// literal member-initializer in gs/src/config.h).
+//
+// That default is FAILSAFE-ONLY by design: one mcs0 rung, which cannot
+// promote anywhere. It used to be a flyable-looking 6-rung ladder (mcs
+// 0/2/4/5/6/7) that 72635df had already called stale when it replaced the
+// bundle's copy -- and because max_mcs defaults to 7, a config omitting
+// link.ladder would climb it to mcs7 at ov 0.2 against the flown 50%/33%.
+// This test exists to keep a flyable ladder from reappearing here: the real
+// one belongs in gs/bundle/maburgs.default.toml, pinned by
+// default_bundle_ladder_is_the_flight_ladder below.
+TEST(ladder_default_is_failsafe_only) {
   auto cfg = maburgs::load_config(write_tmp(""));
   auto& L = cfg.link.ladder_cfg.ladder;
-  CHECK(L.size() == 6);
-  CHECK(L[0].mcs == 0); CHECK(L[0].overhead_base > 1.999 && L[0].overhead_base < 2.001);
-  CHECK(L[1].mcs == 2); CHECK(L[1].overhead_base > 0.999 && L[1].overhead_base < 1.001);
-  CHECK(L[2].mcs == 4); CHECK(L[2].overhead_base > 0.499 && L[2].overhead_base < 0.501);
-  CHECK(L[3].mcs == 5); CHECK(L[3].overhead_base > 0.499 && L[3].overhead_base < 0.501);
-  // mcs6 rung at 0.5 (cmd-value 0.25, not the spec's cmd-value 0.15) since
-  // 2026-07-29 — see the ladder_cfg comment in gs/src/config.h and
-  // docs/mcs6-bench-anomaly.md.
-  CHECK(L[4].mcs == 6); CHECK(L[4].overhead_base > 0.499 && L[4].overhead_base < 0.501);
-  CHECK(L[5].mcs == 7); CHECK(L[5].overhead_base > 0.199 && L[5].overhead_base < 0.201);
-  // Same-rate-fixed-pairs (Task 3): the struct default duplicates each
-  // rung's value into overhead_enh too.
-  for (auto& r : L) CHECK(std::abs(r.overhead_enh - r.overhead_base) < 1e-9);
+  REQUIRE(L.size() == 1);
+  CHECK(L[0].mcs == 0);
+  CHECK(L[0].overhead_base > 0.999 && L[0].overhead_base < 1.001);
+  CHECK(L[0].overhead_enh > 0.499 && L[0].overhead_enh < 0.501);
+  // Operator rule (uep-base-protection-constraint): base >= enh.
+  CHECK(L[0].overhead_base >= L[0].overhead_enh);
 }
 
 // Same-rate-fixed-pairs (Task 3): rung overhead is now a base/enh pair.
@@ -682,10 +681,19 @@ TEST(ladder_over_eight_entries_rejected) {
   CHECK(threw);
 }
 
+// Supplies its OWN ladder rather than filtering whatever the struct default
+// happens to be: this test is about the filter, and coupling it to the
+// default made it fail for an unrelated reason when that default changed.
 TEST(max_mcs_filters_effective_ladder) {
-  auto cfg = maburgs::load_config(write_tmp("[link]\nmax_mcs = 5\n"));
+  auto cfg = maburgs::load_config(write_tmp(
+      "[link]\nmax_mcs = 5\n"
+      "\n[[link.ladder]]\nmcs = 0\noverhead_base = 1.0\noverhead_enh = 0.5\n"
+      "\n[[link.ladder]]\nmcs = 4\noverhead_base = 1.0\noverhead_enh = 0.5\n"
+      "\n[[link.ladder]]\nmcs = 5\noverhead_base = 1.0\noverhead_enh = 0.5\n"
+      "\n[[link.ladder]]\nmcs = 6\noverhead_base = 1.0\noverhead_enh = 0.5\n"
+      "\n[[link.ladder]]\nmcs = 7\noverhead_base = 1.0\noverhead_enh = 0.5\n"));
   auto& L = cfg.link.ladder_cfg.ladder;
-  CHECK(L.size() == 4);
+  CHECK(L.size() == 3);  // mcs 6 and 7 filtered out
   for (auto& r : L) CHECK(r.mcs <= 5);
 }
 

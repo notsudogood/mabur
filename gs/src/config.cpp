@@ -279,9 +279,11 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
       }
       c.link.ladder_cfg.ladder = parsed;
     } else {
-      note_default("link", "ladder",
-                   "(" + std::to_string(c.link.ladder_cfg.ladder.size()) +
-                       " default rungs)");
+      // Deliberately not "(N default rungs)", which reads like a working
+      // ladder. The compiled default is failsafe-only (gs/src/config.h), so
+      // a config that reaches here cannot promote off mcs0 at all -- the
+      // report line is the only warning the operator gets.
+      note_default("link", "ladder", "(FAILSAFE ONLY - no ladder configured)");
     }
     const long max_mcs = get_int(r, "max_mcs", 7, 0, 7, "link");
     {

@@ -86,23 +86,29 @@ struct LinkCfg {
   // Measured-loss ladder controller config (spec
   // docs/superpowers/specs/2026-07-27-ladder-controller-design.md): rungs
   // (post-`max_mcs` filter) plus the util/timing thresholds LadderController
-  // decides on. Default ladder is the spec's static feasibility floor —
-  // rung 0 is the failsafe every controller starts and falls back to.
-  // mcs6 rides ov 0.5, i.e. cmd-value 0.25 (not the spec's cmd-value
-  // 0.15): with bpb=4 a dead body is a 4-symbol cluster, and 0.15 leaves
-  // the s3 window unable to absorb two dead bodies — see
-  // docs/mcs6-bench-anomaly.md ov0.25 experiment. Values are actual-air
-  // overhead (airtime-balance-uep, global rule: every cmd-value default
-  // this migration touches x2) — {0,1.0}->{0,2.0}, {2,0.5}->{2,1.0},
-  // {4,0.25}->{4,0.5}, {5,0.25}->{5,0.5}, {6,0.25}->{6,0.5}, {7,0.1}->{7,0.2}.
-  // Same-rate-fixed-pairs (Task 3): overhead is now a base/enh pair; the
-  // struct default duplicates each rung's value into both fields.
-  LadderCfg ladder_cfg{{{0, 2.0, 2.0},
-                        {2, 1.0, 1.0},
-                        {4, 0.5, 0.5},
-                        {5, 0.5, 0.5},
-                        {6, 0.5, 0.5},
-                        {7, 0.2, 0.2}}};
+  // decides on. `ladder[0]` is the failsafe every controller starts on and
+  // falls back to.
+  //
+  // FAILSAFE-ONLY DEFAULT, and deliberately not a flyable ladder. It exists
+  // solely to satisfy the `size() >= 1` invariant for a config that omits
+  // `link.ladder`; the real ladder is `gs/bundle/maburgs.default.toml` and
+  // every deployment is expected to carry one.
+  //
+  // It used to be a 6-rung ladder (mcs 0/2/4/5/6/7 at overheads 2.0..0.2).
+  // That was the SAME ladder 72635df ("ship the live flight configs") called
+  // "a stale ladder ... at overheads nobody has flown since August" when it
+  // replaced it in the bundle — but that commit only fixed the bundle, so the
+  // copy here survived as a live fallback. Two ways it bit:
+  //   - it climbed to mcs6/mcs7, which the bundle excludes on purpose
+  //     (`max_mcs = 5`, "mcs5 is unholdable at range"), and `max_mcs`
+  //     defaults to 7, so a config omitting the ladder usually omits the
+  //     cap that would have hidden it;
+  //   - its top rung ran ov 0.2 (a 17% loss budget) against the flown
+  //     50%/33%, i.e. a far more aggressive link than anyone chose.
+  // A single mcs0 rung cannot promote anywhere, so the failure mode is now a
+  // visibly crippled link (~1.8 Mbps) instead of a silently aggressive one.
+  // See docs/link-adaptation-v2-proposal.md.
+  LadderCfg ladder_cfg{{{0, 1.0, 0.5}}};
 };
 
 /// Video reassembly tuning (PR C: the RTP output destination is gone --

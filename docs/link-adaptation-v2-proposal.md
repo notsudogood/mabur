@@ -1,9 +1,24 @@
 # Link adaptation v2 — three-tier proposal
 
-**Status: PROPOSAL. Nothing here is implemented, built or flown.** Written
-2026-09-15 from a design discussion. Every number attributed to a flight,
-bench session or source file is real; everything else is derived from the
-shipped formulas or is an explicit assumption, and is marked as such.
+**Status: PARTLY IMPLEMENTED, NOTHING FLOWN.** Written 2026-09-15 from a
+design discussion; implementation started 2026-09-16. Every number
+attributed to a flight, bench session or source file is real; everything
+else is derived from the shipped formulas or is an explicit assumption,
+and is marked as such.
+
+| piece | state |
+|---|---|
+| Ladder default was a stale flight ladder (§2.1 trap) | **fixed**, failsafe-only now |
+| Observed-MCS scoring + `Following` adopt (§4, Fight B) | **landed**, `FollowCfg`, default ON |
+| Tier 1 FEC-overhead policy (§3) | **landed**, `link.overhead`, default **OFF** (observe-only) |
+| Tier 1 arming | needs a flight comparing `ov_target` against the fixed pair, then `aucadence` |
+| Tier 0 reflex (§3) | **not started** — blocked on the reciprocity measurement in §9.1 |
+| Tier 2 objective + armed −1 probe (§3) | **not started** |
+| Fast restore (§4) | **not started** — `pre_adopt_rung()` remembers the rung, nothing acts on it |
+| Metrics (§6) | **not started** |
+
+Nothing here has been on a device. The host suite passes; the
+`ausniff`/`aucadence` device gates have not been run.
 
 Read `docs/link-adaptation.md` for what actually ships today. Note when
 reading the code that there are TWO ladders: the 6-rung struct default in
@@ -559,17 +574,22 @@ bump, no flag day, benchable without a two-device deploy.
 
 Each step is independently valuable and independently revertable.
 
-1. **GS observed-MCS scoring + `Following` state.** Self-contained, no
+1. ✅ **GS observed-MCS scoring + `Following` state.** Self-contained, no
    drone change, unit-testable (`LadderController` is "pure decision logic
    — no clock, no I/O, no radio types"). Fixes a real latent bug today:
    the existing `apply_max_range()` failsafe *already* creates the
    mis-scoring of Fight B, and nothing handles it.
+   *Landed: `gs/src/mcs_mode.h`, `FollowCfg` in `ladder_controller.h`.*
 2. **Metrics as observe-only exports** (salvage density, FCS-vs-gap, EVM
    z-score, `fa + foreign`). Ship them to the sideport and
    `flightreport.py` and fly a few park sessions before any of them gates
    a decision.
-3. **Tier 1 inner loop**, behind a config flag, bitrate decoupled and
+3. ✅ **Tier 1 inner loop**, behind a config flag, bitrate decoupled and
    dead-banded from the start.
+   *Landed: `gs/src/overhead_policy.h`, `link.overhead`, default OFF. The
+   next step is a flight at `enable = false` comparing
+   `link.ctl.ov_target` against the fixed 1.0/0.5 pair — arming it before
+   that is arming a loop nobody has seen the inputs of.*
 4. **Tier 0 reflex**, observe-only first: log what it *would* have done
    against recorded flights before arming it. This is the staging pattern
    the air-clock gate used (`shed_ms` 0 = observe-only) and it worked.

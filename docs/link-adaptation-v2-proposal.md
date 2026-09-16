@@ -109,18 +109,56 @@ Every rung tolerates the same loss — base budget 50 %, enh budget 33 % —
 and `down_util` 0.35 demotes at a base pre-FEC loss above 17.5 %,
 identically on every rung.
 
-**Consequence that reframes the whole design: the ladder trades away rate
-without ever buying protection.** Dropping a rung cuts the video rate by
-1.33–2.0× and leaves the loss tolerance *exactly where it was*, because
-the overhead pair is flat. Under the objective above, a demote is
-therefore close to a pure loss whenever the current rung's `L` is still
-inside its budget: the right move is to spend airtime on FEC and hold the
-rate, which is precisely what the current design cannot express. That is
-the single strongest argument for tier 1 below.
+### 2.1 The flat overhead pair is the core defect
+
+**The ladder trades away rate without ever buying protection.** Dropping
+a rung cuts the video rate 1.33–2.0× and leaves the loss tolerance
+*exactly where it was*, because the overhead pair does not vary by rung.
+A demote is therefore close to a pure loss whenever the current rung's
+`L` is still inside its budget — and the budget is generous, because it
+is the same 50 % at every rung.
+
+**Worse: the shipped pair is over-provisioned at precisely the loss level
+where it gives up.** `down_util` 0.35 scored against a base budget of
+0.5 fires the demote at `L` = 17.5 %, while `ov_base` 1.0 is carrying
+enough repair for 50 % — a **2.86× margin**, not the 2× the design is
+tuned around. So at the moment of the demote there is unspent FEC on air
+*and* the controller is about to spend a third of the video rate to buy
+robustness it already had.
+
+Worked example, mcs4 at the instant `L` reaches the demote threshold
+(`B` = 0.5, `f₀` = 0.60):
+
+| | video | what it does |
+|---|---|---|
+| shipped, hold the rung | 10.83 Mbps | not an option the controller has |
+| **shipped, demote to mcs3** | **7.22 Mbps** | what actually happens |
+| tier 1: hold, `ov` → 0.538 | **12.68 Mbps** | 2× margin on the measured `L` |
+
+Tier 1 holds mcs4 on **less** FEC than ships today (0.538 vs 1.0),
+because 0.538 is what a 2× margin on 17.5 % loss actually costs — and
+delivers **1.76× the video the demote gives**, and 1.17× what holding the
+rung on the shipped pair would give. The current design cannot reach any
+of that: overhead is not an actuator, so its only lever is the rate.
+
+This is the single strongest argument for tier 1, and it is arithmetic on
+shipped constants rather than a bet on the reflex or the probes.
+
+Two caveats on the example. It assumes the enh layer sees the same `L` as
+base, which UEP exists precisely because it does not — the real gain is
+smaller and needs the general two-layer form above. And it assumes `L` is
+stationary over the window, which during a fade it is not.
 
 The rate steps themselves are fine — 2.0× at the very bottom, 1.33–1.5×
 everywhere else — and mcs3 is already a rung, so there is nothing to fix
 in the ladder's *spacing*. What is missing is its second dimension.
+
+⚠ **Latent trap while this is unimplemented.** The struct default
+(`gs/src/config.h:100`) and the shipped bundle disagree on *both*
+dimensions — mcs 0/2/4/5/6/7 with per-rung overhead 2.0…0.2, versus
+mcs 0-5 with a flat 1.0/0.5 pair. A GS config that simply omits
+`link.ladder` therefore flies a materially different ladder, silently and
+validly. Worth reconciling independently of this proposal.
 
 (mcs6/mcs7 are excluded by `max_mcs = 5`, "mcs5 is unholdable at range".
 Raising that is a separate question, and
@@ -371,7 +409,68 @@ after the drone's hold has released — then hand authority back.
 
 ---
 
-## 5. Metrics: what to add
+## 5. Mental model for the FEC (why tier 1 is cheap)
+
+Anyone arriving from a block-RS link (WFB-ng and friends) needs this
+before tier 1 makes sense, because the usual vocabulary does not carry
+over. Shipped geometry, `bundle/mabur.default.toml`:
+
+```
+symbol      = 332 B          window = 32 symbols
+radio body  = 4 symbols (blocks_per_body) -> the window spans 8 bodies
+window      = 10.4 KB of video ~ 7.8 ms ~ half a frame at the mcs4 rung
+ov_base 1.0 -> one repair per source symbol  (half that layer's air)
+ov_enh  0.5 -> one repair per two            (a third of it)
+```
+
+**Block RS** waits for k data packets, computes n−k parity, sends n, and
+the receiver needs any k of them. Blocks are independent; the ratio is a
+property of the block.
+
+**mabur's sliding-window RLC** does none of that:
+
+1. **Data never waits.** A symbol is sent the moment it is full,
+   unmodified (the code is *systematic*). No block-formation latency.
+2. **Repairs come out at a rate, not in a burst.** A credit counter gains
+   `overhead` per sealed symbol and emits a repair each time it crosses
+   1.0. This is why there is no "7/12" to speak of — you set a production
+   *rate*, and it is a `double`.
+3. **Every repair covers a different, overlapping window** of the last
+   ≤32 symbols, carrying its own `window_start`, `window_len` and
+   `repair_key` so the receiver can regenerate the coefficients.
+
+The model in one line:
+
+> **Each repair is one equation; each lost symbol is one unknown. You
+> need as many covering equations as you have unknowns.**
+
+One lost symbol is solved by the next repair covering it. Three losses in
+a window need three independent covering repairs. Consequences worth
+knowing:
+
+- **Protection is spread over time, not bunched.** A symbol's repair
+  trickles in over the following ~8 bodies, so an interference burst
+  cannot take out all of one symbol's protection the way it can take out
+  a block's whole parity run. That is the time diversity the encoder
+  comments cite, and the window length is the knob for it.
+- **No block boundary, so no hard cliff — but there is a deadline.** An
+  unsolvable symbol stays pending and may become solvable as more repairs
+  arrive; mabur eventually gives up at the abandonment horizon. That is
+  what `syms_abandoned` counts, and it is the sliding-window equivalent
+  of "the block failed" — there is no block to attach it to.
+- **Not MDS, unlike RS.** Random coefficients occasionally produce a
+  repair that is linearly dependent on ones already held (~1/256 each at
+  GF(256), so under 1 % waste). Tier 1 should carry a little slack for it
+  rather than running exactly at its target margin.
+
+The payoff for tier 1: the receiver is never told the overhead. It
+collects equations and solves. That is why `set_overhead()` is a live
+knob with no handshake, no block boundary to wait for, and no encoder
+write — hence no keyframe.
+
+---
+
+## 6. Metrics: what to add
 
 Everything in tier A below is already counted and merely not a decision
 input.
@@ -433,13 +532,14 @@ link.
 
 ---
 
-## 6. Comparison summary
+## 7. Comparison summary
 
 | | current | proposed |
 |---|---|---|
 | Decision authority | GS only | GS (tiers 1–2) + drone reflex (tier 0), with an explicit follow contract |
 | Worst-case reaction | ~650–700 ms, unbounded if the RCF is lost | ~100–150 ms, delivery-free |
-| FEC overhead | fixed per rung, config | continuously controlled from raw `pre_fec_loss` |
+| FEC overhead | fixed, and FLAT across every rung (1.0/0.5) — not an actuator at all | continuously controlled from raw `pre_fec_loss` |
+| What a demote buys | 1.33–2.0× less rate, **zero** extra loss tolerance | nothing, because FEC absorbs it first (§2.1) |
 | Bitrate | re-derived on every rung change | quantised steps, dead band, decoupled from FEC changes |
 | Rung choice | loss threshold → demote | maximise `rate × (1 − 2L)` |
 | Downward information | none (demote is blind to what's below) | conditionally armed −1 probe + `RungStore` history |
@@ -455,7 +555,7 @@ bump, no flag day, benchable without a two-device deploy.
 
 ---
 
-## 7. Suggested implementation order
+## 8. Suggested implementation order
 
 Each step is independently valuable and independently revertable.
 
@@ -482,7 +582,7 @@ bitrate policy or UEP overhead — which tiers 1 and 2 both do.
 
 ---
 
-## 8. Open questions and untested premises
+## 9. Open questions and untested premises
 
 1. **Uplink/downlink reciprocity** (tier 0's trigger). Unmeasured on this
    hardware. Falsifiable cheaply: log drone uplink RSSI alongside the GS's

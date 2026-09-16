@@ -125,6 +125,14 @@ struct StatsCtlIn {
   bool following = false;
   uint64_t follow_adopts = 0, follow_above_ignored = 0;
 
+  // Tier 1 (overhead_policy.h): the overhead each layer's policy WANTED this
+  // tick, before quantisation and the IDR-cost gates. Populated whether or
+  // not link.overhead.enable is set -- with it clear these are the whole
+  // point, since they are what an observe-only flight records so the target
+  // can be judged against the fixed pair before anything is armed.
+  double ov_target_base = 0.0, ov_target_enh = 0.0;
+  uint64_t ov_changes = 0;
+
   // Per-rung EWMA store snapshot, index = rung index (spec 2026-08-13).
   std::vector<StatsRungIn> rungs;
 

@@ -791,6 +791,70 @@ TEST(default_bundle_ladder_is_the_flight_ladder) {
   CHECK(layers[1].fec.symbol_size == 332);
 }
 
+// link.overhead: tier 1's FEC-overhead controller (overhead_policy.h). The
+// default MUST stay disabled -- arming it changes the flown operating point,
+// and the bundle ships it off so a flight can record the target first.
+TEST(overhead_defaults_are_disabled) {
+  auto cfg = maburgs::load_config(write_tmp(""));
+  const auto& o = cfg.link.overhead;
+  CHECK(!o.enable);
+  CHECK(std::abs(o.margin - 2.0) < 1e-9);
+  CHECK(std::abs(o.step - 0.1) < 1e-9);
+  CHECK(std::abs(o.min_ov - 0.3) < 1e-9);
+  CHECK(std::abs(o.max_ov - 2.0) < 1e-9);
+  CHECK(std::abs(o.min_interval_ms - 2000.0) < 1e-9);
+  CHECK(std::abs(o.dead_band - 0.15) < 1e-9);
+}
+
+TEST(overhead_shipped_bundle_keeps_it_disabled) {
+  auto c = maburgs::load_config(std::string(MABUR_GS_BUNDLE_DIR) +
+                                "/maburgs.default.toml");
+  CHECK(!c.link.overhead.enable);
+}
+
+TEST(overhead_parses_explicit_values) {
+  auto cfg = maburgs::load_config(write_tmp(
+      "[link.overhead]\nenable = true\nmargin = 3.0\nstep = 0.05\n"
+      "min_ov = 0.5\nmax_ov = 1.5\nmin_interval_ms = 4000\n"
+      "dead_band = 0.2\n"));
+  const auto& o = cfg.link.overhead;
+  CHECK(o.enable);
+  CHECK(std::abs(o.margin - 3.0) < 1e-9);
+  CHECK(std::abs(o.step - 0.05) < 1e-9);
+  CHECK(std::abs(o.min_ov - 0.5) < 1e-9);
+  CHECK(std::abs(o.max_ov - 1.5) < 1e-9);
+  CHECK(std::abs(o.min_interval_ms - 4000.0) < 1e-9);
+  CHECK(std::abs(o.dead_band - 0.2) < 1e-9);
+}
+
+TEST(overhead_rejects_unknown_key_and_bad_ranges) {
+  bool threw = false;
+  try { maburgs::load_config(write_tmp("[link.overhead]\nnope = 1\n")); }
+  catch (const std::exception& e) {
+    threw = std::string(e.what()).find("link.overhead") != std::string::npos;
+  }
+  CHECK(threw);
+  // max_ov cannot exceed the range link.ladder[].overhead_* validates to.
+  threw = false;
+  try { maburgs::load_config(write_tmp("[link.overhead]\nmax_ov = 3.0\n")); }
+  catch (const std::exception&) { threw = true; }
+  CHECK(threw);
+  // Each commanded change costs a keyframe, so the interval has a floor.
+  threw = false;
+  try { maburgs::load_config(write_tmp("[link.overhead]\nmin_interval_ms = 10\n")); }
+  catch (const std::exception&) { threw = true; }
+  CHECK(threw);
+  // An inverted window is a config error, not something to silently clamp.
+  threw = false;
+  try {
+    maburgs::load_config(write_tmp(
+        "[link.overhead]\nmin_ov = 1.5\nmax_ov = 0.5\n"));
+  } catch (const std::exception& e) {
+    threw = std::string(e.what()).find("min_ov") != std::string::npos;
+  }
+  CHECK(threw);
+}
+
 TEST(au_ring_defaults) {
   auto c = maburgs::load_config(std::string(MABUR_GS_BUNDLE_DIR) + "/maburgs.default.toml");
   // PR C: the ring IS the video output, so the shipped bundle enables it;

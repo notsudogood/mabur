@@ -286,6 +286,13 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     // with link.ctl.rung_mcs is the signal maburtop/flightreport want: it
     // means the drone moved on its own authority. null when unheard.
     ctl["following"] = c.following;
+    // Tier 1: what the overhead policy wanted, next to link.ctl.rung's
+    // ov_base/ov_enh which are what is actually commanded. Equal to those
+    // means the policy agrees with the rung; different with
+    // link.overhead.enable off is the observe-only signal.
+    ctl["ov_target"] = {{"base", c.ov_target_base},
+                        {"enh", c.ov_target_enh},
+                        {"changes", c.ov_changes}};
     if (c.observed_mcs < 0) ctl["observed_mcs"] = nullptr;
     else ctl["observed_mcs"] = c.observed_mcs;
     // last_event.u carries u3 (also sentinel-guardable) for S3Residual/

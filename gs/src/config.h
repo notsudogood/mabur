@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "ladder_controller.h"
+#include "overhead_policy.h"
 #include "mabur/uep_encoder.h"
 
 namespace maburgs {
@@ -109,6 +110,12 @@ struct LinkCfg {
   // visibly crippled link (~1.8 Mbps) instead of a silently aggressive one.
   // See docs/link-adaptation-v2-proposal.md.
   LadderCfg ladder_cfg{{{0, 1.0, 0.5}}};
+
+  // Tier 1 of docs/link-adaptation-v2-proposal.md: FEC overhead sized to the
+  // measured loss instead of pinned per rung. `link.overhead` in the config.
+  // Default OFF -- with enable=false the policy computes and exports its
+  // target and commands nothing, which is the observe-only stage.
+  OverheadCfg overhead;
 };
 
 /// Video reassembly tuning (PR C: the RTP output destination is gone --

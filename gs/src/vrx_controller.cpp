@@ -1,5 +1,7 @@
 #include "vrx_controller.h"
 
+#include <algorithm>
+
 #include "mabur/rc_proto.h"
 #include "mabur/profile.h"
 
@@ -16,6 +18,8 @@ OpPoint op_from_rung(const Rung& r) {
 VrxController::VrxController(VrxCfg cfg)
     : cfg_(cfg),
       ctrl_(cfg.ladder),
+      ov_base_(cfg.overhead),
+      ov_enh_(cfg.overhead),
       // link_lost_ms 1000 / beacon_period_ms 20 are deliberately fixed, not
       // config: every hw validation ran with these, and a slower fallback to
       // BEACONING after video loss only delays re-rendezvous. The removed
@@ -67,6 +71,7 @@ std::optional<VrxController::Out> VrxController::step(double now_ms,
 
   if (cfg_.pin_mcs < 0) {
     if (ctrl_.update(health, now_ms)) cur_op_ = op_from_rung(ctrl_.op());
+    apply_overhead_policy(health, now_ms);
   }
   mabur::rc::Rcf r = build_rcf();
   // No repeat copies of an op-changing RCF: the 2026-08-14 repeat burst
@@ -78,6 +83,41 @@ std::optional<VrxController::Out> VrxController::step(double now_ms,
   // docs/switch-loss-findings-2026-09-05.md).
   note_cmd(r);
   return Out{mabur::rc::pack_rcf(r), false};
+}
+
+// Tier 1 (docs/link-adaptation-v2-proposal.md §3): replace the rung's
+// constant overhead pair with one sized to the loss actually being measured.
+// Runs AFTER the rung is settled for the tick, so the policy always sees the
+// op it is modifying.
+//
+// Fed with RAW pre-FEC loss, never the controller's `u` -- u's denominator is
+// this very actuator, so driving the loop with it would make the loop
+// converge on nothing (trap 1 in overhead_policy.h). health.pre_fec_loss and
+// health.s3_pre_fec_loss are both raw fractions, which is exactly what
+// feed() wants.
+void VrxController::apply_overhead_policy(const LinkHealth& health,
+                                          double now_ms) {
+  // A window with no traffic measured no loss; feeding its 0.0 would walk
+  // both layers down to the floor on silence, which is the opposite of what
+  // silence should do.
+  if (!health.sample_valid) return;
+  const double b = ov_base_.feed(health.pre_fec_loss, cur_op_.overhead_base,
+                                 now_ms);
+  // The enh layer only has a measurement when its own window saw traffic --
+  // it is shed under congestion and under the air gate, and s3_usable()
+  // treats that silence as "no information", never as loss. Hold its
+  // overhead where it is rather than reading the shed as a clean link.
+  const double e = health.s3_valid
+                       ? ov_enh_.feed(health.s3_pre_fec_loss,
+                                      cur_op_.overhead_enh, now_ms)
+                       : cur_op_.overhead_enh;
+  if (!cfg_.overhead.enable) return;
+  // Operator rule (uep-base-protection-constraint): base protection must
+  // never fall below enh. Applied here, across the two independent policies,
+  // rather than inside either -- and by RAISING base, never by lowering enh,
+  // so enforcing the invariant can never strip protection from a layer.
+  cur_op_.overhead_base = std::max(b, e);
+  cur_op_.overhead_enh = e;
 }
 
 mabur::rc::Rcf VrxController::build_rcf() {

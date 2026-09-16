@@ -719,6 +719,7 @@ static int run_radio(const maburgs::Config& cfg) {
   vcfg.pin_overhead_base = cfg.link.static_overhead_base;
   vcfg.pin_overhead_enh = cfg.link.static_overhead_enh;
   vcfg.probe_pin_mcs = cfg.link.ladder_cfg.probe.pin_mcs;
+  vcfg.overhead = cfg.link.overhead;
   maburgs::VrxController vrx(vcfg);
 
   // Dedicated adaptive-link log (spec 2026-08-05-s3-probe-promote-design.md
@@ -1888,6 +1889,9 @@ static int run_radio(const maburgs::Config& cfg) {
         ci.following = c.following();
         ci.follow_adopts = c.counters().follow_adopts;
         ci.follow_above_ignored = c.counters().follow_above_ignored;
+        ci.ov_target_base = vrx.ov_target_base();
+        ci.ov_target_enh = vrx.ov_target_enh();
+        ci.ov_changes = vrx.ov_changes();
         ci.rung_ov_base = c.op().overhead_base;
         ci.rung_ov_enh = c.op().overhead_enh;
         ci.util = c.util();

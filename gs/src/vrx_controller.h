@@ -7,6 +7,7 @@
 #include "mabur/rc_proto.h"
 
 #include "ladder_controller.h"
+#include "overhead_policy.h"
 #include "op_point.h"
 #include "rendezvous.h"
 
@@ -34,6 +35,12 @@ struct VrxCfg {
   // link.probe.pin_mcs: static-pin mode only -- probe a fixed MCS while
   // pinned (bench validation).
   int probe_pin_mcs = -1;
+  // Tier 1: FEC overhead as a controlled variable rather than the rung's
+  // config constant (see OverheadCfg, overhead_policy.h). Default OFF, in
+  // which case the policy computes and exports a target and commands
+  // nothing. Never consulted in pin mode -- a pinned link means a pinned
+  // operating point, overhead included.
+  OverheadCfg overhead;
 };
 
 class VrxController {
@@ -55,6 +62,14 @@ class VrxController {
   // here — see ladder_controller.cpp update().
   std::optional<Out> step(double now_ms, const LinkHealth& health);
   const OpPoint& cur_op() const;
+  // Tier 1 telemetry: the overhead each layer's policy last WANTED, before
+  // quantisation and the IDR-cost gates. Meaningful whether or not
+  // overhead.enable is set -- with it clear, these are what an
+  // observe-only flight records so the target can be judged against what
+  // the fixed pair actually did.
+  double ov_target_base() const { return ov_base_.target(); }
+  double ov_target_enh() const { return ov_enh_.target(); }
+  uint64_t ov_changes() const { return ov_base_.changes() + ov_enh_.changes(); }
   // The ladder controller itself, for Task 6's sideport link.ctl block and
   // the "ctl: rung a->b" transition line in main.cpp. Exists even in pin
   // mode (constructed unconditionally) but is never ticked/updated there.
@@ -88,6 +103,8 @@ class VrxController {
 
   VrxCfg cfg_;
   LadderController ctrl_;
+  OverheadPolicy ov_base_, ov_enh_;
+  void apply_overhead_policy(const LinkHealth& health, double now_ms);
   VrxRendezvous rz_;
   double last_fb_ms_ = -1e18;
   double last_keepalive_ms_ = -1e18;

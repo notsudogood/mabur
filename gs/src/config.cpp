@@ -239,7 +239,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
                 "hold_after_down_ms", "min_between_changes_ms", "feedback_timeout_ms",
                 "starved_confirm_ms", "s3_demote", "s3_down_util",
                 "s3_settle_ms", "s3_min_syms",
-                "rung_stats", "fade", "probe",
+                "rung_stats", "fade", "probe", "overhead",
                 "rcf_slot_hold_ms"});
     c.link.vtx_id = static_cast<uint32_t>(get_int(r, "vtx_id", 1, 0, 0xFFFFFFFFL, "link"));
     c.link.feedback_ms = static_cast<int>(get_int(r, "feedback_ms", 100, 20, 5000, "link"));
@@ -292,6 +292,29 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
         if (rung.mcs <= max_mcs) effective.push_back(rung);
       if (effective.empty()) fail("link.ladder", "empty after max_mcs filter");
       c.link.ladder_cfg.ladder = effective;
+    }
+    // link.overhead: tier 1's FEC-overhead controller (overhead_policy.h).
+    // Every bound here is a real constraint, not taste: max_ov cannot exceed
+    // the range link.ladder[].overhead_* validates to, and min_interval_ms
+    // has a floor because each commanded change costs a keyframe on Star6E.
+    if (r.contains("overhead")) {
+      const Value& oj = r["overhead"];
+      check_keys(oj, "link.overhead",
+                 {"enable", "margin", "step", "min_ov", "max_ov",
+                  "min_interval_ms", "dead_band"});
+      OverheadCfg& o = c.link.overhead;
+      if (oj.contains("enable")) o.enable = get_bool(oj, "enable", false, "link.overhead");
+      o.margin = get_num(oj, "margin", 2.0, 1.0, 10.0, "link.overhead");
+      o.step = get_num(oj, "step", 0.1, 0.01, 1.0, "link.overhead");
+      o.min_ov = get_num(oj, "min_ov", 0.3, 0.1, 2.0, "link.overhead");
+      o.max_ov = get_num(oj, "max_ov", 2.0, 0.1, 2.0, "link.overhead");
+      o.min_interval_ms =
+          get_num(oj, "min_interval_ms", 2000.0, 250.0, 60000.0, "link.overhead");
+      o.dead_band = get_num(oj, "dead_band", 0.15, 0.0, 1.0, "link.overhead");
+      if (o.min_ov > o.max_ov)
+        fail("link.overhead.min_ov", "must be <= max_ov");
+    } else {
+      note_default("link", "overhead", "(disabled)");
     }
     c.link.ladder_cfg.down_util = get_num(r, "down_util", 0.6, 0.0, 1.0, "link");
     c.link.ladder_cfg.up_util = get_num(r, "up_util", 0.15, 0.0, 1.0, "link");

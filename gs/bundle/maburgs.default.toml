@@ -92,6 +92,23 @@ mcs = 5
 overhead_base = 1.0
 overhead_enh  = 0.5
 
+# Tier 1 (docs/link-adaptation-v2-proposal.md): FEC overhead sized to the
+# loss actually being measured, instead of pinned to each rung's constant.
+# DISABLED here on purpose -- with enable = false the policy still computes
+# and exports its target (link.ctl.ov_target_base/enh), so a flight records
+# what it WOULD have commanded and can be judged against what the fixed
+# 1.0/0.5 pair actually did. Arm it only after that comparison, and gate the
+# arming on tools/bench/aucadence.py: this moves UEP overhead and the bitrate
+# policy, which is exactly what that gate covers.
+[link.overhead]
+enable          = false
+margin          = 2.0    # budget = margin * measured pre-FEC loss
+step            = 0.1    # quantisation of the commanded value
+min_ov          = 0.3    # floor: the target tracks MEAN loss, not its variance
+max_ov          = 2.0    # ceiling of link.ladder[].overhead_*'s own range
+min_interval_ms = 2000   # each change costs a keyframe on Star6E
+dead_band       = 0.15   # ...so a smaller move is not worth one
+
 [link.probe]
 enable      = true
 rung_offset = 1

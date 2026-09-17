@@ -1037,6 +1037,160 @@ class SessionModeProbeJoinTest(unittest.TestCase):
 
 
 
+# --- LINK-ADAPTATION V2 (observe-only) -------------------------------------
+#
+# The sideport keys tier 1 / tier 2 added, and the comparison the
+# observe-only flight exists to make. See
+# docs/link-adaptation-v2-proposal.md.
+
+def _mk_v2_row(t, rung_idx, rung_mcs, ov_b, ov_e, *, want_b=None, want_e=None,
+               obj=None, observed_mcs=None, emit_obs=False, following=False,
+               event=None, counters=None):
+    # emit_obs mirrors the real exporter, which ALWAYS writes observed_mcs
+    # once the key exists -- null when nothing was heard, never absent
+    # (stats_exporter.cpp). A fixture that omits it instead would test a
+    # shape the GS never produces.
+    ctl = {
+        "rung": {"idx": rung_idx, "mcs": rung_mcs,
+                 "ov_base": ov_b, "ov_enh": ov_e},
+        "util": 0.2,
+    }
+    if want_b is not None:
+        ctl["ov_target"] = {"base": want_b, "enh": want_e, "changes": 0}
+    if obj is not None:
+        ctl["objective"] = obj
+    if observed_mcs is not None or emit_obs or following:
+        ctl["observed_mcs"] = observed_mcs
+        ctl["following"] = following
+    if event is not None:
+        ctl["last_event"] = event
+    if counters is not None:
+        ctl["counters"] = counters
+    return {"v": 1, "t_ms": t, "link": {"ctl": ctl}, "cards": []}
+
+
+def _run_report(rows):
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "flight.jsonl"
+        p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        r = subprocess.run([sys.executable, "tools/flightreport.py", str(p)],
+                           capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return r.stdout
+
+
+def test_v2_section_absent_on_a_recording_without_the_keys():
+    """Old jsonl on the DVR must still report cleanly -- the v2 section is
+    silent rather than printing zeros or raising (data-provenance.md)."""
+    rows = [_mk_v2_row(0, 3, 3, 1.0, 0.5), _mk_v2_row(500, 3, 3, 1.0, 0.5)]
+    out = _run_report(rows)
+    assert "LINK-ADAPTATION V2" not in out, out
+
+
+def test_v2_tier1_reports_wanted_vs_commanded_overhead():
+    """The commanded pair is the flown 1.0/0.5; the policy wanted less on
+    every sample, which is the over-provisioned case worth spending on
+    bitrate. 'below' must therefore read 100%."""
+    rows = [_mk_v2_row(t, 3, 3, 1.0, 0.5, want_b=0.5, want_e=0.4)
+            for t in (0, 500, 1000)]
+    out = _run_report(rows)
+    assert "LINK-ADAPTATION V2" in out, out
+    sec = out[out.find("LINK-ADAPTATION V2"):]
+    assert "tier 1" in sec, sec
+    # want_b p50 0.50 against cmd 1.00, and 100% of samples below it.
+    assert re.search(r"\s+3\s+3\s+0\.50/0\.50\s+1\.00\s+0\.40/0\.40\s+0\.50\s+100%/0%", sec), sec
+    # (1+1.0)/(1+0.5) = 1.33x more video for the same airtime.
+    assert re.search(r"rung 3: x1\.33", sec), sec
+
+
+def test_v2_tier1_flags_the_under_protected_direction():
+    """A target ABOVE the commanded pair is the opposite finding: the fixed
+    overhead is too THIN for the loss being measured. It must show up in the
+    'above' column, not be averaged away."""
+    rows = [_mk_v2_row(t, 3, 3, 1.0, 0.5, want_b=1.6, want_e=1.2)
+            for t in (0, 500)]
+    sec = _run_report(rows)
+    sec = sec[sec.find("LINK-ADAPTATION V2"):]
+    assert re.search(r"0%/100%", sec), sec
+    # Less video, not more: (1+1.0)/(1+1.6) = 0.77.
+    assert re.search(r"rung 3: x0\.77", sec), sec
+
+
+def test_v2_tier2_treats_lo_zero_as_unmeasured_not_dead():
+    """objective.lo == 0 means the armed down probe produced no sample. It
+    must NOT be scored as 'the rung below is worse' -- the objective itself
+    treats no measurement as 'stay'."""
+    rows = [_mk_v2_row(t, 3, 3, 1.0, 0.5,
+                       obj={"hi": 23.4, "lo": 0.0, "armed": True})
+            for t in (0, 500)]
+    sec = _run_report(rows)
+    sec = sec[sec.find("LINK-ADAPTATION V2"):]
+    assert "scored in 0" in sec, sec
+    assert "unheard, not just worse" in sec, sec
+
+
+def test_v2_tier2_reports_the_verdict_where_it_is_scored():
+    rows = [
+        _mk_v2_row(0,   3, 3, 1.0, 0.5, obj={"hi": 23.4, "lo": 0.0, "armed": False}),
+        _mk_v2_row(500, 3, 3, 1.0, 0.5, obj={"hi": 20.0, "lo": 26.0, "armed": True}),
+    ]
+    sec = _run_report(rows)
+    sec = sec[sec.find("LINK-ADAPTATION V2"):]
+    assert re.search(r"armed in 1/2 samples \(50%\), scored in 1", sec), sec
+    assert re.search(r"lower rung scored higher in 1/1", sec), sec
+    assert "-> DEMOTE" in sec, sec
+
+
+def test_v2_tier2_compares_its_verdict_against_what_the_ladder_did():
+    """The comparison the observe flight is FOR: at each real demote, did
+    the objective agree, disagree, or have nothing to say? The no-sample
+    case is called out separately because it would have HELD."""
+    rows = [
+        # Real demote, objective agreed (lower rung scored higher).
+        _mk_v2_row(500, 3, 3, 1.0, 0.5,
+                   obj={"hi": 20.0, "lo": 26.0, "armed": True},
+                   event={"t_ms": 500, "from": 3, "to": 2, "reason": "util"}),
+        # Real demote, objective had no down-probe sample -> would have held.
+        _mk_v2_row(1500, 2, 2, 1.0, 0.5,
+                   obj={"hi": 15.0, "lo": 0.0, "armed": True},
+                   event={"t_ms": 1500, "from": 2, "to": 1, "reason": "util"}),
+        # Real demote, objective disagreed (lower rung scored worse).
+        _mk_v2_row(2500, 1, 1, 1.0, 0.5,
+                   obj={"hi": 10.0, "lo": 6.0, "armed": True},
+                   event={"t_ms": 2500, "from": 1, "to": 0, "reason": "util"}),
+        # A PROMOTE must not be counted as a demote.
+        _mk_v2_row(3500, 2, 2, 1.0, 0.5,
+                   obj={"hi": 18.0, "lo": 9.0, "armed": True},
+                   event={"t_ms": 3500, "from": 1, "to": 2, "reason": "promote"}),
+    ]
+    sec = _run_report(rows)
+    sec = sec[sec.find("LINK-ADAPTATION V2"):]
+    assert re.search(r"shipped ladder demoted 3x", sec), sec
+    assert re.search(r"objective agreed:\s+1", sec), sec
+    assert re.search(r"NO down-probe sample:\s*1", sec), sec
+    assert re.search(r"objective disagreed:\s+1", sec), sec
+
+
+def test_v2_follow_reports_disagreement_and_the_above_counter():
+    """observed_mcs != commanded is the drone having moved on its own.
+    follow_above_ignored is called out because a nonzero value means
+    something upstream is wrong, not merely noteworthy."""
+    rows = [
+        _mk_v2_row(0,    3, 3, 1.0, 0.5, observed_mcs=3,
+                   counters={"follow_adopts": 0, "follow_above_ignored": 0}),
+        _mk_v2_row(500,  3, 3, 1.0, 0.5, observed_mcs=0, following=True,
+                   counters={"follow_adopts": 0, "follow_above_ignored": 0}),
+        # Nothing heard this window: the exporter writes null, not nothing.
+        _mk_v2_row(1000, 0, 0, 1.0, 0.5, observed_mcs=None, emit_obs=True,
+                   counters={"follow_adopts": 1, "follow_above_ignored": 0}),
+    ]
+    sec = _run_report(rows)
+    sec = sec[sec.find("LINK-ADAPTATION V2"):]
+    assert re.search(r"disagreed with commanded in 1/3 samples, unheard in 1", sec), sec
+    assert re.search(r"adopts=1\s+above_ignored=0", sec), sec
+    assert "should be 0" in sec, sec
+
+
 if __name__ == "__main__":
     test_flightreport_structure()
     test_old_scale_snr_warns_on_stderr()
@@ -1057,4 +1211,11 @@ if __name__ == "__main__":
     test_salvage_section_absent_on_old_recordings()
     test_salvage_section_survives_counter_reset_on_restart()
     test_session_dir_mode_prints_salvage_from_flight_jsonl()
+    test_v2_section_absent_on_a_recording_without_the_keys()
+    test_v2_tier1_reports_wanted_vs_commanded_overhead()
+    test_v2_tier1_flags_the_under_protected_direction()
+    test_v2_tier2_treats_lo_zero_as_unmeasured_not_dead()
+    test_v2_tier2_reports_the_verdict_where_it_is_scored()
+    test_v2_tier2_compares_its_verdict_against_what_the_ladder_did()
+    test_v2_follow_reports_disagreement_and_the_above_counter()
     unittest.main()

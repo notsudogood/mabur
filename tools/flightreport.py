@@ -746,6 +746,161 @@ def sniff_ctllog(path):
     return first.startswith("ctllog ")
 
 
+def print_v2_report(rows):
+    """LINK-ADAPTATION V2: what the observe-only stages would have done.
+
+    Reads the sideport keys the tier 1 / tier 2 work added
+    (docs/link-adaptation-v2-proposal.md):
+
+      link.ctl.ov_target.{base,enh}  -- the overhead the policy WANTED
+      link.ctl.rung.{ov_base,ov_enh} -- the overhead actually commanded
+      link.ctl.objective.{hi,lo,armed} -- the two rungs' scores
+      link.ctl.observed_mcs / following -- the drone's actual rate
+
+    The whole point of flying with link.overhead.enable = false and
+    link.objective.enable = true / act = false is to compare a wanted
+    operating point against the one that was really flown, BEFORE either
+    loop is allowed to decide anything. That comparison is this report.
+
+    Silent on recordings that predate the keys -- old jsonl on the DVR must
+    still report cleanly (data-provenance.md)."""
+    have_ov = [r for r in rows
+               if ((r.get("link") or {}).get("ctl") or {}).get("ov_target")]
+    have_obj = [r for r in rows
+                if ((r.get("link") or {}).get("ctl") or {}).get("objective")]
+    have_obs = [r for r in rows
+                if "observed_mcs" in (((r.get("link") or {}).get("ctl")) or {})]
+    if not (have_ov or have_obj or have_obs):
+        return
+
+    print("LINK-ADAPTATION V2 (observe-only)")
+
+    # --- tier 1: wanted overhead vs commanded -----------------------------
+    #
+    # Grouped by rung, because the commanded pair is per-rung config and the
+    # measured loss driving the target is not: a single pooled number would
+    # average two different questions together.
+    if have_ov:
+        per_rung = {}
+        for r in have_ov:
+            ctl = r["link"]["ctl"]
+            rung = (ctl.get("rung") or {})
+            idx = rung.get("idx")
+            if idx is None:
+                continue
+            tb, te = ctl["ov_target"].get("base"), ctl["ov_target"].get("enh")
+            cb, ce = rung.get("ov_base"), rung.get("ov_enh")
+            if None in (tb, te, cb, ce):
+                continue
+            per_rung.setdefault(idx, []).append((tb, te, cb, ce))
+        print("  tier 1 -- overhead the policy WANTED vs what was commanded")
+        print("    rung  n     want_b p50/p95   cmd_b   want_e p50/p95   cmd_e   below/above")
+        for idx in sorted(per_rung):
+            v = per_rung[idx]
+            tb = sorted(x[0] for x in v)
+            te = sorted(x[1] for x in v)
+            cb, ce = v[-1][2], v[-1][3]
+            # "below" is the interesting direction: the target under the
+            # commanded pair means the fixed overhead is over-provisioned
+            # and tier 1 would have spent the difference on bitrate.
+            below = sum(1 for x in v if x[0] < x[2])
+            above = sum(1 for x in v if x[0] > x[2])
+            print(f"    {idx:>4}  {len(v):<5} "
+                  f"{_pct(tb,50):>5.2f}/{_pct(tb,95):<5.2f}  {cb:<5.2f}   "
+                  f"{_pct(te,50):>5.2f}/{_pct(te,95):<5.2f}  {ce:<5.2f}   "
+                  f"{100*below/len(v):.0f}%/{100*above/len(v):.0f}%")
+        # Implied bitrate delta, on the equal-pair form the proposal's §2
+        # derives: kbps ~ rate/(1+ov), so holding rate fixed the ratio is
+        # just (1+ov_cmd)/(1+ov_want). Reported as a median per rung, and
+        # ONLY as an indication -- the shipped pair is unequal, so the exact
+        # figure needs the two-layer form.
+        print("  implied video-rate change if tier 1 had been armed "
+              "(median, equal-pair approximation):")
+        for idx in sorted(per_rung):
+            v = per_rung[idx]
+            ratios = sorted((1.0 + x[2]) / (1.0 + x[0]) for x in v)
+            med = _pct(ratios, 50)
+            print(f"    rung {idx}: x{med:.2f} ({100*(med-1):+.0f}%)")
+
+    # --- tier 2: the objective's verdict ----------------------------------
+    if have_obj:
+        armed = [r for r in have_obj
+                 if (r["link"]["ctl"]["objective"] or {}).get("armed")]
+        # lo == 0 means UNMEASURED, not "the rung below is dead" -- the
+        # objective itself treats it that way (have_lo in rung_objective.h),
+        # so a verdict can only be read where lo > 0.
+        scored = [r for r in armed
+                  if (r["link"]["ctl"]["objective"] or {}).get("lo", 0) > 0]
+        n = len(have_obj)
+        print(f"  tier 2 -- down probe armed in {len(armed)}/{n} samples "
+              f"({100*len(armed)/n:.0f}%), scored in {len(scored)}")
+        if scored:
+            wins = [r for r in scored
+                    if r["link"]["ctl"]["objective"]["lo"] >
+                       r["link"]["ctl"]["objective"]["hi"]]
+            print(f"    lower rung scored higher in {len(wins)}/{len(scored)} "
+                  f"scored samples ({100*len(wins)/len(scored):.0f}%)")
+            for r in scored[:8]:
+                o = r["link"]["ctl"]["objective"]
+                idx = (r["link"]["ctl"].get("rung") or {}).get("idx")
+                verdict = "DEMOTE" if o["lo"] > o["hi"] else "stay"
+                print(f"      t={r.get('t_ms')} rung={idx} "
+                      f"hi={o['hi']:.1f} lo={o['lo']:.1f} -> {verdict}")
+            if len(scored) > 8:
+                print(f"      ... {len(scored)-8} more")
+        elif armed:
+            # Armed but never scored is a real finding, not a gap: it means
+            # the probe was up and nothing came back, i.e. the rung below is
+            # not merely worse but unheard.
+            print("    armed but never scored -- the down probe produced no "
+                  "sample, so the rung below was unheard, not just worse")
+
+        # The comparison that actually matters: what did the SHIPPED ladder
+        # do at the moments the objective had an opinion?
+        demotes = []
+        prev_ev = None
+        for r in have_obj:
+            ev = (r["link"]["ctl"].get("last_event") or {})
+            if not ev.get("t_ms") or ev["t_ms"] == prev_ev:
+                continue
+            prev_ev = ev["t_ms"]
+            if ev.get("to", 0) < ev.get("from", 0):
+                o = r["link"]["ctl"]["objective"] or {}
+                demotes.append((ev, o))
+        if demotes:
+            agree = sum(1 for _, o in demotes
+                        if o.get("lo", 0) > 0 and o["lo"] > o.get("hi", 0))
+            blind = sum(1 for _, o in demotes if not o.get("lo", 0) > 0)
+            print(f"    shipped ladder demoted {len(demotes)}x while the "
+                  f"objective was enabled:")
+            print(f"      objective agreed:      {agree}")
+            print(f"      objective had NO down-probe sample: {blind}"
+                  " (it would have held -- no measurement means stay)")
+            print(f"      objective disagreed:   {len(demotes)-agree-blind}")
+            for ev, o in demotes[:6]:
+                lo = o.get("lo", 0)
+                tag = ("agreed" if lo > 0 and lo > o.get("hi", 0)
+                       else ("no sample" if not lo > 0 else "disagreed"))
+                print(f"      t={ev['t_ms']} {ev['from']}->{ev['to']} "
+                      f"reason={ev.get('reason')} objective={tag}")
+
+    # --- the anti-fight contract ------------------------------------------
+    if have_obs:
+        dis = [r for r in have_obs
+               if r["link"]["ctl"].get("observed_mcs") is not None
+               and r["link"]["ctl"].get("observed_mcs") !=
+                   ((r["link"]["ctl"].get("rung") or {}).get("mcs"))]
+        unheard = sum(1 for r in have_obs
+                      if r["link"]["ctl"].get("observed_mcs") is None)
+        last = have_obs[-1]["link"]["ctl"].get("counters") or {}
+        print(f"  follow -- observed MCS disagreed with commanded in "
+              f"{len(dis)}/{len(have_obs)} samples, unheard in {unheard}")
+        print(f"    adopts={last.get('follow_adopts', 0)} "
+              f"above_ignored={last.get('follow_above_ignored', 0)}"
+              "  (above_ignored should be 0: the drone only ever descends "
+              "on its own authority)")
+
+
 def print_salvage_report(rows):
     """SALVAGE: what rx.keep_corrupted (2026-09-08) bought. The sideport's
     per-card crc_fail and per-stream corrupt/salvaged/sub_fail are
@@ -1010,6 +1165,7 @@ def main(path, aulog=None, probelog_path=None):
         flat_traj = [u for traj in trajs for u in traj]
         print(f"  t={t} residual={rl:.4f} u[-5s..]={flat_traj} drone_state={drone_state}{rssi_str}{snr_str}")
 
+    print_v2_report(rows)
     print_salvage_report(rows)
 
     # link.attrib.suppressed was removed from the sideport 2026-09-02 with
@@ -1047,6 +1203,8 @@ if __name__ == "__main__":
         # section too -- it is a flight's post-flight command, not a ctl
         # viewer. Silent when the recording predates the counters.
         if primary != s.flight and s.flight:
-            print_salvage_report(load(s.flight))
+            fl = load(s.flight)
+            print_v2_report(fl)
+            print_salvage_report(fl)
     else:
         main(arg, sys.argv[2] if len(sys.argv) > 2 else None)

@@ -847,5 +847,10 @@ Fix it in the mabur repo on a branch, re-run the host suite
 (`nix-shell -p pkg-config libusb1 --run "ctest --test-dir build -R 'test_|host_e2e'"`),
 and — if the firmware pins to it — bump `MABUR_VERSION` in
 `openipc-builder/package/mabur/mabur.mk` to the new SHA (the recipe fetches
-the public repo by commit). The build environment is NixOS; devourer/libusb
+the public repo by commit).
+⚠ **STALE (checked 2026-09-17).** That recipe no longer pins a commit:
+`MABUR_VERSION := $(shell git ls-remote $(MABUR_SITE) refs/heads/master ...)`
+resolves master's HEAD at build time, so there is no SHA to bump — and
+`MABUR_SITE` is `gilankpam/mabur`, which may not be the remote your
+checkout pushes to. See "Building the device images" in `docs/deploy.md`. The build environment is NixOS; devourer/libusb
 builds need the `nix-shell -p pkg-config libusb1` wrapper.

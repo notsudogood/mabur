@@ -622,12 +622,23 @@ here.
   command into `nix-shell` instead. (This is also why the same build works
   interactively and "fails" in a script.)
 - Output: `archive/ssc338q_fpv_openipc-urllc-aio/<timestamp>/`.
-- **mabur is pinned by COMMIT.** `package/mabur/mabur.mk` fetches the public
-  repo at `MABUR_VERSION`, so a drone image is only as new as that SHA. Bump
-  it when you want the image to carry new work — otherwise a reflash reverts
-  the drone to whatever the pin names, which after a wire bump means a
-  version-mismatch flag day arriving at the worst possible moment (see the
-  `RC_VERSION` sections above).
+- **mabur is NOT pinned — it tracks master, and from a DIFFERENT REMOTE.**
+  Checked directly on `feat/mabur`, 2026-09-17:
+  ```make
+  MABUR_SITE        = https://github.com/gilankpam/mabur
+  MABUR_BRANCH      = master
+  MABUR_VERSION    := $(shell git ls-remote $(MABUR_SITE) refs/heads/$(MABUR_BRANCH) | cut -f1)
+  MABUR_SITE_METHOD = git
+  ```
+  So `MABUR_VERSION` resolves master's HEAD at build time and there is no
+  SHA to bump. ⚠ `docs/bench-validation.md`'s "bump `MABUR_VERSION` to the
+  new SHA (the recipe fetches the public repo by commit)" describes an
+  earlier version of this recipe and is stale.
+  **The remote is what matters more:** the image builds from
+  `gilankpam/mabur`, which is not necessarily the remote a given checkout
+  pushes to (this one's `origin` is `notsudogood/mabur`). Work has to reach
+  `gilankpam/mabur` master before any drone image can carry it — pushing a
+  branch to another fork, or merging it there, does nothing for the image.
 - The same build also produces U-Boot (`build_uboot()`, from the
   `gilankpam/u-boot-sigmastar` fork, branch `mabur-fastboot`) — three files
   in `output/images`, of which `u-boot-<soc>-nor-padded.bin` is the one
@@ -672,16 +683,24 @@ here.
   before assuming an ssh edit persists across a reflash, or that a card edit
   takes effect without one.
 
-### Which version ends up where — the asymmetry worth remembering
+### Which version ends up where
 
 | | drone | GS |
 |---|---|---|
 | builder | `openipc-builder` (`feat/mabur`) | `sbc-groundstations` |
-| mabur version | **pinned SHA** in `mabur.mk` | **latest master** at build time |
-| reflash after a branch lands on master | still the old pin | picks it up |
-| reflash while work is unmerged | old pin | master, not your branch |
+| mabur remote | `gilankpam/mabur` | `gilankpam/mabur` |
+| mabur version | **master HEAD** at build time | **master HEAD** at build time |
+| reflash while work is unmerged | master, not your branch | master, not your branch |
 
-So after any `RC_VERSION` bump: bump the drone's pin, and get the change
-onto mabur master, or the two ends will disagree the next time either is
-reflashed. Side-loading a binary does not change either image's idea of the
-version.
+Both ends resolve master at build time, so there is no pin on either side
+and nothing to bump. That is simpler than it sounds only if you remember the
+consequence: **an image build can never carry unmerged work.** Branch work
+reaches a device exactly two ways — side-load the binary (the sections above),
+or merge to `gilankpam/mabur` master and rebuild.
+
+The trap this replaces is real but differently shaped. After an `RC_VERSION`
+bump, the danger is not a stale pin; it is that master moves under you. Two
+images built either side of a merge carry different wire versions, and a
+side-loaded binary is invisible to both. So after a bump: get the change onto
+master, then rebuild BOTH images from the same master, and do not mix a
+freshly side-loaded end with a freshly flashed one.

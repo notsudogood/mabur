@@ -17,7 +17,8 @@ and is marked as such.
 | Tier 2 objective + arm logic | **landed**, `link.objective`, default **OFF** |
 | Tier 2 ladder *decision* | **not wired** — `objective.act = true` is rejected at load |
 | Fast restore (§4) | **not started** — `pre_adopt_rung()` remembers the rung, nothing acts on it |
-| Metrics (§6) | **not started** |
+| Metrics (§6) | **not started** — and §6's energy metric may be partly removed on `gilankpam/mabur` master, see §8a |
+| ⚠ Merge collision with `gilankpam/mabur` master | **RC_VERSION 9 taken; tier 1's floor measured wrong — see §8a** |
 
 Nothing here has been on a device. The host gate passes (137/138; the one
 failure is environmental), and `gs_e2e` + `gs_au_e2e` pass — so the
@@ -609,6 +610,122 @@ Each step is independently valuable and independently revertable.
 Gates, per CLAUDE.md: `tools/bench/ausniff.py` for anything touching
 maburgs, plus `tools/bench/aucadence.py` for anything touching the
 bitrate policy or UEP overhead — which tiers 1 and 2 both do.
+
+---
+
+## 8a. Collision with `gilankpam/mabur` master (found 2026-09-17)
+
+This branch was built on `notsudogood/mabur` master (`f51f8e0`).
+`gilankpam/mabur` master — **the remote both device images build from** — is
+a sibling off that same base with ~45 commits on it, and two of them
+collide with this work. Read this before merging in either direction.
+
+### RC_VERSION 9 is already taken — this branch must become 10
+
+`e65922a rc: RC_VERSION 9 — RCF hop_ch/hop_epoch, Telem channel/hop_epoch`
+landed there on 2026-09-15, two days before this branch's own
+`RC_VERSION 9`. They are incompatible and they claim the SAME BYTE:
+
+| | their v9 | this branch's v9 |
+|---|---|---|
+| `RCF_HEAD_LEN` | 17 | 16 |
+| byte 15 | `hop_ch` | `probe_profile_dn` |
+| byte 16 | `hop_epoch` | (CRC) |
+| `TELEM_LEN` | 89 (+channel/hop_epoch) | 87, untouched |
+
+The head lengths differ, so a frame from one build fails the other's CRC
+check rather than mis-parsing — the failure is loud, not silent. But the
+version number is ambiguous, which is worse than either layout.
+
+**Merge target: `RC_VERSION 10`, an 18-byte head**, keeping their fields at
+15–16 (already flown) and appending this branch's at 17:
+
+```
+... byte 14 probe_profile | 15 hop_ch | 16 hop_epoch | 17 probe_profile_dn | crc16
+```
+
+Both sides also patched the SAME four `tests/integration/run_*_e2e.sh`
+scripts that hand-pack the RCF head — theirs to 17 bytes with trailing
+zeros, this branch's to 16. Those four conflict textually and must end at
+18. Note they have `tools/…/gen_vectors.py` emitting the hop fields
+(`fee3b18`); this branch regenerated `rc.json`'s goldens with an ad-hoc
+Python packer instead. Use their generator for the v10 goldens.
+
+### `fec.log` measures what tier 1's floor was guessing at
+
+`ca3ad5d gs: fec.log — per-episode FEC loss gauge for sizing the rung
+overhead pair` is not a competing controller. It is the **measurement tier 1
+is missing**, and it says the tier 1 floor is set too low.
+
+`SwDecoder` books a loss *episode* at horizon eviction — a run of source
+seqs the channel never delivered directly, merged within one repair window,
+with the distinct covering repairs received (two-card deduped), abandoned
+vs recovered, and stale-below-watermark. `flightreport.py` then prints, per
+(sid, mcs, ov), the overhead each non-stale episode **would have needed**:
+
+```
+ov_req = (sqrt(1+4c)-1)/2,   c = m·ov·(1+ov)/r
+```
+
+— at overhead `x` the same lost air carries `m(1+ov)/(1+x)` sources against
+`r·x/ov` covering repairs, and the decoder needs repairs ≥ sources.
+
+**That is a fundamentally better model than `OverheadPolicy`'s.** This
+branch drives overhead from the MEAN pre-FEC loss rate
+(`ov = mL/(1−mL)`, `margin` 2). But sliding-window FEC does not fail on a
+rate — it fails on *coverage*: whether the repairs spanning a burst
+outnumber the sources lost inside it. A 2 % mean loss spread evenly is
+trivially covered; the same 2 % arriving as one 16-symbol burst inside a
+32-symbol window may not be. `margin = 2` on the mean is a crude proxy for
+burstiness; `ov_req` measures it directly, per episode.
+
+The bench numbers (2026-09-16, GS deployed, ausniff 60.0 fps / fid_gaps 0)
+make the consequence concrete. Rung-5 base: episodes are one lost agg-6
+each, `m` 11/16 p50/max against `r ≈ 41`, **`ov_req` max 0.46**; enh at
+ov 0.5 reads 0.38. Reproducing the formula gives 0.387 at m=11 and 0.515 at
+m=16, bracketing their reported max.
+
+Set against what this branch would command at those rungs:
+
+| measured need (rung 5) | `OverheadPolicy` target at a sparse mean L |
+|---|---|
+| `ov_req` ≈ 0.39–0.52 | L=1 % → 0.02, L=5 % → 0.11, L=10 % → 0.25 |
+| | all floored to `min_ov` = **0.30** |
+
+So **`min_ov = 0.3` is below what the measured worst episodes need**, and at
+sparse loss the policy's own target is far below that — the floor is the
+only thing preventing much worse. `overhead_policy.h` says of that 0.3:
+"a judgement call pending flight data on that variance, not a measurement."
+This is that data, and it says the number is wrong.
+
+Two ways to fix it, and the second is better:
+
+1. Raise `min_ov` per rung to the measured `ov_req` p99/max (~0.5 at
+   rung 5). Keeps the mean-loss controller, corrects its floor.
+2. **Drive tier 1 from `ov_req` directly** — feed the episode gauge's
+   high-percentile `ov_req` over a recent window instead of `mL/(1−mL)`.
+   That replaces the margin heuristic with the quantity that actually
+   decides recovery, and makes §9.5's RLC-rank-deficiency slack the only
+   remaining fudge factor.
+
+Either way the flown 1.0 base pair is confirmed over-provisioned by ~2× at
+rung 5 — §2.1's argument, independently measured rather than derived.
+
+### Smaller collisions to expect
+
+- `tools/flightreport.py`: they add `FEC EPISODES` and `HOP`; this branch
+  adds `LINK-ADAPTATION V2`. Textual conflict in `main()` and the section
+  order. `tools/session.py` learns `fec.log` and `scan.log` on their side.
+- `gs/src/ladder_controller.*`: `a5ca94a` adds **`restore(rung)`** and
+  `blank_store` for the hop, and `f4b4987` splits `blank_store`'s s3 gate
+  from the s3 demote decisions. `restore(rung)` is close to what §4's
+  fast-restore wants — build on it rather than adding a second mechanism.
+- `10b22b3` **removes `radio.scan.energy_period_ms` and the 1 Hz A
+  records.** §6's metric 4 cites `cards[i].energy` (`fa`/`cca`/`igi`) as an
+  available signal; on that master it is at least partly gone. Re-check
+  before building on it.
+- `tests/test_flightreport.py` and `tests/CMakeLists.txt` are touched by
+  both.
 
 ---
 

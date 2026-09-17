@@ -1598,3 +1598,266 @@ TEST(blank_store_does_not_suspend_s3_decisions_only_the_ewma) {
   CHECK(ctl.last_event().reason == CtlReason::S3Residual);
   CHECK(ctl.rungs().stat(before_rung).s3_resid.n == before_n);
 }
+
+// ---------------------------------------------------------------------------
+// Fast restore (FollowCfg::restore, proposal §4). Built on the SAME
+// LadderController::restore() the in-flight hop uses, so the probe gate is
+// skipped by construction rather than special-cased.
+// ---------------------------------------------------------------------------
+
+namespace {
+LadderCfg make_cfg_follow_restore() {
+  LadderCfg cfg = make_cfg_noprobe();
+  cfg.follow.confirm_samples = 1;
+  cfg.follow.restore = true;
+  cfg.follow.restore_clean_ms = 500.0;
+  return cfg;
+}
+
+// Drives clean ok_at() samples on `mcs` (so the adopt stays settled) for
+// `ms`, at the usual 50 ms cadence.
+void feed_clean_at(LadderController& ctl, double& t, double ms, int mcs) {
+  const double end = t + ms;
+  while (t < end) { ctl.update(ok_at(0.0, mcs), t); t += 50; }
+}
+
+// Same, but STOPS the tick the restore counter moves. Needed because these
+// fixtures keep reporting the low mcs forever -- a drone parked on its own
+// floor -- so feeding past the restore lands in the re-adopt that follows it
+// (and in the penalty ledger that now guards the cycle). Tests that want to
+// observe the restore itself must not run past it.
+bool feed_clean_until_restore(LadderController& ctl, double& t, double max_ms,
+                              int mcs) {
+  const uint64_t before = ctl.counters().follow_restores;
+  const double end = t + max_ms;
+  while (t < end) {
+    ctl.update(ok_at(0.0, mcs), t);
+    t += 50;
+    if (ctl.counters().follow_restores != before) return true;
+  }
+  return false;
+}
+}  // namespace
+
+// The headline: one step back to the pre-adopt rung, not a rung-by-rung
+// climb. kLadder rung 3's mcs is 5; rung 0's is 0.
+TEST(fast_restore_jumps_back_in_one_step) {
+  LadderController ctl(make_cfg_follow_restore());
+  double t = 0;
+  promote_to(ctl, t, 3);
+  REQUIRE(ctl.rung() == 3);
+
+  // Drone drops itself to rung 0 (mcs0); the GS adopts.
+  REQUIRE(ctl.update(ok_at(0.0, 0), t));
+  t += 50;
+  REQUIRE(ctl.rung() == 0);
+  REQUIRE(ctl.pre_adopt_rung() == 3);
+  REQUIRE(ctl.counters().follow_restores == 0);
+
+  // Clean at the adopted rung until the restore window elapses.
+  CHECK(feed_clean_until_restore(ctl, t, 2000, 0));
+  CHECK(ctl.rung() == 3);                          // straight back, one step
+  CHECK(ctl.counters().follow_restores == 1);
+  CHECK(ctl.last_event().reason == CtlReason::FollowRestore);
+  CHECK(ctl.last_event().from == 0 && ctl.last_event().to == 3);
+  CHECK(std::string(to_string(CtlReason::FollowRestore)) == "follow_restore");
+  // Fires at most once per adopt: the target is consumed.
+  CHECK(ctl.pre_adopt_rung() == -1);
+}
+
+// Default OFF. pre_adopt_rung() must still be populated, so an observe-only
+// flight records the target it WOULD have restored to.
+TEST(fast_restore_disabled_still_records_the_target) {
+  LadderCfg cfg = make_cfg_noprobe();
+  cfg.follow.confirm_samples = 1;           // follow.restore stays false
+  REQUIRE(!cfg.follow.restore);
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 3);
+  REQUIRE(ctl.update(ok_at(0.0, 0), t));
+  t += 50;
+  REQUIRE(ctl.rung() == 0);
+  CHECK(ctl.pre_adopt_rung() == 3);         // recorded...
+  feed_clean_at(ctl, t, 2000, 0);
+  CHECK(ctl.counters().follow_restores == 0);  // ...but never acted on
+}
+
+// The clean streak has to be SUSTAINED: loss inside the window resets it.
+TEST(fast_restore_needs_a_sustained_clean_window) {
+  LadderController ctl(make_cfg_follow_restore());
+  double t = 0;
+  promote_to(ctl, t, 3);
+  REQUIRE(ctl.update(ok_at(0.0, 0), t));
+  t += 50;
+  REQUIRE(ctl.rung() == 0);
+
+  // Clean, then a lossy sample just short of the window, repeatedly.
+  for (int i = 0; i < 6; ++i) {
+    feed_clean_at(ctl, t, 300, 0);
+    ctl.update(ok_at(0.5, 0), t);   // u = 0.5/(2/3) = 0.75, over up_util
+    t += 50;
+  }
+  CHECK(ctl.counters().follow_restores == 0);
+  CHECK(ctl.rung() == 0);
+}
+
+// A genuine demote since the adopt must block the restore, exactly as it
+// blocks a promote -- otherwise the jump lands back over real loss evidence.
+TEST(fast_restore_is_blocked_by_a_genuine_demote) {
+  LadderCfg cfg = make_cfg_follow_restore();
+  cfg.hold_after_down_ms = 4000;
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 3);
+  REQUIRE(ctl.update(ok_at(0.0, 2), t));   // drone drops to rung 1 (mcs2)
+  t += 50;
+  REQUIRE(ctl.rung() == 1);
+  REQUIRE(ctl.pre_adopt_rung() == 3);
+
+  // A residual demote at the adopted rung -- real post-FEC loss. Booked at
+  // rung 1, not the floor: the demote blocks need idx_ > 0, so a fixture
+  // that adopts to rung 0 can never set last_down_ms_ at all and would pass
+  // this test for the wrong reason.
+  LinkHealth bad = ok_at(0.0, 2);   // rung 1's mcs
+  bad.residual_loss = 0.5;
+  REQUIRE(ctl.update(bad, t));
+  t += 50;
+  REQUIRE(ctl.rung() == 0);         // demoted off rung 1
+  // Clean for well past restore_clean_ms, but inside hold_after_down_ms.
+  feed_clean_at(ctl, t, 1500, 0);
+  CHECK(ctl.counters().follow_restores == 0);
+}
+
+// The hop drives its own restore(ref_rung) and blanks the store while it
+// does. Two restores fighting over the rung is the one way this makes things
+// worse, so the follow restore stands down inside that blank.
+TEST(fast_restore_stands_down_inside_the_hop_store_blank) {
+  LadderController ctl(make_cfg_follow_restore());
+  double t = 0;
+  promote_to(ctl, t, 3);
+  REQUIRE(ctl.update(ok_at(0.0, 0), t));
+  t += 50;
+  REQUIRE(ctl.rung() == 0);
+
+  ctl.blank_store(t + 3000);
+  feed_clean_at(ctl, t, 1500, 0);
+  CHECK(ctl.counters().follow_restores == 0);   // held off
+  CHECK(ctl.rung() == 0);
+  // Past the blank, it proceeds.
+  CHECK(feed_clean_until_restore(ctl, t, 2500, 0));
+  CHECK(ctl.rung() == 3);
+}
+
+// The hop's own restore() must invalidate a pending follow target: after a
+// hop has overridden the rung, the follow path's remembered rung is stale.
+TEST(an_explicit_restore_clears_a_pending_follow_target) {
+  LadderController ctl(make_cfg_follow_restore());
+  double t = 0;
+  promote_to(ctl, t, 3);
+  REQUIRE(ctl.update(ok_at(0.0, 0), t));
+  t += 50;
+  REQUIRE(ctl.pre_adopt_rung() == 3);
+
+  ctl.restore(2, t);                    // the hop, to its own ref_rung
+  CHECK(ctl.rung() == 2);
+  CHECK(ctl.pre_adopt_rung() == -1);    // stale target dropped
+  feed_clean_at(ctl, t, 1500, 4);       // rung 2's MCS, so no fresh adopt
+  CHECK(ctl.counters().follow_restores == 0);
+}
+
+// restore() clears ALL THREE probation fields. The adopt path used to clear
+// only probation_active_ and leave probation_until_ms_/probation_rung_
+// stale; delegating to restore() fixed that, so pin it.
+TEST(adopt_via_restore_clears_probation_completely) {
+  LadderCfg cfg = make_cfg_noprobe();
+  cfg.follow.confirm_samples = 1;
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 2);
+  // A promote arms probation on the rung it moved to.
+  REQUIRE(ctl.probation_ms_left(t) > 0);
+  REQUIRE(ctl.update(ok_at(0.0, 0), t));
+  t += 50;
+  REQUIRE(ctl.rung() == 0);
+  CHECK(ctl.probation_ms_left(t) == 0);
+}
+
+// A drone parked on a floor it will not leave is the one way fast restore
+// makes things worse: the GS restores on a clean `u`, the drone re-asserts
+// its own rung, and the pair cycles at restore_clean_ms forever -- one IDR
+// per lap. Measured before the guard: 31 restores in the 20 s after the
+// adopt. The rejection feeds penalize_rung(), so the ledger's existing
+// exponential backoff spaces the retries instead of a fixed interval.
+TEST(a_restore_the_drone_undoes_is_penalized_and_stops_cycling) {
+  LadderController ctl(make_cfg_follow_restore());
+  double t = 0;
+  promote_to(ctl, t, 3);
+  REQUIRE(ctl.update(ok_at(0.0, 0), t));
+  t += 50;
+  REQUIRE(ctl.rung() == 0);
+  REQUIRE(feed_clean_until_restore(ctl, t, 2000, 0));
+  REQUIRE(ctl.rung() == 3);
+  CHECK(ctl.counters().follow_restore_rejected == 0);
+
+  // The drone keeps reporting its floor: the restore is undone inside
+  // restore_trial_ms, so rung 3 goes on the ledger.
+  feed_clean_at(ctl, t, 300, 0);
+  CHECK(ctl.rung() == 0);
+  CHECK(ctl.counters().follow_restore_rejected == 1);
+  CHECK(ctl.last_penalty().rung == 3);
+  CHECK(ctl.probation_ms_left(t) == 0);
+
+  // Inside the penalty the restore stands down rather than re-firing every
+  // restore_clean_ms, and says so on its own counter.
+  CHECK(!feed_clean_until_restore(ctl, t, 4000, 0));
+  CHECK(ctl.counters().follow_restores == 1);
+  CHECK(ctl.counters().follow_restore_penalized > 0);
+}
+
+// The other half: a restore the drone HONOURS must not be penalized. Once
+// the drone reports the restored rung's own mcs there is no disagreement to
+// adopt, so the trial lapses quietly.
+TEST(a_restore_the_drone_honours_is_not_penalized) {
+  LadderController ctl(make_cfg_follow_restore());
+  double t = 0;
+  promote_to(ctl, t, 3);
+  REQUIRE(ctl.update(ok_at(0.0, 0), t));
+  t += 50;
+  REQUIRE(feed_clean_until_restore(ctl, t, 2000, 0));
+  REQUIRE(ctl.rung() == 3);
+
+  // The drone applies rung 3 (mcs5) and holds it well past the trial.
+  feed_clean_at(ctl, t, 4000, 5);
+  CHECK(ctl.rung() == 3);
+  CHECK(ctl.counters().follow_restore_rejected == 0);
+  CHECK(ctl.counters().follow_restore_penalized == 0);
+}
+
+// The fast path standing down must not starve the slow one. An earlier cut
+// of the penalty gate returned false, which denied block 6's promote on
+// every tick the restore's clean streak qualified -- taking away the
+// ordinary probe-gated climb exactly when the shortcut was unavailable.
+TEST(a_penalized_restore_still_lets_the_ordinary_ladder_climb) {
+  LadderController ctl(make_cfg_follow_restore());
+  double t = 0;
+  promote_to(ctl, t, 3);
+  REQUIRE(ctl.update(ok_at(0.0, 0), t));
+  t += 50;
+  REQUIRE(feed_clean_until_restore(ctl, t, 2000, 0));
+  // The drone undoes it: rung 3 is penalized and the fast path is shut.
+  feed_clean_at(ctl, t, 300, 0);
+  REQUIRE(ctl.counters().follow_restore_rejected == 1);
+  REQUIRE(ctl.rung() == 0);
+  const uint64_t promotes_before = ctl.counters().promotes;
+
+  // Clean for well past clean_ms. The ordinary promote must still happen.
+  feed_clean_at(ctl, t, 7000, 0);
+  CHECK(ctl.counters().promotes > promotes_before);
+  // rung() is NOT checked: the fixture keeps reporting mcs0 forever, so the
+  // drone adopts each promote straight back down. The promote HAPPENING is
+  // the property under test; whether it sticks is the drone's floor, which
+  // is what the rejection ledger above is already reporting.
+  // ...and the stand-down was counted as holds, not as one per sample.
+  CHECK(ctl.counters().follow_restore_penalized > 0);
+  CHECK(ctl.counters().follow_restore_penalized < 20);
+}

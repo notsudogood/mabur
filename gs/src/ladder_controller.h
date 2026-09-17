@@ -92,6 +92,44 @@ struct FollowCfg {
   // not a drone decision -- the same distinction ProbeTrack draws with
   // off_profile ("not scored", never "lost").
   double lag_tail_ms = 120.0;
+
+  // FAST RESTORE (docs/link-adaptation-v2-proposal.md §4). After the GS
+  // adopts a rung the drone dropped to on its own, the ordinary ladder
+  // climbs back through the probe gate at ~3.1 s/rung measured -- so
+  // recovering from the floor to rung 5 takes 9-15 s. Through an obstruction
+  // every few seconds that is slower than the dips it is recovering from,
+  // which would make the whole follow path a net loss.
+  //
+  // With this on, a sustained clean window jumps straight back to the rung
+  // that was commanded before the adopt, in one step, via
+  // LadderController::restore() -- the same primitive the in-flight hop uses
+  // for exactly the same reason (docs/inflight-channel-hop.md §4), which
+  // skips the probe gate by construction rather than by special-casing it.
+  //
+  // DEFAULT OFF, and for a specific reason rather than caution in general:
+  // proposal §9.3 flags restore -> re-dip cycling at obstruction spacing as
+  // an open question with no flight data behind it. A restore that fires
+  // into a link which has not really recovered costs an IDR and lands back
+  // where it started. `pre_adopt_rung()` is populated either way, so an
+  // observe-only flight records what this WOULD have restored to.
+  bool restore = false;
+  // How long `u` must stay under `up_util` before the jump. Deliberately
+  // shorter than clean_ms (the probe-gated promote's window): the point is
+  // to beat the rung-by-rung climb, and the rung being restored to is one
+  // the link was already holding, not a new one being tried.
+  double restore_clean_ms = 500.0;
+  // How long a restored rung is on trial. If the drone pulls the GS back off
+  // it within this window, the restore FAILED: the drone is sitting on a
+  // floor it will not leave, and restoring again just starts a fight neither
+  // side can win (proposal §9.3's cycling risk, arriving by the other road).
+  // Such a rejection feeds penalize_rung(), so the ledger's existing
+  // exponential backoff (penalty_base_ms doubling to penalty_max_ms) spaces
+  // the retries out instead of a fixed retry interval doing it -- and the
+  // restore block below consults that ledger before it jumps.
+  //
+  // 3000 mirrors probation_ms, which is the same judgement for a promote:
+  // a rung we have just moved to is not yet established.
+  double restore_trial_ms = 3000.0;
 };
 
 struct LadderCfg {
@@ -196,7 +234,7 @@ struct LinkHealth {
 
 enum class CtlReason {
   None, Residual, Util, Probation, Starved, Timeout, Promote,
-  S3Residual, S3Util, Fade, PromoteProbed, HopRestore, Follow
+  S3Residual, S3Util, Fade, PromoteProbed, HopRestore, Follow, FollowRestore
 };
 const char* to_string(CtlReason r);
 
@@ -259,6 +297,16 @@ struct CtlCounters {
   // descends on its own authority, so a nonzero count means a mis-decoded
   // descriptor, an off-ladder MCS, or a drone that is not honouring the RCF.
   uint64_t follow_adopts = 0, follow_above_ignored = 0;
+  // Fast restores taken (FollowCfg::restore). Compare against follow_adopts:
+  // adopts without restores means the clean window never came, or a genuine
+  // demote kept blocking it.
+  uint64_t follow_restores = 0;
+  // Fast restores the drone undid inside restore_trial_ms (each one also
+  // penalizes the restored rung), and restores the penalty ledger held off
+  // because of them. A climbing restore_rejected against a flat
+  // follow_restores is the drone-floor fight: read it as "stop restoring to
+  // that rung", not as a reason to shorten the clean window.
+  uint64_t follow_restore_rejected = 0, follow_restore_penalized = 0;
 };
 
 // Measured-loss ladder controller: walks a fixed, pre-filtered list of rungs
@@ -286,7 +334,16 @@ class LadderController {
   // Task 11's HopController) may hand back a rung snapshotted before the
   // hop, and a stale or out-of-range index must not index out of bounds.
   // Logs a HopRestore ctl event.
-  void restore(int rung, double now_ms);
+  // `reason` is what the ctl log records. Defaulted to HopRestore so the
+  // hop's call sites read unchanged; FollowCfg's adopt and fast restore pass
+  // Follow and FollowRestore so the three rung-override paths stay
+  // distinguishable in a recording.
+  //
+  // Clears any pending fast-restore target: an explicit rung override -- by
+  // the hop, by an adopt, or by the restore itself -- supersedes whatever
+  // the follow path was still hoping to climb back to.
+  void restore(int rung, double now_ms,
+               CtlReason reason = CtlReason::HopRestore);
 
   // Stop feeding the per-rung EWMA store (observe_s1/observe_evm/observe_s3/
   // observe_probe) until `until_ms`: an interferer's demoted operating point
@@ -523,6 +580,18 @@ class LadderController {
   int prev_idx_ = -1;          // rung commanded before the last change
   int follow_confirm_ = 0;     // consecutive confirmed off-command samples
   int pre_adopt_rung_ = -1;    // rung held when the last adopt happened
+  // Own clean-streak timer rather than sharing the promote block's
+  // clean_start_ms_: that one is maintained BELOW the restore decision, so
+  // reading it here would use the previous tick's value.
+  double restore_clean_since_ms_ = -1.0;
+  // The last fast restore, for the trial window above. -1 = none pending;
+  // cleared once the trial is survived or the rejection is booked.
+  int last_restore_to_ = -1;
+  double last_restore_ms_ = -1e18;
+  // One follow_restore_penalized tick per clean streak, not per sample --
+  // the same "holds, not ticks" convention promotes_probed/probe_holds use,
+  // so the counter reads as "times the fast path stood down".
+  bool restore_hold_counted_ = false;
 
   CtlCounters counters_;
   CtlEvent last_event_;

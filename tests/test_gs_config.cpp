@@ -892,6 +892,69 @@ TEST(overhead_rejects_unknown_key_and_bad_ranges) {
   CHECK(threw);
 }
 
+// link.follow: drone-initiated rate changes and the fast restore
+// (FollowCfg, ladder_controller.h). The ADOPT half defaults ON -- without it
+// the GS scores loss against a rung the drone is not on, which
+// apply_max_range() already causes on its own -- while the fast RESTORE
+// defaults off, because proposal §9.3's cycling risk has no flight data.
+TEST(follow_defaults_adopt_on_restore_off) {
+  auto cfg = maburgs::load_config(write_tmp(""));
+  const auto& f = cfg.link.ladder_cfg.follow;
+  CHECK(f.enable);
+  CHECK(!f.restore);
+  CHECK(f.confirm_samples == 3);
+  CHECK(std::abs(f.lag_tail_ms - 120.0) < 1e-9);
+  CHECK(std::abs(f.restore_clean_ms - 500.0) < 1e-9);
+  CHECK(std::abs(f.restore_trial_ms - 3000.0) < 1e-9);
+}
+
+TEST(follow_shipped_bundle_keeps_the_fast_restore_disabled) {
+  auto c = maburgs::load_config(std::string(MABUR_GS_BUNDLE_DIR) +
+                                "/maburgs.default.toml");
+  CHECK(c.link.ladder_cfg.follow.enable);
+  CHECK(!c.link.ladder_cfg.follow.restore);
+}
+
+TEST(follow_parses_explicit_values) {
+  auto cfg = maburgs::load_config(write_tmp(
+      "[link.follow]\nenable = false\nconfirm_samples = 5\n"
+      "lag_tail_ms = 200\nrestore = true\nrestore_clean_ms = 800\n"
+      "restore_trial_ms = 5000\n"));
+  const auto& f = cfg.link.ladder_cfg.follow;
+  CHECK(!f.enable);
+  CHECK(f.confirm_samples == 5);
+  CHECK(std::abs(f.lag_tail_ms - 200.0) < 1e-9);
+  CHECK(f.restore);
+  CHECK(std::abs(f.restore_clean_ms - 800.0) < 1e-9);
+  CHECK(std::abs(f.restore_trial_ms - 5000.0) < 1e-9);
+}
+
+TEST(follow_rejects_unknown_key_and_a_dead_cycling_guard) {
+  bool threw = false;
+  try { maburgs::load_config(write_tmp("[link.follow]\nnope = 1\n")); }
+  catch (const std::exception& e) {
+    threw = std::string(e.what()).find("link.follow") != std::string::npos;
+  }
+  CHECK(threw);
+  // A trial shorter than the clean window can never observe a rejection --
+  // the drone would have to undo the restore faster than it was armed -- so
+  // the cycling guard would be silently dead. Refused, not clamped.
+  threw = false;
+  try {
+    maburgs::load_config(write_tmp(
+        "[link.follow]\nrestore = true\nrestore_clean_ms = 2000\n"
+        "restore_trial_ms = 500\n"));
+  } catch (const std::exception& e) {
+    threw = std::string(e.what()).find("restore_trial_ms") != std::string::npos;
+  }
+  CHECK(threw);
+  // ...but with the restore OFF the same pair is inert, not an error: the
+  // guard it would disable never runs.
+  auto cfg = maburgs::load_config(write_tmp(
+      "[link.follow]\nrestore_clean_ms = 2000\nrestore_trial_ms = 500\n"));
+  CHECK(!cfg.link.ladder_cfg.follow.restore);
+}
+
 // link.objective: tier 2's rung objective (rung_objective.h).
 TEST(objective_defaults_are_disabled) {
   auto cfg = maburgs::load_config(write_tmp(""));

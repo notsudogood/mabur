@@ -277,7 +277,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
                 "starved_confirm_ms", "s3_demote", "s3_down_util",
                 "s3_settle_ms", "s3_min_syms",
                 "rung_stats", "fade", "probe", "overhead", "objective",
-                "rcf_slot_hold_ms"});
+                "follow", "rcf_slot_hold_ms"});
     c.link.vtx_id = static_cast<uint32_t>(get_int(r, "vtx_id", 1, 0, 0xFFFFFFFFL, "link"));
     c.link.feedback_ms = static_cast<int>(get_int(r, "feedback_ms", 100, 20, 5000, "link"));
     c.link.rcf_slot_hold_ms = static_cast<int>(get_int(r, "rcf_slot_hold_ms", 30, 0, 1000, "link"));
@@ -329,6 +329,38 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
         if (rung.mcs <= max_mcs) effective.push_back(rung);
       if (effective.empty()) fail("link.ladder", "empty after max_mcs filter");
       c.link.ladder_cfg.ladder = effective;
+    }
+    // link.follow: drone-initiated rate changes and the fast restore
+    // (FollowCfg, ladder_controller.h). Exposed because `restore` is the one
+    // knob a flight needs to flip between the observe-only stage (target
+    // exported, nothing commanded) and the armed one, and reflashing to
+    // change a bool is how a flying day gets wasted. The adopt half is NOT
+    // optional here -- `enable` gates it, but leaving it off means the GS
+    // scores loss against a rung the drone is not on, which is the live bug
+    // apply_max_range() already creates.
+    if (r.contains("follow")) {
+      const Value& fj = r["follow"];
+      check_keys(fj, "link.follow",
+                 {"enable", "confirm_samples", "lag_tail_ms", "restore",
+                  "restore_clean_ms", "restore_trial_ms"});
+      FollowCfg& f = c.link.ladder_cfg.follow;
+      if (fj.contains("enable")) f.enable = get_bool(fj, "enable", true, "link.follow");
+      f.confirm_samples = static_cast<int>(
+          get_int(fj, "confirm_samples", 3, 1, 50, "link.follow"));
+      f.lag_tail_ms = get_num(fj, "lag_tail_ms", 120.0, 0.0, 2000.0, "link.follow");
+      if (fj.contains("restore"))
+        f.restore = get_bool(fj, "restore", false, "link.follow");
+      f.restore_clean_ms =
+          get_num(fj, "restore_clean_ms", 500.0, 100.0, 30000.0, "link.follow");
+      f.restore_trial_ms =
+          get_num(fj, "restore_trial_ms", 3000.0, 0.0, 60000.0, "link.follow");
+      // A trial shorter than the clean window can never catch a rejection:
+      // the drone would have to undo the restore faster than the restore
+      // itself was armed. That is a silently dead cycling guard, so refuse it.
+      if (f.restore && f.restore_trial_ms < f.restore_clean_ms)
+        fail("link.follow.restore_trial_ms", "must be >= restore_clean_ms");
+    } else {
+      note_default("link", "follow", "(adopt on, fast restore off)");
     }
     // link.overhead: tier 1's FEC-overhead controller (overhead_policy.h).
     // Every bound here is a real constraint, not taste: max_ov cannot exceed

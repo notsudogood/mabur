@@ -2858,6 +2858,10 @@ static int run_radio(const maburgs::Config& cfg) {
         ci.following = c.following();
         ci.follow_adopts = c.counters().follow_adopts;
         ci.follow_above_ignored = c.counters().follow_above_ignored;
+        ci.restore_target = c.pre_adopt_rung();
+        ci.follow_restores = c.counters().follow_restores;
+        ci.follow_restore_rejected = c.counters().follow_restore_rejected;
+        ci.follow_restore_penalized = c.counters().follow_restore_penalized;
         ci.ov_target_base = vrx.ov_target_base();
         ci.ov_target_enh = vrx.ov_target_enh();
         ci.ov_changes = vrx.ov_changes();

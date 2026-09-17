@@ -1010,9 +1010,17 @@ def _ctl_row(ctl):
     # Only rendered on a disagreement -- in steady state it is noise.
     obs = ctl.get("observed_mcs")
     cmd_mcs = rung.get("mcs")
-    follow_cell = ""
+    parts = []
     if isinstance(obs, int) and isinstance(cmd_mcs, int) and obs != cmd_mcs:
-        follow_cell = f"  air=mcs{obs}{'*' if ctl.get('following') else ''}"
+        parts.append(f"air=mcs{obs}{'*' if ctl.get('following') else ''}")
+    # An armed fast-restore target, rendered independently of the
+    # disagreement above: in the normal case the GS has already ADOPTED the
+    # drone's rung, so the two agree while a target is still pending. `^3`
+    # reads as "holding here, wants back to rung 3".
+    tgt = ctl.get("restore_target")
+    if isinstance(tgt, int) and tgt >= 0:
+        parts.append(f"^{tgt}")
+    follow_cell = ("  " + " ".join(parts)) if parts else ""
     text = (
         f"  rung {_s(rung.get('idx'))} (mcs{_s(cmd_mcs)}"
         f" ov b{_s(rung.get('ov_base'), 2)}/e{_s(rung.get('ov_enh'), 2)})"

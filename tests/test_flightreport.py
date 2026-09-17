@@ -1385,7 +1385,7 @@ def test_session_dir_mode_prints_fec_section():
 
 def _mk_v2_row(t, rung_idx, rung_mcs, ov_b, ov_e, *, want_b=None, want_e=None,
                obj=None, observed_mcs=None, emit_obs=False, following=False,
-               event=None, counters=None):
+               event=None, counters=None, restore_target=None):
     # emit_obs mirrors the real exporter, which ALWAYS writes observed_mcs
     # once the key exists -- null when nothing was heard, never absent
     # (stats_exporter.cpp). A fixture that omits it instead would test a
@@ -1402,6 +1402,9 @@ def _mk_v2_row(t, rung_idx, rung_mcs, ov_b, ov_e, *, want_b=None, want_e=None,
     if observed_mcs is not None or emit_obs or following:
         ctl["observed_mcs"] = observed_mcs
         ctl["following"] = following
+        # Same null-not-absent shape as observed_mcs: the exporter always
+        # writes restore_target alongside it once the key exists.
+        ctl["restore_target"] = restore_target
     if event is not None:
         ctl["last_event"] = event
     if counters is not None:
@@ -1531,6 +1534,58 @@ def test_v2_follow_reports_disagreement_and_the_above_counter():
     assert "should be 0" in sec, sec
 
 
+def test_v2_fast_restore_reports_taken_and_the_armed_target():
+    """The observe-only staging: follow.restore off, so restores stay 0
+    while a target IS armed. The report has to say which of the two reasons
+    it was, because 'taken=0' alone reads like the feature is broken."""
+    base = {"follow_adopts": 1, "follow_above_ignored": 0,
+            "follow_restores": 0, "follow_restore_rejected": 0,
+            "follow_restore_penalized": 0}
+    rows = [
+        _mk_v2_row(0,    3, 3, 1.0, 0.5, observed_mcs=3, counters=base),
+        _mk_v2_row(500,  0, 0, 1.0, 0.5, observed_mcs=0, restore_target=3,
+                   counters=base),
+        _mk_v2_row(1000, 0, 0, 1.0, 0.5, observed_mcs=0, restore_target=3,
+                   counters=base),
+    ]
+    sec = _run_report(rows)
+    sec = sec[sec.find("LINK-ADAPTATION V2"):]
+    assert re.search(r"fast restore: taken=0 rejected=0 penalized_holds=0", sec), sec
+    assert re.search(r"target armed in 2/3 samples", sec), sec
+    assert "follow.restore is off" in sec, sec
+
+
+def test_v2_fast_restore_calls_out_the_drone_floor_fight():
+    """rejected > 0 means the drone undid the restore inside its trial
+    window. The report must point at the drone's rate floor, not at the
+    penalty backoff that is correctly containing it."""
+    c = {"follow_adopts": 4, "follow_above_ignored": 0,
+         "follow_restores": 3, "follow_restore_rejected": 3,
+         "follow_restore_penalized": 31}
+    rows = [
+        _mk_v2_row(0,   3, 3, 1.0, 0.5, observed_mcs=0, counters=c),
+        _mk_v2_row(500, 0, 0, 1.0, 0.5, observed_mcs=0, restore_target=3,
+                   counters=c),
+    ]
+    sec = _run_report(rows)
+    sec = sec[sec.find("LINK-ADAPTATION V2"):]
+    assert re.search(r"taken=3 rejected=3 penalized_holds=31", sec), sec
+    assert "floor it will not leave" in sec, sec
+    assert "NOT a bug to tune away" in sec, sec
+
+
+def test_v2_fast_restore_silent_on_recordings_without_the_counters():
+    """Old jsonl on the DVR predates the counters: absent, not zero."""
+    rows = [
+        _mk_v2_row(0,   3, 3, 1.0, 0.5, observed_mcs=3,
+                   counters={"follow_adopts": 0, "follow_above_ignored": 0}),
+        _mk_v2_row(500, 3, 3, 1.0, 0.5, observed_mcs=0,
+                   counters={"follow_adopts": 0, "follow_above_ignored": 0}),
+    ]
+    sec = _run_report(rows)
+    assert "fast restore" not in sec, sec
+
+
 if __name__ == "__main__":
     test_fec_section_counterfactual_overhead_per_sid_and_rung()
     test_session_dir_mode_prints_fec_section()
@@ -1560,4 +1615,7 @@ if __name__ == "__main__":
     test_v2_tier2_reports_the_verdict_where_it_is_scored()
     test_v2_tier2_compares_its_verdict_against_what_the_ladder_did()
     test_v2_follow_reports_disagreement_and_the_above_counter()
+    test_v2_fast_restore_reports_taken_and_the_armed_target()
+    test_v2_fast_restore_calls_out_the_drone_floor_fight()
+    test_v2_fast_restore_silent_on_recordings_without_the_counters()
     unittest.main()

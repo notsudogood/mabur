@@ -138,6 +138,17 @@ struct StatsCtlIn {
   int observed_mcs = -1;
   bool following = false;
   uint64_t follow_adopts = 0, follow_above_ignored = 0;
+  // Fast restore (FollowCfg::restore). restore_target is the rung a restore
+  // WOULD jump back to (-1 = none armed), and it is populated whether or not
+  // follow.restore is set -- so an observe-only flight records the target
+  // without ever commanding it, the same staging as ov_target_* below.
+  // restore_rejected counts restores the drone undid inside
+  // restore_trial_ms; restore_penalized counts the ones the penalty ledger
+  // then held off. Both climbing against a flat follow_restores is the
+  // drone-floor fight, not a tuning problem.
+  int restore_target = -1;
+  uint64_t follow_restores = 0, follow_restore_rejected = 0,
+           follow_restore_penalized = 0;
 
   // Tier 1 (overhead_policy.h): the overhead each layer's policy WANTED this
   // tick, before quantisation and the IDR-cost gates. Populated whether or

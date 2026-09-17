@@ -981,6 +981,30 @@ def print_v2_report(rows):
               "  (above_ignored should be 0: the drone only ever descends "
               "on its own authority)")
 
+        # Fast restore (FollowCfg::restore). Silent on recordings from
+        # before the counters existed -- absent, not zero.
+        if "follow_restores" in last:
+            rest = last.get("follow_restores", 0)
+            rej = last.get("follow_restore_rejected", 0)
+            pen = last.get("follow_restore_penalized", 0)
+            armed = sum(1 for r in have_obs
+                        if r["link"]["ctl"].get("restore_target") is not None)
+            print(f"    fast restore: taken={rest} rejected={rej} "
+                  f"penalized_holds={pen}, target armed in "
+                  f"{armed}/{len(have_obs)} samples")
+            if rest == 0 and armed:
+                print("      restore never fired with a target armed -- "
+                      "either follow.restore is off (the observe-only "
+                      "staging: compare `target armed` against how long the "
+                      "ladder took to climb back) or the clean window and "
+                      "the hold_after_down gate kept blocking it")
+            if rej:
+                print(f"      {rej} restore(s) undone by the drone inside "
+                      "restore_trial_ms -- it is parked on a floor it will "
+                      "not leave. Each one penalizes the restored rung, so "
+                      "penalized_holds is the backoff working, NOT a bug to "
+                      "tune away; the fix is on the drone's rate floor.")
+
 
 def print_salvage_report(rows):
     """SALVAGE: what rx.keep_corrupted (2026-09-08) bought. The sideport's

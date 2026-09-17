@@ -125,6 +125,35 @@ margin        = 2.0   # must equal link.overhead.margin when both are on
 demote_margin = 0.10  # the lower rung must win by this before it is worth an IDR
 disarm_frac   = 0.75  # hysteresis, as a fraction of the arm threshold
 
+# Drone-initiated rate changes (FollowCfg, gs/src/ladder_controller.h). The
+# drone can drop its own rate -- apply_max_range() alone makes the pair
+# disagree -- and the GS must score loss against the rung the drone is REALLY
+# on, or every fade reads as worse than it is. That half is on.
+#
+# The FAST RESTORE is off. After an adopt, the ordinary ladder climbs back
+# through the probe gate at ~3.1 s/rung, so 9-15 s from the floor -- slower
+# than the obstruction dips it is recovering from. `restore = true` jumps
+# straight back to the pre-adopt rung on a short clean window instead.
+# It is off because proposal §9.3's restore -> re-dip cycling has no flight
+# data behind it. link.ctl.restore_target is exported either way, so fly it
+# off first and compare the armed target against how long the ladder actually
+# took to climb back (flightreport's `fast restore:` line does this).
+#
+# restore_trial_ms is the cycling guard, not tuning: if the drone pulls the
+# GS back off a restored rung inside it, the restore FAILED and that rung
+# goes on the penalty ledger, whose existing exponential backoff then spaces
+# the retries. Measured on the host fixture: without it, a drone parked on
+# its own floor and a clean `u` cycle every restore_clean_ms forever -- 31
+# restores in 20 s, one keyframe each. With it, 3.
+[link.follow]
+enable            = true
+confirm_samples   = 3
+lag_tail_ms       = 120   # ignore the RCF round trip, not a drone decision
+restore           = false
+restore_clean_ms  = 500   # shorter than link.clean_ms on purpose: the rung
+                          # being restored to is one the link already held
+restore_trial_ms  = 3000  # mirrors probation_ms; must be >= restore_clean_ms
+
 [link.probe]
 enable      = true
 rung_offset = 1

@@ -411,6 +411,43 @@ different from before this date too — see `docs/data-provenance.md`.
 gate line: `probe: r3 mcs5 clean 1.8s u0.12 n48 | c0 0.00 c1 0.05`, and its
 signal panel gains the `probe` class in `CLASS_ORDER`.
 
+**Sideport: the link-adaptation-v2 keys under `link.ctl`.** All of them are
+exported whether or not the feature that produces them is armed — that
+observe-only staging is the point, since it lets a flight record what a
+tier *would* have commanded before anything commands it. See
+`docs/link-adaptation-v2-proposal.md`.
+
+- `link.ctl.ov_target = {base, enh, changes}` — tier 1's wanted overhead per
+  layer before quantisation and the IDR-cost gates (`link.overhead`,
+  default off). Compare against `link.ctl.rung.ov_base`/`ov_enh`, which is
+  what is actually on the wire.
+- `link.ctl.objective = {hi, lo, armed}` — tier 2's `rate x (1 - 2L)` score
+  for the current rung and the one below, and whether the down probe is
+  armed (`link.objective`, default off). `lo = 0` means *unmeasured*, not
+  "the lower rung is worthless".
+- `link.ctl.observed_mcs` — what the drone is ACTUALLY transmitting at,
+  `null` when unheard. Disagreeing with `link.ctl.rung.mcs` is the whole
+  signal the follow path exists for; `link.ctl.following` is the transient
+  confirm window.
+- `link.ctl.restore_target` — the rung a fast restore would jump back to,
+  `null` when none is armed (`link.follow.restore`, default off). Armed on
+  every adopt regardless, so an observe-only flight can compare it against
+  how long the ordinary ladder actually took to climb back.
+- `link.ctl.counters.follow_*` — `follow_adopts`, `follow_above_ignored`
+  (should stay **0**: the drone only ever descends on its own authority, so
+  nonzero means a mis-decoded descriptor or a drone ignoring the RCF),
+  `follow_restores`, and the cycling guard's `follow_restore_rejected` /
+  `follow_restore_penalized`. `rejected` climbing against a flat
+  `follow_restores` is a drone parked on a rate floor it will not leave —
+  the penalty backoff containing it is working as designed, and the fix is
+  on the drone's floor, not on these knobs.
+
+`tools/flightreport.py` prints all of the above in its
+`LINK-ADAPTATION V2` section, and is silent on recordings that predate each
+key (absent, not zero). `maburtop`'s LADDER rung line renders the follow
+state only on a disagreement (`air=mcs0`, `*` while confirming) plus `^3`
+whenever a restore target is armed — in steady agreement both are noise.
+
 **Loss-sim rig covers the probe stream too.** `LossSim::kStreams` (bench
 rig, `MABUR_LOSS_SIM` builds only, see `docs/airtime-model.md` §4) is
 `s0..s5`, `5` = probe — `tools/bench/losssim.py s5 eff=<pct>` injects

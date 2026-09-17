@@ -287,11 +287,20 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
                        {"demotes_s3_util", c.demotes_s3_util},
                        {"demotes_fade", c.demotes_fade},
                        {"follow_adopts", c.follow_adopts},
-                       {"follow_above_ignored", c.follow_above_ignored}};
+                       {"follow_above_ignored", c.follow_above_ignored},
+                       {"follow_restores", c.follow_restores},
+                       {"follow_restore_rejected", c.follow_restore_rejected},
+                       {"follow_restore_penalized",
+                        c.follow_restore_penalized}};
     // Drone-initiated rate changes (FollowCfg). `observed_mcs` disagreeing
     // with link.ctl.rung_mcs is the signal maburtop/flightreport want: it
     // means the drone moved on its own authority. null when unheard.
     ctl["following"] = c.following;
+    // The armed fast-restore target, null when none -- same null-when-absent
+    // shape as observed_mcs, so a consumer cannot mistake "no target" for
+    // rung 0.
+    if (c.restore_target >= 0) ctl["restore_target"] = c.restore_target;
+    else ctl["restore_target"] = nullptr;
     // Tier 1: what the overhead policy wanted, next to link.ctl.rung's
     // ov_base/ov_enh which are what is actually commanded. Equal to those
     // means the policy agrees with the rung; different with

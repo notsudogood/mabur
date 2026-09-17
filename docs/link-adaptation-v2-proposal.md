@@ -16,7 +16,8 @@ and is marked as such.
 | Tier 2 wire (**RC_VERSION 10**, `kProbeStreamIdDn`) | **landed**, inert — GS never sets the byte yet |
 | Tier 2 objective + arm logic | **landed**, `link.objective`, default **OFF** |
 | Tier 2 ladder *decision* | **not wired** — `objective.act = true` is rejected at load |
-| Fast restore (§4) | **not started** — `pre_adopt_rung()` remembers the rung, nothing acts on it |
+| Fast restore (§4) | **landed**, `link.follow.restore`, default **OFF** — built on the hop's own `restore()`; `restore_target` exported either way |
+| Fast-restore cycling guard (§9.3) | **landed** — a restore the drone undoes inside `restore_trial_ms` penalizes that rung, so the existing ledger backoff spaces retries |
 | Metrics (§6) | **not started** — and §6's energy metric may be partly removed on `gilankpam/mabur` master, see §8a |
 | Merge with `gilankpam/mabur` master (`ca3ad5d`) | **done** — RC_VERSION 10, 18-byte head; tier 1/2 now respect the hop's store blank |
 | Tier 1's `min_ov` floor | **fixed** — 0.3 → 0.5, sourced from `fec.log`'s `ov_req`; rung 5 only, see §8a |
@@ -832,6 +833,32 @@ as in code.
    after a 200–400 ms dip risks a restore→re-dip→reflex cycle at pillar
    spacing. Needs a real park recording to tune, and may need the restore
    itself to be probe-gated after the first few cycles.
+
+   **Partly answered, and by the host fixture rather than a recording.**
+   One failure mode turned out not to need park data at all: a drone parked
+   on a rate floor it will not leave (its own `apply_max_range()` clamp, or
+   a thermal/power limit) plus a clean GS-side `u` cycles *unconditionally*
+   — restore, drone re-asserts its rung, GS re-adopts, repeat every
+   `restore_clean_ms`. Measured on `tests/test_ladder_controller.cpp`'s
+   fixture: **31 restores in the 20 s after one adopt**, one IDR each, which
+   is the deleted 2026-09-01 FEC→bitrate loop's keyframe storm arriving by a
+   new road.
+
+   The guard reuses machinery rather than adding a retry timer: a restore
+   the drone undoes within `restore_trial_ms` (3000, mirroring
+   `probation_ms`) calls `penalize_rung()` on the restored rung, and the
+   fast-restore block consults `is_penalized()` exactly as the promote block
+   does. The ledger's existing `penalty_base_ms` doubling to
+   `penalty_max_ms` then supplies the backoff. Same fixture: **3 restores in
+   20 s**, spaced 6 s then 11 s.
+
+   `follow_restore_rejected` / `follow_restore_penalized` are on the
+   sideport, so a park recording can now distinguish the two failure modes
+   this item conflates — a link that has not really recovered (rejected
+   stays 0, the restores simply do not stick) from a drone-side floor
+   (rejected climbs). **Still open:** the genuine restore→re-dip case at
+   pillar spacing, which needs the recording. Probe-gating the restore
+   remains the fallback if the ledger's backoff proves too coarse.
 4. **Whether a genuine fast fade even matches the model.** Every recorded
    fade to date is ramp-type under ~0.45 dB/s (26 loss-driven demote
    episodes, flights 0017/0018); "a genuine FAST fade (obstruction,

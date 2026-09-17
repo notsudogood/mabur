@@ -24,6 +24,7 @@ const char* to_string(CtlReason r) {
     case CtlReason::PromoteProbed: return "promote_probed";
     case CtlReason::HopRestore: return "hop_restore";
     case CtlReason::Follow: return "follow";
+    case CtlReason::FollowRestore: return "follow_restore";
   }
   return "unknown";
 }
@@ -354,24 +355,34 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
       // more.
       ++counters_.follow_above_ignored;
     } else if (++follow_confirm_ >= cfg_.follow.confirm_samples) {
-      const int from = idx_;
-      pre_adopt_rung_ = idx_;
+      // restore() IS this operation: set the rung directly, clear probation
+      // (all three fields -- this used to clear only probation_active_ and
+      // leave the other two stale), reset the windows, and mark_transition()
+      // because the drone's switch re-keyed its FEC stream exactly as a
+      // commanded one would. It deliberately does NOT touch last_down_ms_
+      // and books no demote counter or penalize_rung(): nothing was tried
+      // and found wanting, so the hold_after_down gate and the penalty
+      // ledger stay clear.
+      const int pre = idx_;
+      // Is this adopt undoing a fast restore that has not yet served its
+      // trial? Then the restore failed -- the drone is holding a floor it
+      // will not leave -- and the rung it restored to goes on the penalty
+      // ledger, whose exponential backoff then spaces out the retries.
+      // Checked BEFORE restore() below, which clears the pending state.
+      if (last_restore_to_ >= 0 && pre == last_restore_to_ &&
+          now_ms - last_restore_ms_ < cfg_.follow.restore_trial_ms) {
+        penalize_rung(pre, now_ms);
+        ++counters_.follow_restore_rejected;
+      }
       prev_idx_ = idx_;
-      idx_ = obs_rung;
+      restore(obs_rung, now_ms, CtlReason::Follow);
       measured_rung_ = obs_rung;
-      last_change_ms_ = now_ms;
-      // Deliberately NOT last_down_ms_, and no demote counter or
-      // penalize_rung(): nothing was tried and found wanting, so the
-      // hold_after_down gate and the penalty ledger must stay clear.
-      // Probation belongs to a rung we chose; this one we did not.
-      probation_active_ = false;
-      reset_windows();
-      // The drone's switch re-keyed its FEC stream just as a commanded one
-      // would, so the residual windows need the same settle blank.
-      mark_transition(now_ms);
       follow_confirm_ = 0;
       ++counters_.follow_adopts;
-      set_event(now_ms, from, idx_, CtlReason::Follow, u_, snr_now_);
+      // Arm the fast restore. AFTER restore(), which clears it -- and
+      // populated whether or not follow.restore acts on it, so an
+      // observe-only flight records the target via pre_adopt_rung().
+      pre_adopt_rung_ = pre;
       return true;
     } else {
       // Confirming. Withhold this tick's decisions rather than act on a
@@ -627,6 +638,66 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
     }
   }
 
+  // 5c. Fast restore (FollowCfg::restore, proposal §4). After an adopt, jump
+  // back to the rung that was commanded before it in ONE step, instead of
+  // letting block 6 climb rung-by-rung through the probe gate at ~3.1 s/rung
+  // -- which from the floor is 9-15 s, slower than the obstruction dips this
+  // whole path exists to survive.
+  //
+  // Placed before the promote block on purpose: it is the alternative to
+  // climbing, not a thing to do as well as climbing. Its clean streak is its
+  // own timer, because block 6 maintains clean_start_ms_ BELOW here and
+  // reading that would use the previous tick's value.
+  if (u_ < cfg_.up_util) {
+    if (restore_clean_since_ms_ < 0.0) restore_clean_since_ms_ = now_ms;
+  } else {
+    restore_clean_since_ms_ = -1.0;
+    restore_hold_counted_ = false;
+  }
+  if (cfg_.follow.restore && pre_adopt_rung_ > idx_ && !following() &&
+      restore_clean_since_ms_ >= 0.0 &&
+      now_ms - restore_clean_since_ms_ >= cfg_.follow.restore_clean_ms &&
+      // A genuine demote since the adopt must block this exactly as it
+      // blocks a promote -- otherwise the restore would jump straight back
+      // over real loss evidence. Same gate, same reason.
+      now_ms - last_down_ms_ >= cfg_.hold_after_down_ms &&
+      now_ms - last_change_ms_ >= cfg_.min_between_changes_ms &&
+      // Never restore into an interference episode: the hop blanks the store
+      // because the current channel's evidence says nothing about the rung,
+      // and it drives its OWN restore(ref_rung) from the order. Two restores
+      // fighting over the rung is the one way this can make things worse.
+      !store_blanked(now_ms)) {
+    const int target = pre_adopt_rung_;
+    // The ledger has the last word, same as it does for a promote: a rung
+    // the drone has already pulled us off (see the adopt block above) is one
+    // we do not keep jumping back to. This is the cycling guard -- without
+    // it a drone parked on its own floor and a GS with a clean `u` restore
+    // and re-adopt every restore_clean_ms forever, one IDR each.
+    if (is_penalized(target, now_ms)) {
+      if (!restore_hold_counted_) {
+        ++counters_.follow_restore_penalized;
+        restore_hold_counted_ = true;
+      }
+      // FALL THROUGH, deliberately: no return. The rung-by-rung probe-gated
+      // promote in block 6 is precisely the fallback for a fast path that
+      // has stood down, and returning here would deny it on every tick the
+      // clean streak qualifies -- starving the ladder of its ordinary
+      // recovery exactly when the shortcut is unavailable. The clean streak
+      // is left running too, so the restore fires as soon as the penalty
+      // lapses rather than waiting out another restore_clean_ms.
+    } else {
+      // restore() clamps, clears probation, and clears pre_adopt_rung_ -- so
+      // this fires at most once per adopt, and can never land above the
+      // remembered rung because that rung IS the target.
+      restore(target, now_ms, CtlReason::FollowRestore);
+      ++counters_.follow_restores;
+      // Arm the trial. AFTER restore(), which clears it.
+      last_restore_to_ = target;
+      last_restore_ms_ = now_ms;
+      return true;
+    }
+  }
+
   // 6. Clean margin: accrue a clean window and promote once it has been
   // sustained long enough, clear of a recent downgrade and the min-between
   // gate, with a next rung that exists and isn't penalized.
@@ -709,7 +780,7 @@ bool LadderController::on_tick(double now_ms) {
   return false;
 }
 
-void LadderController::restore(int rung, double now_ms) {
+void LadderController::restore(int rung, double now_ms, CtlReason reason) {
   rung = std::clamp(rung, 0, static_cast<int>(cfg_.ladder.size()) - 1);
   const int from = idx_;
   idx_ = rung;
@@ -719,7 +790,17 @@ void LadderController::restore(int rung, double now_ms) {
   probation_rung_ = -1;
   reset_windows();
   mark_transition(now_ms);
-  set_event(now_ms, from, rung, CtlReason::HopRestore, u_, snr_now_);
+  // Any explicit rung override supersedes a pending fast-restore target --
+  // the hop's, an adopt's, or this restore's own. Callers that WANT to arm
+  // one (the adopt path) set pre_adopt_rung_ after returning.
+  pre_adopt_rung_ = -1;
+  restore_clean_since_ms_ = -1.0;
+  // A pending fast-restore trial belongs to the restore that armed it; any
+  // later rung override ends it un-judged. The fast-restore block re-arms it
+  // after this returns, exactly as the adopt path re-arms pre_adopt_rung_.
+  last_restore_to_ = -1;
+  restore_hold_counted_ = false;
+  set_event(now_ms, from, rung, reason, u_, snr_now_);
 }
 
 void LadderController::blank_store(double until_ms) {

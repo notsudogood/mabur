@@ -711,15 +711,82 @@ Two ways to fix it, and the second is better:
 Either way the flown 1.0 base pair is confirmed over-provisioned by ~2× at
 rung 5 — §2.1's argument, independently measured rather than derived.
 
+### The hop design and this branch touch the same ladder surface
+
+Read `docs/inflight-channel-hop.md` §4 ("Ladder interaction: restore the
+pre-onset rung") on that master before merging. Three real interactions,
+one of them a defect in tier 1.
+
+**`LadderController::restore(rung, now)` IS §4's fast-restore.** Theirs
+clamps the rung into range, sets `idx_` directly, clears all three
+probation fields, `reset_windows()`, `mark_transition()`, and logs
+`CtlReason::HopRestore` — bypassing the probe gate by construction, which
+is the ~3.1 s/rung this branch wanted to skip. Two consequences:
+
+- §4's fast restore should call `restore(pre_adopt_rung(), now)` with its
+  own reason, not add a second mechanism.
+- This branch's `Following` **adopt block is the same code inline**, minus
+  the clamp. On merge it should BE `restore()` too, so there is one
+  rung-override path rather than three.
+
+**Tier 1 has no blank, and by the hop design's own argument it needs one.**
+`blank_store(until_ms)` suspends the per-rung EWMA writes because "an
+interferer's demoted operating point is real RF evidence for the CHANNEL
+that just got abandoned, not for what the rung can do in general, and must
+not poison the learned per-rung statistics." That reasoning applies
+verbatim to `OverheadPolicy`, which is fed raw `health.pre_fec_loss` with
+no blank at all — so through an interference episode tier 1 would size
+overhead to the jammed channel and then carry that sizing onto the new one.
+
+The mechanism is concrete, not hypothetical. `VrxController::restore_rung()`
+calls `sync_op_()`, which is `cur_op_ = op_from_rung(ctrl_.op())` — it
+rebuilds the WHOLE operating point from the rung's config, overhead pair
+included. `apply_overhead_policy()` then overwrites `cur_op_.overhead_*`
+on the next `step()`. So a hop order's intent to restore the pre-onset
+operating point is half-defeated once tier 1 is armed: the rung sticks,
+the overhead does not, and what replaces it was measured on the channel
+being abandoned.
+
+Fix: gate `OverheadPolicy::feed()` on the same `blank_store_until_ms_`
+deadline — hold the commanded overhead rather than feeding, exactly as the
+store holds its EWMAs. That needs an accessor; the deadline is private
+today. Note the blank starts at the first `interfered` window
+(`hop_blank.h`'s `hop_store_blank_until()`), not at the order, so the
+hold covers the detection windows too.
+
+**Tier 2 self-disarms under interference — by accident.** `want_probe()`
+requires `residual_clean` (both residual losses zero), and interference
+drives residual nonzero, so the down probe stops arming. That is the right
+behaviour reached for the wrong reason, and it is only half of it:
+`should_demote()` still scores `hi` from the contaminated `pre_fec_loss`.
+Harmless while `act = false`; load-bearing the moment it is armed. Both
+should key on the hop verdict explicitly rather than inferring it from
+residual.
+
+That matters because the hop design deliberately **runs the ladder
+unfrozen during detection** — "a demote or two, each an IDR" is accepted
+and priced in, and `restore()` overwrites it when the hop lands. An
+objective-driven demote is not the same animal: it is a COMPARISON in
+which both rungs' scores were measured on the interfered channel, so the
+"priced in" argument does not extend to it. `objective.act` wants gating
+off inside the blank.
+
+**Encouraging sign:** the hop design gates its blank on `hop.enable`
+specifically so that observe-only flights are not silently different from
+pre-branch recordings, citing `docs/data-provenance.md`. That is the same
+staging discipline this branch used for `link.overhead` and
+`link.objective`, so the two designs are compatible in philosophy as well
+as in code.
+
 ### Smaller collisions to expect
 
 - `tools/flightreport.py`: they add `FEC EPISODES` and `HOP`; this branch
   adds `LINK-ADAPTATION V2`. Textual conflict in `main()` and the section
   order. `tools/session.py` learns `fec.log` and `scan.log` on their side.
-- `gs/src/ladder_controller.*`: `a5ca94a` adds **`restore(rung)`** and
-  `blank_store` for the hop, and `f4b4987` splits `blank_store`'s s3 gate
-  from the s3 demote decisions. `restore(rung)` is close to what §4's
-  fast-restore wants — build on it rather than adding a second mechanism.
+- `gs/src/ladder_controller.*`: covered above. Also note `CtlReason` grows
+  on both sides (`HopRestore` theirs, `Follow` here) and both branches
+  touch `mark_transition()`/`reset_windows()`; `f4b4987` split
+  `blank_store`'s s3 gate from the s3 demote decisions.
 - `10b22b3` **removes `radio.scan.energy_period_ms` and the 1 Hz A
   records.** §6's metric 4 cites `cards[i].energy` (`fa`/`cca`/`igi`) as an
   available signal; on that master it is at least partly gone. Re-check

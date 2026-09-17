@@ -343,7 +343,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
       if (oj.contains("enable")) o.enable = get_bool(oj, "enable", false, "link.overhead");
       o.margin = get_num(oj, "margin", 2.0, 1.0, 10.0, "link.overhead");
       o.step = get_num(oj, "step", 0.1, 0.01, 1.0, "link.overhead");
-      o.min_ov = get_num(oj, "min_ov", 0.3, 0.1, 2.0, "link.overhead");
+      o.min_ov = get_num(oj, "min_ov", 0.5, 0.1, 2.0, "link.overhead");
       o.max_ov = get_num(oj, "max_ov", 2.0, 0.1, 2.0, "link.overhead");
       o.min_interval_ms =
           get_num(oj, "min_interval_ms", 2000.0, 250.0, 60000.0, "link.overhead");

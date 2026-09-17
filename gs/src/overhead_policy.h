@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace maburgs {
 
@@ -60,10 +61,36 @@ struct OverheadCfg {
   //
   // The FLOOR is deliberately well above that range's 0.1. A momentarily
   // clean link drives the target toward zero, and arriving at a 9% budget
-  // just before a burst is how you lose a GOP: the target tracks the MEAN
-  // loss, and nothing here models its variance. 0.3 (a 23% budget) is a
-  // judgement call pending flight data on that variance, not a measurement.
-  double min_ov = 0.3;
+  // just before a burst is how you lose a GOP: the target above tracks the
+  // MEAN loss and models nothing about its burst structure.
+  //
+  // 0.5, and it is a MEASUREMENT now, not the judgement call 0.3 was.
+  // fec.log's per-episode gauge (2026-09-16 bench, GS deployed, ausniff
+  // 60.0 fps / fid_gaps 0 twice) reports rung-5 base episodes needing
+  // ov_req up to **0.46**, and rung-5 enh at flown ov 0.5 needing 0.38 --
+  // see ov_req() below for what that quantity is. 0.5 is the first point on
+  // the `step` 0.1 grid at or above that measured worst episode; 0.3 and 0.4
+  // both sit under it and would have under-protected it.
+  //
+  // What this costs: the floor binds whenever the mean-loss target is below
+  // it, which on a sparse link is most of the time, and kbps ~ 1/(1+ov), so
+  // 0.3 -> 0.5 gives up ~13% of video rate there. That is the price of not
+  // losing the worst episode in the recording, and it is the conservative
+  // direction for a FLOOR: too high costs bitrate, too low costs AUs.
+  //
+  // TWO CAVEATS, both worth keeping in view:
+  //   - Only rung 5 is measured. The same burst in TIME destroys fewer
+  //     symbols at a lower MCS (longer symbols, lower bitrate), which argues
+  //     rung 5 is the ladder's worst case and 0.5 covers the rest -- but
+  //     that is reasoning, not data, and it cuts the other way if low rungs
+  //     are flown precisely when bursts are longer. Per-rung floors are the
+  //     proper fix once fec.log covers more rungs.
+  //   - One floor serves BOTH layers, so enh (measured 0.38) is held at the
+  //     0.5 it already flies. That costs enh nothing today and refines
+  //     §2.1 of docs/link-adaptation-v2-proposal.md: base is ~2x
+  //     over-provisioned (1.0 vs 0.46), enh only ~1.3x (0.5 vs 0.38), so
+  //     the bitrate win tier 1 is chasing lives almost entirely on base.
+  double min_ov = 0.5;
   double max_ov = 2.0;
   // Minimum wall time between commanded changes. Each one costs an IDR
   // (trap 2), so this is an airtime budget: at mcs4 an IDR is ~38 ms, so
@@ -92,6 +119,33 @@ class OverheadPolicy {
   static double ov_for_loss(double loss, double margin) {
     const double b = std::clamp(margin * std::max(0.0, loss), 0.0, 0.95);
     return b / (1.0 - b);
+  }
+
+  // The overhead ONE OBSERVED LOSS EPISODE would have needed, from fec.log's
+  // (m, r) at the overhead `ov` it flew at. Byte-for-byte the same function
+  // as tools/flightreport.py's fec_ov_req(), which is the reference and
+  // whose FEC EPISODES section is where the numbers behind min_ov come from;
+  // the two must not drift.
+  //
+  // At overhead x the same lost air carries m*(1+ov)/(1+x) sources (an
+  // aggregate is a fixed number of envelopes, fewer of them repairs) against
+  // r*x/ov covering repairs, and the decoder needs repairs >= sources:
+  //
+  //     x*(1+x) = m*ov*(1+ov)/r = c   ->   x = (sqrt(1+4c)-1)/2
+  //
+  // inf when no repair covered the episode at all, which is a real outcome
+  // and not an error: no overhead would have saved it.
+  //
+  // This is here rather than only in Python because it is the quantity
+  // min_ov is derived from, so the derivation should be checkable in the
+  // same place as the constant -- and because driving feed() from a high
+  // percentile of it, instead of from the mean loss, is the better shape
+  // this policy should eventually take (proposal §8a). Nothing calls it on
+  // the hot path yet.
+  static double ov_req(double m, double r, double ov) {
+    if (r <= 0.0) return std::numeric_limits<double>::infinity();
+    const double c = m * ov * (1.0 + ov) / r;
+    return (std::sqrt(1.0 + 4.0 * c) - 1.0) / 2.0;
   }
 
   // Feeds one window's RAW pre-FEC loss for this layer (trap 1: a loss

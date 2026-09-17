@@ -19,7 +19,7 @@ and is marked as such.
 | Fast restore (§4) | **not started** — `pre_adopt_rung()` remembers the rung, nothing acts on it |
 | Metrics (§6) | **not started** — and §6's energy metric may be partly removed on `gilankpam/mabur` master, see §8a |
 | Merge with `gilankpam/mabur` master (`ca3ad5d`) | **done** — RC_VERSION 10, 18-byte head; tier 1/2 now respect the hop's store blank |
-| ⚠ Tier 1's `min_ov` floor | **still wrong** — `fec.log` measures ~0.5 at rung 5 against a 0.3 floor, see §8a |
+| Tier 1's `min_ov` floor | **fixed** — 0.3 → 0.5, sourced from `fec.log`'s `ov_req`; rung 5 only, see §8a |
 
 Nothing here has been on a device. The host gate passes (137/138; the one
 failure is environmental), and `gs_e2e` + `gs_au_e2e` pass — so the
@@ -705,13 +705,30 @@ This is that data, and it says the number is wrong.
 
 Two ways to fix it, and the second is better:
 
-1. Raise `min_ov` per rung to the measured `ov_req` p99/max (~0.5 at
-   rung 5). Keeps the mean-loss controller, corrects its floor.
+1. Raise `min_ov` to the measured `ov_req` max. **DONE** — `min_ov` is 0.5,
+   the first point on the `step` 0.1 grid at or above the measured 0.46.
+   `OverheadPolicy::ov_req(m, r, ov)` now mirrors `flightreport.py`'s
+   `fec_ov_req()` in C++ so the derivation sits next to the constant, and
+   `test_overhead_policy` pins the floor against the measurement so it
+   cannot drift back to a guess. Costs ~13 % of video rate wherever the
+   floor binds (`kbps ∝ 1/(1+ov)`), which on a sparse link is most of the
+   time — the conservative direction for a floor: too high costs bitrate,
+   too low costs AUs.
+
+   Two caveats carried in the code: only **rung 5** is measured (the
+   same burst in time destroys fewer symbols at a lower MCS, which argues
+   rung 5 is the worst case — reasoning, not data), and one floor serves
+   both layers, so enh sits at the 0.5 it already flies.
+
+   It also refines §2.1: base is ~2× over-provisioned (1.0 vs 0.46), enh
+   only ~1.3× (0.5 vs 0.38) — so the bitrate win tier 1 chases is almost
+   entirely on **base**, not the pair.
 2. **Drive tier 1 from `ov_req` directly** — feed the episode gauge's
    high-percentile `ov_req` over a recent window instead of `mL/(1−mL)`.
-   That replaces the margin heuristic with the quantity that actually
-   decides recovery, and makes §9.5's RLC-rank-deficiency slack the only
-   remaining fudge factor.
+   Still the better shape, and still not done: it replaces the margin
+   heuristic with the quantity that actually decides recovery, and makes
+   §9.5's RLC-rank-deficiency slack the only remaining fudge factor. The
+   C++ `ov_req()` is the groundwork; nothing calls it on the hot path.
 
 Either way the flown 1.0 base pair is confirmed over-provisioned by ~2× at
 rung 5 — §2.1's argument, independently measured rather than derived.

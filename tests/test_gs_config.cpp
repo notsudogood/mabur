@@ -834,7 +834,10 @@ TEST(overhead_defaults_are_disabled) {
   CHECK(!o.enable);
   CHECK(std::abs(o.margin - 2.0) < 1e-9);
   CHECK(std::abs(o.step - 0.1) < 1e-9);
-  CHECK(std::abs(o.min_ov - 0.3) < 1e-9);
+  // 0.5, not the old 0.3: fec.log measured rung-5 base episodes needing
+  // ov_req up to 0.46, so 0.3 under-protected the worst one recorded. See
+  // OverheadCfg::min_ov and test_overhead_policy's floor test.
+  CHECK(std::abs(o.min_ov - 0.5) < 1e-9);
   CHECK(std::abs(o.max_ov - 2.0) < 1e-9);
   CHECK(std::abs(o.min_interval_ms - 2000.0) < 1e-9);
   CHECK(std::abs(o.dead_band - 0.15) < 1e-9);

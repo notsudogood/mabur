@@ -103,7 +103,8 @@ overhead_enh  = 0.5
 enable          = false
 margin          = 2.0    # budget = margin * measured pre-FEC loss
 step            = 0.1    # quantisation of the commanded value
-min_ov          = 0.3    # floor: the target tracks MEAN loss, not its variance
+min_ov          = 0.5    # floor: measured, = fec.log ov_req max 0.46 at rung 5
+                         # (the target tracks MEAN loss, not burst structure)
 max_ov          = 2.0    # ceiling of link.ladder[].overhead_*'s own range
 min_interval_ms = 2000   # each change costs a keyframe on Star6E
 dead_band       = 0.15   # ...so a smaller move is not worth one

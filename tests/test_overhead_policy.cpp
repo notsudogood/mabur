@@ -38,6 +38,75 @@ TEST(ov_for_loss_saturates_instead_of_diverging) {
   CHECK(std::isfinite(OverheadPolicy::ov_for_loss(1.0, 2.0)));
 }
 
+// --- ov_req: the episode gauge min_ov is derived from --------------------
+
+// Must stay byte-for-byte the same function as tools/flightreport.py's
+// fec_ov_req(), which is the reference. Reproduces the 2026-09-16 bench
+// figures from the fec.log commit: rung-5 base at flown ov 1.0 with
+// m p50 = 11 against r ~ 41.
+TEST(ov_req_reproduces_the_bench_episodes) {
+  CHECK(std::abs(OverheadPolicy::ov_req(11, 41, 1.0) - 0.3869) < 1e-3);
+  CHECK(std::abs(OverheadPolicy::ov_req(16, 41, 1.0) - 0.5151) < 1e-3);
+  // More lost sources needs more overhead; more covering repairs needs less.
+  CHECK(OverheadPolicy::ov_req(16, 41, 1.0) > OverheadPolicy::ov_req(11, 41, 1.0));
+  CHECK(OverheadPolicy::ov_req(11, 82, 1.0) < OverheadPolicy::ov_req(11, 41, 1.0));
+}
+
+// No repair covered the episode at all: no overhead would have saved it.
+// That is a real outcome, reported as infinity rather than treated as an
+// error or silently clamped.
+TEST(ov_req_is_infinite_when_no_repair_covered_the_episode) {
+  CHECK(std::isinf(OverheadPolicy::ov_req(10, 0, 1.0)));
+  CHECK(std::isinf(OverheadPolicy::ov_req(10, -1, 1.0)));
+}
+
+// Round-trip the derivation: at the overhead ov_req returns, the episode's
+// sources and covering repairs balance -- x*(1+x) == c.
+TEST(ov_req_satisfies_its_own_balance_condition) {
+  const double m = 13, r = 45, ov = 0.7;
+  const double x = OverheadPolicy::ov_req(m, r, ov);
+  const double c = m * ov * (1.0 + ov) / r;
+  CHECK(std::abs(x * (1.0 + x) - c) < 1e-9);
+}
+
+// THE REGRESSION THIS FILE EXISTS FOR. min_ov was 0.3 on a stated guess
+// ("pending flight data on that variance, not a measurement"); fec.log
+// measured rung-5 base episodes needing up to 0.46, so 0.3 would have
+// under-protected the worst episode in the recording. The floor must stay at
+// or above that measurement, and on the `step` grid so quantisation cannot
+// land under it.
+TEST(min_ov_floor_covers_the_measured_worst_episode) {
+  OverheadCfg c;
+  constexpr double kMeasuredWorstOvReq = 0.46;  // 2026-09-16 bench, rung-5 base
+  CHECK(c.min_ov >= kMeasuredWorstOvReq);
+  // ...and the enh layer's measured need too, with one shared floor.
+  CHECK(c.min_ov >= 0.38);
+  // On the quantisation grid: a floor between two steps would be rounded up
+  // by feed() anyway, but keeping it ON the grid makes the commanded value
+  // equal the floor exactly rather than a step above it.
+  const double steps = c.min_ov / c.step;
+  CHECK(std::abs(steps - std::round(steps)) < 1e-9);
+  // And still a floor, not the ceiling.
+  CHECK(c.min_ov < c.max_ov);
+}
+
+// The floor is what a sparse link actually flies, so pin that it binds --
+// this is where the 13% rate cost is paid, and where the old 0.3 would have
+// under-protected.
+TEST(a_sparse_link_sits_on_the_floor_not_below_it) {
+  OverheadCfg c = on();
+  OverheadPolicy p(c);
+  for (double L : {0.0, 0.01, 0.05, 0.10}) {
+    OverheadPolicy q(c);
+    const double got = q.feed(L, 1.0, 0.0);
+    CHECK(got >= c.min_ov);
+    CHECK(got >= 0.46);  // the measured worst episode, whatever L says
+  }
+  // 10% mean loss wants ov 0.25 on the mean-loss model alone -- comfortably
+  // under the measured burst need, which is the whole reason for the floor.
+  CHECK(OverheadPolicy::ov_for_loss(0.10, 2.0) < 0.46);
+}
+
 // Default OFF: computes and exports, commands nothing. This is the
 // observe-only staging, so it has to be genuinely inert.
 TEST(disabled_computes_a_target_but_commands_nothing) {
@@ -73,7 +142,7 @@ TEST(quantisation_rounds_up_never_down) {
 // A momentarily clean link must not strip protection to the config floor of
 // 0.1 -- the target tracks the MEAN loss and models nothing about its
 // variance, so arriving at a 9% budget before a burst loses a GOP.
-TEST(floor_holds_protection_on_a_clean_link) {
+TEST(floor_holds_protection_on_a_clean_link) {  // value pinned above
   OverheadCfg c = on();
   OverheadPolicy p(c);
   const double got = p.feed(0.0, 1.0, 0.0);

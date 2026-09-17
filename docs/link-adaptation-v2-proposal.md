@@ -13,12 +13,22 @@ and is marked as such.
 | Tier 1 FEC-overhead policy (§3) | **landed**, `link.overhead`, default **OFF** (observe-only) |
 | Tier 1 arming | needs a flight comparing `ov_target` against the fixed pair, then `aucadence` |
 | Tier 0 reflex (§3) | **not started** — blocked on the reciprocity measurement in §9.1 |
-| Tier 2 objective + armed −1 probe (§3) | **not started** |
+| Tier 2 wire (RC_VERSION 9, `kProbeStreamIdDn`) | **landed**, inert — GS never sets the byte yet |
+| Tier 2 objective + arm logic | **landed**, `link.objective`, default **OFF** |
+| Tier 2 ladder *decision* | **not wired** — `objective.act = true` is rejected at load |
 | Fast restore (§4) | **not started** — `pre_adopt_rung()` remembers the rung, nothing acts on it |
 | Metrics (§6) | **not started** |
 
-Nothing here has been on a device. The host suite passes; the
-`ausniff`/`aucadence` device gates have not been run.
+Nothing here has been on a device. The host gate passes (137/138; the one
+failure is environmental), and `gs_e2e` + `gs_au_e2e` pass — so the
+drone→GS path has run end to end on RC_VERSION 9. The `ausniff` and
+`aucadence` device gates have NOT been run, and `aucadence` is the one
+tiers 1 and 2 both need before either is armed.
+
+Building `maburgs` currently requires devourer at HEAD rather than the
+pinned submodule (`f3b76ea` predates `card_scan_usb.cpp`'s
+`DeviceProbe.h`). The pin has not been bumped; that is a separate
+decision.
 
 Read `docs/link-adaptation.md` for what actually ships today. Note when
 reading the code that there are TWO ladders: the 6-rung struct default in

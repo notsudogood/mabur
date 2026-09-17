@@ -20,6 +20,7 @@ VrxController::VrxController(VrxCfg cfg)
       ctrl_(cfg.ladder),
       ov_base_(cfg.overhead),
       ov_enh_(cfg.overhead),
+      obj_(cfg.objective),
       // link_lost_ms 1000 / beacon_period_ms 20 are deliberately fixed, not
       // config: every hw validation ran with these, and a slower fallback to
       // BEACONING after video loss only delays re-rendezvous. The removed
@@ -72,6 +73,7 @@ std::optional<VrxController::Out> VrxController::step(double now_ms,
   if (cfg_.pin_mcs < 0) {
     if (ctrl_.update(health, now_ms)) cur_op_ = op_from_rung(ctrl_.op());
     apply_overhead_policy(health, now_ms);
+    update_objective(health);
   }
   mabur::rc::Rcf r = build_rcf();
   // No repeat copies of an op-changing RCF: the 2026-08-14 repeat burst
@@ -120,6 +122,53 @@ void VrxController::apply_overhead_policy(const LinkHealth& health,
   cur_op_.overhead_enh = e;
 }
 
+// Tier 2 (docs/link-adaptation-v2-proposal.md §3): decide whether to arm the
+// down probe, and score both rungs.
+//
+// Arming is deliberately NOT a tuned threshold. The objective's own algebra
+// gives the loss at which a demote could win even if the rung below were
+// spotless -- (1 - rate_lo/rate_hi)/margin -- and below that point no
+// measurement of the lower rung could justify going there, so the probe
+// would be pure airtime cost (2-3x the up probe's, since a fixed-size body
+// at a lower rate is proportionally longer on air).
+void VrxController::update_objective(const LinkHealth& health) {
+  if (!health.sample_valid) return;
+  const int idx = ctrl_.rung();
+  if (idx <= 0) {  // nothing below the failsafe rung to probe or fall to
+    obj_dn_profile_ = mabur::rc::kNoProbeProfile;
+    return;
+  }
+  const auto& lo = cfg_.ladder.ladder[static_cast<std::size_t>(idx - 1)];
+  const double rate_hi = mabur::rc::phy_rate_mbps(cur_op_slot_enh());
+  const double rate_lo = mabur::rc::phy_rate_mbps(
+      mabur::rc::ladder_from(mabur::rc::PhyMode::HT,
+                             static_cast<uint8_t>(lo.mcs), 20)[1]);
+  // Residual loss is post-FEC: nonzero means FEC is already failing at this
+  // rung, so there is nothing to weigh up -- the existing demote paths
+  // should act rather than this spending seconds measuring.
+  const bool residual_clean =
+      health.residual_loss <= 0.0 && health.s3_residual_loss <= 0.0;
+  const bool want = obj_.want_probe(rate_hi, rate_lo, health.pre_fec_loss,
+                                    residual_clean);
+  obj_dn_profile_ =
+      want ? mabur::rc::encode_profile(mabur::rc::PhyMode::HT,
+                                       static_cast<uint8_t>(lo.mcs), 20)
+           : mabur::rc::kNoProbeProfile;
+  // Scored every tick the objective is enabled, armed or not, so an
+  // observe-only flight records the verdict continuously rather than only
+  // while a probe happens to be up.
+  obj_.should_demote(rate_hi, rate_lo, health.pre_fec_loss,
+                     health.probe_dn_loss, health.probe_dn_valid);
+}
+
+// The enh slot's TX spec for the CURRENT op -- the rate both video streams
+// ride since same-rate-fixed-pairs.
+mabur::rc::LayerTxSpec VrxController::cur_op_slot_enh() const {
+  return mabur::rc::ladder_from(
+      cur_op_.vht ? mabur::rc::PhyMode::VHT : mabur::rc::PhyMode::HT,
+      static_cast<uint8_t>(cur_op_.mcs), static_cast<uint8_t>(cur_op_.bw))[1];
+}
+
 mabur::rc::Rcf VrxController::build_rcf() {
   seq_ = static_cast<uint16_t>(seq_ + 1);
   mabur::rc::Rcf r;
@@ -134,6 +183,10 @@ mabur::rc::Rcf VrxController::build_rcf() {
   // every RCF, or none. In static-pin mode the ladder is out of the loop, so
   // the probe follows the dedicated pin instead.
   r.probe_profile = mabur::rc::kNoProbeProfile;
+  // Tier 2's down probe: whatever update_objective() decided this tick. In
+  // static-pin mode the ladder is out of the loop, so it stays off.
+  r.probe_profile_dn =
+      cfg_.pin_mcs >= 0 ? mabur::rc::kNoProbeProfile : obj_dn_profile_;
   const auto mode = cur_op_.vht ? mabur::rc::PhyMode::VHT : mabur::rc::PhyMode::HT;
   if (cfg_.pin_mcs >= 0) {
     if (cfg_.probe_pin_mcs >= 0)

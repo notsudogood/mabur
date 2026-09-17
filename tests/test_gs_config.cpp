@@ -855,6 +855,72 @@ TEST(overhead_rejects_unknown_key_and_bad_ranges) {
   CHECK(threw);
 }
 
+// link.objective: tier 2's rung objective (rung_objective.h).
+TEST(objective_defaults_are_disabled) {
+  auto cfg = maburgs::load_config(write_tmp(""));
+  const auto& o = cfg.link.objective;
+  CHECK(!o.enable);
+  CHECK(!o.act);
+  CHECK(std::abs(o.margin - 2.0) < 1e-9);
+  CHECK(std::abs(o.demote_margin - 0.10) < 1e-9);
+  CHECK(std::abs(o.disarm_frac - 0.75) < 1e-9);
+}
+
+TEST(objective_shipped_bundle_keeps_it_disabled) {
+  auto c = maburgs::load_config(std::string(MABUR_GS_BUNDLE_DIR) +
+                                "/maburgs.default.toml");
+  CHECK(!c.link.objective.enable);
+  CHECK(!c.link.objective.act);
+}
+
+// act = true must FAIL BOOT rather than silently do nothing: the arming and
+// scoring are wired, the ladder decision is not, and a config that reads as
+// armed-and-acting while doing neither is the worst of both.
+TEST(objective_act_is_rejected_until_implemented) {
+  bool threw = false;
+  std::string what;
+  try {
+    maburgs::load_config(write_tmp("[link.objective]\nenable = true\nact = true\n"));
+  } catch (const std::exception& e) {
+    what = e.what();
+    threw = what.find("link.objective.act") != std::string::npos;
+  }
+  CHECK(threw);
+  CHECK(what.find("not implemented") != std::string::npos);
+}
+
+// The objective scores the overhead tier 1 commands, so a mismatched margin
+// would score a link nobody is flying.
+TEST(objective_margin_must_match_the_overhead_policys) {
+  bool threw = false;
+  try {
+    maburgs::load_config(write_tmp(
+        "[link.overhead]\nenable = true\nmargin = 2.0\n"
+        "\n[link.objective]\nenable = true\nmargin = 3.0\n"));
+  } catch (const std::exception& e) {
+    threw = std::string(e.what()).find("link.objective.margin") != std::string::npos;
+  }
+  CHECK(threw);
+  // Matching margins are fine, and so is a mismatch while tier 1 is OFF --
+  // there is no commanded overhead to disagree with then.
+  auto ok1 = maburgs::load_config(write_tmp(
+      "[link.overhead]\nenable = true\nmargin = 2.5\n"
+      "\n[link.objective]\nenable = true\nmargin = 2.5\n"));
+  CHECK(ok1.link.objective.enable);
+  auto ok2 = maburgs::load_config(write_tmp(
+      "[link.objective]\nenable = true\nmargin = 3.0\n"));
+  CHECK(ok2.link.objective.enable);
+}
+
+TEST(objective_rejects_unknown_key) {
+  bool threw = false;
+  try { maburgs::load_config(write_tmp("[link.objective]\nnope = 1\n")); }
+  catch (const std::exception& e) {
+    threw = std::string(e.what()).find("link.objective") != std::string::npos;
+  }
+  CHECK(threw);
+}
+
 TEST(au_ring_defaults) {
   auto c = maburgs::load_config(std::string(MABUR_GS_BUNDLE_DIR) + "/maburgs.default.toml");
   // PR C: the ring IS the video output, so the shipped bundle enables it;

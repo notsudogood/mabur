@@ -4,10 +4,12 @@
 #include <optional>
 #include <vector>
 
+#include "mabur/profile.h"
 #include "mabur/rc_proto.h"
 
 #include "ladder_controller.h"
 #include "overhead_policy.h"
+#include "rung_objective.h"
 #include "op_point.h"
 #include "rendezvous.h"
 
@@ -41,6 +43,9 @@ struct VrxCfg {
   // nothing. Never consulted in pin mode -- a pinned link means a pinned
   // operating point, overhead included.
   OverheadCfg overhead;
+  // Tier 2: the rung objective (see ObjectiveCfg, rung_objective.h). Default
+  // OFF. Never consulted in pin mode -- a pinned link means a pinned rung.
+  ObjectiveCfg objective;
 };
 
 class VrxController {
@@ -70,6 +75,12 @@ class VrxController {
   double ov_target_base() const { return ov_base_.target(); }
   double ov_target_enh() const { return ov_enh_.target(); }
   uint64_t ov_changes() const { return ov_base_.changes() + ov_enh_.changes(); }
+  // Tier 2 telemetry: the two rungs' scores in kbps-proportional units, and
+  // whether the down probe is currently armed. Populated whenever
+  // link.objective.enable is set, which is the point of the observe stage.
+  double obj_score_hi() const { return obj_.score_hi(); }
+  double obj_score_lo() const { return obj_.score_lo(); }
+  bool obj_armed() const { return obj_.armed(); }
   // The ladder controller itself, for Task 6's sideport link.ctl block and
   // the "ctl: rung a->b" transition line in main.cpp. Exists even in pin
   // mode (constructed unconditionally) but is never ticked/updated there.
@@ -109,7 +120,11 @@ class VrxController {
   VrxCfg cfg_;
   LadderController ctrl_;
   OverheadPolicy ov_base_, ov_enh_;
+  RungObjective obj_;
   void apply_overhead_policy(const LinkHealth& health, double now_ms);
+  void update_objective(const LinkHealth& health);
+  mabur::rc::LayerTxSpec cur_op_slot_enh() const;
+  uint8_t obj_dn_profile_ = mabur::rc::kNoProbeProfile;
   VrxRendezvous rz_;
   double last_fb_ms_ = -1e18;
   double last_keepalive_ms_ = -1e18;

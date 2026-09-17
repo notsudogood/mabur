@@ -183,6 +183,15 @@ struct LinkHealth {
   double probe_loss = 0.0;       // union block loss over the window
   uint64_t probe_expected_syms = 0;
   int probe_rung = -1;           // rung the sample was commanded at
+
+  // --- down probe window (tier 2), from the second ProbeTrack ---
+  // Scored against the rung BELOW the op, so it never mixes with the up
+  // probe's verdict. probe_dn_valid is false until an armed down probe has
+  // actually produced a sample -- the objective treats "no measurement" as
+  // "stay", never as a clean lower rung.
+  bool probe_dn_valid = false;
+  double probe_dn_loss = 0.0;
+  int probe_dn_rung = -1;
 };
 
 enum class CtlReason {

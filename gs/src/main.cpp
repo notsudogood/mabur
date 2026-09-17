@@ -737,6 +737,7 @@ static int run_radio(const maburgs::Config& cfg) {
   vcfg.pin_overhead_enh = cfg.link.static_overhead_enh;
   vcfg.probe_pin_mcs = cfg.link.ladder_cfg.probe.pin_mcs;
   vcfg.overhead = cfg.link.overhead;
+  vcfg.objective = cfg.link.objective;
   maburgs::VrxController vrx(vcfg);
 
   // Dedicated adaptive-link log (spec 2026-08-05-s3-probe-promote-design.md
@@ -1572,6 +1573,12 @@ static int run_radio(const maburgs::Config& cfg) {
     // after failsafe_ms of RCF silence. See FollowCfg in
     // ladder_controller.h and docs/link-adaptation-v2-proposal.md §4.
     health.observed_mcs = agg.observed_video_mcs();
+    // Tier 2's down-probe sample: the measured loss at the rung BELOW the
+    // op, or invalid when nothing is armed. The objective treats invalid as
+    // "stay", never as a clean lower rung.
+    health.probe_dn_valid = probe_dn_sample.valid;
+    health.probe_dn_loss = probe_dn_sample.valid ? probe_dn_sample.loss : 0.0;
+    health.probe_dn_rung = vrx.ctl().rung() - 1;
     if (auto out = vrx.step(now_ms, health)) {
       if (!out->is_disc) {
         prev_pkts_out = pkts_now;  // window == RCF period
@@ -1952,6 +1959,9 @@ static int run_radio(const maburgs::Config& cfg) {
         ci.ov_target_base = vrx.ov_target_base();
         ci.ov_target_enh = vrx.ov_target_enh();
         ci.ov_changes = vrx.ov_changes();
+        ci.obj_score_hi = vrx.obj_score_hi();
+        ci.obj_score_lo = vrx.obj_score_lo();
+        ci.obj_armed = vrx.obj_armed();
         ci.rung_ov_base = c.op().overhead_base;
         ci.rung_ov_enh = c.op().overhead_enh;
         ci.util = c.util();

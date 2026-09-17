@@ -290,6 +290,12 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     // ov_base/ov_enh which are what is actually commanded. Equal to those
     // means the policy agrees with the rung; different with
     // link.overhead.enable off is the observe-only signal.
+    // Tier 2: hi is the current rung's score, lo the rung below's (0 until
+    // the armed down probe has a sample). lo > hi with objective.act off is
+    // the observe-only signal that a demote would have been taken.
+    ctl["objective"] = {{"hi", c.obj_score_hi},
+                        {"lo", c.obj_score_lo},
+                        {"armed", c.obj_armed}};
     ctl["ov_target"] = {{"base", c.ov_target_base},
                         {"enh", c.ov_target_enh},
                         {"changes", c.ov_changes}};

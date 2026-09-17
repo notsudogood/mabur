@@ -133,6 +133,13 @@ struct StatsCtlIn {
   double ov_target_base = 0.0, ov_target_enh = 0.0;
   uint64_t ov_changes = 0;
 
+  // Tier 2 (rung_objective.h): the two rungs' scores in kbps-proportional
+  // units, and whether the down probe is armed. score_lo is 0 until an armed
+  // down probe has produced a real sample -- that is "unmeasured", not "the
+  // rung below is dead".
+  double obj_score_hi = 0.0, obj_score_lo = 0.0;
+  bool obj_armed = false;
+
   // Per-rung EWMA store snapshot, index = rung index (spec 2026-08-13).
   std::vector<StatsRungIn> rungs;
 

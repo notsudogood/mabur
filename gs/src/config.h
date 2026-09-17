@@ -6,6 +6,7 @@
 
 #include "ladder_controller.h"
 #include "overhead_policy.h"
+#include "rung_objective.h"
 #include "mabur/uep_encoder.h"
 
 namespace maburgs {
@@ -116,6 +117,13 @@ struct LinkCfg {
   // Default OFF -- with enable=false the policy computes and exports its
   // target and commands nothing, which is the observe-only stage.
   OverheadCfg overhead;
+
+  // Tier 2 of docs/link-adaptation-v2-proposal.md: pick the rung by
+  // maximising rate*(1-margin*L) instead of by tripping a loss threshold,
+  // measuring the rung below with an armed down probe. `link.objective`.
+  // Default OFF, and `act` is currently rejected at load -- the decision
+  // path is not implemented yet, only the arming and the scoring.
+  ObjectiveCfg objective;
 };
 
 /// Video reassembly tuning (PR C: the RTP output destination is gone --

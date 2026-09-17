@@ -239,7 +239,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
                 "hold_after_down_ms", "min_between_changes_ms", "feedback_timeout_ms",
                 "starved_confirm_ms", "s3_demote", "s3_down_util",
                 "s3_settle_ms", "s3_min_syms",
-                "rung_stats", "fade", "probe", "overhead",
+                "rung_stats", "fade", "probe", "overhead", "objective",
                 "rcf_slot_hold_ms"});
     c.link.vtx_id = static_cast<uint32_t>(get_int(r, "vtx_id", 1, 0, 0xFFFFFFFFL, "link"));
     c.link.feedback_ms = static_cast<int>(get_int(r, "feedback_ms", 100, 20, 5000, "link"));
@@ -315,6 +315,32 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
         fail("link.overhead.min_ov", "must be <= max_ov");
     } else {
       note_default("link", "overhead", "(disabled)");
+    }
+    // link.objective: tier 2's rung objective (rung_objective.h).
+    if (r.contains("objective")) {
+      const Value& ob = r["objective"];
+      check_keys(ob, "link.objective",
+                 {"enable", "act", "margin", "demote_margin", "disarm_frac"});
+      ObjectiveCfg& o = c.link.objective;
+      if (ob.contains("enable")) o.enable = get_bool(ob, "enable", false, "link.objective");
+      if (ob.contains("act")) o.act = get_bool(ob, "act", false, "link.objective");
+      o.margin = get_num(ob, "margin", 2.0, 1.0, 10.0, "link.objective");
+      o.demote_margin = get_num(ob, "demote_margin", 0.10, 0.0, 1.0, "link.objective");
+      o.disarm_frac = get_num(ob, "disarm_frac", 0.75, 0.1, 1.0, "link.objective");
+      // Fail loudly rather than accept a setting that silently does
+      // nothing: arming and scoring are wired, the ladder decision is not.
+      if (o.act)
+        fail("link.objective.act",
+             "not implemented yet -- the objective can arm the down probe "
+             "and score both rungs, but cannot move the ladder");
+      // The objective scores the overhead tier 1 is commanding, so a
+      // mismatched margin scores a link that is not being flown.
+      if (o.enable && c.link.overhead.enable &&
+          std::abs(o.margin - c.link.overhead.margin) > 1e-9)
+        fail("link.objective.margin",
+             "must equal link.overhead.margin when both are enabled");
+    } else {
+      note_default("link", "objective", "(disabled)");
     }
     c.link.ladder_cfg.down_util = get_num(r, "down_util", 0.6, 0.0, 1.0, "link");
     c.link.ladder_cfg.up_util = get_num(r, "up_util", 0.15, 0.0, 1.0, "link");

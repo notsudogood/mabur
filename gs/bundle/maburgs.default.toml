@@ -109,6 +109,22 @@ max_ov          = 2.0    # ceiling of link.ladder[].overhead_*'s own range
 min_interval_ms = 2000   # each change costs a keyframe on Star6E
 dead_band       = 0.15   # ...so a smaller move is not worth one
 
+# Tier 2 (docs/link-adaptation-v2-proposal.md): choose the rung by
+# maximising rate*(1-margin*L) rather than by tripping a loss threshold,
+# measuring the rung below with a down probe armed only when a demote could
+# actually win. DISABLED here. With enable = true / act = false the probe
+# arms and link.ctl.objective.{hi,lo} record the verdict without acting --
+# that stage costs real airtime (a down probe is 2-3x the up probe's, since
+# a fixed-size body at a lower rate is longer on air), so fly it knowingly.
+# act = true is REJECTED at load today: arming and scoring are wired, the
+# ladder decision is not.
+[link.objective]
+enable        = false
+act           = false
+margin        = 2.0   # must equal link.overhead.margin when both are on
+demote_margin = 0.10  # the lower rung must win by this before it is worth an IDR
+disarm_frac   = 0.75  # hysteresis, as a fraction of the arm threshold
+
 [link.probe]
 enable      = true
 rung_offset = 1

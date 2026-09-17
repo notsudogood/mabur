@@ -92,6 +92,24 @@ std::vector<uint8_t> make_rcf_wire(uint32_t vtx_id, uint16_t seq, uint8_t profil
   return pack_rcf(r);
 }
 
+// 7-arg form: also sets probe_profile_dn (RC_VERSION 9, tier 2's down
+// probe). Separate from the 6-arg form above so every existing caller keeps
+// asserting that an armed UP probe does NOT imply a down one.
+std::vector<uint8_t> make_rcf_wire(uint32_t vtx_id, uint16_t seq, uint8_t profile,
+                                    uint8_t ov_base_16ths, uint8_t ov_enh_16ths,
+                                    uint8_t probe_profile,
+                                    uint8_t probe_profile_dn) {
+  Rcf r;
+  r.vtx_id = vtx_id;
+  r.seq = seq;
+  r.profile = profile;
+  r.fec_overhead_base = ov_base_16ths / 16.0;
+  r.fec_overhead_enh = ov_enh_16ths / 16.0;
+  r.probe_profile = probe_profile;
+  r.probe_profile_dn = probe_profile_dn;
+  return pack_rcf(r);
+}
+
 // Convenience overload: the common case with no probe stream commanded.
 std::vector<uint8_t> make_rcf_wire(uint32_t vtx_id, uint16_t seq, uint8_t profile,
                                     uint8_t ov_base_16ths, uint8_t ov_enh_16ths) {
@@ -1014,6 +1032,61 @@ TEST(probe_rcf_fills_the_probe_slot_not_the_enh_layer) {
   agent.on_rc_frame(wire2.data(), wire2.size(), 200);
   CHECK(act.applied.back().probe_profile == kNoProbeProfile);
   CHECK(!agent.probe_on());
+}
+
+// 11c. Tier 2 (RC_VERSION 9): probe_profile_dn fills its own slot, resolves
+// to its own TX spec, and is independent of the up probe in BOTH directions.
+TEST(probe_dn_rcf_fills_its_own_slot_independently) {
+  Config cfg = make_cfg();
+  MockActuator act;
+  RcAgent agent(cfg, act);
+  agent.tick(0, RadioHealth{});
+  const uint8_t op_byte = encode_profile(PhyMode::HT, 3, 20);
+  const uint8_t up_byte = encode_profile(PhyMode::HT, 4, 20);
+  const uint8_t dn_byte = encode_profile(PhyMode::HT, 2, 20);
+  auto wire = make_rcf_wire(1, 1, op_byte, 8, 8, up_byte, dn_byte);
+  agent.on_rc_frame(wire.data(), wire.size(), 100);
+  REQUIRE(!act.applied.empty());
+  const AppliedOp& op = act.applied.back();
+  // Neither probe moves the video layers.
+  CHECK(op.ladder[0].mcs == 3);
+  CHECK(op.ladder[1].mcs == 3);
+  CHECK(op.probe_profile == up_byte);
+  CHECK(op.probe.mcs == 4);
+  CHECK(op.probe_profile_dn == dn_byte);
+  CHECK(op.probe_dn.mcs == 2);
+  CHECK(op.probe_dn.bw == 20);
+  // A probe changes MCS and nothing else: it inherits the enh slot's coding.
+  CHECK(op.probe_dn.ldpc && op.probe_dn.stbc);
+
+  // Down armed, up NOT: the two bytes are genuinely independent.
+  auto only_dn = make_rcf_wire(1, 2, op_byte, 8, 8, kNoProbeProfile, dn_byte);
+  agent.on_rc_frame(only_dn.data(), only_dn.size(), 200);
+  CHECK(act.applied.back().probe_profile == kNoProbeProfile);
+  CHECK(act.applied.back().probe_profile_dn == dn_byte);
+
+  // Up armed, down NOT -- the direction that matters most, since the down
+  // probe is armed rarely and must not linger once the GS stops asking.
+  auto only_up = make_rcf_wire(1, 3, op_byte, 8, 8, up_byte, kNoProbeProfile);
+  agent.on_rc_frame(only_up.data(), only_up.size(), 300);
+  CHECK(act.applied.back().probe_profile == up_byte);
+  CHECK(act.applied.back().probe_profile_dn == kNoProbeProfile);
+}
+
+// 11d. An ordinary RCF (no down byte) must leave the down slot clear -- the
+// 6-arg helper packs kNoProbeProfile there, so this pins that the default
+// travels correctly rather than inheriting the up probe.
+TEST(probe_dn_defaults_clear_on_a_plain_rcf) {
+  Config cfg = make_cfg();
+  MockActuator act;
+  RcAgent agent(cfg, act);
+  agent.tick(0, RadioHealth{});
+  const uint8_t up_byte = encode_profile(PhyMode::HT, 6, 20);
+  auto wire = make_rcf_wire(1, 1, encode_profile(PhyMode::HT, 5, 20), 8, 8, up_byte);
+  agent.on_rc_frame(wire.data(), wire.size(), 100);
+  REQUIRE(!act.applied.empty());
+  CHECK(act.applied.back().probe_profile == up_byte);
+  CHECK(act.applied.back().probe_profile_dn == kNoProbeProfile);
 }
 
 // 11b. Failsafe entry (MAX_RANGE) clears the probe slot even if the last

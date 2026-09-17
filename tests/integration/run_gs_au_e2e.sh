@@ -34,8 +34,8 @@ import rc_proto
 # lifted, and the lost enhance stream read as a decoder bug.
 RC_VERSION = int(re.search(r"RC_VERSION\s*=\s*(\d+)",
                            open("common/include/mabur/rc_proto.h").read()).group(1))
-body = struct.pack("<HBBBIHBBBB", rc_proto.RC_MAGIC, RC_VERSION, rc_proto.T_RCF, 0,
-                   1, 1, rc_proto.encode_profile("ht", 4, 20), 25, 25, 0xFF)
+body = struct.pack("<HBBBIHBBBBB", rc_proto.RC_MAGIC, RC_VERSION, rc_proto.T_RCF, 0,
+                   1, 1, rc_proto.encode_profile("ht", 4, 20), 25, 25, 0xFF, 0xFF)
 w = body + struct.pack("<H", rc_proto._crc(body))
 with open(sys.argv[1], "wb") as f:
     f.write(struct.pack("<II", 1, len(w))); f.write(w)

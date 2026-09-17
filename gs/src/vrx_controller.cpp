@@ -149,6 +149,7 @@ mabur::rc::Rcf VrxController::build_rcf() {
 
 void VrxController::note_cmd(const mabur::rc::Rcf& r) {
   last_cmd_probe_profile_ = r.probe_profile;
+  last_cmd_probe_profile_dn_ = r.probe_profile_dn;
 }
 
 const OpPoint& VrxController::cur_op() const { return cur_op_; }

@@ -572,9 +572,17 @@ static int run_radio(const maburgs::Config& cfg) {
   const int probe_block_payload =
       static_cast<int>(mabur::sw::kSwHeaderLen) + probe_layer.fec.symbol_size;
   maburgs::ProbeTrack probe_track(maburgs::ProbeTrackCfg{probe_bpb, 100, n_cards});
+  // Tier 2's DOWN probe (RC_VERSION 9): its own track and its own window.
+  // Same geometry -- a probe body is a video body's size at its rung either
+  // way -- but scored separately, because a down probe measures a rung the
+  // link is NOT on and must never be pooled with the up probe's verdict.
+  maburgs::ProbeTrack probe_dn_track(
+      maburgs::ProbeTrackCfg{probe_bpb, 100, n_cards});
+  maburgs::S1LossWindow probe_dn_loss;
   maburgs::S1LossWindow probe_loss;  // union, commanded profile
   std::vector<maburgs::S1LossWindow> probe_card_loss(static_cast<size_t>(n_cards));
   uint8_t probe_cmd_last = mabur::rc::kNoProbeProfile;
+  uint8_t probe_dn_cmd_last = mabur::rc::kNoProbeProfile;
   // A commanded-profile change blanks the windows: bodies already in flight
   // carry the OLD profile and ProbeTrack stops scoring them, so the window
   // must refill from the new profile's bodies only (RCF lag + finalize).
@@ -605,7 +613,16 @@ static int run_radio(const maburgs::Config& cfg) {
          // One probe expectation per ENH access unit: the probe body rides
          // the enh AU's send opportunity, so the AU count is what "expected"
          // means (probe_track.h explains why seq gaps cannot be).
-         if (sid == 1) probe_track.on_enh_au(h.frame_id, static_cast<double>(mono_ms()));
+         if (sid == 1) {
+           probe_track.on_enh_au(h.frame_id, static_cast<double>(mono_ms()));
+           // The down probe rides the same enh-AU trigger, so it books the
+           // same expectation. Booked unconditionally, exactly like the up
+           // probe: expectations come from AU COUNT, never from arrival-side
+           // seq gaps, or a 100%-lost interval would read as silence ("no
+           // data, ignore") instead of loss ("data, score it zero") -- which
+           // is precisely the case the gate exists to catch (probe_track.h).
+           probe_dn_track.on_enh_au(h.frame_id, static_cast<double>(mono_ms()));
+         }
        },
        [&](const uint8_t* d, size_t n) {
          if (au_on) au_ring.append(d, n);
@@ -980,6 +997,28 @@ static int run_radio(const maburgs::Config& cfg) {
     const double evm = evm_raw != 0 ? evm_raw * maburgs::kEvmRawToDb : std::nan("");
     probe_track.on_body(card, rx, snr, evm,
                         static_cast<double>(m.mono_us) / 1000.0);
+  });
+
+  // Tier 2's down probe. Mirrors the up-probe sink apart from one thing: it
+  // does NOT call rcf_slot.on_probe_tail(). The UP probe is the last body of
+  // the enh burst and the slotter releases on its arrival
+  // (probe-blanking-fix-findings-2026-09-05); the down probe is pushed
+  // before it, so treating it as the tail would release the GS's uplink
+  // blast one body early -- straight back into the bug that fix closed.
+  agg.set_probe_dn_sink([&](uint8_t card, const mabur::node::RxBody& m) {
+    mabur::probe::ProbeRx rx;
+    if (!mabur::probe::parse_probe_body(m.body.data(), m.body.size(),
+                                        probe_block_payload, &rx))
+      return;
+    const double snr = m.phy_valid
+                            ? std::max(m.snr[0], m.snr[1]) * maburgs::kSnrRawToDb
+                            : std::nan("");
+    const int8_t evm_raw =
+        (m.evm[0] != 0 && (m.evm[1] == 0 || m.evm[0] < m.evm[1])) ? m.evm[0]
+                                                                  : m.evm[1];
+    const double evm = evm_raw != 0 ? evm_raw * maburgs::kEvmRawToDb : std::nan("");
+    probe_dn_track.on_body(card, rx, snr, evm,
+                           static_cast<double>(m.mono_us) / 1000.0);
   });
 
   maburgs::TxSelector sel(
@@ -1434,6 +1473,27 @@ static int run_radio(const maburgs::Config& cfg) {
                                                   pcnt.arrived_blocks, now_ms);
     }
     const auto probe_sample = probe_loss.sample(now_ms);
+
+    // Tier 2's down probe, on the same machinery. Its commanded profile
+    // changes blank its own window for the same reason the up probe's do:
+    // bodies already in flight carry the old profile, and ProbeTrack stops
+    // scoring those. It does NOT touch rcf_slot's probe tail -- the slotter
+    // times against the burst's LAST body, which is always the up probe.
+    probe_dn_track.tick(now_ms);
+    if (const uint8_t pcd = vrx.probe_profile_dn(); pcd != probe_dn_cmd_last) {
+      probe_dn_cmd_last = pcd;
+      probe_dn_track.set_commanded(pcd, now_ms);
+      probe_dn_loss.blank_until(now_ms + kProbeSwitchBlankMs);
+    }
+    {
+      const auto& pud = probe_dn_track.union_counts();
+      probe_dn_loss.add(pud.expected_blocks, pud.arrived_blocks, now_ms);
+    }
+    const auto probe_dn_sample = probe_dn_loss.sample(now_ms);
+    // Drained unconditionally, for the same reason as the up probe's: the
+    // finalized list is an unbounded vector that only take_finalized()
+    // clears.
+    probe_dn_track.take_finalized();
     // Drain every iteration even with no log open: ProbeTrack's bounded
     // structure is its pending ring, NOT the finalized list -- that is a
     // plain std::vector it appends to and only take_finalized() clears, so

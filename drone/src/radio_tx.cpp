@@ -64,7 +64,8 @@ RadioTx::RadioTx(FrameSink& sink) : sink_(sink) {
 }
 
 void RadioTx::set_ladder(const std::array<rc::LayerTxSpec, 2>& ladder,
-                         const std::optional<rc::LayerTxSpec>& probe) {
+                         const std::optional<rc::LayerTxSpec>& probe,
+                         const std::optional<rc::LayerTxSpec>& probe_dn) {
   auto next = std::make_shared<Cache>();
   for (size_t i = 0; i < ladder.size(); ++i)
     next->layers[i].radiotap =
@@ -72,6 +73,12 @@ void RadioTx::set_ladder(const std::array<rc::LayerTxSpec, 2>& ladder,
   if (probe)
     next->layers[2].radiotap =
         devourer::build_stream_radiotap(to_tx_mode(*probe, probe->bw));
+  // Tier 2's down probe (RC_VERSION 9). Left empty when unarmed, which is
+  // most of the time -- build_frame() then drops and counts its bodies
+  // exactly as it does an unset up-probe slot.
+  if (probe_dn)
+    next->layers[3].radiotap =
+        devourer::build_stream_radiotap(to_tx_mode(*probe_dn, probe_dn->bw));
   // Single atomic swap: the whole radiotap table changes together, so
   // send_body() (hot thread) can never observe a torn mix of old and new
   // layer entries.
@@ -81,7 +88,11 @@ void RadioTx::set_ladder(const std::array<rc::LayerTxSpec, 2>& ladder,
 bool RadioTx::build_frame(const Cache& cache, uint8_t stream_id,
                           const uint8_t* body, size_t len,
                           std::vector<uint8_t>& out) {
-  size_t idx = stream_id == kProbeStreamId ? 2 : (stream_id >= 2 ? 0 : stream_id);
+  size_t idx = stream_id == kProbeStreamId
+                   ? 2
+                   : (stream_id == kProbeStreamIdDn
+                          ? 3
+                          : (stream_id >= 2 ? 0 : stream_id));
   const LayerCache& lc = cache.layers[idx];
 
   // Missing radiotap cache entry (e.g. called before set_ladder). Sequence

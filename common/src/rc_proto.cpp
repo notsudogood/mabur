@@ -52,7 +52,7 @@ void put_crc(std::vector<uint8_t>& body) {
   put16(body, crc);
 }
 
-constexpr size_t RCF_HEAD_LEN = 15;
+constexpr size_t RCF_HEAD_LEN = 16;  // +1 for probe_profile_dn (RC_VERSION 9)
 constexpr size_t DISC_LEN = 21;
 constexpr size_t DISC_ACK_LEN = 19;
 constexpr size_t TELEM_LEN = 87;  // 2026-09-13: cal_base_ref_idx removed
@@ -85,6 +85,7 @@ std::vector<uint8_t> pack_rcf(const Rcf& r) {
   body.push_back(overhead_to_x100(r.fec_overhead_base));
   body.push_back(overhead_to_x100(r.fec_overhead_enh));
   body.push_back(r.probe_profile);
+  body.push_back(r.probe_profile_dn);
   put_crc(body);
   return body;
 }
@@ -101,6 +102,7 @@ std::optional<Rcf> parse_rcf(const uint8_t* buf, size_t len) {
   r.fec_overhead_base = buf[12] / 100.0;
   r.fec_overhead_enh = buf[13] / 100.0;
   r.probe_profile = buf[14];
+  r.probe_profile_dn = buf[15];
   return r;
 }
 

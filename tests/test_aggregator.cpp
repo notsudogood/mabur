@@ -223,6 +223,49 @@ static std::vector<uint8_t> probe_body_fixture(uint32_t seq) {
                                         static_cast<int>(mabur::sw::kSwHeaderLen) + 64);
 }
 
+// Tier 2's down probe: identical body, different SBI stream id.
+static std::vector<uint8_t> probe_dn_body_fixture(uint32_t seq) {
+  auto b = mabur::probe::build_probe_body(mabur::probe::ProbeHdr{seq, 0x02, 1}, 4,
+                                          static_cast<int>(mabur::sw::kSwHeaderLen) + 64);
+  b[3] = mabur::kProbeStreamIdDn;  // SBI header byte 3 is STREAM_ID
+  return b;
+}
+
+// Tier 2 (RC_VERSION 9): the down probe must reach its OWN sink. Routing it
+// to the up probe's would retrigger the RcfSlotter's burst-tail release one
+// body early (probe-blanking-fix-findings-2026-09-05), and routing it to the
+// video decoder would book it as video loss.
+TEST(probe_dn_body_routes_to_its_own_sink) {
+  Aggregator agg(vec_layers(), 512, 2);
+  int frags = 0, up = 0, dn = 0; uint8_t dn_card = 99;
+  agg.set_frag_sink([&](const mabur::DecodedFrag&) { ++frags; });
+  agg.set_probe_sink([&](uint8_t, const mabur::node::RxBody&) { ++up; });
+  agg.set_probe_dn_sink([&](uint8_t card, const mabur::node::RxBody&) {
+    ++dn; dn_card = card;
+  });
+  agg.on_rx_body(msg(1, 10, true, probe_dn_body_fixture(5)));
+  CHECK(dn == 1);
+  CHECK(dn_card == 1);
+  CHECK(up == 0);     // never the up probe's sink
+  CHECK(frags == 0);  // never the video decoder
+  CHECK(agg.card(1).video_bodies == 0);
+  // Shares the Probe RF class with the up probe, and stays out of the
+  // base+enh pool the RF label and the fade trigger read.
+  CHECK(agg.card(1).cls[static_cast<size_t>(RfClass::Probe)].frames == 1);
+  CHECK(agg.card(1).rf_pool.frames == 0);
+}
+
+// With no down sink attached the body must be dropped, not fall through to
+// the video decoder.
+TEST(probe_dn_body_without_a_sink_is_dropped_not_decoded) {
+  Aggregator agg(vec_layers(), 512, 2);
+  int frags = 0;
+  agg.set_frag_sink([&](const mabur::DecodedFrag&) { ++frags; });
+  agg.on_rx_body(msg(1, 10, true, probe_dn_body_fixture(7)));
+  CHECK(frags == 0);
+  CHECK(agg.card(1).video_bodies == 0);
+}
+
 TEST(probe_body_routes_to_probe_sink_not_video) {
   Aggregator agg(vec_layers(), 512, 2);
   int frags = 0, probes = 0; uint8_t probe_card = 99;

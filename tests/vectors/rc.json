@@ -53,6 +53,17 @@
     "seq": 42,
     "vtx_id": 287454020
    }
+  },
+  {
+   "fields": {
+    "fec_overhead_base": 0.7,
+    "fec_overhead_enh": 0.4,
+    "probe_profile": 4,
+    "probe_profile_dn": 2,
+    "profile": 3,
+    "seq": 1234,
+    "vtx_id": 195948557
+   }
   }
  ]
 }

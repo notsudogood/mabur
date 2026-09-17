@@ -46,7 +46,11 @@ constexpr uint16_t RC_MAGIC = 0x5243;  // "RC"
 // to the chip's efuse anchor (CalWindow int8, CalResult walls in [-64,63],
 // sentinel -128); Telem drops cal_base_ref_idx. Spec
 // 2026-09-13-relative-walls-design.md.
-constexpr uint8_t RC_VERSION = 8;
+// Bumped 8 -> 9 on 2026-09-17: the RCF gained probe_profile_dn, a second
+// probe head byte naming a rung BELOW the op to canary (0xFF = none), and
+// SBI gained kProbeStreamIdDn for it. Tier 2 of
+// docs/link-adaptation-v2-proposal.md.
+constexpr uint8_t RC_VERSION = 9;
 
 // RCF probe_profile sentinel: the drone runs no probe stream.
 constexpr uint8_t kNoProbeProfile = 0xFF;
@@ -89,6 +93,19 @@ struct Rcf {
   // Probe stream MCS (spec 2026-09-04): encode_profile of the rung the GS
   // wants probed, or kNoProbeProfile. Always present in the head.
   uint8_t probe_profile = kNoProbeProfile;
+
+  // DOWN-probe MCS (tier 2, RC_VERSION 9): encode_profile of a rung BELOW
+  // the op, or kNoProbeProfile. Also always present in the head -- a fixed
+  // byte rather than a flagged tail, for the same reason probe_profile
+  // became one in v6: an optional tail is a second thing to get wrong on a
+  // wire with no compatibility story to protect.
+  //
+  // Expected to be kNoProbeProfile for most of a flight. Unlike the upward
+  // probe this one is ARMED, not always-on: it costs 2-3x the airtime (a
+  // fixed-size body at a lower rate is proportionally longer on air) and it
+  // only carries information once the link is loaded enough that the rung
+  // below sits off its error floor.
+  uint8_t probe_profile_dn = kNoProbeProfile;
 };
 
 // VRX -> VTX discovery beacon (rendezvous), addressed to a VTX_ID.

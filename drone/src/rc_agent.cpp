@@ -65,6 +65,10 @@ void RcAgent::apply_max_range(uint64_t now_ms) {
 
   applied_.ladder = ladder;
   applied_.probe_profile = rc::kNoProbeProfile;
+  // MAX_RANGE runs no probes of either direction: the up probe has no rung
+  // above mcs0's floor to canary, and a down probe below the floor does not
+  // exist. Both off explicitly rather than inherited.
+  applied_.probe_profile_dn = rc::kNoProbeProfile;
   // 2.0, not 1.0: the pre-Task-1 wire scale doubled every commanded
   // overhead on its way into the budget formula (uep_layer_overhead's ref
   // scale); RC_VERSION 4 made fec_overhead a literal actual-overhead value
@@ -90,7 +94,8 @@ void RcAgent::apply_max_range(uint64_t now_ms) {
 // run_bitrate_policy() explicitly afterwards, per the spec.
 void RcAgent::apply_ladder_op(const std::array<LayerTxSpec, 2>& ladder,
                               double ov_base, double ov_enh,
-                              uint8_t probe_profile) {
+                              uint8_t probe_profile,
+                              uint8_t probe_profile_dn) {
   // A resolved DISC/RCF op is only ever applied on a path that (re)enters
   // LINKED (see on_rc_frame), so the sticky MAX_RANGE forced-shed from a
   // prior RENDEZVOUS/FAILSAFE no longer applies — clear it here rather than
@@ -105,6 +110,15 @@ void RcAgent::apply_ladder_op(const std::array<LayerTxSpec, 2>& ladder,
     PhyMode pm; uint8_t pmcs, pbw;
     rc::decode_profile(probe_profile, pm, pmcs, pbw);
     applied_.probe = rc::ladder_from(ladder[1].mode, pmcs, ladder[1].bw)[1];
+  }
+  // Tier 2's down probe, resolved the same way: the RCF names only an MCS,
+  // and the spec's rule that a probe changes MCS and nothing else means it
+  // inherits the enh slot's mode/bw and its LDPC+STBC.
+  applied_.probe_profile_dn = probe_profile_dn;
+  if (probe_profile_dn != rc::kNoProbeProfile) {
+    PhyMode pm; uint8_t pmcs, pbw;
+    rc::decode_profile(probe_profile_dn, pm, pmcs, pbw);
+    applied_.probe_dn = rc::ladder_from(ladder[1].mode, pmcs, ladder[1].bw)[1];
   }
   applied_.shed[0] = false;
   // shed_level_ still counts 0..3 (congestion semantics untouched — see
@@ -412,7 +426,10 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
                                    static_cast<int>(rc::profile_table().size()) - 1);
     auto ladder = rc::ladder_for_row(row_idx);
     const auto& row = rc::profile_table()[static_cast<size_t>(row_idx)];
-    apply_ladder_op(ladder, row.ov_base, row.ov_enh, rc::kNoProbeProfile);
+    // DISC's init_profile names an op only -- no probe of either direction
+    // until the first RCF asks for one.
+    apply_ladder_op(ladder, row.ov_base, row.ov_enh, rc::kNoProbeProfile,
+                    rc::kNoProbeProfile);
 
     if (state_ != State::FAILSAFE) link_established_ = true;
     state_ = State::LINKED;
@@ -460,7 +477,8 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
     auto ladder = rc::ladder_from(mode, mcs, bw);
 
     State prev_state = state_;
-    apply_ladder_op(ladder, r->fec_overhead_base, r->fec_overhead_enh, r->probe_profile);
+    apply_ladder_op(ladder, r->fec_overhead_base, r->fec_overhead_enh,
+                    r->probe_profile, r->probe_profile_dn);
 
     if (prev_state == State::BOOT || prev_state == State::RENDEZVOUS)
       link_established_ = true;

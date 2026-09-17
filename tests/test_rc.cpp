@@ -17,6 +17,9 @@ static Rcf rcf_from_json(const nlohmann::json& f) {
   r.fec_overhead_enh = f["fec_overhead_enh"].get<double>();
   r.probe_profile = f.contains("probe_profile") ? f["probe_profile"].get<uint8_t>()
                                                 : kNoProbeProfile;
+  r.probe_profile_dn = f.contains("probe_profile_dn")
+                           ? f["probe_profile_dn"].get<uint8_t>()
+                           : kNoProbeProfile;
   return r;
 }
 
@@ -51,11 +54,15 @@ TEST(rcf_matches_golden_wire) {
   // Reverting any pack_rcf() layout change without updating these fails
   // here, which is the point -- the format cannot drift silently.
   const std::vector<std::string> GOLDEN = {
-      "4352080100efbeadde0700243232ff4815",
-      "435208010001000000ffff006464ffaa6b",
+      "4352090100efbeadde0700243232ffff056f",
+      "435209010001000000ffff006464ffff5c12",
       // Asym pair (base 1.0 / enh 0.5): ENH actually rides a different
       // literal overhead than BASE here, not a duplicated equal-pair scalar.
-      "4352080100443322112a0008643206a49b",
+      "4352090100443322112a0008643206ff43f3",
+      // RC_VERSION 9: BOTH probes armed at once -- op mcs3, up probe mcs4,
+      // down probe mcs2. The case probe_profile_dn exists for, and the one
+      // that would catch the two head bytes being packed in the wrong order.
+      "43520901000df0ad0bd2040346280402a131",
   };
   auto j = mtest::load_json(std::string(MABUR_VECTOR_DIR) + "/rc.json");
   REQUIRE(j["rcf"].size() == GOLDEN.size());
@@ -73,6 +80,8 @@ TEST(rcf_matches_golden_wire) {
     CHECK(parsed->profile == r.profile);
     CHECK(std::abs(parsed->fec_overhead_base - r.fec_overhead_base) < 1e-9);
     CHECK(std::abs(parsed->fec_overhead_enh - r.fec_overhead_enh) < 1e-9);
+    CHECK(parsed->probe_profile == r.probe_profile);
+    CHECK(parsed->probe_profile_dn == r.probe_profile_dn);
     CHECK(frame_type(raw.data(), raw.size()) == T_RCF);
     ++i;
   }
@@ -85,7 +94,7 @@ TEST(disc_matches_golden_wire) {
   // Reverting any pack_disc() layout change without updating this fails
   // here, which is the point -- the format cannot drift silently.
   const std::vector<std::string> GOLDEN = {
-      "4352080204010000000100feca95140100000002002e27",
+      "4352090204010000000100feca951401000000020031f9",
   };
   auto j = mtest::load_json(std::string(MABUR_VECTOR_DIR) + "/rc.json");
   REQUIRE(j["disc"].size() == GOLDEN.size());
@@ -118,7 +127,7 @@ TEST(disc_ack_matches_golden_wire) {
   // Reverting any pack_disc_ack() layout change without updating this
   // fails here, which is the point -- the format cannot drift silently.
   const std::vector<std::string> GOLDEN = {
-      "4352080304010000000100feca0300951401009257",
+      "4352090304010000000100feca0300951401007047",
   };
   auto j = mtest::load_json(std::string(MABUR_VECTOR_DIR) + "/rc.json");
   REQUIRE(j["disc_ack"].size() == GOLDEN.size());
@@ -298,9 +307,9 @@ TEST(telem_round_trip_and_golden) {
   // (fill GOLDEN with the printed hex in the same commit — the test must
   // not pass with an empty golden)
   const std::string GOLDEN =
-      "43520804030201020706050405191e2d0034127766554433221100a0860100400d0"
+      "43520904030201020706050405191e2d0034127766554433221100a0860100400d0"
       "300e09304002823e80100034007000000d204801a0600090000000200333415163d"
-      "034800040005000700080009000a003e00000000453a";
+      "034800040005000700080009000a003e000000004a37";
   CHECK(mtest::hex(wire) == GOLDEN);
   // Corrupt/truncate rejection, mirroring the disc_ack tests:
   auto trunc = wire; trunc.pop_back();
@@ -335,10 +344,14 @@ TEST(rcf_probe_profile_is_a_fixed_head_byte) {
   none.probe_profile = kNoProbeProfile;
   auto wire_none = mabur::rc::pack_rcf(none);
   CHECK(wire.size() == wire_none.size());   // fixed byte, no optional tail
-  CHECK(wire.size() == 15 + 2);              // head 15 + crc
+  CHECK(wire.size() == 16 + 2);              // head 16 + crc (v9: +probe_dn)
   CHECK(wire[4] == 0);                       // flags byte carries nothing
   CHECK(wire[14] == r.probe_profile);
   CHECK(wire_none[14] == 0xFF);
+  // RC_VERSION 9's second probe byte, also fixed and also defaulting to the
+  // no-probe sentinel -- an armed UP probe must not imply a DOWN one.
+  CHECK(wire[15] == kNoProbeProfile);
+  CHECK(wire_none[15] == kNoProbeProfile);
   auto p = mabur::rc::parse_rcf(wire.data(), wire.size());
   REQUIRE(p.has_value());
   CHECK(p->probe_profile == r.probe_profile);
@@ -370,14 +383,14 @@ TEST(version_mismatch_rejected_both_directions) {
   CHECK(mabur::rc::parse_rcf(body.data(), body.size()).has_value());
 
   // Byte 2 is the version. Any other version must be refused outright —
-  // including 6, the previous RCF wire this build bumped away from.
-  auto v6 = body;
-  v6[2] = 6;
-  CHECK(!mabur::rc::parse_rcf(v6.data(), v6.size()).has_value());
+  // including 8, the previous RCF wire this build bumped away from.
+  auto v8 = body;
+  v8[2] = 8;
+  CHECK(!mabur::rc::parse_rcf(v8.data(), v8.size()).has_value());
 
-  auto v9 = body;
-  v9[2] = 9;
-  CHECK(!mabur::rc::parse_rcf(v9.data(), v9.size()).has_value());
+  auto v10 = body;
+  v10[2] = 10;
+  CHECK(!mabur::rc::parse_rcf(v10.data(), v10.size()).has_value());
 
   // The same guard must hold for telemetry, which travels the opposite
   // direction (drone -> GS). A half-deployed pair must fail BOTH ways.
@@ -401,12 +414,13 @@ TEST(rcf_head_is_fifteen_bytes) {
   r.fec_overhead_base = 0.42;
   r.fec_overhead_enh = 0.37;
   auto body = mabur::rc::pack_rcf(r);
-  // 15-byte head + 2 CRC bytes, with no variable-length tail at all.
-  CHECK(body.size() == 15 + 2);
+  // 16-byte head + 2 CRC bytes, with no variable-length tail at all.
+  CHECK(body.size() == 16 + 2);
   // The two literal x100 overhead bytes precede the fixed probe_profile byte.
   CHECK(body[12] == 42);
   CHECK(body[13] == 37);
   CHECK(body[14] == kNoProbeProfile);
+  CHECK(body[15] == kNoProbeProfile);
 }
 
 // The version check drops a foreign frame with no trace anywhere -- on a
@@ -556,8 +570,8 @@ TEST(telem_ack_is_the_cal_active_bit_alone) {
   CHECK((got->flags & 0x40) != 0);
 }
 
-TEST(rc_version_is_eight) {
-  CHECK(mabur::rc::RC_VERSION == 8);
+TEST(rc_version_is_nine) {
+  CHECK(mabur::rc::RC_VERSION == 9);
 }
 
 MTEST_MAIN

@@ -565,3 +565,31 @@ binary + new config, or new binary + old config, both fail boot into the
 `S00mabur`, copy both, start with `setsid`). The GS has no config change.
 Rollback is paired: `maburd.pre-relwalls` + `mabur.toml.pre-relwalls`
 on the drone with `maburgs.pre-relwalls` on the GS.
+
+## 2026-09-17 RC_VERSION 9 (tier 2 down probe)
+
+The RCF head gains `probe_profile_dn`, a second probe byte naming a rung
+BELOW the op to canary (15 → 16 bytes before the CRC), and SBI gains
+`kProbeStreamIdDn` (6) for the bodies. `RC_VERSION` 8 → 9, a
+version-mismatch flag day like the ones above — no control link and no
+video between the two swaps, so finish the deploy rather than restarting
+`maburd`.
+
+**No config change on either end**, so this is binary-only: swap `maburgs`
+then `maburd` (or the other way; the mismatch window is the same either
+way). Rollback is the paired pre-branch binaries, `maburgs.pre-dnprobe` +
+`maburd.pre-dnprobe`, with no config to restore alongside them.
+
+**Behaviourally inert on arrival.** The GS never sets the new byte yet —
+`VrxController::build_rcf()` leaves it at `kNoProbeProfile`, so the drone
+resolves no down-probe slot, `RadioTx` slot 3 stays empty and no sid-6
+body is ever built. What the deploy actually buys is the plumbing: the
+wire carries the byte, the drone emits on it when asked, and the GS scores
+what arrives into its own `ProbeTrack`. The arm logic and the
+`rate × (1 − 2L)` objective are a later commit — see
+`docs/link-adaptation-v2-proposal.md` §3.
+
+**What to watch after the swap.** `ausniff` (fps, `frame_id_gaps`,
+resyncs) must be unchanged: the down probe is off, so any movement is this
+commit's plumbing, not the feature. `link.ctl.observed_mcs` should track
+`link.ctl.rung.mcs`, and `follow_above_ignored` should stay 0.

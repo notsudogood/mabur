@@ -355,9 +355,13 @@ struct RealActuator : mabur::Actuator {
     // falling edge of cal_active, so the ladder is correct again the
     // instant video resumes rather than waiting for the next RCF.
     if (!(cal_active && cal_active->load(std::memory_order_relaxed))) {
-      tx->set_ladder(op.ladder, op.probe_profile != rc::kNoProbeProfile
-                                    ? std::optional<rc::LayerTxSpec>(op.probe)
-                                    : std::nullopt);
+      tx->set_ladder(op.ladder,
+                     op.probe_profile != rc::kNoProbeProfile
+                         ? std::optional<rc::LayerTxSpec>(op.probe)
+                         : std::nullopt,
+                     op.probe_profile_dn != rc::kNoProbeProfile
+                         ? std::optional<rc::LayerTxSpec>(op.probe_dn)
+                         : std::nullopt);
     }
     // Applying an op is a ladder + FEC + shed change and nothing else — see
     // the struct comment: there is no per-op power step to do in real mode.
@@ -818,6 +822,14 @@ int run_dry_run(const Config& cfg, const std::string& in_path, const std::string
   ProbeSource probe_src(probe_layer.blocks_per_body,
                         static_cast<int>(mabur::sw::kSwHeaderLen) + probe_layer.fec.symbol_size,
                         std::random_device{}());
+  // Tier 2's DOWN probe (RC_VERSION 9): same geometry, its OWN stream id and
+  // its OWN seq counter -- ProbeTrack scores loss per stream from seq spans,
+  // so two directions sharing one counter would interleave into a single
+  // space and make both unreadable.
+  ProbeSource probe_dn_src(
+      probe_layer.blocks_per_body,
+      static_cast<int>(mabur::sw::kSwHeaderLen) + probe_layer.fec.symbol_size,
+      std::random_device{}(), mabur::kProbeStreamIdDn);
 
   auto frames = read_frame_file(in_path);
   FramePipeline pipe;
@@ -901,6 +913,20 @@ int run_dry_run(const Config& cfg, const std::string& in_path, const std::string
       if (op_now && op_now->probe_profile != rc::kNoProbeProfile && !op_now->shed[1]) {
         UepBody pb = probe_src.build(op_now->probe_profile,
                                      static_cast<uint16_t>(pipe.next_frame_id() - 1));
+        tx.send_body(pb.stream_id, pb.body.data(), pb.body.size());
+        ++sent_bodies;
+      }
+      // Tier 2's down probe (RC_VERSION 9), on the same enh-AU trigger and
+      // the same shed rule. Emitted AFTER the up probe so the up probe keeps
+      // the burst-tail slot the RcfSlotter releases against -- that fix
+      // (probe-blanking-fix-findings-2026-09-05) anchors on the LAST body,
+      // and moving the up probe off the tail would put the GS's uplink blast
+      // back on it.
+      if (op_now && op_now->probe_profile_dn != rc::kNoProbeProfile &&
+          !op_now->shed[1]) {
+        UepBody pb = probe_dn_src.build(
+            op_now->probe_profile_dn,
+            static_cast<uint16_t>(pipe.next_frame_id() - 1));
         tx.send_body(pb.stream_id, pb.body.data(), pb.body.size());
         ++sent_bodies;
       }
@@ -1609,6 +1635,14 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
     ProbeSource probe_src(probe_layer.blocks_per_body,
                           static_cast<int>(mabur::sw::kSwHeaderLen) + probe_layer.fec.symbol_size,
                           std::random_device{}());
+    // Tier 2's DOWN probe (RC_VERSION 9): same geometry, its OWN stream id
+    // and its OWN seq counter -- ProbeTrack scores loss per stream from seq
+    // spans, so two directions sharing one counter would interleave into a
+    // single space and make both unreadable.
+    ProbeSource probe_dn_src(
+        probe_layer.blocks_per_body,
+        static_cast<int>(mabur::sw::kSwHeaderLen) + probe_layer.fec.symbol_size,
+        std::random_device{}(), mabur::kProbeStreamIdDn);
 
     std::shared_ptr<const AppliedOp> last_applied_op;
     // Debug-HTTP per-layer overhead override transition tracking (fix
@@ -1769,6 +1803,24 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
             op->probe_profile != rc::kNoProbeProfile && !op->shed[1]) {
           UepBody pb = probe_src.build(op->probe_profile,
                                        static_cast<uint16_t>(pipe.next_frame_id() - 1));
+          const uint64_t p_us = now_steady_us();
+          pb.enqueued_ms = static_cast<uint32_t>(p_us / 1000);
+          pb.pushed_us = p_us;
+          air_clock.book(p_us, pb.body.size(), AirClock::kProbeSid);
+          txq.push(std::move(pb));
+          txq.flush();
+        }
+        // Tier 2's down probe. Pushed after the up probe, so FIFO order
+        // through the TxQueue keeps the UP probe as the burst's last body --
+        // the RcfSlotter releases on its arrival
+        // (probe-blanking-fix-findings-2026-09-05), and demoting it from the
+        // tail would aim the GS's uplink blast at it again. Priced on the
+        // air clock as a probe body, like its sibling.
+        if (!first && au_sid == 1 && op &&
+            op->probe_profile_dn != rc::kNoProbeProfile && !op->shed[1]) {
+          UepBody pb = probe_dn_src.build(
+              op->probe_profile_dn,
+              static_cast<uint16_t>(pipe.next_frame_id() - 1));
           const uint64_t p_us = now_steady_us();
           pb.enqueued_ms = static_cast<uint32_t>(p_us / 1000);
           pb.pushed_us = p_us;

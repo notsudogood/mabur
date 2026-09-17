@@ -116,6 +116,12 @@ class Aggregator {
   void set_rc_sink(RcSink s) { rc_sink_ = std::move(s); }
   void set_msp_sink(MspSink s) { msp_sink_ = std::move(s); }
   void set_probe_sink(ProbeSink s) { probe_sink_ = std::move(s); }
+  // Tier 2's down probe (kProbeStreamIdDn, RC_VERSION 9). A SEPARATE sink,
+  // not a widened one: the two directions are scored by separate ProbeTracks
+  // against separate windows, and only the UP probe is the burst tail the
+  // RcfSlotter releases against -- routing both through one callback would
+  // make the down probe retrigger that release.
+  void set_probe_dn_sink(ProbeSink s) { probe_dn_sink_ = std::move(s); }
 
   void on_rx_body(const mabur::node::RxBody& m);
 
@@ -148,6 +154,7 @@ class Aggregator {
   RcSink rc_sink_;
   MspSink msp_sink_;
   ProbeSink probe_sink_;
+  ProbeSink probe_dn_sink_;
   uint16_t last_video_seq_ = 0;
   uint64_t last_video_us_ = 0;
   McsMode video_mcs_{};

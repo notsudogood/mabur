@@ -78,6 +78,11 @@ class VrxController {
   uint16_t rcf_seq() const;
   // The probe byte the last built RCF carried (kNoProbeProfile when none).
   uint8_t probe_profile() const { return last_cmd_probe_profile_; }
+  // Tier 2's down probe (RC_VERSION 9). kNoProbeProfile whenever it is
+  // unarmed, which is most of a flight -- and always, until the arm logic
+  // lands. The down-probe ProbeTrack keys its scoring on this exactly as the
+  // up probe's does on probe_profile().
+  uint8_t probe_profile_dn() const { return last_cmd_probe_profile_dn_; }
   // chip_caps from the most recently accepted DiscAck; 0 before any accept.
   // Gates GS main's video tail on mabur::rc::CAP_FRAME_WIRE.
   uint16_t peer_caps() const { return peer_caps_; }
@@ -113,6 +118,7 @@ class VrxController {
   uint16_t peer_caps_ = 0;
   bool peer_acked_ = false;
   uint8_t last_cmd_probe_profile_ = mabur::rc::kNoProbeProfile;
+  uint8_t last_cmd_probe_profile_dn_ = mabur::rc::kNoProbeProfile;
   uint8_t agreed_channel_ = 0;
   bool ack_edge_ = false;
 };

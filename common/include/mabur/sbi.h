@@ -60,6 +60,16 @@ constexpr uint8_t kMspStreamId = 4;
 // Routed to the GS ProbeTrack, never the video decoder.
 constexpr uint8_t kProbeStreamId = 5;
 
+// Reserved SBI stream_id for the DOWN probe (tier 2,
+// docs/link-adaptation-v2-proposal.md §3). Same body shape and the same
+// ProbeHdr as kProbeStreamId, but flown at a rung BELOW the op instead of
+// above it, and only while the GS arms it -- a downward canary on a healthy
+// link is informationless (at 240 blocks/s, a single loss event at a true
+// PER of 1e-4 takes ~42 s to observe) and costs 2-3x the airtime of the
+// upward one, since a fixed-size body at a lower rate takes proportionally
+// longer on air. Routed to its own ProbeTrack, never the video decoder.
+constexpr uint8_t kProbeStreamIdDn = 6;
+
 // Packs fixed-size FEC envelopes into SBI radio bodies, each sub-block
 // guarded by its own CRC16-CCITT so a corrupted body still yields its
 // surviving sub-blocks as usable symbols. Byte-exact port of

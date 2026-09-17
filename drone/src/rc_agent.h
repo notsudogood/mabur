@@ -42,6 +42,13 @@ struct AppliedOp {
   // mode/bw as the op, LDPC+STBC like the video slots. RadioTx slot 2.
   uint8_t probe_profile = rc::kNoProbeProfile;
   rc::LayerTxSpec probe;
+
+  // Tier 2's DOWN probe (RC_VERSION 9): the RCF's probe_profile_dn byte as
+  // received, and its resolved TX spec. RadioTx slot 3. Expected to be
+  // kNoProbeProfile for most of a flight -- the GS arms it only when the
+  // rung below is loaded enough to carry information.
+  uint8_t probe_profile_dn = rc::kNoProbeProfile;
+  rc::LayerTxSpec probe_dn;
 };
 
 // Volatile per-layer overhead override (bench sweeps, set via the debug
@@ -300,7 +307,8 @@ class RcAgent {
 
   void apply_max_range(uint64_t now_ms);
   void apply_ladder_op(const std::array<rc::LayerTxSpec, 2>& ladder,
-                        double ov_base, double ov_enh, uint8_t probe_profile);
+                        double ov_base, double ov_enh, uint8_t probe_profile,
+                        uint8_t probe_profile_dn);
   void reapply_with_shed();
   void run_bitrate_policy(uint64_t now_ms, bool force);
   void run_congestion_guard(uint64_t now_ms, const RadioHealth& health);

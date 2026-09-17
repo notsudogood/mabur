@@ -240,7 +240,13 @@ void Aggregator::on_rx_body(const mabur::node::RxBody& m) {
       class_idx = static_cast<int>(RfClass::Ctrl);
     } else if (stream_id == mabur::kMspStreamId) {
       class_idx = static_cast<int>(RfClass::Msp);
-    } else if (stream_id == mabur::kProbeStreamId) {
+    } else if (stream_id == mabur::kProbeStreamId ||
+               stream_id == mabur::kProbeStreamIdDn) {
+      // Both probe directions share the Probe RF class. They fly at
+      // DIFFERENT rates, so the class's RSSI/SNR/EVM pool mixes two rungs --
+      // acceptable because those are channel properties rather than
+      // rate-dependent ones (the same argument aggregator.h makes for
+      // rf_pool), and because neither probe feeds a decision off this class.
       class_idx = static_cast<int>(RfClass::Probe);
     } else if (stream_id >= 0 && stream_id < 2) {
       class_idx = stream_id;
@@ -289,6 +295,16 @@ void Aggregator::on_rx_body(const mabur::node::RxBody& m) {
     // CRC-clean sub-blocks exactly as the video decoder does, so probe loss
     // stays comparable to video loss.
     if (probe_sink_) probe_sink_(m.card_id, m);
+    return;
+  }
+  if (stream_id == mabur::kProbeStreamIdDn) {
+    // Tier 2's down probe: same salvage contract as the up probe (FCS-failed
+    // bodies still reach the sink, so a corrupt PPDU is scored by its dead
+    // sub-blocks rather than booked as a whole-body loss), but its own sink
+    // and its own track. Deliberately does NOT feed rcf_slot.on_probe_tail:
+    // the UP probe is the burst's last body and the slotter's release
+    // anchors on it (probe-blanking-fix-findings-2026-09-05).
+    if (probe_dn_sink_) probe_dn_sink_(m.card_id, m);
     return;
   }
   ++c.video_bodies;

@@ -110,4 +110,186 @@ TEST(one_card_interleaves_with_quiet_gap) {
   p.on_ack(6650, 149, 149);
   CHECK(!p.split() && p.desired(0) == 149);
 }
+TEST(two_card_hop_lead_then_confirm) {
+  ChannelPlan p(C(2));
+  p.on_ack(0, 136, 136); p.take_events(); p.tick(100, true);
+  p.hop_order(1000, 149, /*lead_card=*/1);
+  CHECK(p.hopping() && p.hop_target() == 149 && p.hop_lead() == 1);
+  CHECK(p.desired(0) == 136 && p.desired(1) == 149);
+  CHECK(!p.split());
+  auto ev = p.take_events();
+  REQUIRE(ev.size() == 1);
+  CHECK(ev[0].reason == MoveReason::HopLead && ev[0].card == 1 && ev[0].from == 136 && ev[0].to == 149);
+  p.tick(1200, false);            // FEC starved during the split: no SplitHome
+  CHECK(!p.split() && p.desired(0) == 136);
+  p.hop_confirmed(1250);
+  CHECK(!p.hopping() && p.op() == 149);
+  CHECK(p.desired(0) == 149 && p.desired(1) == 149);
+  ev = p.take_events();
+  REQUIRE(ev.size() == 1);
+  CHECK(ev[0].reason == MoveReason::HopFollow && ev[0].card == -1 && ev[0].from == 136 && ev[0].to == 149);
+}
+TEST(two_card_hop_withdraw_returns_lead) {
+  ChannelPlan p(C(2));
+  p.on_ack(0, 136, 136); p.take_events();
+  p.hop_order(1000, 149, 1); p.take_events();
+  p.hop_withdraw(1500);
+  CHECK(!p.hopping() && p.op() == 136 && p.desired(1) == 136);
+  auto ev = p.take_events();
+  REQUIRE(ev.size() == 1);
+  CHECK(ev[0].reason == MoveReason::HopWithdraw && ev[0].card == 1 && ev[0].from == 149 && ev[0].to == 136);
+}
+TEST(one_card_hop_moves_all_and_confirms_or_withdraws) {
+  ChannelPlan p(C(1));
+  p.on_ack(0, 136, 136); p.take_events();
+  p.hop_order(1000, 165, -1);
+  CHECK(p.desired(0) == 165 && p.op() == 136);
+  auto ev = p.take_events();
+  REQUIRE(ev.size() == 1);
+  CHECK(ev[0].reason == MoveReason::HopOneCard && ev[0].card == -1 && ev[0].to == 165);
+  p.hop_withdraw(1600);
+  CHECK(p.desired(0) == 136 && p.op() == 136);
+  p.hop_order(2000, 165, -1); p.take_events();
+  p.hop_confirmed(2100);
+  CHECK(p.op() == 165 && p.desired(0) == 165);
+}
+TEST(hop_after_a_hop_uses_the_new_op_as_from) {
+  ChannelPlan p(C(2));
+  p.on_ack(0, 136, 136); p.take_events();
+  p.hop_order(1000, 149, 1); p.hop_confirmed(1100); p.take_events();
+  p.hop_order(3000, 165, 0);            // lead is whichever card is not TX now
+  CHECK(p.desired(0) == 165 && p.desired(1) == 149);
+  auto ev = p.take_events();
+  CHECK(ev[0].from == 149 && ev[0].to == 165 && ev[0].card == 0);
+}
+// The hop window is EXCLUDED from the split timer (shift, not clear): real
+// pre-hop loss (2100 ms, t=0..2100) plus real post-hop loss (2900 ms, from
+// withdraw at t=2400) must sum to exactly split_after_ms(5000) -> split at
+// t=5300. This fails both against the pre-round-1 carried-timestamp bug
+// (splits too early, at t=5000, because the pre-hop loss and hop window are
+// never excluded) and against the round-1 reset (splits too late, at
+// t=2500+5000=7500, because it also discards the genuine pre-hop loss).
+TEST(hop_excludes_only_its_own_window_from_the_split_timer) {
+  ChannelPlan p(C(2));
+  p.on_ack(0, 149, 149); p.take_events();
+  p.tick(0, false);                 // lost_since_ms_ = 0
+  p.hop_order(2100, 165, 1);        // hop_start_ms_ = 2100; 2100 ms real loss so far
+  p.tick(2200, false);              // during the hop: ignored
+  p.hop_withdraw(2400);             // shift: lost_since_ms_ += (2400-2100) = 300 -> 300
+  p.tick(2500, false);              // continuous loss resumes right at withdraw
+  CHECK(!p.split());
+  p.tick(5299, false);              // 300 + split_after_ms(5000) - 1
+  CHECK(!p.split());
+  p.tick(5300, false);              // 300 + split_after_ms(5000)
+  CHECK(p.split());
+}
+// Same property, exercised through the SUCCESS exit (hop_confirmed) rather
+// than hop_withdraw: hop_confirmed also moves op_ to the target (165, still
+// != home), so this pins that the shift arithmetic is unaffected by that
+// state change and the split still requires exactly split_after_ms of
+// NON-hop loss.
+TEST(hop_excludes_only_its_own_window_from_the_split_timer_via_confirm) {
+  ChannelPlan p(C(2));
+  p.on_ack(0, 149, 149); p.take_events();
+  p.tick(0, false);                 // lost_since_ms_ = 0
+  p.hop_order(2100, 165, 1);        // hop_start_ms_ = 2100; 2100 ms real loss so far
+  p.tick(2200, false);              // during the hop: ignored
+  p.hop_confirmed(2400);            // op_ -> 165; shift: lost_since_ms_ += (2400-2100) = 300 -> 300
+  CHECK(!p.hopping() && p.op() == 165);
+  p.tick(2500, false);              // continuous loss resumes right after confirm
+  CHECK(!p.split());
+  p.tick(5299, false);              // 300 + split_after_ms(5000) - 1
+  CHECK(!p.split());
+  p.tick(5300, false);              // 300 + split_after_ms(5000)
+  CHECK(p.split());
+}
+// The re-review's own probe: loss from t=1, a short hop from t=4900 to
+// t=5200 (300 ms), loss unbroken after. The split must land near
+// loss_onset + split_after_ms + hop_duration = 1 + 5000 + 300 = 5301, not
+// at hop_end + split_after_ms = 10200 (the round-1 reset behaviour).
+TEST(short_hop_during_a_fade_does_not_meaningfully_delay_the_split) {
+  ChannelPlan p(C(2));
+  p.on_ack(0, 149, 149); p.take_events();
+  p.tick(1, false);                 // lost_since_ms_ = 1
+  p.hop_order(4900, 165, 1);        // hop_start_ms_ = 4900; 4899 ms accrued
+  p.tick(5000, false);              // during the hop: ignored
+  p.hop_withdraw(5200);             // shift: lost_since_ms_ += (5200-4900) = 300 -> 301
+  p.tick(5200, false);              // loss unbroken right at withdraw
+  CHECK(!p.split());
+  p.tick(5300, false);              // 5301 - 1
+  CHECK(!p.split());
+  p.tick(5301, false);              // loss_onset(1) + split_after_ms(5000) + hop_duration(300)
+  CHECK(p.split());
+}
+// A re-entrant hop_order() while already hopping must not restart the
+// exclusion window: the whole hopping stretch, across however many
+// re-orders, is one continuous exclusion measured from the FIRST order.
+TEST(hop_reorder_does_not_restart_the_exclusion_window) {
+  ChannelPlan p(C(2));
+  p.on_ack(0, 149, 149); p.take_events();
+  p.tick(0, false);                 // lost_since_ms_ = 0
+  p.hop_order(1000, 165, 1);        // hop_start_ms_ = 1000 (first order)
+  p.tick(1200, false);              // ignored: still hopping
+  p.hop_order(1500, 149, 0);        // re-order mid-hop: must NOT move hop_start_ms_
+  p.take_events();
+  p.hop_withdraw(2000);             // shift uses the ORIGINAL 1000, not 1500:
+                                     // lost_since_ms_ += (2000-1000) = 1000 -> 1000
+  CHECK(!p.hopping());
+  p.tick(2000, false);
+  CHECK(!p.split());
+  p.tick(5999, false);              // 1000 + split_after_ms(5000) - 1
+  CHECK(!p.split());
+  p.tick(6000, false);              // 1000 + split_after_ms(5000)
+  CHECK(p.split());
+}
+TEST(hop_order_while_hopping_emits_withdraw_for_abandoned_lead) {
+  ChannelPlan p(C(2));
+  p.on_ack(0, 136, 136); p.take_events();
+  p.hop_order(1000, 149, 1);
+  p.hop_order(2000, 165, 0);        // second order abandons the first hop's lead
+  CHECK(p.hopping() && p.hop_target() == 165 && p.hop_lead() == 0);
+  auto ev = p.take_events();
+  REQUIRE(ev.size() == 3);
+  CHECK(ev[0].reason == MoveReason::HopLead && ev[0].card == 1 && ev[0].from == 136 && ev[0].to == 149);
+  CHECK(ev[1].reason == MoveReason::HopWithdraw && ev[1].card == 1 && ev[1].from == 149 && ev[1].to == 136);
+  CHECK(ev[2].reason == MoveReason::HopLead && ev[2].card == 0 && ev[2].from == 136 && ev[2].to == 165);
+}
+// I1: the one-card Withdraw branch, which had never executed anywhere --
+// no unit test, no gs_e2e (the harness breaks the moment OneCardRetune
+// fires), no hardware. On one card main.cpp's HopAction::Order
+// deliberately does NOT call hop_order() (the sole radio must stay on the
+// old channel while the order rides one_card_repeats RCFs); those repeats
+// are counted off real in-session RCFs, which stop being sent the moment
+// the link leaves SESSION -- exactly the case interference produces. So
+// confirm_ms expires first and main.cpp calls hop_withdraw() with no hop
+// in flight. Unguarded, that ran lost_since_ms_ += (now - hop_start_ms_)
+// with hop_start_ms_ still 0, pushing the loss timestamp a whole session
+// into the future and suppressing SplitHome -- the one-card GS's only
+// convergence mechanism when the two ends disagree.
+TEST(withdraw_with_no_hop_in_flight_leaves_the_split_timer_alone) {
+  ChannelPlan p(C(1));
+  p.on_ack(0, 149, 149); p.take_events();
+  p.tick(30000, false);             // lost_since_ms_ = 30000 (link down, deep into the flight)
+  p.hop_withdraw(30100);            // controller timed out; the plan never started hopping
+  CHECK(!p.hopping());
+  CHECK(p.take_events().empty());   // nothing moved, so nothing to log
+  p.tick(34999, false);
+  CHECK(!p.split());
+  p.tick(35000, false);             // 30000 + split_after_ms(5000)
+  CHECK(p.split());                 // pre-fix: lost_since_ms_ = 60100, no split for another 30 s
+  auto ev = p.take_events();
+  REQUIRE(ev.size() == 1);
+  CHECK(ev[0].reason == MoveReason::SplitHome);
+}
+TEST(confirm_with_no_hop_in_flight_is_a_no_op) {
+  ChannelPlan p(C(1));
+  p.on_ack(0, 149, 149); p.take_events();
+  p.tick(30000, false);
+  p.hop_confirmed(30100);           // pre-fix: op_ = hop_target_ = 0
+  CHECK(p.op() == 149);
+  CHECK(p.desired(0) == 149);
+  CHECK(p.take_events().empty());
+  p.tick(35000, false);
+  CHECK(p.split());
+}
 MTEST_MAIN

@@ -161,13 +161,24 @@ TEST(air_clock_fields_saturate_and_round_trip) {
   in.air_backlog_max_ms = 37;
   in.air_shed_drops = 12;
   auto wire = mabur::rc::pack_telem(mabur::make_telem(2, in));
-  CHECK(wire.size() == 87 + 2);   // TELEM_LEN + crc16 (cal_base_ref_idx removed)
+  CHECK(wire.size() == 89 + 2);   // TELEM_LEN + crc16 (2026-09-14: +channel/hop_epoch)
   auto back = mabur::rc::parse_telem(wire.data(), wire.size());
   REQUIRE(back.has_value());
   CHECK((back->flags & 0x20) == 0);
   CHECK(back->air_backlog_max_ms == 37);
   CHECK(back->air_shed_drops == 12);
   CHECK(back->venc_ring_fill_pct == 0);   // the field before ours still parses
+}
+
+// In-flight channel hop readback (spec 2026-09-14 §1): channel/hop_epoch
+// are a straight pass-through, no saturation.
+TEST(hop_fields_pass_through) {
+  mabur::TelemInputs in;
+  in.channel = 149;
+  in.hop_epoch = 3;
+  auto t = mabur::make_telem(1, in);
+  CHECK(t.channel == 149);
+  CHECK(t.hop_epoch == 3);
 }
 
 MTEST_MAIN

@@ -438,6 +438,13 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
     // A DISC establishes a (new) GS session — same session-boundary seq
     // reset as failsafe entry above.
     have_last_seq_ = false;
+    // Same restarted-GS rationale as have_last_seq_ above (see the FAILSAFE
+    // entry comment below): a new session's hop epoch numbering can start
+    // over, so a latched hop_epoch_/hop_ch_ from the old session must not
+    // survive to silently swallow the new session's first hop order.
+    have_hop_ = false;
+    hop_epoch_ = 0;
+    hop_ch_ = 0;
 
     // Same rationale as RCF's entering_linked force: DISC always
     // (re)establishes LINKED from RENDEZVOUS/FAILSAFE, so the newly resolved
@@ -480,6 +487,24 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
     apply_ladder_op(ladder, r->fec_overhead_base, r->fec_overhead_enh,
                     r->probe_profile, r->probe_profile_dn);
 
+    // In-flight hop order (spec 2026-09-14 §1): a NEW (epoch, ch) PAIR moves
+    // us; the same pair again is a no-op; hop_ch 0 is a pre-hop GS. The order
+    // in this very RCF must not be confirmed by itself, so move_pending_ is
+    // re-armed AFTER the clear above; the next RCF heard on the new channel
+    // clears it, and move_confirm_ms sends us home if none arrives.
+    if (r->hop_ch != 0 &&
+        (!have_hop_ || r->hop_epoch != hop_epoch_ || r->hop_ch != hop_ch_)) {
+      have_hop_ = true;
+      hop_epoch_ = r->hop_epoch;
+      hop_ch_ = r->hop_ch;
+      if (r->hop_ch != channel_) {
+        act_.retune(r->hop_ch, "hop");
+        channel_ = r->hop_ch;
+        move_pending_ = true;
+        move_at_ms_ = now_ms;
+      }
+    }
+
     if (prev_state == State::BOOT || prev_state == State::RENDEZVOUS)
       link_established_ = true;
     state_ = State::LINKED;
@@ -518,6 +543,9 @@ void RcAgent::tick(uint64_t now_ms, const RadioHealth& health) {
     if (state_ == State::LINKED) apply_max_range(now_ms);
     state_ = State::RENDEZVOUS;
     have_last_seq_ = false;
+    have_hop_ = false;
+    hop_epoch_ = 0;
+    hop_ch_ = 0;
     go_home_("move_unconfirmed");
   }
 
@@ -550,6 +578,9 @@ void RcAgent::tick(uint64_t now_ms, const RadioHealth& health) {
       // 3 s LINKED / 1 s FAILSAFE with a healthy air link). Resetting at
       // failsafe keeps in-session replay protection with no lockout.
       have_last_seq_ = false;
+      have_hop_ = false;
+      hop_epoch_ = 0;
+      hop_ch_ = 0;
       // Rebase the rendezvous_ms timer from the moment failsafe was
       // entered (not the last real feedback), so a link silent since t=0
       // with failsafe_ms=1000/rendezvous_ms=30000 falls back to

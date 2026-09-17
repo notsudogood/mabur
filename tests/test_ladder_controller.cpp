@@ -1,4 +1,5 @@
 #include <cmath>
+#include <string>
 
 #include "ladder_controller.h"
 #include "mtest.h"
@@ -1528,4 +1529,72 @@ TEST(follow_disabled_leaves_scoring_on_the_commanded_rung) {
   CHECK(ctl.measured_rung() == 2);  // commanded, not observed
   CHECK(std::abs(ctl.util() - 0.30 / (1.0 / 3.0)) < 1e-9);
   CHECK(ctl.counters().follow_adopts == 0);
+}
+
+// --- Task 8: hop restore + store blanking (spec 2026-09-14 in-flight hop) ---
+
+// restore() re-enters a rung directly: no probe gate (probe is ENABLED in
+// make_cfg() here, so a normal promote from 0 would need one), probation
+// cleared immediately, and the ctl-log event says why.
+TEST(restore_reenters_rung_without_probe_and_clears_probation) {
+  auto cfg = make_cfg();          // probe ENABLED: a normal promote would need a probe
+  LadderController ctl(cfg);
+  double t = 0;
+  feed_for(ctl, t, 1000, 0.0);
+  REQUIRE(ctl.rung() == 0);
+  ctl.restore(5, t);
+  CHECK(ctl.rung() == 5);
+  CHECK(ctl.last_event().reason == CtlReason::HopRestore);
+  CHECK(ctl.last_event().from == 0 && ctl.last_event().to == 5);
+  CHECK(ctl.probation_ms_left(t) == 0);
+  CHECK(std::string(to_string(CtlReason::HopRestore)) == "hop_restore");
+}
+
+// blank_store() gates all three RungStore write sites: while blanked, the
+// per-rung sample count (RungStat::u.n, exported as link.rungs[i].n) must
+// not move even under elevated util; once the deadline passes, writes
+// resume. The elevated-phase util (0.5) is deliberately kept UNDER
+// down_util (0.6, the ladder default): at or above down_util a confirmed
+// util demote fires within eff_confirm_ms regardless of blank_store (it
+// gates the STORE only, never decisions), which would carry the sample off
+// rung 2 for good and make the post-blank resumption unobservable on
+// stat(2) -- not a blank_store bug, just the wrong util to probe it with.
+TEST(blank_store_gates_every_store_write) {
+  auto cfg = make_cfg_noprobe();
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 2);
+  feed_for(ctl, t, cfg.probation_ms + 200, 0.3);
+  const auto before = ctl.rungs().stat(2).u.n;
+  ctl.blank_store(t + 1000);
+  feed_for(ctl, t, 600, 0.5);              // elevated util, but blanked
+  CHECK(ctl.rung() == 2);                  // still parked: this really tests the blank
+  CHECK(ctl.rungs().stat(2).u.n == before);
+  feed_for(ctl, t, 600, 0.3);              // past the blank: writes resume
+  CHECK(ctl.rungs().stat(2).u.n > before);
+}
+
+// Fix round 1: blank_store() must gate ONLY the RungStore write, never the
+// s3 demote decision itself -- the spec (2026-09-14 §4) has the ladder
+// running UNFROZEN through the whole detect+hop+settle window (a demote or
+// two, each an IDR, is expected and wanted), while the store simply must
+// not learn from a window it knows is unrepresentative of the rung on a
+// clean channel. This pins the split: with a blank active, an s3 residual
+// condition that would normally demote still demotes, but the per-rung
+// s3_resid EWMA it was measured on does not advance.
+TEST(blank_store_does_not_suspend_s3_decisions_only_the_ewma) {
+  LadderCfg cfg = make_cfg_noprobe();
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 4);
+  feed_for(ctl, t, cfg.probation_ms + 200.0, 0.3);  // retire probation
+  const int before_rung = ctl.rung();
+  const auto before_n = ctl.rungs().stat(before_rung).s3_resid.n;
+  ctl.blank_store(t + 1000);
+  const bool changed = ctl.update(ok3(0.3 * ctl.budget_base(), 0.0, 0.02), t);
+  CHECK(changed);
+  CHECK(ctl.rung() == before_rung - 1);
+  CHECK(ctl.counters().demotes_s3_residual == 1);
+  CHECK(ctl.last_event().reason == CtlReason::S3Residual);
+  CHECK(ctl.rungs().stat(before_rung).s3_resid.n == before_n);
 }

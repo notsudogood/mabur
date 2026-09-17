@@ -182,13 +182,26 @@ dump("uep.json", {"symbol_size": 64, "blocks_per_body": 4,
 # (base 1.0 / enh 0.5) so classify/pack/parse actually exercise ENH riding
 # a different overhead than BASE, not just a duplicated scalar.
 # RC_VERSION 6: fixed probe byte; cases 1-2 leave it at the 0xFF default.
+# RC_VERSION 9: hop_ch/hop_epoch, all three cases at the 0/0 no-hop-order default.
+# RC_VERSION 10: probe_profile_dn at head byte 17. Cases 1-3 leave it at the
+# 0xFF default; case 4 exercises EVERY v10 head field at once (op mcs3, up
+# probe mcs4, down probe mcs2, a live hop order at epoch 7) because that is
+# the only case that would catch the three tail bytes being packed in the
+# wrong order -- and two of them landed in the wrong order once already, when
+# the hop branch and the down-probe branch each took byte 15 as "v9".
 rcfs = [{"vtx_id": 0xDEADBEEF, "seq": 7, "profile": 0x24,
-         "fec_overhead_base": 0.5, "fec_overhead_enh": 0.5},
+         "fec_overhead_base": 0.5, "fec_overhead_enh": 0.5,
+         "hop_ch": 0, "hop_epoch": 0},
         {"vtx_id": 1, "seq": 65535, "profile": 0x00,
-         "fec_overhead_base": 1.0, "fec_overhead_enh": 1.0},
+         "fec_overhead_base": 1.0, "fec_overhead_enh": 1.0,
+         "hop_ch": 0, "hop_epoch": 0},
         {"vtx_id": 0x11223344, "seq": 42, "profile": 0x08,
          "fec_overhead_base": 1.0, "fec_overhead_enh": 0.5,
-         "probe_profile": 0x06}]
+         "probe_profile": 0x06, "hop_ch": 0, "hop_epoch": 0},
+        {"vtx_id": 0x0BADF00D, "seq": 1234, "profile": 0x03,
+         "fec_overhead_base": 0.7, "fec_overhead_enh": 0.4,
+         "probe_profile": 0x04, "hop_ch": 157, "hop_epoch": 7,
+         "probe_profile_dn": 0x02}]
 discs = [rc_proto.Disc(vtx_id=1, vrx_nonce=0xCAFE0001, op_channel=149,
                        op_width=20, init_profile=0, seq=2)]
 acks = [rc_proto.DiscAck(vtx_id=1, vrx_nonce=0xCAFE0001, chip_caps=0x0003,

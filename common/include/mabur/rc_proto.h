@@ -46,11 +46,21 @@ constexpr uint16_t RC_MAGIC = 0x5243;  // "RC"
 // to the chip's efuse anchor (CalWindow int8, CalResult walls in [-64,63],
 // sentinel -128); Telem drops cal_base_ref_idx. Spec
 // 2026-09-13-relative-walls-design.md.
-// Bumped 8 -> 9 on 2026-09-17: the RCF gained probe_profile_dn, a second
+// Bumped 8 -> 9 on 2026-09-14: RCF gains hop_ch/hop_epoch (in-flight channel
+// hop order, present in every RCF), Telem gains channel/hop_epoch (readback).
+// Spec docs/superpowers/specs/2026-09-14-inflight-channel-hop-design.md §1.
+// Bumped 9 -> 10 on 2026-09-17: the RCF gained probe_profile_dn, a second
 // probe head byte naming a rung BELOW the op to canary (0xFF = none), and
 // SBI gained kProbeStreamIdDn for it. Tier 2 of
 // docs/link-adaptation-v2-proposal.md.
-constexpr uint8_t RC_VERSION = 9;
+//
+// ⚠ 10 rather than 9 because TWO independent branches both took 9: the hop
+// wire (2026-09-14, 17-byte head) and the down probe (2026-09-17, 16-byte
+// head), and BOTH claimed byte 15. They are reconciled here into one
+// 18-byte head -- the hop's fields keep 15/16 because they had already
+// flown, and the down probe moved to 17. Nothing ever shipped on the
+// 16-byte v9, so there is no third layout to care about.
+constexpr uint8_t RC_VERSION = 10;
 
 // RCF probe_profile sentinel: the drone runs no probe stream.
 constexpr uint8_t kNoProbeProfile = 0xFF;
@@ -94,11 +104,21 @@ struct Rcf {
   // wants probed, or kNoProbeProfile. Always present in the head.
   uint8_t probe_profile = kNoProbeProfile;
 
-  // DOWN-probe MCS (tier 2, RC_VERSION 9): encode_profile of a rung BELOW
+  // In-flight hop (spec 2026-09-14 §1): the channel the drone must be on,
+  // in EVERY RCF (the standing truth, not an event), and the epoch the GS
+  // bumps on each order/withdrawal so repeats are idempotent. 0 = no order
+  // ever issued (a pre-hop GS); the drone ignores hop_ch 0.
+  uint8_t hop_ch = 0;
+  uint8_t hop_epoch = 0;
+
+  // DOWN-probe MCS (tier 2, RC_VERSION 10): encode_profile of a rung BELOW
   // the op, or kNoProbeProfile. Also always present in the head -- a fixed
   // byte rather than a flagged tail, for the same reason probe_profile
   // became one in v6: an optional tail is a second thing to get wrong on a
   // wire with no compatibility story to protect.
+  //
+  // Declared after the hop pair to mirror the wire: this is head byte 17,
+  // and 15/16 are the hop's. It took byte 15 on the abandoned 16-byte v9.
   //
   // Expected to be kNoProbeProfile for most of a flight. Unlike the upward
   // probe this one is ARMED, not always-on: it costs 2-3x the airtime (a
@@ -237,6 +257,8 @@ struct Telem {
   // phase boundary's ack Telem(s) and the suppression rule never conflict.
   // The verify pass sends no command and gets no ack -- the drone
   // self-initiates it once it applies the result.
+  uint8_t channel = 0;    // RcAgent::channel() at build — spec 2026-09-14 §1
+  uint8_t hop_epoch = 0;  // last (epoch) applied from an RCF hop order
 };
 
 // One rate's index range for a calibration phase. idx_step 4 is the coarse

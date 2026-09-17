@@ -17,6 +17,8 @@ static Rcf rcf_from_json(const nlohmann::json& f) {
   r.fec_overhead_enh = f["fec_overhead_enh"].get<double>();
   r.probe_profile = f.contains("probe_profile") ? f["probe_profile"].get<uint8_t>()
                                                 : kNoProbeProfile;
+  r.hop_ch = f.contains("hop_ch") ? f["hop_ch"].get<uint8_t>() : 0;
+  r.hop_epoch = f.contains("hop_epoch") ? f["hop_epoch"].get<uint8_t>() : 0;
   r.probe_profile_dn = f.contains("probe_profile_dn")
                            ? f["probe_profile_dn"].get<uint8_t>()
                            : kNoProbeProfile;
@@ -54,15 +56,19 @@ TEST(rcf_matches_golden_wire) {
   // Reverting any pack_rcf() layout change without updating these fails
   // here, which is the point -- the format cannot drift silently.
   const std::vector<std::string> GOLDEN = {
-      "4352090100efbeadde0700243232ffff056f",
-      "435209010001000000ffff006464ffff5c12",
+      "43520a0100efbeadde0700243232ff0000ff6f72",
+      "43520a010001000000ffff006464ff0000ffb6c7",
       // Asym pair (base 1.0 / enh 0.5): ENH actually rides a different
       // literal overhead than BASE here, not a duplicated equal-pair scalar.
-      "4352090100443322112a0008643206ff43f3",
-      // RC_VERSION 9: BOTH probes armed at once -- op mcs3, up probe mcs4,
-      // down probe mcs2. The case probe_profile_dn exists for, and the one
-      // that would catch the two head bytes being packed in the wrong order.
-      "43520901000df0ad0bd2040346280402a131",
+      "43520a0100443322112a00086432060000ffeb07",
+      // RC_VERSION 10: EVERY v10 head field at once -- op mcs3, up probe
+      // mcs4, a live hop order (ch 157, epoch 7), down probe mcs2. This is
+      // the case that catches the three tail bytes being packed in the wrong
+      // order, and two of them WERE in the wrong order once: the hop branch
+      // and the down-probe branch each took byte 15 as "v9", which is why
+      // this is v10 with an 18-byte head (15 hop_ch, 16 hop_epoch,
+      // 17 probe_profile_dn).
+      "43520a01000df0ad0bd204034628049d0702ff96",
   };
   auto j = mtest::load_json(std::string(MABUR_VECTOR_DIR) + "/rc.json");
   REQUIRE(j["rcf"].size() == GOLDEN.size());
@@ -94,7 +100,7 @@ TEST(disc_matches_golden_wire) {
   // Reverting any pack_disc() layout change without updating this fails
   // here, which is the point -- the format cannot drift silently.
   const std::vector<std::string> GOLDEN = {
-      "4352090204010000000100feca951401000000020031f9",
+      "43520a0204010000000100feca9514010000000200318b",
   };
   auto j = mtest::load_json(std::string(MABUR_VECTOR_DIR) + "/rc.json");
   REQUIRE(j["disc"].size() == GOLDEN.size());
@@ -127,7 +133,7 @@ TEST(disc_ack_matches_golden_wire) {
   // Reverting any pack_disc_ack() layout change without updating this
   // fails here, which is the point -- the format cannot drift silently.
   const std::vector<std::string> GOLDEN = {
-      "4352090304010000000100feca0300951401007047",
+      "43520a0304010000000100feca0300951401005676",
   };
   auto j = mtest::load_json(std::string(MABUR_VECTOR_DIR) + "/rc.json");
   REQUIRE(j["disc_ack"].size() == GOLDEN.size());
@@ -307,9 +313,9 @@ TEST(telem_round_trip_and_golden) {
   // (fill GOLDEN with the printed hex in the same commit — the test must
   // not pass with an empty golden)
   const std::string GOLDEN =
-      "43520904030201020706050405191e2d0034127766554433221100a0860100400d0"
+      "43520a04030201020706050405191e2d0034127766554433221100a0860100400d0"
       "300e09304002823e80100034007000000d204801a0600090000000200333415163d"
-      "034800040005000700080009000a003e000000004a37";
+      "034800040005000700080009000a003e00000000000078ed";
   CHECK(mtest::hex(wire) == GOLDEN);
   // Corrupt/truncate rejection, mirroring the disc_ack tests:
   auto trunc = wire; trunc.pop_back();
@@ -344,14 +350,19 @@ TEST(rcf_probe_profile_is_a_fixed_head_byte) {
   none.probe_profile = kNoProbeProfile;
   auto wire_none = mabur::rc::pack_rcf(none);
   CHECK(wire.size() == wire_none.size());   // fixed byte, no optional tail
-  CHECK(wire.size() == 16 + 2);              // head 16 + crc (v9: +probe_dn)
+  CHECK(wire.size() == 18 + 2);              // head 18 + crc (v10)
   CHECK(wire[4] == 0);                       // flags byte carries nothing
   CHECK(wire[14] == r.probe_profile);
   CHECK(wire_none[14] == 0xFF);
-  // RC_VERSION 9's second probe byte, also fixed and also defaulting to the
-  // no-probe sentinel -- an armed UP probe must not imply a DOWN one.
-  CHECK(wire[15] == kNoProbeProfile);
-  CHECK(wire_none[15] == kNoProbeProfile);
+  // RC_VERSION 10's second probe byte is head byte 17 (15/16 are the hop's),
+  // also fixed and also defaulting to the no-probe sentinel -- an armed UP
+  // probe must not imply a DOWN one.
+  CHECK(wire[17] == kNoProbeProfile);
+  CHECK(wire_none[17] == kNoProbeProfile);
+  // Byte 15 is hop_ch now, defaulting to 0 (no hop order ever issued) --
+  // NOT the probe sentinel it was on the abandoned 16-byte v9.
+  CHECK(wire[15] == 0);
+  CHECK(wire_none[15] == 0);
   auto p = mabur::rc::parse_rcf(wire.data(), wire.size());
   REQUIRE(p.has_value());
   CHECK(p->probe_profile == r.probe_profile);
@@ -383,14 +394,21 @@ TEST(version_mismatch_rejected_both_directions) {
   CHECK(mabur::rc::parse_rcf(body.data(), body.size()).has_value());
 
   // Byte 2 is the version. Any other version must be refused outright —
-  // including 8, the previous RCF wire this build bumped away from.
+  // including 9 -- which matters more than the usual "previous version"
+  // case: TWO branches shipped a "v9" RCF (17-byte hop head, 16-byte
+  // down-probe head) and this build is neither. A v9 frame from either must
+  // be refused, not partially parsed.
+  auto v9 = body;
+  v9[2] = 9;
+  CHECK(!mabur::rc::parse_rcf(v9.data(), v9.size()).has_value());
+
   auto v8 = body;
   v8[2] = 8;
   CHECK(!mabur::rc::parse_rcf(v8.data(), v8.size()).has_value());
 
-  auto v10 = body;
-  v10[2] = 10;
-  CHECK(!mabur::rc::parse_rcf(v10.data(), v10.size()).has_value());
+  auto v11 = body;
+  v11[2] = 11;
+  CHECK(!mabur::rc::parse_rcf(v11.data(), v11.size()).has_value());
 
   // The same guard must hold for telemetry, which travels the opposite
   // direction (drone -> GS). A half-deployed pair must fail BOTH ways.
@@ -403,24 +421,35 @@ TEST(version_mismatch_rejected_both_directions) {
   CHECK(!mabur::rc::parse_telem(tv1.data(), tv1.size()).has_value());
 }
 
-TEST(rcf_head_is_fifteen_bytes) {
-  // Pins the removed power byte AND the removed ack_seq/score/layer_delivery
-  // fields, plus the RC_VERSION 5 overhead split and the RC_VERSION 6 fixed
-  // probe_profile byte: the RCF head is fixed-length, so restoring any
-  // dropped field or losing a head byte makes the packed body a different
-  // length and this fails.
-  mabur::rc::Rcf r;
-  r.vtx_id = 1;
-  r.fec_overhead_base = 0.42;
-  r.fec_overhead_enh = 0.37;
+TEST(rcf_head_is_eighteen_bytes) {
+  mabur::rc::Rcf r; r.vtx_id = 0xdeadbeef; r.seq = 7; r.profile = 0x24;
+  r.fec_overhead_base = 0.42; r.fec_overhead_enh = 0.37; r.hop_ch = 149; r.hop_epoch = 3;
   auto body = mabur::rc::pack_rcf(r);
-  // 16-byte head + 2 CRC bytes, with no variable-length tail at all.
-  CHECK(body.size() == 16 + 2);
+  // 18-byte head + 2 CRC bytes, with no variable-length tail at all. The
+  // three tail bytes are pinned INDIVIDUALLY and in order, because the v9
+  // collision was exactly two of them claiming the same offset.
+  CHECK(body.size() == 18 + 2);
   // The two literal x100 overhead bytes precede the fixed probe_profile byte.
   CHECK(body[12] == 42);
   CHECK(body[13] == 37);
-  CHECK(body[14] == kNoProbeProfile);
-  CHECK(body[15] == kNoProbeProfile);
+  CHECK(body[14] == mabur::rc::kNoProbeProfile);  // probe_profile
+  CHECK(body[15] == 149);                         // hop_ch
+  CHECK(body[16] == 3);                           // hop_epoch
+  CHECK(body[17] == mabur::rc::kNoProbeProfile);  // probe_profile_dn
+  auto back = mabur::rc::parse_rcf(body.data(), body.size());
+  REQUIRE(back.has_value());
+  CHECK(back->hop_ch == 149); CHECK(back->hop_epoch == 3);
+  CHECK(back->probe_profile_dn == mabur::rc::kNoProbeProfile);
+}
+
+TEST(telem_carries_channel_and_hop_epoch) {
+  mabur::rc::Telem t; t.tlm_seq = 5; t.channel = 165; t.hop_epoch = 9;
+  auto b = mabur::rc::pack_telem(t);
+  CHECK(b.size() == 89 + 2);
+  CHECK(b[87] == 165); CHECK(b[88] == 9);
+  auto back = mabur::rc::parse_telem(b.data(), b.size());
+  REQUIRE(back.has_value());
+  CHECK(back->channel == 165); CHECK(back->hop_epoch == 9);
 }
 
 // The version check drops a foreign frame with no trace anywhere -- on a
@@ -564,14 +593,14 @@ TEST(telem_ack_is_the_cal_active_bit_alone) {
   mabur::rc::Telem t;
   t.flags = 0x40;
   auto b = mabur::rc::pack_telem(t);
-  CHECK(b.size() == 87 + 2);  // body + crc16
+  CHECK(b.size() == 89 + 2);  // body + crc16
   auto got = mabur::rc::parse_telem(b.data(), b.size());
   REQUIRE(got.has_value());
   CHECK((got->flags & 0x40) != 0);
 }
 
-TEST(rc_version_is_nine) {
-  CHECK(mabur::rc::RC_VERSION == 9);
+TEST(rc_version_is_ten) {
+  CHECK(mabur::rc::RC_VERSION == 10);
 }
 
 MTEST_MAIN

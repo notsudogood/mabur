@@ -1514,3 +1514,141 @@ TEST(reassert_is_a_five_second_cadence_not_a_per_tick_spam) {
   CHECK(act.bitrates.size() == 4);
   CHECK(act.bitrates.back() == target);
 }
+
+// In-flight channel hop (spec 2026-09-14 §1): the RCF carries hop_ch/
+// hop_epoch so the GS can move the drone mid-flight without a DISC
+// round-trip. hop_ch 0 means "no hop order" (a pre-hop GS); a new
+// (epoch, ch) pair retunes and arms move_pending_ like a DISC move, but
+// the RCF that carries the order must not confirm its own move -- the
+// NEXT RCF heard on the new channel does that.
+static std::vector<uint8_t> make_rcf_wire_hop(uint32_t vtx, uint16_t seq, uint8_t profile,
+                                              double ovb, double ove, uint8_t hop_ch, uint8_t epoch) {
+  Rcf r; r.vtx_id = vtx; r.seq = seq; r.profile = profile; r.fec_overhead_base = ovb;
+  r.fec_overhead_enh = ove; r.hop_ch = hop_ch; r.hop_epoch = epoch;
+  return pack_rcf(r);
+}
+// RcAgent holds a std::atomic<bool> member, so it is neither copyable nor
+// movable -- it cannot be returned by value (the brief's `linked_agent`
+// helper as written does not compile: NRVO is optional and the deleted
+// move constructor must still be accessible even when elided). Link
+// in-place on the caller's already-constructed agent instead.
+static void link_agent(RcAgent& agent, const Config& cfg) {
+  agent.tick(0, RadioHealth{});
+  auto disc = make_disc_wire(cfg.link.vtx_id, 0xCAFEF00D, /*op_channel=*/136, 20, 0, 1);
+  agent.on_rc_frame(disc.data(), disc.size(), 100);
+}
+
+TEST(rcf_new_hop_pair_retunes_and_arms_move_confirm) {
+  auto cfg = make_cfg(); MockActuator act; RcAgent agent(cfg, act); link_agent(agent, cfg);
+  auto w = make_rcf_wire_hop(cfg.link.vtx_id, 1, 0x24, 1.0, 0.5, /*hop_ch=*/149, /*epoch=*/1);
+  agent.on_rc_frame(w.data(), w.size(), 200);
+  REQUIRE(act.retunes.size() == 1);
+  CHECK(act.retunes[0] == 149);
+  CHECK(act.retune_reasons[0] == "hop");
+  CHECK(agent.channel() == 149);
+  CHECK(agent.hop_epoch() == 1);
+  // nothing heard on 149 -> home after move_confirm_ms
+  agent.tick(200 + cfg.link.move_confirm_ms + 100, RadioHealth{});
+  REQUIRE(act.retunes.size() == 2);
+  CHECK(act.retunes[1] == 136);
+  CHECK(act.retune_reasons[1] == "move_unconfirmed");
+}
+
+TEST(rcf_same_hop_pair_is_idempotent_and_next_rcf_confirms) {
+  auto cfg = make_cfg(); MockActuator act; RcAgent agent(cfg, act); link_agent(agent, cfg);
+  auto w1 = make_rcf_wire_hop(cfg.link.vtx_id, 1, 0x24, 1.0, 0.5, 149, 1);
+  agent.on_rc_frame(w1.data(), w1.size(), 200);
+  auto w2 = make_rcf_wire_hop(cfg.link.vtx_id, 2, 0x24, 1.0, 0.5, 149, 1);   // repeat, heard on 149
+  agent.on_rc_frame(w2.data(), w2.size(), 260);
+  CHECK(act.retunes.size() == 1);
+  agent.tick(260 + cfg.link.move_confirm_ms + 100, RadioHealth{});
+  CHECK(act.retunes.size() == 1);            // confirmed: no move_unconfirmed
+  CHECK(agent.channel() == 149);
+}
+
+TEST(rcf_hop_withdrawal_returns_to_previous_channel) {
+  auto cfg = make_cfg(); MockActuator act; RcAgent agent(cfg, act); link_agent(agent, cfg);
+  auto w1 = make_rcf_wire_hop(cfg.link.vtx_id, 1, 0x24, 1.0, 0.5, 149, 1);
+  agent.on_rc_frame(w1.data(), w1.size(), 200);
+  auto w2 = make_rcf_wire_hop(cfg.link.vtx_id, 2, 0x24, 1.0, 0.5, 136, 2);   // withdraw: new epoch, old channel
+  agent.on_rc_frame(w2.data(), w2.size(), 400);
+  REQUIRE(act.retunes.size() == 2);
+  CHECK(act.retunes[1] == 136);
+  CHECK(act.retune_reasons[1] == "hop");
+  CHECK(agent.hop_epoch() == 2);
+}
+
+TEST(rcf_hop_ch_zero_is_ignored) {
+  auto cfg = make_cfg(); MockActuator act; RcAgent agent(cfg, act); link_agent(agent, cfg);
+  auto w = make_rcf_wire_hop(cfg.link.vtx_id, 1, 0x24, 1.0, 0.5, 0, 5);
+  agent.on_rc_frame(w.data(), w.size(), 200);
+  CHECK(act.retunes.empty());
+  CHECK(agent.hop_epoch() == 0);
+}
+
+// Fix round 1, item 1 (reviewer): a restarted GS resets its hop epoch
+// numbering along with everything else, so a stale latched hop_epoch_/
+// hop_ch_ from the old session must not swallow the new session's first
+// hop order. Same failure mode have_last_seq_ documents (restarted-GS,
+// rc_agent.cpp FAILSAFE-entry comment) -- here pinned via the new-DISC
+// session boundary, which is the one a fresh GS process actually takes.
+TEST(new_disc_session_clears_stale_hop_state_so_the_next_hop_retunes) {
+  auto cfg = make_cfg(); MockActuator act; RcAgent agent(cfg, act); link_agent(agent, cfg);
+  auto w1 = make_rcf_wire_hop(cfg.link.vtx_id, 1, 0x24, 1.0, 0.5, 149, 1);
+  agent.on_rc_frame(w1.data(), w1.size(), 200);
+  REQUIRE(act.retunes.size() == 1);
+  CHECK(act.retunes[0] == 149);
+
+  // The GS restarts: nothing more arrives, so the unconfirmed move sends the
+  // drone home (RENDEZVOUS) once move_confirm_ms elapses -- the same bench
+  // scenario have_last_seq_'s FAILSAFE-entry comment documents (a restart
+  // long enough to lose the link, not a same-session keep-alive DISC, which
+  // takes the LINKED ack-only fast path and does not reach a reset site).
+  agent.tick(200 + cfg.link.move_confirm_ms + 100, RadioHealth{});
+  REQUIRE(act.retunes.size() == 2);
+  CHECK(act.retunes[1] == 136);
+  CHECK(act.retune_reasons[1] == "move_unconfirmed");
+  CHECK(agent.state() == RcAgent::State::RENDEZVOUS);
+  CHECK(agent.hop_epoch() == 0);  // already cleared by the fallback reset
+
+  // The restarted GS re-establishes with a DISC (state_ is RENDEZVOUS, not
+  // LINKED, so this is the full session-establish path, not the ack-only
+  // keep-alive one) proposing the same home channel we're already on, so it
+  // is not itself a move.
+  auto disc2 = make_disc_wire(cfg.link.vtx_id, 0xFEEDFACE, /*op_channel=*/136, 20, 0, 1);
+  agent.on_rc_frame(disc2.data(), disc2.size(), 3000);
+  CHECK(act.retunes.size() == 2);  // no move: proposed channel == current
+  CHECK(agent.hop_epoch() == 0);
+
+  // The restarted GS's own hop epoch numbering restarts too, so it repeats
+  // (epoch=1, ch=149) verbatim -- without the reset this would be swallowed
+  // as "already applied" (stale hop_epoch_==1 latched from the old
+  // session) and the drone would silently stay on home while the GS
+  // believes it has moved to 149.
+  auto w2 = make_rcf_wire_hop(cfg.link.vtx_id, 1, 0x24, 1.0, 0.5, 149, 1);
+  agent.on_rc_frame(w2.data(), w2.size(), 3100);
+  REQUIRE(act.retunes.size() == 3);
+  CHECK(act.retunes[2] == 149);
+  CHECK(act.retune_reasons[2] == "hop");
+  CHECK(agent.channel() == 149);
+  CHECK(agent.hop_epoch() == 1);
+}
+
+// Fix round 1, item 2 (reviewer): the spec's freshness guard compares the
+// (hop_epoch, hop_ch) PAIR, not the epoch alone -- a same-epoch RCF
+// commanding a different channel must still be applied.
+TEST(rcf_same_epoch_different_channel_is_applied_not_ignored) {
+  auto cfg = make_cfg(); MockActuator act; RcAgent agent(cfg, act); link_agent(agent, cfg);
+  auto w1 = make_rcf_wire_hop(cfg.link.vtx_id, 1, 0x24, 1.0, 0.5, 149, 1);
+  agent.on_rc_frame(w1.data(), w1.size(), 200);
+  REQUIRE(act.retunes.size() == 1);
+  CHECK(act.retunes[0] == 149);
+
+  auto w2 = make_rcf_wire_hop(cfg.link.vtx_id, 2, 0x24, 1.0, 0.5, /*hop_ch=*/40, /*epoch=*/1);
+  agent.on_rc_frame(w2.data(), w2.size(), 260);
+  REQUIRE(act.retunes.size() == 2);
+  CHECK(act.retunes[1] == 40);
+  CHECK(act.retune_reasons[1] == "hop");
+  CHECK(agent.channel() == 40);
+  CHECK(agent.hop_epoch() == 1);
+}

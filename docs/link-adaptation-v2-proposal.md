@@ -13,12 +13,13 @@ and is marked as such.
 | Tier 1 FEC-overhead policy (§3) | **landed**, `link.overhead`, default **OFF** (observe-only) |
 | Tier 1 arming | needs a flight comparing `ov_target` against the fixed pair, then `aucadence` |
 | Tier 0 reflex (§3) | **not started** — blocked on the reciprocity measurement in §9.1 |
-| Tier 2 wire (RC_VERSION 9, `kProbeStreamIdDn`) | **landed**, inert — GS never sets the byte yet |
+| Tier 2 wire (**RC_VERSION 10**, `kProbeStreamIdDn`) | **landed**, inert — GS never sets the byte yet |
 | Tier 2 objective + arm logic | **landed**, `link.objective`, default **OFF** |
 | Tier 2 ladder *decision* | **not wired** — `objective.act = true` is rejected at load |
 | Fast restore (§4) | **not started** — `pre_adopt_rung()` remembers the rung, nothing acts on it |
 | Metrics (§6) | **not started** — and §6's energy metric may be partly removed on `gilankpam/mabur` master, see §8a |
-| ⚠ Merge collision with `gilankpam/mabur` master | **RC_VERSION 9 taken; tier 1's floor measured wrong — see §8a** |
+| Merge with `gilankpam/mabur` master (`ca3ad5d`) | **done** — RC_VERSION 10, 18-byte head; tier 1/2 now respect the hop's store blank |
+| ⚠ Tier 1's `min_ov` floor | **still wrong** — `fec.log` measures ~0.5 at rung 5 against a 0.3 floor, see §8a |
 
 Nothing here has been on a device. The host gate passes (137/138; the one
 failure is environmental), and `gs_e2e` + `gs_au_e2e` pass — so the
@@ -26,10 +27,14 @@ drone→GS path has run end to end on RC_VERSION 9. The `ausniff` and
 `aucadence` device gates have NOT been run, and `aucadence` is the one
 tiers 1 and 2 both need before either is armed.
 
-Building `maburgs` currently requires devourer at HEAD rather than the
-pinned submodule (`f3b76ea` predates `card_scan_usb.cpp`'s
-`DeviceProbe.h`). The pin has not been bumped; that is a separate
-decision.
+Building `maburgs` requires devourer at HEAD rather than the pinned
+submodule, now for TWO independent reasons: `f3b76ea` predates both
+`card_scan_usb.cpp`'s `DeviceProbe.h` and the hop scout's
+`GetRxEnergyScout`. Note `gilankpam/mabur` master pins the SAME `f3b76ea`
+while calling `GetRxEnergyScout`, so that master does not build against
+its own pinned submodule either — the pin is stale in both lines and
+everyone is building against the sibling `../devourer` checkout. Not
+bumped here; that is a separate decision.
 
 Read `docs/link-adaptation.md` for what actually ships today. Note when
 reading the code that there are TWO ladders: the 6-rung struct default in
@@ -620,7 +625,7 @@ This branch was built on `notsudogood/mabur` master (`f51f8e0`).
 a sibling off that same base with ~45 commits on it, and two of them
 collide with this work. Read this before merging in either direction.
 
-### RC_VERSION 9 is already taken — this branch must become 10
+### RC_VERSION 9 was already taken — reconciled at 10 (DONE)
 
 `e65922a rc: RC_VERSION 9 — RCF hop_ch/hop_epoch, Telem channel/hop_epoch`
 landed there on 2026-09-15, two days before this branch's own
@@ -637,7 +642,7 @@ The head lengths differ, so a frame from one build fails the other's CRC
 check rather than mis-parsing — the failure is loud, not silent. But the
 version number is ambiguous, which is worse than either layout.
 
-**Merge target: `RC_VERSION 10`, an 18-byte head**, keeping their fields at
+**Resolved as `RC_VERSION 10`, an 18-byte head**, keeping their fields at
 15–16 (already flown) and appending this branch's at 17:
 
 ```

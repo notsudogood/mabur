@@ -28,6 +28,8 @@ VrxController::VrxController(VrxCfg cfg)
       rz_(VrxRzConfig{cfg.vtx_id, 1000, 20, cfg.op_channel}),
       cur_op_(op_from_rung(ctrl_.op())) {}
 
+void VrxController::sync_op_() { cur_op_ = op_from_rung(ctrl_.op()); }
+
 void VrxController::on_video(double now_ms) { rz_.feed_video(now_ms); }
 
 void VrxController::on_rc_frame(const uint8_t* buf, size_t len, double now_ms) {
@@ -52,7 +54,7 @@ std::optional<VrxController::Out> VrxController::step(double now_ms,
     cur_op_ = OpPoint{false, cfg_.pin_mcs, 20, false,
                      cfg_.pin_overhead_base, cfg_.pin_overhead_enh, 0.0};
   } else if (ctrl_.on_tick(now_ms)) {
-    cur_op_ = op_from_rung(ctrl_.op());
+    sync_op_();
   }
   const VrxAction act = rz_.tick(now_ms);
   if (act == VrxAction::Beacon)
@@ -71,9 +73,11 @@ std::optional<VrxController::Out> VrxController::step(double now_ms,
   last_fb_ms_ = now_ms;
 
   if (cfg_.pin_mcs < 0) {
-    if (ctrl_.update(health, now_ms)) cur_op_ = op_from_rung(ctrl_.op());
+    if (ctrl_.update(health, now_ms)) sync_op_();
+    // AFTER sync_op_(): that rebuilds the whole OpPoint from rung config,
+    // overhead pair included, so a policy write before it would be undone.
     apply_overhead_policy(health, now_ms);
-    update_objective(health);
+    update_objective(health, now_ms);
   }
   mabur::rc::Rcf r = build_rcf();
   // No repeat copies of an op-changing RCF: the 2026-08-14 repeat burst
@@ -103,6 +107,15 @@ void VrxController::apply_overhead_policy(const LinkHealth& health,
   // both layers down to the floor on silence, which is the opposite of what
   // silence should do.
   if (!health.sample_valid) return;
+  // Respect the hop's store blank, for exactly the reason it exists: "an
+  // interferer's demoted operating point is real RF evidence for the CHANNEL
+  // that just got abandoned, not for what the rung can do in general"
+  // (LadderController::blank_store). Overhead sized to a jammed channel
+  // would otherwise be carried onto the one the hop moves to. HOLD the
+  // commanded pair rather than feeding -- the same thing the rung store does
+  // with its EWMAs. The blank starts at the first `interfered` window, not at
+  // the hop order, so this covers the detection windows too.
+  if (ctrl_.store_blanked(now_ms)) return;
   const double b = ov_base_.feed(health.pre_fec_loss, cur_op_.overhead_base,
                                  now_ms);
   // The enh layer only has a measurement when its own window saw traffic --
@@ -131,8 +144,15 @@ void VrxController::apply_overhead_policy(const LinkHealth& health,
 // measurement of the lower rung could justify going there, so the probe
 // would be pure airtime cost (2-3x the up probe's, since a fixed-size body
 // at a lower rate is proportionally longer on air).
-void VrxController::update_objective(const LinkHealth& health) {
+void VrxController::update_objective(const LinkHealth& health,
+                                     double now_ms) {
   if (!health.sample_valid) return;
+  // Same blank, same reason: a down probe measures the rung BELOW on the
+  // channel currently being interfered with, which predicts nothing about
+  // that rung after the hop -- and it would spend 3-10% of airtime saying
+  // so. want_probe() also disarms on a dirty residual, which interference
+  // usually produces, but that is incidental; this is the explicit gate.
+  if (ctrl_.store_blanked(now_ms)) { obj_dn_profile_ = mabur::rc::kNoProbeProfile; return; }
   const int idx = ctrl_.rung();
   if (idx <= 0) {  // nothing below the failsafe rung to probe or fall to
     obj_dn_profile_ = mabur::rc::kNoProbeProfile;
@@ -179,6 +199,8 @@ mabur::rc::Rcf VrxController::build_rcf() {
       static_cast<uint8_t>(cur_op_.mcs), static_cast<uint8_t>(cur_op_.bw));
   r.fec_overhead_base = cur_op_.overhead_base;
   r.fec_overhead_enh = cur_op_.overhead_enh;
+  r.hop_ch = hop_ch_;
+  r.hop_epoch = hop_epoch_;
   // Probe stream MCS (spec 2026-09-04): the ladder names a rung to probe on
   // every RCF, or none. In static-pin mode the ladder is out of the loop, so
   // the probe follows the dedicated pin instead.
@@ -198,6 +220,11 @@ mabur::rc::Rcf VrxController::build_rcf() {
         static_cast<uint8_t>(cur_op_.bw));
   }
   return r;
+}
+
+void VrxController::restore_rung(int rung, double now_ms) {
+  ctrl_.restore(rung, now_ms);
+  sync_op_();
 }
 
 void VrxController::note_cmd(const mabur::rc::Rcf& r) {

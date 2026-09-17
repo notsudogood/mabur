@@ -1036,6 +1036,346 @@ class SessionModeProbeJoinTest(unittest.TestCase):
         self.assertIn("PROBE LOG (per mcs)", out)
 
 
+HOP_CTL_LOG = """ctllog 11 ladder=0/100,2/50,4/25,5/25,6/25,7/10 down_util=0.35 up_util=0.15
+E 1380 3 5 hop_restore 0.0500 25.0 -20.0
+"""
+
+
+class HopReportTest(unittest.TestCase):
+    """Task 13: flightreport's HOP section, built from scan.log (gs/src/
+    scan_log.cpp) V/H/D records plus ctl.log's E hop_restore lines."""
+
+    FIXTURE = Path("tests/fixtures/scan-hop.log")
+
+    def _ctl(self, text=HOP_CTL_LOG):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "ctl.log")
+        with open(p, "w") as f:
+            f.write(text)
+        return flightreport.load_ctllog(p)
+
+    def test_rejoined_session_takes_the_last_scanlog_marker(self):
+        """Bench 2026-09-15: a GS restart REJOINS the session directory, so
+        the first scan.log after a deploy starts with the old binary's
+        'scanlog 1' header and carries the new binary's 'scanlog 2' marker
+        (and every V/H/D record) further down. Reading only the first line
+        skipped the whole HOP section on exactly the session that held the
+        first real hop. The highest marker seen wins."""
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "scan.log")
+        with open(p, "w") as f:
+            f.write("scanlog 1 home=136 candidates=120,149,165 dwell_ms=250 min_rounds=3 enable=1 cards=2\n")
+            f.write("A 100 0 120 551 3 2510 0 32\n")
+            f.write(self.FIXTURE.read_text())
+        scanlog = flightreport.load_scanlog(p)
+        self.assertEqual(scanlog["version"], 2)
+        ref = flightreport.load_scanlog(str(self.FIXTURE))
+        self.assertEqual(len(scanlog["H"]), len(ref["H"]))
+        self.assertEqual(len(scanlog["V"]), len(ref["V"]))
+
+    def test_hop_table_row_timings_and_outcome(self):
+        """onset->order / order->video / video->restore, paired end to end:
+        the onset is the FIRST of the two consecutive 'interfered' V lines
+        (not just the one immediately before the order), the restore comes
+        from ctl.log's E hop_restore matched by nearest timestamp, and the
+        per-card DWELL COST summary only counts sess=1 rows."""
+        scanlog = flightreport.load_scanlog(str(self.FIXTURE))
+        ctllog = self._ctl()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            flightreport.print_hop_report(scanlog, ctllog)
+        out = buf.getvalue()
+        self.assertIn("onset->order 300 ms", out)
+        self.assertIn("order->video 80 ms", out)
+        self.assertIn("video->restore 0 ms", out)
+        self.assertIn("outcome verify_pass", out)
+        self.assertNotIn("SHADOW", out)
+        # DWELL COST: card 0 has two sess=1 dwells (350us, 390us -> median
+        # 370), the sess=0 warm-up dwell (999+999+999) must NOT count.
+        self.assertIn("card 0: n=2 median(to+read+back)=370us", out)
+        self.assertIn("card 1: n=1 median(to+read+back)=280us", out)
+
+    def test_a_hold_entry_still_closes_its_own_attempt_row(self):
+        """Holds are edge-logged now (one entry event, one hold_end),
+        where they used to re-log every ~10 ms control tick. That did NOT
+        change which event closes an attempt row: HopController's
+        verifying_tick logs its terminal "verify_fail" with the epoch
+        UNBUMPED, so build_hop_rows' epoch-match branch still reads it as
+        the terminal outcome -- the repeats it lost were always redundant.
+        Pinned because it was proposed as a regression of this wave and is
+        not one."""
+        def E(t, kind, epoch, target):
+            return {"t_ms": float(t), "kind": kind, "epoch": epoch,
+                    "target": target, "score": 0, "elapsed_ms": 0.0}
+        rows = flightreport.build_hop_rows(
+            [E(1000, "order", 1, 149), E(1080, "lead_confirm", 1, 149),
+             E(1500, "verify_fail", 1, 149), E(4000, "hold_end", 1, 149)], [])
+        self.assertEqual([r["outcome"] for r in rows], ["verify_fail"])
+        # ...and the same for a retry that runs into the rate cap.
+        rows = flightreport.build_hop_rows(
+            [E(1000, "order", 1, 149), E(1080, "lead_confirm", 1, 149),
+             E(1500, "verify_fail", 2, 165), E(1560, "lead_confirm", 2, 165),
+             E(2000, "hold_cap", 2, 165), E(9000, "hold_end", 2, 165)], [])
+        self.assertEqual([r["outcome"] for r in rows], ["verify_fail", "hold_cap"])
+
+    def test_hold_end_closes_an_open_row_instead_of_unterminated(self):
+        """hold_end is TERMINAL, not informational. The controller does not
+        currently emit one while an attempt row is open (a hold entry
+        closes the row first, and hold_end only ever follows a hold), but
+        an unrecognised kind arriving with a row open falls through to
+        "unterminated" -- "the log ends mid-attempt" -- which would be a
+        lie about a flight that in fact ended in a hold. Closing on
+        hold_end is the safe reading, and it is what the per-tick hold
+        lines used to provide for free."""
+        def E(t, kind, epoch, target):
+            return {"t_ms": float(t), "kind": kind, "epoch": epoch,
+                    "target": target, "score": 0, "elapsed_ms": 0.0}
+        rows = flightreport.build_hop_rows(
+            [E(1000, "order", 1, 149), E(1080, "lead_confirm", 1, 149),
+             E(4000, "hold_end", 1, 149)], [])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["outcome"], "hold_end")
+        self.assertEqual(rows[0]["outcome_ts"], 4000.0)
+
+    def test_zero_hops_prints_verdict_histogram(self):
+        """No H events at all (a perfectly healthy flight, or hop_controller
+        compiled in but never triggering): the verdict histogram, not an
+        empty hop table, per the brief's zero-hop path.
+
+        Every non-healthy V line here must be a state
+        HopVerdict::window() (gs/src/hop_verdict.cpp) can actually produce:
+        interfered  = impaired && (contended || raised) && !weak && !fading
+        fade        = impaired && weak
+        Evidence is a bitmask OR'd together independent of the verdict
+        branch taken -- kEvImpaired=1 is set on EVERY non-healthy line
+        below (an interfered or fade verdict is impossible with it clear),
+        which is exactly the bug this fixture used to encode (evidence=8,
+        contended alone, on an 'interfered' line -- a state the real
+        classifier cannot emit) before this round's fix."""
+        V = [{"t_ms": float(i), "verdict": "healthy", "evidence": 0, "ref_rung": None,
+              "link_loss_pct": 0.0, "recovered": 0, "cards": []} for i in range(40)]
+        # interfered via contention (impaired|contended = 0x09), card 0.
+        V += [{"t_ms": 1000.0 + i, "verdict": "interfered", "evidence": 0x09, "ref_rung": 3,
+               "link_loss_pct": 5.0, "recovered": 2,
+               "cards": [{"card": 0, "foreign": 15, "fa": 3, "cca": 20, "crc_fail": 1,
+                          "rssi_dbm": -58.0, "snr_db": 13.5, "d_rssi_db": -1.0}]}
+              for i in range(2)]
+        # fade (impaired|weak = 0x03), same card -- weak takes priority
+        # over contended/raised in the classifier's else-if chain, so this
+        # line deliberately carries neither bit.
+        V.append({"t_ms": 1200.0, "verdict": "fade", "evidence": 0x03, "ref_rung": 3,
+                  "link_loss_pct": 4.0, "recovered": 1,
+                  "cards": [{"card": 0, "foreign": 2, "fa": 1, "cca": 5, "crc_fail": 0,
+                             "rssi_dbm": -70.0, "snr_db": 5.0, "d_rssi_db": -6.0}]})
+        # interfered via a raised false-alarm rate (impaired|raised = 0x11,
+        # the DJI-O4-style signature), card 1 -- kept off card 0 so card
+        # 0's median below stays a clean read of the contended/fade mix.
+        V.append({"t_ms": 1300.0, "verdict": "interfered", "evidence": 0x11, "ref_rung": 3,
+                  "link_loss_pct": 6.0, "recovered": 2,
+                  "cards": [{"card": 1, "foreign": 1, "fa": 30, "cca": 40, "crc_fail": 2,
+                             "rssi_dbm": -50.0, "snr_db": 18.0, "d_rssi_db": -1.0}]})
+        # unknown (impaired|fading = 0x05, no weak, no contended/raised):
+        # a fade in progress that hasn't crossed the WEAK thresholds yet --
+        # impaired and RSSI dropped relative to its frozen reference
+        # (d_rssi_db -5.0), but rssi/snr still well above the weak-absolute
+        # cutoffs the fade line above uses (-70.0/5.0). Under the
+        # classifier's precedence (healthy -> fade -> interfered -> else
+        # unknown) this falls through every named case: the one verdict
+        # meaning "impaired, and none of our five domain terms explains
+        # why" -- exactly the diagnostic category an observe-only
+        # threshold-calibration flight most needs surfaced. Card 2, kept
+        # off cards 0/1 so their medians above are untouched.
+        V.append({"t_ms": 1400.0, "verdict": "unknown", "evidence": 0x05, "ref_rung": 3,
+                  "link_loss_pct": 3.0, "recovered": 1,
+                  "cards": [{"card": 2, "foreign": 3, "fa": 2, "cca": 10, "crc_fail": 1,
+                             "rssi_dbm": -66.0, "snr_db": 9.0, "d_rssi_db": -5.0}]})
+        scanlog = {"version": 2, "V": V, "H": [], "D": [], "M": []}
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            flightreport.print_hop_report(scanlog, {"E": []})
+        out = buf.getvalue()
+        self.assertIn("verdicts: healthy 40 fade 1 interfered 3 unknown 1", out)
+        self.assertNotIn("HOP REPORT", out)
+        # Bit tally is over ALL windows (weak/fading/contended/raised are
+        # OR'd in unconditionally, independent of the impaired gate) --
+        # impaired=5 counts both interfered pairs, the fade line, the
+        # raised line and the unknown line; weak=1 (only the fade line);
+        # fading=1 (only the unknown line -- the one bit with zero
+        # coverage before this line was added); contended=2 (only the two
+        # 0x09 lines); raised=1 (only the 0x11 line).
+        self.assertIn("evidence bits: impaired=5 weak=1 fading=1 contended=2 raised=1", out)
+        # card 0: the 2 contended-interfered windows (foreign=15/fa=3) plus
+        # the 1 fade window (foreign=2/fa=1) -- median of [15,15,2]/[3,3,1]
+        # is still 15/3 (2 of 3 samples agree), n=3.
+        self.assertIn("card 0 (non-healthy, n=3): foreign=15 fa=3 rssi=-58.0 snr=13.5", out)
+        # card 1: only the 1 raised-interfered window.
+        self.assertIn("card 1 (non-healthy, n=1): foreign=1 fa=30 rssi=-50.0 snr=18.0", out)
+        # card 2: only the 1 unknown (fading) window.
+        self.assertIn("card 2 (non-healthy, n=1): foreign=3 fa=2 rssi=-66.0 snr=9.0", out)
+
+    def test_shadow_would_events_labeled_and_histogram_still_shown(self):
+        """hop.enable=false: HopController still runs and still logs, every
+        event 'would_'-prefixed (HopController::log_event). video never
+        confirms while disabled (nothing actually retunes -- ChannelPlan::
+        hop_order() is only called from main.cpp's real HopAction::Order
+        case), so the FSM's own confirm_ms timeout fires every time:
+        would_order -> would_withdraw. This must not crash, must not be
+        counted as a real hop (which would suppress the verdict
+        histogram), and must say plainly that it's hypothetical."""
+        H = [{"t_ms": 1300.0, "kind": "would_order", "epoch": 1, "target": 42,
+              "score": 50, "elapsed_ms": 0.0},
+             {"t_ms": 1900.0, "kind": "would_withdraw", "epoch": 2, "target": 42,
+              "score": 0, "elapsed_ms": 600.0}]
+        # impaired|contended = 0x09 (gs/src/hop_verdict.cpp:
+        # interfered = impaired && (contended||raised) && !weak && !fading
+        # -- an 'interfered' verdict is impossible with kEvImpaired clear).
+        V = [{"t_ms": 1000.0, "verdict": "interfered", "evidence": 0x09, "ref_rung": 3,
+              "link_loss_pct": 5.0, "recovered": 0,
+              "cards": [{"card": 0, "foreign": 22, "fa": 4, "cca": 30, "crc_fail": 0,
+                        "rssi_dbm": -55.0, "snr_db": 14.0, "d_rssi_db": -0.5}]}]
+        scanlog = {"version": 2, "V": V, "H": H, "D": [], "M": []}
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            flightreport.print_hop_report(scanlog, {"E": []})
+        out = buf.getvalue()
+        self.assertIn("hop.enable=false", out)
+        self.assertIn("SHADOW", out)
+        self.assertIn("outcome would_withdraw", out)
+        self.assertIn("video->restore -", out)   # never restores while disabled
+        self.assertIn("verdicts: interfered 1", out)   # zero REAL hops: histogram still runs
+        self.assertIn("evidence bits: impaired=1 weak=0 fading=0 contended=1 raised=0", out)
+        self.assertIn("card 0 (non-healthy, n=1): foreign=22 fa=4 rssi=-55.0 snr=14.0", out)
+
+    def test_withdrawn_hop_prints_blank_restore_not_a_stray_match(self):
+        """A hop that never confirms (Ordered-state confirm_ms timeout ->
+        withdraw, HopController::withdraw()) never gets a restore -- and an
+        unrelated hop_restore sitting far away in ctl.log (a different
+        epoch entirely) must not be stolen for this row just because it's
+        the only candidate on offer."""
+        H = [{"t_ms": 100.0, "kind": "order", "epoch": 1, "target": 42,
+              "score": 10, "elapsed_ms": 0.0},
+             {"t_ms": 2100.0, "kind": "withdraw", "epoch": 2, "target": 42,
+              "score": 0, "elapsed_ms": 2000.0}]
+        scanlog = {"version": 2, "V": [], "H": H, "D": [], "M": []}
+        ctllog = self._ctl("ctllog 11 x\nE 50000 0 1 hop_restore 0.05 25.0 -20.0\n")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            flightreport.print_hop_report(scanlog, ctllog)
+        out = buf.getvalue()
+        self.assertIn("video->restore -", out)
+        self.assertIn("outcome withdraw", out)
+
+    def test_v_line_variable_card_count(self):
+        """The per-card block in a V line repeats once per card -- must not
+        assume exactly two (this bench has run with one card, e.g.
+        [[jgr3-nhm-abs-floor]])."""
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "scan.log")
+        with open(p, "w") as f:
+            f.write("scanlog 2 x\n"
+                    "V 100.0 healthy 00 - 0.0 0 0 0 0 0 0 30.0 25.0 0.0\n"
+                    "V 200.0 interfered 08 2 4.0 3 "
+                    "0 1 2 3 4 10.0 5.0 -1.0 "
+                    "1 5 6 7 8 15.0 6.0 -2.0 "
+                    "2 9 10 11 12 20.0 7.0 -3.0\n")
+        scanlog = flightreport.load_scanlog(p)
+        self.assertEqual(len(scanlog["V"]), 2)
+        self.assertEqual(len(scanlog["V"][0]["cards"]), 1)
+        self.assertEqual(len(scanlog["V"][1]["cards"]), 3)
+        last = scanlog["V"][1]["cards"][2]
+        self.assertEqual(last, {"card": 2, "foreign": 9, "fa": 10, "cca": 11,
+                                 "crc_fail": 12, "rssi_dbm": 20.0, "snr_db": 7.0,
+                                 "d_rssi_db": -3.0})
+
+    def test_session_dir_dispatch_prints_hop_report_after_probe(self):
+        """session.py's `scan` slot + main()'s ctl-log branch: a session
+        directory carrying scan.log gets the HOP section, after PROBE."""
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "ctl.log"), "w") as f:
+                f.write(HOP_CTL_LOG)
+            import shutil
+            shutil.copy(str(self.FIXTURE), os.path.join(d, "scan.log"))
+            result = subprocess.run([sys.executable, "tools/flightreport.py", d],
+                                    capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = result.stdout
+        self.assertIn("HOP REPORT", out)
+        self.assertIn("onset->order 300 ms", out)
+        self.assertLess(out.index("PROBE GATE"), out.index("HOP REPORT"))
+
+    def test_session_without_scanlog_skips_hop_section(self):
+        """No scan.log at all in the session directory: no HOP section, no
+        crash (CLAUDE.md: an older recording must still report cleanly)."""
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "ctl.log"), "w") as f:
+                f.write(HOP_CTL_LOG)
+            result = subprocess.run([sys.executable, "tools/flightreport.py", d],
+                                    capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("HOP REPORT", result.stdout)
+
+    def test_session_with_scanlog_v1_marker_skips_hop_section(self):
+        """A scan.log whose marker predates the V/H/D record shapes this
+        parses must not crash the report or print a misparsed section."""
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "ctl.log"), "w") as f:
+                f.write(HOP_CTL_LOG)
+            with open(os.path.join(d, "scan.log"), "w") as f:
+                f.write("scanlog 1 x\n")
+            result = subprocess.run([sys.executable, "tools/flightreport.py", d],
+                                    capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("HOP REPORT", result.stdout)
+
+
+FEC_LOG_ROWS = """feclog 1
+1000 0 5 1.00 100 12 12 12 0 0 32 32
+1100 0 5 1.00 300 4 4 4 0 0 32 32
+1200 0 5 1.00 500 40 40 32 8 0 32 32
+1300 0 5 1.00 700 6 6 6 0 3 32 32
+1400 1 5 0.50 900 12 12 12 0 0 16 32
+"""
+
+
+def test_fec_section_counterfactual_overhead_per_sid_and_rung():
+    """FEC (fec.log, 2026-09-15): per (sid, mcs, ov) group, the overhead
+    each episode would have needed, ov_req = (sqrt(1+4c)-1)/2 with
+    c = m*ov*(1+ov)/r (a lower overhead packs more sources into the same
+    lost aggregate, so m scales by (1+ov)/(1+ov') while the covering repairs
+    scale by ov'/ov). Rows: A m=12 r=32 -> 0.50; B m=4 -> 0.21; C m=40
+    aband=8 -> 1.16 (a real failure); D stale=3 (transition debris, counted
+    but excluded from the counterfactual); E sid 1 at ov 0.5 -> 0.40."""
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "fec.log"
+        p.write_text(FEC_LOG_ROWS)
+        result = subprocess.run([sys.executable, "tools/flightreport.py", str(p)],
+                                capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    assert "FEC EPISODES" in out, out
+    sec = out[out.find("FEC EPISODES"):]
+    s0 = sec[sec.find("sid 0"):sec.find("sid 1")]
+    assert re.search(r"sid 0 mcs 5 ov 1\.00: n=4 stale=1 failed=1", s0), s0
+    assert "ov_req p50/p90/p99/max=0.50/1.16/1.16/1.16" in s0, s0
+    # would-fail counts at candidate overheads, non-stale rows only (3)
+    assert re.search(r"0\.25:2\b.*0\.35:2\b.*0\.50:1\b.*0\.75:1\b.*1\.00:1\b", s0), s0
+    assert "of 3 non-stale" in s0, s0
+    s1 = sec[sec.find("sid 1"):]
+    assert re.search(r"sid 1 mcs 5 ov 0\.50: n=1 stale=0 failed=0", s1), s1
+    assert "ov_req p50/p90/p99/max=0.40/0.40/0.40/0.40" in s1, s1
+
+
+def test_session_dir_mode_prints_fec_section():
+    """A session directory carrying fec.log gets the FEC section after the
+    ctl report, from the sibling file (session.resolve pairing)."""
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "ctl.log").write_text("ctllog 11\n")
+        (Path(d) / "fec.log").write_text(FEC_LOG_ROWS)
+        result = subprocess.run([sys.executable, "tools/flightreport.py", d],
+                                capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "FEC EPISODES" in result.stdout, result.stdout
+
 
 # --- LINK-ADAPTATION V2 (observe-only) -------------------------------------
 #
@@ -1192,6 +1532,8 @@ def test_v2_follow_reports_disagreement_and_the_above_counter():
 
 
 if __name__ == "__main__":
+    test_fec_section_counterfactual_overhead_per_sid_and_rung()
+    test_session_dir_mode_prints_fec_section()
     test_flightreport_structure()
     test_old_scale_snr_warns_on_stderr()
     test_overhead_scale_break_warns_on_stderr()

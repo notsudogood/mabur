@@ -22,6 +22,7 @@ const char* to_string(CtlReason r) {
     case CtlReason::S3Util: return "s3_util";
     case CtlReason::Fade: return "fade";
     case CtlReason::PromoteProbed: return "promote_probed";
+    case CtlReason::HopRestore: return "hop_restore";
     case CtlReason::Follow: return "follow";
   }
   return "unknown";
@@ -145,7 +146,7 @@ void LadderController::update_probe_gate(const LinkHealth& h, double now_ms) {
     const double b = budget_enh_for(idx_ + 1);  // the CANDIDATE's enh budget
     probe_u_ = b > 0.0 ? h.probe_loss / b : (h.probe_loss > 0.0 ? 1e9 : 0.0);
     probe_last_sample_ms_ = now_ms;
-    store_.observe_probe(pr, probe_u_, now_ms);
+    if (now_ms >= blank_store_until_ms_) store_.observe_probe(pr, probe_u_, now_ms);
     if (probe_u_ <= probe_util_threshold()) {
       if (probe_clean_since_ms_ < 0.0) probe_clean_since_ms_ = now_ms;
       set_probe_state(ProbeGateState::Clean, pr, probe_u_, now_ms);
@@ -387,10 +388,17 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
   // can outlive the blanking; see CLAUDE.md tuning invariant). Fed BEFORE
   // the decision blocks so the sample that triggers a demote still lands
   // on the rung it actually measured.
-  if (now_ms >= s3_blank_until_ms_) {
-    store_.observe_s1(idx_, u_, h.residual_loss > 0.0, now_ms);
+  //
+  // measured_rung_, not idx_: since FollowCfg, u_ is scored against
+  // budget_base_for(measured_rung_), so filing it under idx_ would drop a
+  // value computed for one rung into another rung's bucket whenever the
+  // drone is somewhere we did not command. EVM goes the same way -- it is
+  // op-point-dependent (docs/evm-sweep-findings-2026-08-10.md), so its
+  // per-rung baseline belongs to the rung actually flown.
+  if (now_ms >= s3_blank_until_ms_ && now_ms >= blank_store_until_ms_) {
+    store_.observe_s1(measured_rung_, u_, h.residual_loss > 0.0, now_ms);
     if (!std::isnan(h.rf_evm_db))
-      store_.observe_evm(idx_, h.rf_evm_db, now_ms);
+      store_.observe_evm(measured_rung_, h.rf_evm_db, now_ms);
   }
 
   // 4. Residual (post-FEC) loss demotes immediately, exempt from
@@ -514,7 +522,13 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
     const double b3 = budget_enh_for(measured_rung_);
     u3_ = b3 > 0.0 ? h.s3_pre_fec_loss / b3
                    : (h.s3_pre_fec_loss > 0.0 ? 1e9 : 0.0);
-    store_.observe_s3(measured_rung_, u3_, h.s3_residual_loss > 0.0, now_ms);
+    // Two independent guards, both wanted: blank_store_until_ms_ keeps
+    // interfered-channel evidence out of the store entirely (the hop's
+    // reason), and measured_rung_ files whatever IS written against the rung
+    // the drone is actually transmitting at rather than the one we commanded
+    // (FollowCfg's reason).
+    if (now_ms >= blank_store_until_ms_)
+      store_.observe_s3(measured_rung_, u3_, h.s3_residual_loss > 0.0, now_ms);
   }
 
   // Same bookkeeping as the s1 util/probation demotes above, deliberately —
@@ -693,6 +707,23 @@ bool LadderController::on_tick(double now_ms) {
     return true;
   }
   return false;
+}
+
+void LadderController::restore(int rung, double now_ms) {
+  rung = std::clamp(rung, 0, static_cast<int>(cfg_.ladder.size()) - 1);
+  const int from = idx_;
+  idx_ = rung;
+  last_change_ms_ = now_ms;
+  probation_active_ = false;
+  probation_until_ms_ = -1e18;
+  probation_rung_ = -1;
+  reset_windows();
+  mark_transition(now_ms);
+  set_event(now_ms, from, rung, CtlReason::HopRestore, u_, snr_now_);
+}
+
+void LadderController::blank_store(double until_ms) {
+  blank_store_until_ms_ = std::max(blank_store_until_ms_, until_ms);
 }
 
 }  // namespace maburgs

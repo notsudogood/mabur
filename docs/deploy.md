@@ -593,3 +593,95 @@ what arrives into its own `ProbeTrack`. The arm logic and the
 resyncs) must be unchanged: the down probe is off, so any movement is this
 commit's plumbing, not the feature. `link.ctl.observed_mcs` should track
 `link.ctl.rung.mcs`, and `follow_above_ignored` should stay 0.
+
+## Building the device images
+
+Everything above swaps a BINARY onto a running device. This section is the
+other path: rebuilding the images themselves. Two separate builders, one per
+end, and they treat mabur's version differently — which is the part that
+bites.
+
+Checked 2026-09-17. `docs/bench-validation.md`'s image instructions predate
+this and name a stale branch; that paragraph now carries a warning pointing
+here.
+
+### Drone — `openipc-builder`
+
+- Repo: `gilankpam/openipc-builder`, branch **`feat/mabur`** (last moved
+  2026-09-10). NOT `feat/devourer` (2026-07-11, predates the venc fold-in,
+  so its image has no current mabur) and not `feat/waybeam` (dead).
+- Target: `ssc338q_fpv_openipc-urllc-aio` (SSC338Q / infinity6e).
+- Build:
+  ```sh
+  cd ../openipc-builder
+  printf './builder.sh ssc338q_fpv_openipc-urllc-aio\n' | nix-shell
+  ```
+  ⚠ **`nix-shell --run "./builder.sh …"` silently builds nothing.** The
+  `buildFHSEnv` shell sets `runScript = "bash"`, which overrides `--run`:
+  bash starts, finds no tty, and exits 0 having done nothing. Pipe the
+  command into `nix-shell` instead. (This is also why the same build works
+  interactively and "fails" in a script.)
+- Output: `archive/ssc338q_fpv_openipc-urllc-aio/<timestamp>/`.
+- **mabur is pinned by COMMIT.** `package/mabur/mabur.mk` fetches the public
+  repo at `MABUR_VERSION`, so a drone image is only as new as that SHA. Bump
+  it when you want the image to carry new work — otherwise a reflash reverts
+  the drone to whatever the pin names, which after a wire bump means a
+  version-mismatch flag day arriving at the worst possible moment (see the
+  `RC_VERSION` sections above).
+- The same build also produces U-Boot (`build_uboot()`, from the
+  `gilankpam/u-boot-sigmastar` fork, branch `mabur-fastboot`) — three files
+  in `output/images`, of which `u-boot-<soc>-nor-padded.bin` is the one
+  `flashcp` wants. `SKIP_UBOOT=1` turns it off. Flashing U-Boot is a
+  separate, riskier operation with its own runbook and a **mandatory serial
+  console**: see `docs/boot-time-findings-2026-09-07.md` "Flashing — the
+  runbook". A prebuilt copy of just that file is published at
+  `gilankpam/openipc-builder` release `latest-master` — note that release is
+  **U-Boot only**, not a rootfs image.
+
+### Ground station — `sbc-groundstations`
+
+- Repo: `gilankpam/sbc-groundstations` (fork of `OpenIPC/sbc-groundstations`),
+  a Buildroot image builder covering several SBCs: RunCam Wifilink, Emax
+  Wyvern-Link, Radxa Zero3, OpenIPC Bonnet, Orange Pi Zero 2W (H618).
+- Build:
+  ```sh
+  ./build.sh                                     # default: runcam_wifilink
+  DEFCONFIG=orangepi_zero2w_defconfig ./build.sh # or radxa_zero3_defconfig
+  nix-shell --run './build.sh'                   # skips host dep setup
+  ```
+  (`--run` does work here — this is a plain nix-shell, not the FHS env the
+  drone builder uses.)
+- Output: `<platform>_sdcard.img` plus `<platform>_boot.scr`.
+- Flashing: on the eMMC boards, copy the `.img` and the `.scr` to a FAT32 SD
+  card, rename the script to `boot.scr`, and boot the device (there are
+  `dd`/RKDevTool routes too). The Orange Pi Zero 2W has no eMMC — write the
+  `.img` straight to SD.
+- **mabur tracks MASTER, not a pin.** Its `package/mabur/mabur.mk` resolves
+  the latest master SHA at build time (with a fallback hash for offline
+  builds), and builds with drone/test/linkbench off and the GS player on.
+  It installs `maburgs`, `maburplay`, the assets, the Python tools, the
+  config defaults and the init scripts. So a GS image self-updates to
+  whatever mabur master is — which means work on a branch does NOT reach a
+  GS image until it merges, and a reflash mid-branch gets master, not your
+  branch.
+- **GS config lives on a 64 MB FAT32 `CONFIG` partition**, holding editable
+  `maburgs.toml` and `maburplay.toml`. That partition survives being read on
+  any machine, so GS config can be edited by mounting the card rather than
+  over ssh. ⚠ Unverified from this repo: whether `/etc/maburgs.toml` on a
+  running device is that file, a copy of it, or independent of it. Confirm
+  before assuming an ssh edit persists across a reflash, or that a card edit
+  takes effect without one.
+
+### Which version ends up where — the asymmetry worth remembering
+
+| | drone | GS |
+|---|---|---|
+| builder | `openipc-builder` (`feat/mabur`) | `sbc-groundstations` |
+| mabur version | **pinned SHA** in `mabur.mk` | **latest master** at build time |
+| reflash after a branch lands on master | still the old pin | picks it up |
+| reflash while work is unmerged | old pin | master, not your branch |
+
+So after any `RC_VERSION` bump: bump the drone's pin, and get the change
+onto mabur master, or the two ends will disagree the next time either is
+reflashed. Side-loading a binary does not change either image's idea of the
+version.

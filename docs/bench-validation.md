@@ -613,6 +613,14 @@ Pick one:
    git checkout feat/devourer        # feat/waybeam does NOT have mabur
    nix-shell --run "./builder.sh ssc338q_fpv_openipc-urllc-aio"
    ```
+   ⚠ **BOTH LINES ARE STALE (checked 2026-09-17).** `feat/devourer` last
+   moved 2026-07-11 and predates the venc fold-in — building it gets an
+   image with no current mabur in it. The live branch is **`feat/mabur`**
+   (2026-09-10). And `nix-shell --run` silently builds NOTHING here: the
+   `buildFHSEnv` shell's `runScript = "bash"` overrides `--run`, so it
+   starts bash, finds no tty and exits 0. Pipe the command in instead. See
+   "Building the device images" in `docs/deploy.md` for the current
+   procedure.
    Image lands in `archive/ssc338q_fpv_openipc-urllc-aio/<timestamp>/`. This
    boots straight into waybeam→mabur (both init scripts + configs baked in;
    `/etc/waybeam.json` already points `outgoing` at `shm://mabur`).

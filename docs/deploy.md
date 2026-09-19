@@ -694,9 +694,10 @@ here.
 
 Both ends resolve master at build time, so there is no pin on either side
 and nothing to bump. That is simpler than it sounds only if you remember the
-consequence: **an image build can never carry unmerged work.** Branch work
-reaches a device exactly two ways — side-load the binary (the sections above),
-or merge to `gilankpam/mabur` master and rebuild.
+consequence: **a STOCK image build can never carry unmerged work.** Branch
+work reaches a device three ways — side-load the binary (the sections above),
+merge to `gilankpam/mabur` master and rebuild, or fork the two recipes and
+repoint them (next section).
 
 The trap this replaces is real but differently shaped. After an `RC_VERSION`
 bump, the danger is not a stale pin; it is that master moves under you. Two
@@ -704,3 +705,156 @@ images built either side of a merge carry different wire versions, and a
 side-loaded binary is invisible to both. So after a bump: get the change onto
 master, then rebuild BOTH images from the same master, and do not mix a
 freshly side-loaded end with a freshly flashed one.
+
+### Building a branch instead of master — fork the two recipes
+
+Neither builder pins a SHA, but both hardcode a *remote* and a *branch*, and
+those are two lines each. Forking them is how a branch gets flown before it
+is merged — which matters, because "merge it first" means merging code that
+has never been on hardware.
+
+`openipc-builder`, `package/mabur/mabur.mk`:
+
+```make
+MABUR_SITE   ?= https://github.com/<you>/mabur
+MABUR_BRANCH ?= <your-branch>
+```
+
+`sbc-groundstations`, `package/mabur/mabur.mk` — three spots, because the
+`ls-remote` URL is written out separately from `MABUR_SITE`:
+
+```make
+MABUR_GIT_REMOTE ?= https://github.com/<you>/mabur.git
+MABUR_GIT_BRANCH ?= <your-branch>
+MABUR_MASTER_SHA := $(shell ... git ls-remote $(MABUR_GIT_REMOTE) \
+	refs/heads/$(MABUR_GIT_BRANCH) 2>/dev/null | cut -f1)
+MABUR_VERSION = $(or $(MABUR_MASTER_SHA),<branch head, offline fallback>)
+MABUR_SITE = $(MABUR_GIT_REMOTE)
+```
+
+Use `?=` so a one-off build can go back to master from the make line without
+re-editing (`make MABUR_GIT_BRANCH=master mabur-dirclean mabur-rebuild`).
+
+**Both images must come from the same branch.** This is the flag day at the
+top of this file wearing a different hat: `RC_VERSION` on a feature branch is
+usually ahead of master (branch 10 vs master 9 on 2026-09-19 — check with
+`grep 'RC_VERSION =' common/include/mabur/rc_proto.h` on both), and a
+mismatched pair has no control link and no video at all, which reads exactly
+like the stale-caps deadlock. Do not pair a branch-built GS with a
+master-built air unit.
+
+**The `third_party/devourer` submodule pin is irrelevant to both images.**
+Each builder has its own `package/devourer` that resolves
+`gilankpam/devourer` master at build time, and passes it in explicitly
+(`-DDEVOURER_DIR=`); `openipc-builder` leaves `MABUR_GIT_SUBMODULES` unset on
+purpose. So the pin governs host and cross builds only — do not chase it when
+an image misbehaves.
+
+### The RunCam WiFilink pair (2026-09-19)
+
+Different hardware from the bench rig every finding in `docs/` was measured
+on (OpenIPC URLLC AIO + Radxa Zero 3W). Both halves are supported, but not
+equally.
+
+| | WiFilink air unit | WiFilink VRx |
+|---|---|---|
+| SoC | SSC338Q / infinity6e | RK3566 |
+| sensor / radio | IMX415, one RTL8812EU2 | two RTL8812EU2 (8822E) |
+| target | `ssc338q_fpv_openipc-urllc-aio` | `runcam_wifilink_defconfig` |
+| status | spec-identical, no target of its own | first-class, `BR2_PACKAGE_MABUR=y` |
+
+**GS — one defect to fix first.** `runcam_wifilink_defconfig` is a near-clone
+of `radxa_zero3_defconfig` (same kernel patches, `rk3566-radxa-zero-3*` DTS,
+`radxa-zero-3-rk3566` U-Boot; differing only in
+`BR2_FACTORY_RESET_GPIO_PIN_NAME`, PIN_38 vs PIN_11, and its own overlay) —
+**except it is missing the mesa3d/librga cluster the radxa board carries.**
+mabur's recipe declares both in `MABUR_DEPENDENCIES` and passes
+`-DMABUR_PLAYER_GPU=ON` for the burned-DVR colortrans stage, while
+`package/mabur/Config.in` selects only devourer/libusb/rockchip-mpp/libdrm.
+Upstream drift, not a mabur bug: per the GS recipe's own comment the GPU
+stage became a real dependency again on 2026-09-16, and the radxa defconfig
+carries the symbols while the runcam one does not. (That recipe cites a
+`docs/colortrans.md` which lives on `gilankpam/mabur` master, not on this
+branch — expect it to arrive with the next merge.) Add to the defconfig:
+
+```
+BR2_PACKAGE_MESA3D=y
+BR2_PACKAGE_MESA3D_LLVM=y
+BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_PANFROST=y
+BR2_PACKAGE_MESA3D_OPENGL_EGL=y
+BR2_PACKAGE_MESA3D_OPENGL_ES=y
+BR2_PACKAGE_LIBRGA=y
+```
+
+Panfrost is right for RK3566's Mali-G52, same as the Radxa Zero 3. Do NOT
+try to fix this by `select`ing them from mabur's `Config.in`: Kconfig
+`select` does not satisfy `depends on`, and the chain has real dependencies
+(`BR2_PACKAGE_MESA3D` needs `!STATIC_LIBS`/`HAS_SYNC_1`/`THREADS_NPTL`/
+`GCC_AT_LEAST_8`, `MESA3D_LLVM` adds seven more, and the gallium driver
+depends on `MESA3D_LLVM`), so selecting them only emits unmet-dependency
+warnings and leaves the symbols unset. `BR2_PACKAGE_LIBRGA` has no
+dependencies and IS safe to select, like `ROCKCHIP_MPP`. A build-time
+`$(error)` guard in `mabur.mk` is the reliable way to stop the drift
+recurring — `depends on` is worse, because Kconfig then silently drops
+`BR2_PACKAGE_MABUR=y` from the defconfig and you get an image with no
+maburgs at all.
+
+**Air unit — no device target needed, two hazards.** `openipc-builder`
+`feat/mabur` carries exactly one device and its HEAD commit says so
+("dedicate the tree to `ssc338q_fpv_openipc-urllc-aio`"); there is no
+`runcam`/`wifilink` string anywhere in the repo. That target is the same
+SSC338Q / IMX415 / RTL8812EU_USB / 16 MB NOR combination, and its defconfig
+holds nothing device-specific — only SoC, family and variant — so it builds
+for a WiFilink as-is. A `devices/ssc338q_fpv_runcam-wifilink/` copy buys
+hygiene (a correctly named `archive/` dir, somewhere to diverge) rather than
+function. Either way:
+
+1. **`SKIP_UBOOT=1`.** `builder.sh` builds U-Boot from
+   `gilankpam/u-boot-sigmastar` `mabur-fastboot`, aimed at the URLLC AIO.
+   SigmaStar U-Boot carries board-specific DDR init, so flashing it onto a
+   WiFilink is the one step here that can brick the board. The rootfs and
+   kernel do not need it.
+   `printf 'SKIP_UBOOT=1 ./builder.sh <target>\n' | nix-shell`
+2. **Check `mtdparts` before the first flash.** The device overlay's
+   `usr/share/openipc/customizer.sh` does `fw_setenv bootargs` with a
+   hardcoded 16 MB NOR layout:
+
+   ```
+   mtdparts=NOR_FLASH:256k(boot),64k(env),2048k(kernel),${rootmtd}(rootfs),-(rootfs_data)
+   ```
+
+   Compare against `cat /proc/mtd` on the stock air unit; rewriting bootargs
+   to a layout the flash does not have leaves a board that cannot mount
+   rootfs, and recovering that needs the
+   serial console (`docs/boot-time-findings-2026-09-07.md`, "Flashing — the
+   runbook"). The same file also points `fw_setenv upgrade` at the URLLC AIO
+   release tarball — aim it elsewhere or unset it, or a later `sysupgrade`
+   flashes another board's rootfs.
+
+**`lib/firmware/PHY_REG_PG.txt` is inert — do not go looking for a WiFilink
+version of it.** It is tempting: a per-rate TX power table in the device
+overlay, on new hardware. But the string `PHY_REG_PG.txt` appears nowhere in
+mabur or devourer. The table is read by the IN-KERNEL Realtek driver at
+module load, and the mabur defconfig builds neither
+(`BR2_PACKAGE_RTL88X2EU_OPENIPC=n`, `BR2_PACKAGE_RTL8812AU_OPENIPC=n`) with a
+deliberately empty `/etc/modules` and no `insmod` of an 8812/8822 module
+anywhere in the overlay; devourer drives the card in userspace over libusb
+with `array_mp_8822e_phy_reg_pg` compiled into its HAL. It is not even vendor
+calibration data — its header is hand-authored, transcribing `fpvd`'s
+`txPowerCurve`, and `fpvd` is a package mabur replaces
+(`BR2_PACKAGE_FPVD=n`). A pre-mabur leftover; safe to delete from a forked
+device target.
+
+TX power on mabur comes from `[radio]` in the drone's `mabur.toml` instead —
+`power_mode` (default `"none"`, i.e. no override at all) and, in `"offset"`
+mode, `rate_walls_rel` / `legacy_wall_rel` / `wall_margin_db`, applied
+through devourer's `SetTxPowerRateDiffs`. **Those are the per-VTX values**,
+and the shipped ones say so ("measured on my vtx not yours", 8812EU,
+2026-09-13, ch136). They are inert at the default `power_mode = "none"`; run
+`maburcal` on the WiFilink's own VTX before setting `"offset"`. See
+`docs/calibration.md`.
+
+**Nothing in this section has been on a device.** The RunCam pair is
+simultaneously new hardware and, if flown on a branch, unproven link code —
+two independent explanations for a black screen. Bring the pair up on a
+master-equivalent build first, then repoint the recipes at the branch.

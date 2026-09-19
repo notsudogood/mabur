@@ -645,9 +645,17 @@ here.
   `flashcp` wants. `SKIP_UBOOT=1` turns it off. Flashing U-Boot is a
   separate, riskier operation with its own runbook and a **mandatory serial
   console**: see `docs/boot-time-findings-2026-09-07.md` "Flashing — the
-  runbook". A prebuilt copy of just that file is published at
-  `gilankpam/openipc-builder` release `latest-master` — note that release is
-  **U-Boot only**, not a rootfs image.
+  runbook". A prebuilt copy of that file is published at
+  `gilankpam/openipc-builder` release `latest-master`.
+- **Prebuilt images exist, and the release is NOT U-Boot only** (an earlier
+  revision of this page said it was — wrong). `.github/workflows/master.yml`
+  uploads `${NORFW}` (`<platform>-nor.tgz`, the whole NOR firmware), the NAND
+  variant when one is built, AND `${UBOOT}`. So flashing the tarball and
+  leaving the bootloader alone is a supported path, and the one with hardware
+  behind it — see "The RunCam WiFilink pair" below. The release is built from
+  openipc-builder's `master` (`TAG_NAME: latest-${{ github.ref_name }}`), not
+  `feat/mabur`; on 2026-09-19 the two are content-identical (`82a2a5e` vs
+  `1ae04c6`, empty `git diff`), so which one you build is currently moot.
 
 ### Ground station — `sbc-groundstations`
 
@@ -752,84 +760,114 @@ an image misbehaves.
 
 ### The RunCam WiFilink pair (2026-09-19)
 
-Different hardware from the bench rig every finding in `docs/` was measured
-on (OpenIPC URLLC AIO + Radxa Zero 3W). Both halves are supported, but not
-equally.
+Different hardware from the bench rig every measured finding in `docs/` came
+off (OpenIPC URLLC AIO + Radxa Zero 3W), and both halves work.
 
 | | WiFilink air unit | WiFilink VRx |
 |---|---|---|
-| SoC | SSC338Q / infinity6e | RK3566 |
+| SoC | SSC338Q / infinity6e | RK3566 (Mali-G52) |
 | sensor / radio | IMX415, one RTL8812EU2 | two RTL8812EU2 (8822E) |
 | target | `ssc338q_fpv_openipc-urllc-aio` | `runcam_wifilink_defconfig` |
-| status | spec-identical, no target of its own | first-class, `BR2_PACKAGE_MABUR=y` |
+| own device target | none, and none needed | first-class, `BR2_PACKAGE_MABUR=y` |
 
-**GS — one defect to fix first.** `runcam_wifilink_defconfig` is a near-clone
-of `radxa_zero3_defconfig` (same kernel patches, `rk3566-radxa-zero-3*` DTS,
+**FLOWN, on the prebuilt releases (2026-09-19).** Both prebuilt images run
+on this pair, which is what makes everything below evidence rather than
+reasoning:
+
+- drone: `gilankpam/openipc-builder` release `latest-master`, the
+  `ssc338q_fpv_openipc-urllc-aio` NOR tarball — **rootfs only, the stock
+  RunCam bootloader left untouched**.
+- GS: `gilankpam/sbc-groundstations` release `buildroot-snapshot`, the
+  `runcam_wifilink` artifacts. Burned-DVR recording (the GPU colortrans
+  stage) works there.
+
+So the hardware is known-good on master-equivalent builds. If a branch build
+then misbehaves, the hardware is not the variable — which is the whole reason
+to do it in this order.
+
+**GS — the mesa3d asymmetry is real but harmless. Do not "fix" it.** An
+earlier revision of this page called it a defect to fix before building;
+that was wrong, and the correction is worth keeping because the reasoning
+looked airtight. `runcam_wifilink_defconfig` is a near-clone of
+`radxa_zero3_defconfig` (same kernel patches, `rk3566-radxa-zero-3*` DTS,
 `radxa-zero-3-rk3566` U-Boot; differing only in
-`BR2_FACTORY_RESET_GPIO_PIN_NAME`, PIN_38 vs PIN_11, and its own overlay) —
-**except it is missing the mesa3d/librga cluster the radxa board carries.**
-mabur's recipe declares both in `MABUR_DEPENDENCIES` and passes
-`-DMABUR_PLAYER_GPU=ON` for the burned-DVR colortrans stage, while
-`package/mabur/Config.in` selects only devourer/libusb/rockchip-mpp/libdrm.
-Upstream drift, not a mabur bug: per the GS recipe's own comment the GPU
-stage became a real dependency again on 2026-09-16, and the radxa defconfig
-carries the symbols while the runcam one does not. (That recipe cites a
-`docs/colortrans.md` which lives on `gilankpam/mabur` master, not on this
-branch — expect it to arrive with the next merge.) Add to the defconfig:
+`BR2_FACTORY_RESET_GPIO_PIN_NAME`, PIN_38 vs PIN_11, and its own overlay) and
+it does NOT carry the mesa3d/librga symbols the radxa board does, even though
+mabur's recipe lists both in `MABUR_DEPENDENCIES` and passes
+`-DMABUR_PLAYER_GPU=ON`. That looks like a build-breaking omission. It is not:
 
-```
-BR2_PACKAGE_MESA3D=y
-BR2_PACKAGE_MESA3D_LLVM=y
-BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_PANFROST=y
-BR2_PACKAGE_MESA3D_OPENGL_EGL=y
-BR2_PACKAGE_MESA3D_OPENGL_ES=y
-BR2_PACKAGE_LIBRGA=y
-```
+- `.github/workflows/master.yml` builds `radxa_zero3`, `runcam_wifilink` AND
+  `emax_wyvern-link` and publishes all three, so the build does not fail.
+  (Presumably because Buildroot still builds a package named in another's
+  `_DEPENDENCIES` whether or not its Kconfig symbol is set — that is the
+  likely mechanism, not a verified one. The observation is what matters.)
+- Of the three boards that set `BR2_PACKAGE_MABUR=y`, only `radxa_zero3` has
+  the symbols; `runcam_wifilink` and `emax_wyvern-link` both lack them. All
+  three are RK3566, so this is not a per-GPU decision — it is drift, and it
+  is inert.
+- Burned-DVR recording works on a `runcam_wifilink` image built without them
+  (flown, above), so it does not bite at runtime either.
 
-Panfrost is right for RK3566's Mali-G52, same as the Radxa Zero 3. Do NOT
-try to fix this by `select`ing them from mabur's `Config.in`: Kconfig
-`select` does not satisfy `depends on`, and the chain has real dependencies
+**A `$(error)` guard in `mabur.mk` asserting those symbols would therefore
+break two of the three mabur boards' builds** — `emax_wyvern-link`
+outright, and `runcam_wifilink` unless the six symbols are added to it.
+Adding the symbols is also not free: `BR2_PACKAGE_MESA3D_LLVM` is bulky, for
+no observed gain. If you ever do want them, copy the block from
+`radxa_zero3_defconfig` (panfrost is right for RK3566's Mali-G52) — but
+measure a reason first.
+
+For completeness, since it cost a detour: `select`ing the mesa3d chain from
+`package/mabur/Config.in` would not have worked anyway. Kconfig `select` does
+not satisfy `depends on`, and the chain has real dependencies
 (`BR2_PACKAGE_MESA3D` needs `!STATIC_LIBS`/`HAS_SYNC_1`/`THREADS_NPTL`/
-`GCC_AT_LEAST_8`, `MESA3D_LLVM` adds seven more, and the gallium driver
-depends on `MESA3D_LLVM`), so selecting them only emits unmet-dependency
-warnings and leaves the symbols unset. `BR2_PACKAGE_LIBRGA` has no
-dependencies and IS safe to select, like `ROCKCHIP_MPP`. A build-time
-`$(error)` guard in `mabur.mk` is the reliable way to stop the drift
-recurring — `depends on` is worse, because Kconfig then silently drops
-`BR2_PACKAGE_MABUR=y` from the defconfig and you get an image with no
-maburgs at all.
+`GCC_AT_LEAST_8`, `MESA3D_LLVM` adds seven more, the gallium driver depends
+on `MESA3D_LLVM`), so it emits unmet-dependency warnings and leaves the
+symbols unset. `depends on` is worse: Kconfig then silently drops
+`BR2_PACKAGE_MABUR=y` and the image ships with no maburgs at all.
 
-**Air unit — no device target needed, two hazards.** `openipc-builder`
-`feat/mabur` carries exactly one device and its HEAD commit says so
-("dedicate the tree to `ssc338q_fpv_openipc-urllc-aio`"); there is no
-`runcam`/`wifilink` string anywhere in the repo. That target is the same
-SSC338Q / IMX415 / RTL8812EU_USB / 16 MB NOR combination, and its defconfig
-holds nothing device-specific — only SoC, family and variant — so it builds
-for a WiFilink as-is. A `devices/ssc338q_fpv_runcam-wifilink/` copy buys
-hygiene (a correctly named `archive/` dir, somewhere to diverge) rather than
-function. Either way:
+**Air unit — no device target needed.** `openipc-builder` carries exactly one
+device and its HEAD commit says so ("dedicate the tree to
+`ssc338q_fpv_openipc-urllc-aio`"); there is no `runcam`/`wifilink` string
+anywhere in the repo. That target is the same SSC338Q / IMX415 /
+RTL8812EU_USB / 16 MB NOR combination, its defconfig holds nothing
+device-specific — only SoC, family and variant — and its prebuilt output
+boots on a WiFilink (above). A `devices/ssc338q_fpv_runcam-wifilink/` copy
+buys hygiene (a correctly named `archive/` dir, somewhere to diverge) rather
+than function.
 
-1. **`SKIP_UBOOT=1`.** `builder.sh` builds U-Boot from
-   `gilankpam/u-boot-sigmastar` `mabur-fastboot`, aimed at the URLLC AIO.
-   SigmaStar U-Boot carries board-specific DDR init, so flashing it onto a
-   WiFilink is the one step here that can brick the board. The rootfs and
-   kernel do not need it.
-   `printf 'SKIP_UBOOT=1 ./builder.sh <target>\n' | nix-shell`
-2. **Check `mtdparts` before the first flash.** The device overlay's
-   `usr/share/openipc/customizer.sh` does `fw_setenv bootargs` with a
+Two things about flashing, one settled and one not:
+
+1. **`mtdparts` — settled for this board.** The device overlay's
+   `usr/share/openipc/customizer.sh` rewrites `bootargs` on first boot with a
    hardcoded 16 MB NOR layout:
 
    ```
    mtdparts=NOR_FLASH:256k(boot),64k(env),2048k(kernel),${rootmtd}(rootfs),-(rootfs_data)
    ```
 
-   Compare against `cat /proc/mtd` on the stock air unit; rewriting bootargs
-   to a layout the flash does not have leaves a board that cannot mount
-   rootfs, and recovering that needs the
+   Those are the URLLC AIO's offsets, and a WiFilink boots and runs with them
+   applied, so they are compatible in practice. Still worth a `cat /proc/mtd`
+   before flashing an unfamiliar board — a layout the flash does not have
+   leaves something that cannot mount rootfs, recoverable only over the
    serial console (`docs/boot-time-findings-2026-09-07.md`, "Flashing — the
-   runbook"). The same file also points `fw_setenv upgrade` at the URLLC AIO
-   release tarball — aim it elsewhere or unset it, or a later `sysupgrade`
-   flashes another board's rootfs.
+   runbook"). The same file points `fw_setenv upgrade` at the URLLC AIO
+   release tarball, so aim it elsewhere or unset it before anyone runs
+   `sysupgrade` on a WiFilink.
+2. **U-Boot — still open, so keep `SKIP_UBOOT=1`.** The known-good path
+   above flashed the **rootfs tarball only** and left the stock RunCam
+   bootloader in place; the published `u-boot-ssc338q-nor-padded.bin` has NOT
+   been flashed on this hardware. SigmaStar U-Boot carries board-specific DDR
+   init, so the URLLC AIO's bootloader on a WiFilink is the one step here
+   that could brick the board, and nothing yet says it is safe. Build with:
+
+   ```
+   printf 'SKIP_UBOOT=1 ./builder.sh <target>\n' | nix-shell
+   ```
+
+   (`nix-shell --run` silently builds nothing in this FHS env — `runScript =
+   "bash"` overrides it — so pipe the command in.) The boot-time wins U-Boot
+   buys are real but they are not worth the risk until someone flashes it
+   with a serial console attached.
 
 **`lib/firmware/PHY_REG_PG.txt` is inert — do not go looking for a WiFilink
 version of it.** It is tempting: a per-rate TX power table in the device
@@ -854,7 +892,12 @@ and the shipped ones say so ("measured on my vtx not yours", 8812EU,
 `maburcal` on the WiFilink's own VTX before setting `"offset"`. See
 `docs/calibration.md`.
 
-**Nothing in this section has been on a device.** The RunCam pair is
-simultaneously new hardware and, if flown on a branch, unproven link code —
-two independent explanations for a black screen. Bring the pair up on a
-master-equivalent build first, then repoint the recipes at the branch.
+**What is and is not proven here.** The pair runs the prebuilt
+master-equivalent images, so the hardware, the flash layout and the GS
+player (burned DVR included) are known-good. What has NOT been on this
+hardware is any branch build, the U-Boot fork, and every
+`link-adaptation-v2` control path — `link.overhead`, `link.objective` and
+`link.follow.restore` all default off, so a branch image starts out
+behaving like master and the new paths are opt-in one at a time. That
+ordering is the point: with the hardware already established, a
+misbehaving branch build has one candidate cause instead of two.

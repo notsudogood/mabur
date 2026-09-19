@@ -21,6 +21,7 @@ and is marked as such.
 | Metrics (§6) | **not started** — and §6's energy metric may be partly removed on `gilankpam/mabur` master, see §8a |
 | Merge with `gilankpam/mabur` master (`ca3ad5d`) | **done** — RC_VERSION 10, 18-byte head; tier 1/2 now respect the hop's store blank |
 | Tier 1's `min_ov` floor | **fixed** — 0.3 → 0.5, sourced from `fec.log`'s `ov_req`; rung 5 only, see §8a |
+| §2.1's "flat overhead pair" framing | **corrected 2026-09-19** — master ships a two-step pair now; the finding and the worked example survive, see §2.1 |
 
 Nothing here has been on a device. The host gate passes (137/138; the one
 failure is environmental), and `gs_e2e` + `gs_au_e2e` pass — so the
@@ -39,10 +40,11 @@ bumped here; that is a separate decision.
 
 Read `docs/link-adaptation.md` for what actually ships today. Note when
 reading the code that there are TWO ladders: the 6-rung struct default in
-`gs/src/config.h:100` (mcs 0/2/4/5/6/7, per-rung overhead) is a fallback
-used only when the config omits `link.ladder`, and the SHIPPED flight
-ladder in `gs/bundle/maburgs.default.toml` (mcs 0-5, flat 1.0/0.5)
-replaces it wholesale. `common/src/profile.cpp`'s `profile_table()` is a
+`gs/src/config.h:145` (a single failsafe mcs0 rung since the §2.1 trap was
+fixed) is a fallback used only when the config omits `link.ladder`, and the
+SHIPPED flight ladder in `gs/bundle/maburgs.default.toml` replaces it
+wholesale — mcs 0-5, flat 1.0/0.5 on this branch, two-step
+0.5/0.5/0.5/1/1/1 on `gilankpam/mabur` master (§2.1). `common/src/profile.cpp`'s `profile_table()` is a
 third list and is NOT the ladder — it is reached only by tests and
 `apply_max_range()`. Every number in this page is the flight ladder.
 
@@ -65,7 +67,7 @@ broadband shadowing.
 |---|---|
 | **Who decides** | GS only. Every demote input is measured GS-side on received video; `T_TELEM` is display-only and the ladder never reads it. |
 | **MCS** | 6 rungs, mcs 0/1/2/3/4/5, capped by `max_mcs = 5` (`gs/bundle/maburgs.default.toml:65-93`). Consecutive, so rung index == MCS here. Both streams ride the scored MCS (same-rate since 2026-08-30). |
-| **FEC overhead** | **Fixed, and FLAT across every rung**: `overhead_base` 1.0 / `overhead_enh` 0.5 on all six. Carried in the RCF, never adapted at runtime. So a rung is effectively just an MCS — the ladder has no FEC dimension at all today. |
+| **FEC overhead** | **Fixed per rung, never adapted at runtime.** Flat 1.0 base / 0.5 enh on all six rungs on this branch; a two-step 0.5→1.0 base / 0.25→0.5 enh between rungs 2 and 3 on `gilankpam/mabur` master (§2.1). Either way it is a CONSTANT the RCF carries, not an actuator, so the controller's only lever is the rate. |
 | **Bitrate** | Derived from overhead + rate against `encoder.airtime_budget` (0.5 shipped): `kbps = 1000·B / [f₀(1+ov_b)/rate_b + (1−f₀)(1+ov_e)/rate_e]`, `f₀ = 0.60` fixed (`drone/src/rc_agent.cpp:208`). |
 | **Demote triggers** | s1 util, s1 residual, enh util, enh residual, fade — all transition-attributed, all GS-measured. Confirms 250/500 ms, 100 ms inside the 2.5 s fade regime. |
 | **Promote** | Always-on +1 probe stream (SBI sid 5, one 1405 B body per enh AU), gated Clean/Lossy/NoInfo. ~3.1 s/rung measured on the bench climb. |
@@ -123,40 +125,64 @@ loss and carry the same overhead. Still monotone in `rate` and decreasing
 in both losses, so the ranking logic is unchanged; only the constant
 moves. Use the simple form for reasoning, the general one for code.
 
-Where the shipped ladder actually sits (`B` = 0.5, `f₀` = 0.60, the flat
-1.0/0.5 pair, so no `L` term — today's overhead does not respond to loss
-at all):
+Where the ladder actually sits (`B` = 0.5, `f₀` = 0.60; no `L` term,
+because today's overhead does not respond to loss at all). Both flown
+pairs, since they differ — this branch's flat 1.0/0.5 and
+`gilankpam/mabur` master's two-step (§2.1):
 
 ```
-rung/mcs  speed    video    step up from prev
-   0      6.5Mb   1.81Mb
-   1     13.0Mb   3.61Mb    2.00x
-   2     19.5Mb   5.42Mb    1.50x
-   3     26.0Mb   7.22Mb    1.33x
-   4     39.0Mb  10.83Mb    1.50x
-   5     52.0Mb  14.44Mb    1.33x
+                  THIS BRANCH (flat)      MASTER (two-step)
+rung/mcs  speed   video    step   bud_b    video    step   bud_b
+   0      6.5Mb   1.81Mb          0.500    2.32Mb          0.333
+   1     13.0Mb   3.61Mb  2.00x   0.500    4.64Mb  2.00x   0.333
+   2     19.5Mb   5.42Mb  1.50x   0.500    6.96Mb  1.50x   0.333
+   3     26.0Mb   7.22Mb  1.33x   0.500    7.22Mb  1.04x   0.500
+   4     39.0Mb  10.83Mb  1.50x   0.500   10.83Mb  1.50x   0.500
+   5     52.0Mb  14.44Mb  1.33x   0.500   14.44Mb  1.33x   0.500
 ```
 
-Every rung tolerates the same loss — base budget 50 %, enh budget 33 % —
-and `down_util` 0.35 demotes at a base pre-FEC loss above 17.5 %,
+On the flat pair every rung tolerates the same loss — base budget 50 %,
+enh 33 % — and `down_util` 0.35 demotes above 17.5 % base pre-FEC loss,
 identically on every rung.
 
-### 2.1 The flat overhead pair is the core defect
+Master's pair buys the low rungs **28 % more video** (2.32 vs 1.81 Mbps at
+mcs0) by spending less of an already small rate on FEC, and that is a real
+gain. But look at the `2 → 3` step: **1.04×**, against 1.33× in raw radio
+rate. The extra FEC at rung 3 eats almost the entire rate gain, so in
+video terms rungs 2 and 3 are nearly the same operating point at very
+different protection levels. §2.1 picks that apart.
+
+### 2.1 A demote buys no protection — the core defect
+
+⚠ **Corrected 2026-09-19 for `gilankpam/mabur` master's ladder.** This
+section was written against a ladder with a genuinely flat overhead pair
+(1.0 base / 0.5 enh on all six rungs), which is still what THIS branch's
+`gs/bundle/maburgs.default.toml` ships. Master has since moved to a
+two-step pair, so the old heading ("the flat overhead pair") no longer
+describes the flown config. **The finding itself survives intact, and the
+worked example below is unchanged** — see "What master's ladder does and
+does not change" at the end of this section for exactly why.
 
 **The ladder trades away rate without ever buying protection.** Dropping
 a rung cuts the video rate 1.33–2.0× and leaves the loss tolerance
-*exactly where it was*, because the overhead pair does not vary by rung.
+*exactly where it was* — or, at one transition on master, makes it worse.
 A demote is therefore close to a pure loss whenever the current rung's
-`L` is still inside its budget — and the budget is generous, because it
-is the same 50 % at every rung.
+`L` is still inside its budget, and the budget is generous.
 
-**Worse: the shipped pair is over-provisioned at precisely the loss level
-where it gives up.** `down_util` 0.35 scored against a base budget of
-0.5 fires the demote at `L` = 17.5 %, while `ov_base` 1.0 is carrying
-enough repair for 50 % — a **2.86× margin**, not the 2× the design is
-tuned around. So at the moment of the demote there is unspent FEC on air
-*and* the controller is about to spend a third of the video rate to buy
-robustness it already had.
+**Worse: the pair is over-provisioned at precisely the loss level where it
+gives up, and no choice of overhead fixes that.** `down_util` 0.35 scored
+against a base budget of 0.5 fires the demote at `L` = 17.5 %, while
+`ov_base` 1.0 is carrying enough repair for 50 % — a **2.86× margin**, not
+the 2× the design is tuned around. That ratio is **structural**: the
+demote fires at `down_util × B` and the budget is `B`, so the margin is
+`1 / down_util` = 2.857 whatever the overhead is. Master's lower rungs
+(`ov_base` 0.5, `B` = 0.333) fire at `L` = 11.7 % against a 33.3 % budget
+— the same 2.86×. Re-tuning the ladder's overhead values cannot touch
+this; only making overhead an actuator, or moving `down_util`, can.
+
+So at the moment of the demote there is unspent FEC on air *and* the
+controller is about to spend a third of the video rate to buy robustness
+it already had.
 
 Worked example, mcs4 at the instant `L` reaches the demote threshold
 (`B` = 0.5, `f₀` = 0.60):
@@ -185,12 +211,71 @@ The rate steps themselves are fine — 2.0× at the very bottom, 1.33–1.5×
 everywhere else — and mcs3 is already a rung, so there is nothing to fix
 in the ladder's *spacing*. What is missing is its second dimension.
 
-⚠ **Latent trap while this is unimplemented.** The struct default
-(`gs/src/config.h:100`) and the shipped bundle disagree on *both*
-dimensions — mcs 0/2/4/5/6/7 with per-rung overhead 2.0…0.2, versus
-mcs 0-5 with a flat 1.0/0.5 pair. A GS config that simply omits
-`link.ladder` therefore flies a materially different ladder, silently and
-validly. Worth reconciling independently of this proposal.
+**What master's ladder does and does not change (2026-09-19).** Master
+now ships a two-step pair instead of a flat one:
+
+| rung | mcs | `ov_base` | budget `B` | demote at `L` |
+|---|---|---|---|---|
+| 0–2 | 0, 1, 2 | 0.5 | 0.333 | 11.7 % |
+| 3–5 | 3, 4, 5 | 1.0 | 0.500 | 17.5 % |
+
+(`overhead_enh` steps 0.25 → 0.5 alongside it. `down_util` is still 0.35.)
+
+Three consequences. The first settles whether this section survives at
+all; the second turned out to be the most interesting thing in it:
+
+1. **The worked example above is untouched.** mcs4 is rung 4 and mcs3 is
+   rung 3; both carry `ov_base` 1.0, so the demote the example prices
+   still crosses no overhead step and still buys exactly zero extra
+   tolerance. Every number in that table stands.
+2. **The 3 → 2 demote is the sharpest instance of this section's argument,
+   not a counterexample to it.** It gives up **3.6 % of the video**
+   (7.22 → 6.96 Mbps) and **a third of the base budget** (0.500 → 0.333).
+   Under the flat pair a demote was "expensive in rate, neutral on
+   tolerance"; across this boundary it is "nearly free in rate, and it
+   *reduces* tolerance". So in the two dimensions the controller actually
+   reasons about — rate and budget — rung 3 dominates rung 2 outright.
+
+   That demote can still be correct, because the point of a lower MCS is
+   that the physical `L` falls too. But it now has a precise condition:
+   it pays only if mcs2's pre-FEC loss is **more than a third lower** than
+   mcs3's, enough to cover the budget it hands back. Nothing in the
+   shipped controller checks that — `down_util` fires on the current
+   rung's utilisation alone and never compares the two rungs. Checking it
+   IS tier 2's `rate × (1 − 2L)` objective (§2), which is why this
+   boundary is an argument for the proposal rather than against it.
+3. **It is a rate optimization, not a protection trade — so it is
+   orthogonal to this proposal rather than a partial fix for it.** Less
+   FEC at low rungs is defensible on its own terms: mcs0–2 are
+   intrinsically more robust, so the same physical channel needs less
+   repair there, and spending less of the (already small) low-rung rate on
+   FEC is a straight win. What it does not do is let the controller
+   *exchange* rate for protection, which is the lever tier 1 adds.
+
+An earlier revision of this note (and a chat claim on 2026-09-19) said
+master had "partly addressed" the defect and that tier 1's headroom was
+therefore smaller. That was wrong: "non-flat" was read off without
+checking which rungs the step falls between. It sits BELOW the rungs the
+worked example uses, so the headroom there is unchanged.
+
+**Reconcile on merge.** This branch's bundle still ships the flat
+1.0/0.5 pair on all six rungs; master's two-step pair is the newer and
+better-reasoned choice, so take master's side of
+`gs/bundle/maburgs.default.toml`'s ladder. Note that tier 1's `min_ov`
+floor of 0.5 (see §8a) then exactly MEETS master's rungs 0–2, which ask
+for 0.5. The floor only clamps downward, so with
+`link.overhead.enable = true` tier 1 can still RAISE overhead on those
+rungs when loss demands it — it just can never trade any of that 0.5 back
+for rate, which is where the low-rung bitrate win would have come from.
+Downward movement is available only at rungs 3–5. Per-rung floors are the
+fix; `fec.log` covers rung 5 only so far.
+
+✅ **A latent trap noted here is now fixed.** The struct default and the
+shipped bundle used to disagree on both dimensions, so a GS config that
+merely omitted `link.ladder` flew a materially different ladder, silently
+and validly. `gs/src/config.h:145` is now a single failsafe rung
+(`{{{0, 1.0, 0.5}}}`), which cannot promote anywhere: the failure mode is
+a visibly crippled ~1.8 Mbps link instead of a silently aggressive one.
 
 (mcs6/mcs7 are excluded by `max_mcs = 5`, "mcs5 is unholdable at range".
 Raising that is a separate question, and
@@ -570,7 +655,7 @@ link.
 |---|---|---|
 | Decision authority | GS only | GS (tiers 1–2) + drone reflex (tier 0), with an explicit follow contract |
 | Worst-case reaction | ~650–700 ms, unbounded if the RCF is lost | ~100–150 ms, delivery-free |
-| FEC overhead | fixed, and FLAT across every rung (1.0/0.5) — not an actuator at all | continuously controlled from raw `pre_fec_loss` |
+| FEC overhead | fixed per rung, never adapted — not an actuator at all (flat 1.0/0.5 here, two-step on master, §2.1) | continuously controlled from raw `pre_fec_loss` |
 | What a demote buys | 1.33–2.0× less rate, **zero** extra loss tolerance | nothing, because FEC absorbs it first (§2.1) |
 | Bitrate | re-derived on every rung change | quantised steps, dead band, decoupled from FEC changes |
 | Rung choice | loss threshold → demote | maximise `rate × (1 − 2L)` |
@@ -810,6 +895,21 @@ as in code.
   on both sides (`HopRestore` theirs, `Follow` here) and both branches
   touch `mark_transition()`/`reset_windows()`; `f4b4987` split
   `blank_store`'s s3 gate from the s3 demote decisions.
+- **The flown ladder's overhead pair diverged (found 2026-09-19, after the
+  `ca3ad5d` merge).** Master's `gs/bundle/maburgs.default.toml` now steps
+  `overhead_base` 0.5 → 1.0 and `overhead_enh` 0.25 → 0.5 between rungs 2
+  and 3; this branch still ships the flat 1.0/0.5. Take MASTER's side on
+  merge — it is the better-reasoned choice (low MCS is intrinsically
+  robust, so it needs less repair) and it is what the hardware flies. Two
+  knock-ons: §2.1's heading was wrong and is corrected there, and tier 1's
+  `min_ov` 0.5 floor BINDS at rungs 0–2 under master's pair, so an armed
+  `link.overhead` can only move rungs 3–5 until per-rung floors exist.
+- Master-era GS configs carry two keys this branch rejects, and both are
+  fatal at load: `link.probe.clean_bodies` (master renamed this branch's
+  `clean_ms`, and changed the UNIT — bodies, not milliseconds) and the
+  player's `[colortrans]` section. `maburgs` then crash-loops at 2 s;
+  `maburplay` exits 2, which `S97maburplay` treats as terminal — a
+  permanently black screen. See `docs/deploy.md`.
 - `10b22b3` **removes `radio.scan.energy_period_ms` and the 1 Hz A
   records.** §6's metric 4 cites `cards[i].energy` (`fa`/`cca`/`igi`) as an
   available signal; on that master it is at least partly gone. Re-check

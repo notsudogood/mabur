@@ -11,7 +11,7 @@ and is marked as such.
 | Ladder default was a stale flight ladder (§2.1 trap) | **fixed**, failsafe-only now |
 | Observed-MCS scoring + `Following` adopt (§4, Fight B) | **landed**, `FollowCfg`, default ON |
 | Tier 1 FEC-overhead policy (§3) | **landed**, `link.overhead`, default **OFF** (observe-only) |
-| Tier 1 arming | needs a flight comparing `ov_target` against the fixed pair, then `aucadence` |
+| Tier 1 arming | comparison flight **flown 2026-09-23** (`ov_target` 0.50 vs commanded 1.00, 100% of samples) — but see `docs/rung5-standing-queue-findings-2026-09-23.md` §6: arming it as designed spends the saving on +33% video, not headroom, and rung 5's defect is the headroom |
 | Tier 0 reflex (§3) | **not started** — blocked on the reciprocity measurement in §9.1 |
 | Tier 2 wire (**RC_VERSION 10**, `kProbeStreamIdDn`) | **landed**, inert — GS never sets the byte yet |
 | Tier 2 objective + arm logic | **landed**, `link.objective`, default **OFF** |
@@ -23,11 +23,17 @@ and is marked as such.
 | Tier 1's `min_ov` floor | **fixed** — 0.3 → 0.5, sourced from `fec.log`'s `ov_req`; rung 5 only, see §8a |
 | §2.1's "flat overhead pair" framing | **corrected 2026-09-19** — master ships a two-step pair now; the finding and the worked example survive, see §2.1 |
 
-Nothing here has been on a device. The host gate passes (137/138; the one
-failure is environmental), and `gs_e2e` + `gs_au_e2e` pass — so the
-drone→GS path has run end to end on RC_VERSION 9. The `ausniff` and
-`aucadence` device gates have NOT been run, and `aucadence` is the one
-tiers 1 and 2 both need before either is armed.
+⚠ **Updated 2026-09-23: this branch HAS now been on a device** — one
+96.8 s bench session on the RunCam WiFilink pair, observe-only, written up
+in `docs/rung5-standing-queue-findings-2026-09-23.md`. It did not validate
+the tiers; it found that rung 5 runs with a ~220 ms standing queue and no
+headroom, which changes what arming tier 1 is worth (§6 there). The host
+gate passes (137/138; the one failure is environmental), and `gs_e2e` +
+`gs_au_e2e` pass — so the drone→GS path has run end to end on RC_VERSION 9.
+The `ausniff` and `aucadence` device gates are STILL NOT run, and
+`aucadence` is the one tiers 1 and 2 both need before either is armed —
+now with a specific question to answer, since mcs5 was the only rung with a
+negative completion→probe offset in that session.
 
 Building `maburgs` requires devourer at HEAD rather than the pinned
 submodule, now for TWO independent reasons: `f3b76ea` predates both

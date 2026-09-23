@@ -226,3 +226,86 @@ does the span plateau, or only creep more slowly?
 Unchanged from run 1: `dq` is 1 ms, `enc` 7.2 ms — the drone still queues
 nothing and encodes fine. `frame_lookahead = 8` remains where the backlog
 parks when there is one.
+
+## Run 3 — `bitrate_max_kbps` 16000 → 14648, `ov_base` 0.6 held (same day)
+
+The video-rate cap run 2 called for. Drone `bitrate_max_kbps` 14648
+(= 15.00 Mbps, since star6e programs `kbps × 1024`), GS rung 5 `ov_base`
+0.6 unchanged, `superframe_p_pct` still 200. Cap confirmed to bind: mean AU
+34,400 → **30,866 B**, video 16.3 → **14.7 Mbps**, on-air **22.7 Mbps**
+against the measured ~24.8 capacity — **~8.5 % headroom**.
+
+### The standing queue is gone
+
+Rung 5 held ~60 s. Span across 40 s of it, sampled every 3 s:
+
+```
+t_s   mean_sz  max_sz   span   e2e   fec
+113     30820   44798   16.4    47    17
+119     30725   31465   16.4    59    25
+128     30921   34984   25.2    50    20
+137     30898   31446   16.8    49    18
+143     30805   52820   17.8    64    24   <- 52.8 kB peak frame, absorbed
+152     33530   36528   23.1    51    19
+```
+
+**Flat. No trend over 40 s.** And the t=143 row is the point: a 52.8 kB peak
+— larger than any frame in run 1 — passed through with the span unmoved.
+That is what headroom buys.
+
+### Three runs
+
+| | run 1 | run 2 | run 3 |
+|---|---|---|---|
+| `ov_base` / `bitrate_max_kbps` | 1.0 / 16000 | 0.6 / 16000 | **0.6 / 14648** |
+| video | 15.2 Mbps | 16.3 | **14.7** |
+| on-air (capacity ≈ 24.8) | 26.5 | 25.2 | **22.7** |
+| rung-5 span | 212 ms, parked | 22.7 → 173, climbing | **16–23 ms, flat** |
+| `e2e` p50 | 86 ms | 44 | **50** |
+| `e2e` p90 | 480 ms | 63 | **60** |
+| `e2e` worst | **741 ms** | 173 | **101** |
+| demotes off rung 5 | `timeout` ×2, to rung **0** | `s3_residual` ×2, to rung 4 | `residual` ×1, to rung 4 |
+
+Worst-case latency fell **741 → 101 ms**, and the failure mode went from a
+control-plane collapse to the floor, to one ordinary single-rung demote
+that recovered in 3.7 s.
+
+Note the video comparison that matters: stock `ov 1.0` could only have
+carried ~12.6 Mbps *cleanly* (24.8 ÷ 1.75 with margin). Run 3 delivers
+**14.7 Mbps with flat latency** — more usable video than the shipped
+configuration could ever sustain, not less.
+
+### The cut is not free — first failure at ov 0.6
+
+`fec.log` mcs5 at ov 0.60, run 3: **`n=30 stale=1 failed=1`**, with
+`ov_req` p50 0.38 / p90 0.39 / **p99 = max = 0.79**. *"would fail at ov
+0.50: 1, 0.75: 1, 1.00: 0"*.
+
+One episode needed 0.79 and failed at 0.60; it would have survived at 1.00.
+That is the `residual` demote at t=108303 (`u=0.1477` — a 14.8 % pre-FEC
+loss burst at 39 dB SNR, so a burst rather than a fade). Runs 1 and 2 had
+zero mcs5 failures.
+
+So the honest accounting: cutting rung 5's base overhead from 1.0 to 0.6
+buys a flat queue and +2 Mbps of usable video, and costs roughly one failed
+episode per minute of rung-5 flight **on a clean bench at 39 dB**. At range,
+where `ov_req`'s tail is fatter, that rate will rise. 0.6 is a bench result,
+not a flight-validated setting.
+
+### Status
+
+MCS 5 is usable: 14.7 Mbps, `e2e` p50 50 ms / p90 60 ms / worst 101 ms, no
+standing queue, no timeouts, motion absorbed. The defect this page opened
+with is closed.
+
+Still outstanding before any of this ships:
+
+1. **`tools/bench/aucadence.py` has still never run on a device**, and
+   CLAUDE.md gates exactly this class of change (UEP overhead + bitrate
+   policy) on it. Run 1 also flagged mcs5 as the only rung with a negative
+   base−enh completion offset.
+2. **Range.** Every number here is 36–40 dB SNR on a bench. The one ov 0.6
+   failure is the leading indicator to watch.
+3. `superframe_p_pct` was never needed — at 14.7 Mbps the headroom absorbs
+   a 52.8 kB peak unaided. It stays the lever if the bitrate is pushed back
+   up.

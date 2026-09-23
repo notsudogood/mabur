@@ -186,9 +186,29 @@ Dropping `ov_base` 1.0 → 0.6 should have freed ~3.0 Mbps of on-air. Only
 the overhead bracket*, so cutting the bracket raises the video command by
 construction. **The encoder ate ~85 % of the saving.**
 
-25.2 Mbps is still above the ~19–21 Mbps allowance (PHY 52–58 × efficiency
-0.73 × `airtime_budget` 0.5), so the queue rebuilds — just far more slowly
-(22.7 → 133 ms over ~10 s, versus 212 ms within 2 s in run 1).
+⚠ **Corrected from the run-2 data itself.** This page first estimated the
+allowance at ~19–21 Mbps from PHY 52–58 × `efficiency` 0.73 ×
+`airtime_budget` 0.5. That is wrong: those two constants govern the
+encoder's rate *command*, not what the medium carries. Measured instead
+from the queue's own fill rate — span 111 → 173 ms over 4 s is a **1.55 %
+deficit** against 25.2 Mbps offered — actual deliverable capacity at mcs5
+on this pair is **≈ 24.8 Mbps**. Run 2 overshoots it by only ~0.4 Mbps,
+which is why it fills slowly rather than not at all.
+
+**Run 2 never reached equilibrium, and was static throughout.** AU size is
+flat at ~34,450 B from the moment rung 5 is entered (t=95 s) — the encoder
+settled immediately and never ramped — yet the span climbs monotonically
+22.7 → 173 ms to the end of the log. At ~15 ms/s it reaches the ~270 ms
+`frame_lookahead` ceiling about 6 s after the log ends, i.e. it parks
+exactly where run 1 parked. **Run 2 bought time (3 s → ~15 s to fill), not
+headroom.**
+
+**The encoder did not "choose" to take the saving — it clipped.**
+`encoder.bitrate_max_kbps = 16000` programs 16.384 Mbps and measured video
+is 16.3–16.4: the command is pinned at the ceiling. In run 1 the policy
+commanded 15.2 Mbps, under the cap. Cutting the bracket raised the command
+until it hit the rail, which is why ~85 % of the saving vanished rather
+than some arbitrary fraction.
 
 This is the tier-1 caution in TL;DR §6 demonstrated on hardware: **overhead
 relief does not become headroom unless something stops it becoming
@@ -196,10 +216,12 @@ bitrate.**
 
 ### Next
 
-The remaining lever is the video rate itself, so the saving lands as slack:
-`encoder.bitrate_max_kbps` (16000 today) or `encoder.airtime_budget` (0.5).
-Holding video at ~13.5 Mbps with `ov_base` 0.6 puts on-air at ~21 Mbps, at
-the allowance. That is the experiment run 3 should be.
+The remaining lever is the video rate itself, so the saving lands as slack.
+Against the **measured** ~24.8 Mbps capacity, and the 1.55× bracket at
+`ov_base` 0.6: `bitrate_max_kbps` 16000 → **14000** gives video ~14.0 and
+on-air ~21.7 Mbps, ~12 % headroom. That is run 3 — and it must hold rung 5
+static for **≥ 60 s**, the question run 2's ~10 s window could not answer:
+does the span plateau, or only creep more slowly?
 
 Unchanged from run 1: `dq` is 1 ms, `enc` 7.2 ms — the drone still queues
 nothing and encodes fine. `frame_lookahead = 8` remains where the backlog

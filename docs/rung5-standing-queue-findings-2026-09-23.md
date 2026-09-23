@@ -69,11 +69,12 @@ the tables below carry the numbers so they can be redone).
    rung 5). "Would fail at ov 0.50: 0 of 12". That wasted third of rung 5's
    airtime is exactly the margin a 51 kB frame needs.
 
-6. **Arming tier 1 as designed would NOT fix this.** flightreport prices it
-   as **+33 % video** at rung 5 — the recovered airtime becomes bitrate, not
-   slack, restoring the zero-headroom condition at a higher rate. The
-   standing queue would return. For this defect the freed airtime has to
-   become headroom.
+6. **Arming tier 1 as designed would NOT fix this — now MEASURED, not
+   predicted.** flightreport prices it as +33 % video at rung 5: the
+   recovered airtime becomes bitrate, not slack. Run 2 below cut
+   `overhead_base` 1.0 → 0.6 and watched the encoder reclaim **~85 % of the
+   saving as video within seconds**. For this defect the freed airtime has
+   to be *prevented* from becoming bitrate.
 
 ## What this is not
 
@@ -129,3 +130,77 @@ against single digits at every other rung.
    for this.
 4. `aucadence.py` before any change to the overhead pair, per CLAUDE.md —
    and note anomaly 2 above suggests it has something to say already.
+
+
+## Run 2 — `overhead_base` 1.0 → 0.6 at rung 5 (same day)
+
+Single-variable A/B on the same pair, same bench, same static scene.
+`superframe_p_pct` left at 200. Change verified in the loaded config, not
+just the file: `ctl.log` header reads
+`ladder=0/100:50,…,4/100:50,5/60:50`, and `fec.log` mcs-5 base rows carry
+`ov 0.60`.
+
+### The mechanism is confirmed
+
+| | run 1 (ov 1.0) | run 2 (ov 0.6) |
+|---|---|---|
+| rung 5 arrival span, first ~7 s | 212.1 ms | **22.7 ms** |
+| rung 5 arrival span, later | 212 ms, stable | 133.3 ms, climbing |
+| `fec` p50 (whole session) | 212 at rung 5 | **9 ms** |
+| `e2e` p50 / p90 | 86 / 480 ms | **44 / 63 ms** |
+| rungs 0–4 span | 8.8 ms | 8.7 ms (unchanged, as expected) |
+
+Cutting rung 5's base overhead collapsed the standing queue by **9×**, from
+212 ms to 22.7 ms. The bracket-vs-budget mismatch is the mechanism.
+
+### The failure mode changed, qualitatively
+
+| | run 1 | run 2 |
+|---|---|---|
+| demote reason | `timeout` ×2 (control-plane starvation) | `s3_residual` ×2 (measured loss) |
+| demote depth | 5 **→ 0**, the floor | 5 **→ 4**, one rung |
+| `air_pct` at the event | 48 % → **385–418 %** | no excursion |
+
+The feedback timeout is gone. What remains is an ordinary loss-driven
+single-rung demote — the ladder behaving as designed, rather than the
+control plane starving and bottoming out.
+
+### Protection was not cut too close
+
+`fec.log` mcs5 at ov 0.60: `ov_req` p50 **0.34**, p90 0.39, max **0.47**,
+and *"would fail at ov 0.50: 0 of 19"*. 0.60 carries margin, and even 0.50
+would have covered every episode in this session. Tier 1 still wants 0.50
+in 100 % of rung-5 samples.
+
+### Why it is incomplete: the encoder reclaimed the saving
+
+| | video rate | on-air rate |
+|---|---|---|
+| run 1, ov 1.0 | 15.2 Mbps | 26.5 Mbps |
+| run 2, ov 0.6, early | **16.3 Mbps** | 25.2 Mbps |
+| run 2, ov 0.6, later | 16.4 Mbps | 25.4 Mbps |
+
+Dropping `ov_base` 1.0 → 0.6 should have freed ~3.0 Mbps of on-air. Only
+**1.3 Mbps** materialised, because the commanded video rate rose 15.2 →
+16.3 Mbps — the bitrate policy sizes video from the rung's capacity *net of
+the overhead bracket*, so cutting the bracket raises the video command by
+construction. **The encoder ate ~85 % of the saving.**
+
+25.2 Mbps is still above the ~19–21 Mbps allowance (PHY 52–58 × efficiency
+0.73 × `airtime_budget` 0.5), so the queue rebuilds — just far more slowly
+(22.7 → 133 ms over ~10 s, versus 212 ms within 2 s in run 1).
+
+This is the tier-1 caution in TL;DR §6 demonstrated on hardware: **overhead
+relief does not become headroom unless something stops it becoming
+bitrate.**
+
+### Next
+
+The remaining lever is the video rate itself, so the saving lands as slack:
+`encoder.bitrate_max_kbps` (16000 today) or `encoder.airtime_budget` (0.5).
+Holding video at ~13.5 Mbps with `ov_base` 0.6 puts on-air at ~21 Mbps, at
+the allowance. That is the experiment run 3 should be.
+
+Unchanged from run 1: `dq` is 1 ms, `enc` 7.2 ms — the drone still queues
+nothing and encodes fine. `frame_lookahead = 8` remains where the backlog
+parks when there is one.

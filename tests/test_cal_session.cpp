@@ -778,4 +778,53 @@ TEST(no_dip_rows_park_at_the_constant_rail_without_any_ack) {
   for (int r = 0; r < 8; ++r) CHECK(res->walls[r] == kRailRel);
 }
 
+// running() is what main.cpp gates every GS-initiated card move on (the
+// ChannelPlan split, the hop block, the in-flight scout). It must cover the
+// whole run, AwaitAck through Verify -- wider than radio_silent(), which is
+// only the on-air phases -- and clear at Done, Failed and after abort().
+TEST(running_spans_await_ack_through_verify) {
+  CalSessionCfg cfg;
+  cfg.phase_slack_ms = 0;
+  CalSession s(cfg);
+  s.set_peer(true, true);
+  CHECK(!s.running());                              // Idle
+  std::string err;
+  REQUIRE(s.start(1, 34, 0, &err));
+  CHECK(s.state() == CalSession::State::AwaitAck && s.running());
+  s.due_cmd(0);
+  s.on_ack(34, 1);
+  CHECK(s.state() == CalSession::State::Sweep && s.running());
+  const auto coarse = make_coarse_plan(1, 34);
+  feed_phase(s, coarse, 100, 10);
+  const uint64_t t1 = 1 + plan_duration_ms(coarse) + 1;
+  REQUIRE(s.due_result(t1 + 2000).has_value());
+  CHECK(s.running());                               // result out, verify pending
+  for (int k = 0; k < 97; ++k) {
+    mabur::cal::CalFrameInfo f{0, 59, mabur::cal::kPhaseVerify,
+                               static_cast<uint16_t>(k)};
+    s.on_cal_frame(0, f, -60, /*crc_ok=*/true, t1 + 3000);
+  }
+  CHECK(s.running());                               // Verify
+  s.due_cmd(t1 + 2000 + 60000);
+  REQUIRE(s.state() == CalSession::State::Done);
+  CHECK(!s.running());
+}
+
+TEST(running_is_false_after_failure_and_after_abort) {
+  CalSessionCfg cfg;
+  cfg.ack_timeout_ms = 3000;
+  CalSession s(cfg);
+  s.set_peer(true, true);
+  std::string err;
+  REQUIRE(s.start(1, 1, 0, &err));
+  s.due_cmd(0);
+  s.due_cmd(3500);                                  // no ack -> Failed
+  REQUIRE(s.state() == CalSession::State::Failed);
+  CHECK(!s.running());
+  REQUIRE(s.start(1, 2, 4000, &err));               // a failed run can be retried
+  CHECK(s.running());
+  s.abort("operator");
+  CHECK(!s.running());
+}
+
 MTEST_MAIN

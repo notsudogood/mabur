@@ -44,8 +44,7 @@ bool CalSession::start(uint32_t vtx_id, uint32_t nonce, uint64_t now_ms,
   // A session already running -- AwaitAck through Verify -- blocks a new
   // start(); Idle, Done and Failed do not, so a finished or failed run can
   // be retried without a separate reset call.
-  if (state_ != State::Idle && state_ != State::Done &&
-      state_ != State::Failed) {
+  if (running()) {
     if (err) *err = "a calibration session is already running";
     return false;
   }

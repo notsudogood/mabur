@@ -34,8 +34,17 @@ namespace maburgs {
 // periodic in-flight scout thread starts on; `in_session` is
 // VrxState::SESSION. The caller resets HopVerdict on the falling edge so
 // nothing measured while inactive can latch a trigger.
-inline bool hop_active(bool in_session, bool scout_joined) {
-  return in_session && scout_joined;
+//
+// `calibrating` is CalSession::running(). A calibration run takes the video
+// link down by construction, so the verdict engine reads every window as
+// impaired, the trigger latches, and the freshness burst walks a card
+// through every candidate -- off the channel the sweep is on. `in_session`
+// alone does not cover it: the session re-links briefly mid-run (twice in
+// the 2026-09-23 run, rung5-standing-queue-findings), and scout dwells ran
+// in exactly those windows. Same stand-down as ChannelPlan's deferred split
+// and the periodic scout thread, all three gated on the one predicate.
+inline bool hop_active(bool in_session, bool scout_joined, bool calibrating) {
+  return in_session && scout_joined && !calibrating;
 }
 
 // Pure: whether the core loop must keep its current TX card this tick

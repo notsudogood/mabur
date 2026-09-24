@@ -161,9 +161,11 @@ Cutting rung 5's base overhead collapsed the standing queue by **9×**, from
 | demote depth | 5 **→ 0**, the floor | 5 **→ 4**, one rung |
 | `air_pct` at the event | 48 % → **385–418 %** | no excursion |
 
-The feedback timeout is gone. What remains is an ordinary loss-driven
+No feedback timeout in this run. What remains is an ordinary loss-driven
 single-rung demote — the ladder behaving as designed, rather than the
-control plane starving and bottoming out.
+control plane starving and bottoming out. ⚠ **Rarer, not gone:** run 4
+below logged one `5→0 timeout` at `ov_base` 0.6 in ~190 s at rung 5, a
+different shape from run 1's (see "Run 4 — the `ov 0.6` timeout").
 
 ### Protection was not cut too close
 
@@ -295,8 +297,8 @@ not a flight-validated setting.
 ### Status
 
 MCS 5 is usable: 14.7 Mbps, `e2e` p50 50 ms / p90 60 ms / worst 101 ms, no
-standing queue, no timeouts, motion absorbed. The defect this page opened
-with is closed.
+standing queue, motion absorbed. The defect this page opened with is
+closed. (No timeouts in this 60 s run; run 4 found them rarer, not gone.)
 
 Still outstanding before any of this ships:
 
@@ -306,6 +308,179 @@ Still outstanding before any of this ships:
    base−enh completion offset.
 2. **Range.** Every number here is 36–40 dB SNR on a bench. The one ov 0.6
    failure is the leading indicator to watch.
-3. `superframe_p_pct` was never needed — at 14.7 Mbps the headroom absorbs
-   a 52.8 kB peak unaided. It stays the lever if the bitrate is pushed back
-   up.
+3. `superframe_p_pct` was not needed for the standing queue — at 14.7 Mbps
+   the headroom absorbs a 52.8 kB peak unaided. Run 4 measured it as a
+   working peak clipper (see below), but it did not move the spike tail.
+
+## Run 4 — one 11-minute session: `ov 0.6` → `ov 0.5` → calibration (2026-09-24)
+
+One `debug_log` session, 473–1137 s, three configurations separated by a GS
+restart and a `maburcal start`:
+
+| segment | time | GS rung 5 | notes |
+|---|---|---|---|
+| A | 473–679 s | `ov_base` 0.6 | `ctl.log` header `5/60:50` |
+| — | 680–715 s | — | GS restart; header becomes `5/50:50` |
+| B | 715–875 s | `ov_base` 0.5 | pre-calibration |
+| — | 875–963 s | — | `maburcal start`: 88 s with no video |
+| C | 963–1137 s | `ov_base` 0.5 | post-calibration, `power_mode = "offset"` |
+
+Drone throughout: `bitrate_max_kbps` 14648 and — measured, not configured
+from here, see next section — `superframe_p_pct` 140.
+
+### `superframe_p_pct` 140 is a real peak clipper, at no mean-rate cost
+
+Rung-5-sized AUs (> 20 kB), share of frames per 500 B bin around the
+140 % threshold (31,249 B budget × 1.4 = **43,749 B**):
+
+| bin | session 4, cap 140 (n = 24,807) | run 3, cap 200 (n = 3,497) |
+|---|---|---|
+| 40,000–42,499 | **0 frames** | 16 (4.6 ‰) |
+| 42,500–42,999 | 12 (0.5 ‰) | 0 |
+| 43,000–43,999 | **545 (22.0 ‰)** | 4 (1.1 ‰) |
+| > 44,500 | 16 (0.6 ‰) | 10 (2.9 ‰) |
+| p50 | 30,300 B (14.4 Mbps) | 30,845 B |
+| max | 47,245 | 52,820 |
+
+An empty band below the threshold and a spike just under it is the REENCODE
+signature: frames that would have been 45–55 kB are re-encoded down to just
+beneath the cap. The median is untouched. The operator had meant to revert
+to 200 before this session; the bitstream says the drone ran 140 throughout.
+
+⚠ **Correction.** Earlier in this investigation (chat, never in this page)
+an unlogged OSD reading of ~10.6 Mbps at `superframe_p_pct` 140, plus the
+2026-08-27 probe's ~53 % cap-to-mean ratio in `docs/airtime-model.md`, was
+read as "the RC re-plans the whole stream to about half the cap, so any cap
+that clips peaks halves the mean". The logged session contradicts that. The
+probe's 6000 B cap sat *below* its 11.1 kB mean — a different regime, where
+cutting the mean is the only thing a cap can do. With the cap above the
+natural p99, only the tail moves. The 10.6 Mbps figure has no log behind it;
+rung 4 runs ~10.9 Mbps.
+
+**But it did not shorten the spike tail.** Segment B (cap 140, `ov` 0.5):
+`e2e` high p90 93 ms, worst 123 ms. Run 3 (cap 200, `ov` 0.6): 90 ms, 101 ms.
+Removing the > 44 kB frames left the tail where it was, so the residual
+spikes are not driven by peak frame size.
+
+This answers `docs/handover-venc-overshoot-2026-09-03.md`'s open question
+and its "sweep before shipping non-zero": on star6e `superframe_p_pct` binds,
+and at a cap above the natural p99 it clips P-frame peaks without a mean
+cost. One bench session, one scene; not flight-validated.
+
+### `ov_base` 0.5: no latency gain, a measurable protection cost
+
+| rung 5, base layer | episodes | failed | `ov_req` max | would fail at 0.75 |
+|---|---|---|---|---|
+| `ov_base` 0.6 | 105 | 1 (~1 %) | 0.58 | 0 |
+| `ov_base` 0.5 | 180 | 3 (~1.7 %) | 0.72 | 0 |
+
+Latency at 0.5 matches run 3 at 0.6 (high p90 93 vs 90 ms). Segment A's
+worse tail (high p90 115 ms, worst 780 ms) is dominated by the one event
+below, not by the overhead. The extra failures are the extra 5→4 demotes the
+operator saw. **Recommendation: stay at 0.6.**
+
+### Run 4 — the `ov 0.6` timeout at 575 s
+
+```
+ t_s  air%  mean_sz  max_sz  span   e2e p50/hi   fec
+ 573    51    30393   43297    22     54/100      20
+ 574    35    30334   31136   574     65/780      30
+ 575   452    29956   43775   306    405/695     369   <- 5->0 timeout
+ 576    50     3188    4012     7     42/98        6
+```
+
+Not run 1's mechanism. There is no gradual build-up and no oversize frame;
+the span jumps 22 → 574 ms in one second while `air_pct` *falls* to 35 %,
+then surges to 452 % as the backlog releases. It reads as a ~0.5 s delivery
+stall. Cause not determined from these logs — an off-channel dwell, a USB
+stall and an RF burst would all look like this here. One event in ~190 s of
+rung 5.
+
+### Calibration made it worse: the GS split a receiver off the sweep channel
+
+`maburcal start` ran at 875 s. From `scan.log`:
+
+```
+M 712517  all 136 -> 120  commit       session op channel 120 (home 136)
+M 880404  0   120 -> 136  split_home   5 s into the run
+M 943268  0   136 -> 120  reunite      after the sweep
+```
+
+The run takes the video link down by design, so after `split_after_ms`
+(5 s) `ChannelPlan` did what it does on any loss and sent card 0 home.
+`cal.log`'s coarse pass shows the result: **card 0 heard 43 of 216 cells**
+and nothing from row 1 index 23 onward. The walls were measured on one
+antenna.
+
+What that produced:
+
+- **Walls no single PA produces:** MCS0 +63, MCS1 −33, MCS2 +63, MCS3 23,
+  MCS4 −9, MCS5 −4. `docs/calibration.md` treats a 3 dB MCS0/MCS1 spread
+  as a reproducibility failure; this is 96 indices.
+- **MCS0 parked at the +63 rail**, and `legacy_wall_rel` is set from MCS0
+  by design, so control frames went out near full power. `ctrl`-class EVM
+  **−17.1 → −10.2 dB** while RSSI rose −34.0 → −32.6 dBm: PA compression.
+  Per-rung EVM tracks the walls exactly: rungs 0 and 2 (rail) read about
+  −10 dB after the run, rungs 1 and 4 (−33, −9) read about −34 dB.
+- **MCS2 failed its own verify pass:** 62 % delivery.
+
+Effect at rung 5, same `ov_base` 0.5, before (B) against after (C):
+
+| | B pre-cal | C post-cal |
+|---|---|---|
+| seconds with an `e2e` spike > 100 ms | 2 | **10** |
+| worst `e2e` | 123 ms | **275 ms** |
+| `5→0 timeout` | 0 | **2** |
+
+Why it was never seen before: `ChannelPlan::tick()` already returns early
+when `op == home` ("the split has nothing to split"). A bench whose session
+channel is the home channel cannot hit this. The boot scan here committed
+120 with home 136.
+
+**Fixed in the same commit as this section** — the GS half of what the
+drone already does. The drone latches a retune requested mid-sweep and
+replays it on `cal_active`'s falling edge (`docs/channel-select.md`); the GS
+had no such guard. Now every GS-initiated card move is gated on one
+predicate, `CalSession::running()` (AwaitAck through Verify, wider than
+`radio_silent()` because the link is down for the whole run):
+
+- `ChannelPlan::set_calibrating()`: the split is **deferred, not
+  excluded**. The loss timer keeps counting, but no card leaves `op`. This
+  deliberately differs from a hop's window, which is excluded. A run ends
+  with the drone in `RENDEZVOUS` every time and the drone replays its
+  deferred move home on the falling edge, so the accumulated loss is real
+  evidence of where the drone is — the split fires on the first tick after
+  the run and meets it there.
+- `hop_active(in_session, scout_joined, calibrating)`: the verdict engine,
+  freshness burst and hop controller stand down for the run. `in_session`
+  alone did not cover it: the session re-linked briefly mid-run (943 s,
+  949 s) and scout dwells ran in exactly those windows.
+- The periodic in-flight scout thread gates on the same predicate.
+
+Tests: `test_channel_plan` (deferred for the whole run; fires on the first
+tick after; never advanced by a short run; a mid-run re-link restarts the
+clock; one-card holds its only radio), `test_cal_session` (`running()`
+across AwaitAck → Sweep → Verify → Done, and after Failed and `abort()`),
+`test_hop_burst_gate`. With the one-line guard removed,
+`calibration_defers_the_split_for_the_whole_run` fails exactly as the
+bench did. Host suite 143/148; the five failures are environmental in the
+build container (no sibling `../devourer`, no `nix-shell` for ffprobe,
+running as root). With `../devourer` supplied, `host_e2e`, `gs_e2e` and
+`gs_au_e2e` pass; `player_e2e` passes up to its ffprobe step.
+
+**Operator consequence:** any calibration run before this fix on a session
+whose operating channel was not the home channel measured its walls on one
+card. Roll it back (`cp /etc/mabur.toml.pre-cal /etc/mabur.toml`) and re-run
+once this `maburgs` is deployed. GS binary only: no wire, config or
+`RC_VERSION` change, no flag day.
+
+### Still open
+
+- The residual spike tail at rung 5 (worst ~100–125 ms). Not peak frame
+  size (the clipper above did not move it). Candidates: the in-flight
+  scout's off-channel dwell, which doubled from ~3.3 to ~6.5 ms per dwell
+  between run 1 and run 3 while `hop.enable = false`, and the regulator's
+  arrival-jitter chaining (`reg` p-high 22–28 ms). Untested.
+- The run-4 575 s stall.
+- `aucadence.py` on a device; mcs5 remains the only rung with a negative
+  completion→probe offset in every run.

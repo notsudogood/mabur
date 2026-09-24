@@ -54,6 +54,24 @@ class ChannelPlan {
   uint8_t hop_target() const { return hop_target_; }
   int hop_lead() const { return hop_lead_; }
 
+  // TX-power calibration in progress (CalSession::running()), set by the
+  // caller every tick before tick(). While on, the split is DEFERRED: the
+  // loss timer keeps counting, but no card leaves op_, so both receivers
+  // stay on the channel the sweep is on. Deferred, not excluded the way a
+  // hop's window is -- the difference is deliberate. A hop ends with the
+  // drone on op_ or the target, so loss during it says nothing about where
+  // the drone went. A calibration run ends with the drone in RENDEZVOUS
+  // every time (docs/calibration.md), and on cal_active's falling edge the
+  // drone replays the retune it deferred -- the rendezvous timer's move
+  // home (docs/channel-select.md). The loss accumulated across the run is
+  // therefore real evidence the drone is heading home, and the split that
+  // meets it there fires on the first tick after the run instead of
+  // split_after_ms later. A split cannot already be in effect when a run
+  // starts: CalSession::start() requires a linked session, and the tick
+  // that saw it reunited.
+  void set_calibrating(bool on) { calibrating_ = on; }
+  bool calibrating() const { return calibrating_; }
+
  private:
   // One-card interleave: window index since split; even = home, odd = op.
   int window_(double now_ms) const;
@@ -69,6 +87,8 @@ class ChannelPlan {
   double split_at_ms_ = 0;
   double now_ms_ = 0;
   std::vector<MoveEvent> events_;
+
+  bool calibrating_ = false;
 
   bool hopping_ = false;
   uint8_t hop_target_ = 0;

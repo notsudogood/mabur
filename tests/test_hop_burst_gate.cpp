@@ -47,10 +47,19 @@ TEST(first_burst_not_delayed_by_initial_last_burst_ms) {
 // Bench 2026-09-15: nothing in the hop block may run before the link is in
 // SESSION with the boot scout's cards released (see hop_active's comment).
 TEST(hop_block_is_inactive_outside_session_or_while_boot_scout_owns_a_card) {
-  CHECK(hop_active(/*in_session=*/true, /*scout_joined=*/true));
-  CHECK(!hop_active(false, true));
-  CHECK(!hop_active(true, false));
-  CHECK(!hop_active(false, false));
+  CHECK(hop_active(/*in_session=*/true, /*scout_joined=*/true, /*calibrating=*/false));
+  CHECK(!hop_active(false, true, false));
+  CHECK(!hop_active(true, false, false));
+  CHECK(!hop_active(false, false, false));
+}
+// Bench 2026-09-23: the hop block stands down for a whole calibration run,
+// INCLUDING a mid-run window where the session has re-linked -- in_session
+// alone let scout dwells walk a card off the sweep channel (see
+// hop_active's comment).
+TEST(hop_block_is_inactive_while_a_calibration_runs_even_in_session) {
+  CHECK(!hop_active(/*in_session=*/true, /*scout_joined=*/true, /*calibrating=*/true));
+  CHECK(!hop_active(false, true, true));
+  CHECK(!hop_active(true, false, true));
 }
 // Bench 2026-09-15: the TX selector must not switch onto the lead card
 // while a hop is in flight (see tx_selection_frozen's comment).

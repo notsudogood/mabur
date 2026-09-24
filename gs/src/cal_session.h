@@ -99,6 +99,22 @@ class CalSession {
   // keepalive, the calibration commands themselves) gates on this.
   bool radio_silent(uint64_t now_ms) const;
 
+  // A run is in progress: AwaitAck through Verify. Idle, Done and Failed
+  // are not -- the same predicate start() refuses a second run on. Wider
+  // than radio_silent() on purpose: the link is down for the WHOLE run, not
+  // only while a phase is on the air, so anything that reads loss as a
+  // reason to move a card (ChannelPlan's split, the hop block, the in-flight
+  // scout) must stand down for all of it. main.cpp gates every GS-initiated
+  // card move on this, the GS half of what the drone already does with
+  // cal_active (a retune requested mid-sweep is latched and replayed on the
+  // falling edge, docs/channel-select.md). Found 2026-09-23: with the
+  // session on a non-home channel, ChannelPlan split card 0 off to home
+  // 5 s into a run, and it heard 43 of 216 coarse cells.
+  bool running() const {
+    return state_ != State::Idle && state_ != State::Done &&
+           state_ != State::Failed;
+  }
+
   State state() const { return state_; }
 
   // Per-rate analysis as it stands right now (coarse-only mid-run, merged

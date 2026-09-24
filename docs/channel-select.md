@@ -187,6 +187,16 @@ anchor rather than the boot channel's.
   then a candidate dwell, then home again. The first ack or video heard on
   either channel re-unites every card there; the GS never needs to know
   the drone's timers.
+- **The split waits out a calibration run (2026-09-24).** While
+  `CalSession::running()` (AwaitAck through Verify) the loss timer keeps
+  counting but no card leaves the op channel, and the hop block and
+  in-flight scout stand down too — the GS half of the drone's latched
+  retune above. The split then fires on the first tick after the run: the
+  drone ends every run in `RENDEZVOUS` and replays its move home on the
+  falling edge, so that is where it is. Before this, a two-card GS whose
+  op channel was not home sent card 0 home 5 s into every run, and the
+  walls were measured on one antenna — see
+  `docs/rung5-standing-queue-findings-2026-09-23.md`, run 4.
 - **The scan does not stop at `min_rounds`**; that is only the floor
   below which the DISC proposal is home. The scan does stop if the scout
   card dies mid-scan — the scan is abandoned and frozen on whatever the

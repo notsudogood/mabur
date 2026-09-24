@@ -985,6 +985,10 @@ static int run_radio(const maburgs::Config& cfg) {
   std::atomic<bool> scout_run{false};
   std::atomic<bool> in_session_atomic{false};
   std::atomic<bool> hopping_atomic{false};
+  // CalSession::running(), published by the core loop each tick: the scout
+  // thread must not dwell a card off the sweep channel mid-run, including
+  // when the session briefly re-links (see hop_active in hop_burst_gate.h).
+  std::atomic<bool> cal_running_atomic{false};
   std::atomic<int> tx_card_now{tx_card_pin < 0 ? 0 : tx_card_pin};
   std::atomic<int> dwell_card{-1};
   // Bumped once per completed AU (end-of-AU FrameStream callback, below):
@@ -1021,7 +1025,9 @@ static int run_radio(const maburgs::Config& cfg) {
   auto scout_loop = [&] {
     while (scout_run.load() && !g_stop.load()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(hcfg.dwell_period_ms));
-      if (!in_session_atomic.load() || hopping_atomic.load() || n_cards < 2) continue;
+      if (!in_session_atomic.load() || hopping_atomic.load() ||
+          cal_running_atomic.load() || n_cards < 2)
+        continue;
       const int card = tx_card_now.load() == 0 ? 1 : 0;
       auto& fe = *fronts[static_cast<size_t>(card)];
       if (!fe.ready()) continue;
@@ -1831,7 +1837,16 @@ static int run_radio(const maburgs::Config& cfg) {
     const bool in_session = vrx.link_state() == maburgs::VrxState::SESSION;
     in_session_atomic.store(in_session, std::memory_order_relaxed);
 
+    // A calibration run holds every card on the sweep channel for its whole
+    // length (CalSession::running(): AwaitAck through Verify) -- the GS half
+    // of what the drone already does with cal_active. One predicate, three
+    // consumers: the split below, the hop block's hop_active(), and the
+    // periodic scout thread via cal_running_atomic.
+    const bool cal_running = cal_session.running();
+    cal_running_atomic.store(cal_running, std::memory_order_relaxed);
+
     // ---- auto channel selection, per tick (spec 2026-09-13) ----
+    plan.set_calibrating(cal_running);
     plan.tick(now_ms, in_session);
 
     // ---- in-flight channel hop: verdict window (spec section 2) ----
@@ -1846,7 +1861,7 @@ static int run_radio(const maburgs::Config& cfg) {
     // was down can be acted on when it returns; on the rising edge the
     // per-card and recovered baselines are re-primed, so the first window
     // of a session measures the session, not the outage before it.
-    const bool hop_active = maburgs::hop_active(in_session, scout_joined);
+    const bool hop_active = maburgs::hop_active(in_session, scout_joined, cal_running);
     if (hop_active != hop_was_active) {
       hop_was_active = hop_active;
       verdict.reset();

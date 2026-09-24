@@ -91,6 +91,28 @@ IDR at the join. If it doesn't, that is the ordinary stale-caps
 restart-deadlock shape and not a calibration bug — see
 `docs/deploy.md`.
 
+### The GS holds both receivers on the sweep channel (fixed 2026-09-24)
+
+Because the link is down for the whole run, the GS's own loss handling used
+to react to it. With the session on a channel other than home, `ChannelPlan`
+split card 0 off to the home channel `split_after_ms` (5 s) into the run,
+and the rest of the sweep was measured on one card. The first run found on
+hardware heard 43 of 216 coarse cells on card 0, came out with walls no
+single PA produces (MCS0 +63, MCS1 −33, MCS2 +63), parked MCS0 — and so
+`legacy_wall_rel` — at the rail, and pushed control-frame EVM from −17 to
+−10 dB. Full evidence: `docs/rung5-standing-queue-findings-2026-09-23.md`,
+run 4.
+
+`maburgs` now gates every card move it initiates — the split, the hop
+block, the in-flight scout — on `CalSession::running()`, so both cards stay
+put until the run ends. When `op == home` the split was always a no-op,
+which is why earlier benches never saw it.
+
+**If you calibrated before this fix** while `scan.log`'s `commit` line
+named a channel other than home, the walls came from one card. Roll back
+(below) and re-run on the fixed `maburgs`. `grep split_home scan.log`
+inside the run's window shows whether yours was affected.
+
 Corollary: losing the link *during* a run is expected, not an error. The
 drone's sweep is open-loop and wall-clock-bounded; it finishes or times
 out and restores itself whether or not the GS is still talking. Killing

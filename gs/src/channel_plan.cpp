@@ -36,6 +36,9 @@ void ChannelPlan::tick(double now_ms, bool in_session) {
   // DISC out on both cards on one channel (and log a from==to SplitHome
   // move) while changing nothing about what is on the air.
   if (op_ == cfg_.home) return;
+  // Calibration run: keep counting, but hold every card on op_ -- see
+  // set_calibrating() for why the loss is not excluded from the timer.
+  if (calibrating_) return;
   if (!split_ && now_ms - lost_since_ms_ >= cfg_.split_after_ms) {
     split_ = true;
     split_at_ms_ = now_ms;

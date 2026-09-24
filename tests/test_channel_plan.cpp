@@ -281,6 +281,80 @@ TEST(withdraw_with_no_hop_in_flight_leaves_the_split_timer_alone) {
   REQUIRE(ev.size() == 1);
   CHECK(ev[0].reason == MoveReason::SplitHome);
 }
+// 2026-09-23 (rung5-standing-queue-findings): a two-card GS on op 120,
+// home 136, split card 0 home 5 s into a calibration run -- it heard 43 of
+// 216 coarse cells and the walls came out on one antenna. While a run is
+// in progress both cards stay on the sweep channel; the split fires on the
+// first tick after it, because the drone ends every run in RENDEZVOUS and
+// replays its deferred move home on cal_active's falling edge.
+TEST(calibration_defers_the_split_for_the_whole_run) {
+  ChannelPlan p(C(2));
+  p.on_ack(0, 120, 120); p.take_events();           // session on a non-home channel
+  p.tick(100, true);
+  p.set_calibrating(true);                          // run starts while linked
+  p.tick(1100, false);                              // sweep begins: link lost
+  p.tick(6100, false);                              // pre-fix: SplitHome here
+  p.tick(80000, false);                             // still sweeping
+  CHECK(!p.split());
+  CHECK(p.desired(0) == 120 && p.desired(1) == 120);
+  CHECK(!p.beacon_cards().has_value());
+  CHECK(p.take_events().empty());
+  p.set_calibrating(false);                         // run over
+  p.tick(80001, false);                             // first tick after it
+  CHECK(p.split());
+  CHECK(p.desired(0) == 136 && p.desired(1) == 120);
+  auto ev = p.take_events();
+  REQUIRE(ev.size() == 1);
+  CHECK(ev[0].reason == MoveReason::SplitHome && ev[0].card == 0 && ev[0].to == 136);
+}
+// Deferred, never advanced: a run that ends early (an ack timeout fails it
+// at 3 s) leaves loss short of split_after_ms, and the split still needs
+// the full window measured from loss onset.
+TEST(calibration_defers_but_never_advances_the_split) {
+  ChannelPlan p(C(2));
+  p.on_ack(0, 120, 120); p.take_events();
+  p.tick(100, true);
+  p.set_calibrating(true);
+  p.tick(1000, false);                              // loss onset
+  p.tick(3000, false);
+  p.set_calibrating(false);
+  p.tick(5999, false);                              // 1000 + split_after_ms(5000) - 1
+  CHECK(!p.split());
+  p.tick(6000, false);                              // 1000 + split_after_ms(5000)
+  CHECK(p.split());
+}
+// The session re-linked twice mid-run on 2026-09-23. A re-link restarts the
+// loss clock exactly as it does outside a run, so the split after the run
+// measures from the LAST loss onset, not the first.
+TEST(calibration_mid_run_relink_restarts_the_loss_clock) {
+  ChannelPlan p(C(2));
+  p.on_ack(0, 120, 120); p.take_events();
+  p.tick(100, true);
+  p.set_calibrating(true);
+  p.tick(1000, false);
+  p.tick(40000, true);                              // brief re-link mid-run
+  p.tick(41000, false);                             // lost again
+  p.set_calibrating(false);                         // run over at 44000
+  p.tick(44000, false);
+  p.tick(45999, false);                             // 41000 + 5000 - 1
+  CHECK(!p.split());
+  p.tick(46000, false);
+  CHECK(p.split());
+}
+// One card: a split would interleave home windows on the ONLY radio, i.e.
+// take the sweep's sole receiver off channel for half of every window.
+TEST(one_card_calibration_holds_the_card_on_op) {
+  ChannelPlan p(C(1));
+  p.on_ack(0, 120, 120); p.take_events();
+  p.tick(100, true);
+  p.set_calibrating(true);
+  p.tick(1100, false);
+  p.tick(80000, false);
+  CHECK(!p.split());
+  CHECK(p.desired(0) == 120);
+  CHECK(!p.beacon_cards().has_value());
+  CHECK(p.take_events().empty());
+}
 TEST(confirm_with_no_hop_in_flight_is_a_no_op) {
   ChannelPlan p(C(1));
   p.on_ack(0, 149, 149); p.take_events();

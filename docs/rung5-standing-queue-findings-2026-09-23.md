@@ -486,7 +486,7 @@ once this `maburgs` is deployed. GS binary only: no wire, config or
 
 Setup for all three: channel 165 pinned as home on both ends
 (`radio.scan.enable = false`), `ov_base` 0.6 at rung 5,
-`bitrate_max_kbps` 14648, `superframe_p_pct` 140, calibration rolled back
+`bitrate_max_kbps` 14648, `superframe_p_pct` **200** (the shipped default — the `.pre-cal` restore brought it back, so NOT the 140 of run 4; confirmed on the drone after run 7), calibration rolled back
 to `.pre-cal`, `hop.enable = false`, `hop.scout_when_disabled = false`,
 `link.objective.enable = true` (tier 2 observe; never armed — rung-5 loss
 never approached its 12.5 % threshold). Between runs 4 and 5 a field
@@ -533,4 +533,8 @@ on camera in run 7 (OSD `lat 64/111`, the run's only > 100 ms second, at
 ~70 s): no FEC failure anywhere in the run, and the AUs in that second
 jump from ~30 kB to 46–51 kB with 37–63 ms arrival spans — a real scene
 change (the camera's exposure swinging towards the bright window), not
-decoder concealment of lost data.
+decoder concealment of lost data. At `superframe_p_pct` 200 the P-frame
+cap sits at ~62 kB at this rate, so nothing clipped them; the operator
+reports the same reaction to fast hand motion on the bench and to whipping
+the quad in the field. Next: 120 (~37 kB; the 30–40 kB bucket arrived in
+≤ 24 ms p90 in run 7) with a static/motion-alternating bench run.

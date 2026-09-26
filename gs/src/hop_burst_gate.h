@@ -63,8 +63,23 @@ inline bool tx_selection_frozen(bool dwell_busy, bool hopping) {
   return dwell_busy || hopping;
 }
 
+// `dwells_allowed` is `hop.enable || hop.scout_when_disabled` -- the same
+// predicate the periodic scout thread starts on. With the hop disabled the
+// controller only shadows (every action `would_`), so a burst buys ranking
+// data for a hop that can never happen, and the burst is not free: it runs
+// synchronously on the core thread. Bench 2026-09-26 (rung5 findings, run
+// 7), two cards, hop.enable = false and scout_when_disabled = false: the
+// burst still fired ~1.2/s on the interfered verdicts, AUs starting within
+// 50 ms of one ran > 40 ms 34-40 % of the time vs 14 % half a second
+// earlier, and 74-83 % of rung-5 seconds carried a > 40 ms fec stage. Held
+// off (dwell_period_ms = 60000 as the stand-in for this gate) the same
+// bench, busier channel, measured 4 %. A one-card GS loses its only ranking
+// source with this off -- which only matters when there is a hop to rank
+// for, i.e. hop.enable = true, where the gate is open anyway.
 inline bool hop_burst_due(HopState state, bool trigger, double now_ms,
-                          double last_burst_ms, int dwell_period_ms) {
+                          double last_burst_ms, int dwell_period_ms,
+                          bool dwells_allowed) {
+  if (!dwells_allowed) return false;
   const bool hop_free = state == HopState::Idle || state == HopState::Hold;
   return hop_free && trigger && (now_ms - last_burst_ms >= dwell_period_ms);
 }

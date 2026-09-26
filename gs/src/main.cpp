@@ -1962,9 +1962,11 @@ static int run_radio(const maburgs::Config& cfg) {
       // the dwell_period_ms rate limit against last_burst_ms below -- see
       // that header for the four properties this gate has to get right,
       // now unit-tested directly instead of only inside this hardware-
-      // touching body.
+      // touching body. Closed outright while the hop is disabled and
+      // scout_when_disabled is off (the header has the bench numbers).
       if (maburgs::hop_burst_due(hopc.state(), last_verdict_out.trigger, now_ms,
-                                 last_burst_ms, hcfg.dwell_period_ms)) {
+                                 last_burst_ms, hcfg.dwell_period_ms,
+                                 hcfg.enable || hcfg.scout_when_disabled)) {
         // Freshness burst (spec section 3): sweep every candidate once,
         // back to back, BEFORE a target is chosen -- so it must not
         // require ht.best to already hold one (dropped from this gate in

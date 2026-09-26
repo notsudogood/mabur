@@ -230,7 +230,13 @@ runs once the boot scout has released every card, gated on
 `hop.enable || hop.scout_when_disabled` — **`scout_when_disabled` defaults
 `true`**, so the scout dwells and logs even with `hop.enable = false`, to
 collect ranking/calibration data for the first (observe-only) flights; set
-it `false` to fly with literally no dwells. Every `hop.dwell_period_ms`
+it `false` to fly with literally no dwells. The core loop's synchronous
+freshness burst (below) obeys the same predicate since 2026-09-26
+(`hop_burst_due`'s `dwells_allowed`): before that it fired on the shadow
+controller's interfered/impaired trigger even with both keys off — ~1.2
+bursts/s on a busy home bench, each one stalling the core thread, which
+put a > 40 ms `fec` stage in 74–83 % of rung-5 seconds
+(`docs/rung5-standing-queue-findings-2026-09-23.md`, runs 5–7). Every `hop.dwell_period_ms`
 (333 ms default):
 1. Card = whichever the TX selector is not using this cycle (read once at
    cycle start; the selector defers switching onto a card mid-dwell —

@@ -476,11 +476,61 @@ once this `maburgs` is deployed. GS binary only: no wire, config or
 
 ### Still open
 
-- The residual spike tail at rung 5 (worst ~100–125 ms). Not peak frame
-  size (the clipper above did not move it). Candidates: the in-flight
-  scout's off-channel dwell, which doubled from ~3.3 to ~6.5 ms per dwell
-  between run 1 and run 3 while `hop.enable = false`, and the regulator's
-  arrival-jitter chaining (`reg` p-high 22–28 ms). Untested.
+- ~~The residual spike tail at rung 5.~~ **Found, runs 5–7 below**: the
+  hop block's freshness burst, not the periodic scout.
 - The run-4 575 s stall.
 - `aucadence.py` on a device; mcs5 remains the only rung with a negative
   completion→probe offset in every run.
+
+## Runs 5–7 — the residual tail is the hop freshness burst (2026-09-26)
+
+Setup for all three: channel 165 pinned as home on both ends
+(`radio.scan.enable = false`), `ov_base` 0.6 at rung 5,
+`bitrate_max_kbps` 14648, `superframe_p_pct` 140, calibration rolled back
+to `.pre-cal`, `hop.enable = false`, `hop.scout_when_disabled = false`,
+`link.objective.enable = true` (tier 2 observe; never armed — rung-5 loss
+never approached its 12.5 % threshold). Between runs 4 and 5 a field
+flight on 165 and a comparison against a second, hardware-identical
+WiFilink pair (another operator's flight, newer upstream build) had
+established that the remaining tail is NOT offered load (the second pair
+carries the same ~14.2 Mbps at 1.0/0.5 with a 15 ms `fec` stage and 0 of
+140 rung-5 seconds over 100 ms), NOT signal level (flat ~30 % tail from
+−60 to −40 dBm here, clean down to −10 dBm there) and NOT the drone TX
+queue (5 ms wait, ≤ 1 ms air backlog in every run on both pairs).
+
+**`scout_when_disabled = false` does not stop in-session dwells.** It
+gates only the periodic scout thread. The core loop's freshness burst
+(`hop_burst_due`, a back-to-back sweep of every candidate, run
+synchronously on the core thread) keys on the verdict trigger, which the
+shadow controller still latches on `interfered`/`impaired` windows. On
+the home bench — `interfered` in 42–61 % of verdicts even on 165 — it
+fired at its `dwell_period_ms` floor (334 ms minimum gap measured):
+
+| run | bursts (`scan.log` D rows) | rung-5 s with `fec` max > 40 ms | > 100 ms seconds | worst second | `fec` max p90 |
+|---|---|---|---|---|---|
+| 5 (bench, default 333 ms) | 108 (324) | 74 % | 11 / 72 | 595 ms | 91 ms |
+| 6 (bench, 60000 in the file, GS not restarted) | 120 (360) | 83 % | 13 / 64 | 758 ms | 78 ms |
+| **7 (bench, 60000 loaded)** | **2 (6)** | **4 %** | **1 / 69** | **109 ms** | **36 ms** |
+| second pair, flight | — | 6 % | 0 / 140 | 99 ms | 38 ms |
+
+Run 7's channel was *busier*, not quieter (297 `interfered` verdicts vs
+213/217). In runs 5–6, AUs whose first packet landed within 50 ms of a
+burst had a > 40 ms arrival span 34–40 % of the time, against 14–15 % for
+the same window 500 ms earlier. The second pair runs these bursts too,
+without the effect; not investigated (different build).
+
+Fix: `hop_burst_due` takes `dwells_allowed` = `hop.enable ||
+hop.scout_when_disabled`, the scout thread's own start predicate, so
+`scout_when_disabled = false` now means no in-session dwells at all.
+`test_hop_burst_gate` covers it; removing the gate fails the new case.
+GS binary only. Until that `maburgs` is deployed, `hop.dwell_period_ms =
+60000` is the stand-in (it also slows the periodic scout, which is off
+anyway with `scout_when_disabled = false`). With the hop *enabled* the
+burst still blocks the core thread; moving it off that thread is open.
+
+A "white flash" of the kind the operator has reported since the first run, caught
+on camera in run 7 (OSD `lat 64/111`, the run's only > 100 ms second, at
+~70 s): no FEC failure anywhere in the run, and the AUs in that second
+jump from ~30 kB to 46–51 kB with 37–63 ms arrival spans — a real scene
+change (the camera's exposure swinging towards the bright window), not
+decoder concealment of lost data.

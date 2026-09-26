@@ -9,18 +9,18 @@ using namespace maburgs;
 
 TEST(idle_and_hold_with_trigger_and_no_prior_burst_are_due) {
   CHECK(hop_burst_due(HopState::Idle, /*trigger=*/true, /*now_ms=*/0,
-                      /*last_burst_ms=*/-1e18, /*dwell_period_ms=*/333));
-  CHECK(hop_burst_due(HopState::Hold, true, 0, -1e18, 333));
+                      /*last_burst_ms=*/-1e18, /*dwell_period_ms=*/333, true));
+  CHECK(hop_burst_due(HopState::Hold, true, 0, -1e18, 333, true));
 }
 
 TEST(ordered_and_verifying_are_never_due) {
-  CHECK(!hop_burst_due(HopState::Ordered, true, 0, -1e18, 333));
-  CHECK(!hop_burst_due(HopState::Verifying, true, 0, -1e18, 333));
+  CHECK(!hop_burst_due(HopState::Ordered, true, 0, -1e18, 333, true));
+  CHECK(!hop_burst_due(HopState::Verifying, true, 0, -1e18, 333, true));
 }
 
 TEST(no_trigger_is_never_due_even_when_state_and_timing_allow) {
-  CHECK(!hop_burst_due(HopState::Idle, /*trigger=*/false, 100000, -1e18, 333));
-  CHECK(!hop_burst_due(HopState::Hold, /*trigger=*/false, 100000, -1e18, 333));
+  CHECK(!hop_burst_due(HopState::Idle, /*trigger=*/false, 100000, -1e18, 333, true));
+  CHECK(!hop_burst_due(HopState::Hold, /*trigger=*/false, 100000, -1e18, 333, true));
 }
 
 TEST(rate_limit_enforced_across_successive_calls) {
@@ -30,10 +30,20 @@ TEST(rate_limit_enforced_across_successive_calls) {
   // stops it firing back to back.
   const double last_burst_ms = 1000.0;
   const int dwell_period_ms = 333;
-  CHECK(!hop_burst_due(HopState::Hold, true, 1010.0, last_burst_ms, dwell_period_ms));
-  CHECK(!hop_burst_due(HopState::Hold, true, 1332.0, last_burst_ms, dwell_period_ms));
-  CHECK(hop_burst_due(HopState::Hold, true, 1333.0, last_burst_ms, dwell_period_ms));
-  CHECK(hop_burst_due(HopState::Hold, true, 5000.0, last_burst_ms, dwell_period_ms));
+  CHECK(!hop_burst_due(HopState::Hold, true, 1010.0, last_burst_ms, dwell_period_ms, true));
+  CHECK(!hop_burst_due(HopState::Hold, true, 1332.0, last_burst_ms, dwell_period_ms, true));
+  CHECK(hop_burst_due(HopState::Hold, true, 1333.0, last_burst_ms, dwell_period_ms, true));
+  CHECK(hop_burst_due(HopState::Hold, true, 5000.0, last_burst_ms, dwell_period_ms, true));
+}
+
+TEST(no_burst_while_hop_disabled_and_scout_when_disabled_off) {
+  // Bench 2026-09-26: with hop.enable = false and scout_when_disabled =
+  // false the burst still fired ~1.2/s on the interfered verdicts, stalling
+  // the core thread (see hop_burst_due's comment). Every other input here
+  // says "due"; the dwell gate alone must close it.
+  CHECK(!hop_burst_due(HopState::Idle, true, 0.0, -1e18, 333, /*dwells_allowed=*/false));
+  CHECK(!hop_burst_due(HopState::Hold, true, 5000.0, 1000.0, 333, false));
+  CHECK(hop_burst_due(HopState::Hold, true, 5000.0, 1000.0, 333, true));
 }
 
 TEST(first_burst_not_delayed_by_initial_last_burst_ms) {
@@ -41,8 +51,8 @@ TEST(first_burst_not_delayed_by_initial_last_burst_ms) {
   // declaration), so `now_ms - last_burst_ms` is astronomically large on
   // tick one -- it must clear the dwell_period_ms floor immediately, not
   // wait one dwell_period_ms from process start.
-  CHECK(hop_burst_due(HopState::Idle, true, /*now_ms=*/0.0, -1e18, 333));
-  CHECK(hop_burst_due(HopState::Idle, true, /*now_ms=*/10.0, -1e18, 333));
+  CHECK(hop_burst_due(HopState::Idle, true, /*now_ms=*/0.0, -1e18, 333, true));
+  CHECK(hop_burst_due(HopState::Idle, true, /*now_ms=*/10.0, -1e18, 333, true));
 }
 // Bench 2026-09-15: nothing in the hop block may run before the link is in
 // SESSION with the boot scout's cards released (see hop_active's comment).

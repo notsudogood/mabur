@@ -129,7 +129,7 @@ Consume the same numbers programmatically with:
   directly — nothing else holds the port any more.
 - Debug logs: maburgs writes a per-session directory when `debug_log.enable`
   is set — `<debug_log.dir>/NNNN/` holding `ctl.log`, `probe.log`, `au.log`,
-  `scan.log`, `fec.log` and `flight.jsonl`; maburplay writes `lat.log` into the same directory by
+  `scan.log`, `fec.log`, `arq.log` and `flight.jsonl`; maburplay writes `lat.log` into the same directory by
   following the `/tmp/mabur-session` marker and holds no logging config of
   its own. Default is **off**: nothing is written until the knob is set.
   The marker lives in tmpfs, so a reboot starts a new session while a 2 s
@@ -350,6 +350,38 @@ Consume the same numbers programmatically with:
   same boot warm-up loss that pollutes the rung-0 residual EWMA
   (`link.rungs[0]`), not a rung-0 verdict; drop them by time, or read
   only rungs the ladder actually held.
+
+**arq.log (arqlog 1, 2026-09-28).** Feedback-repair shadow mode, phase 1
+of `docs/feedback-repair-rollout.md`: at every burst end, how many repair
+symbols each video layer is short -- exactly what a live "send me k more"
+request would ask for -- written by maburgs (`gs/src/arq_shadow.h`,
+`gs/src/arq_log.h`) into the session directory, rotating with it, never
+fatal. Observes only: nothing extra is transmitted. The shortfall is
+`SwDecoder::deficit()` (unknown live seqs minus pending independent rows,
+0 exactly when nothing is missing), sampled `settle_ms` (4) after the burst
+ends so the other card's tail copy lands first. A burst ends at the other
+layer's first body (base and enh AUs alternate), at the trailing probe, at
+a same-layer body after an 8 ms RX-stamp gap, or after 15 ms of silence.
+Header `arqlog 1`, then two record types:
+`E <t_open_ms> <sid> <mcs> <bw> <ov> <bpb> <dur_ms> <grow_ms> <nack> <d0> <dpk> <aband> <stale>`
+is one shortfall episode -- consecutive short burst ends of one layer,
+closed by the first one back at 0: when it opened (burst-end mono ms), the
+op and overhead at open, FEC blocks per body (symbols -> bodies), how long
+until the layer was whole again (`dur_ms` -- an in-band fix if `aband` is 0,
+else the eviction of what was lost), how long the shortfall kept growing
+(`grow_ms`: 0 = one burst, large = an outage), how many burst ends were
+short (`nack`: the requests a live loop would have sent), the first and
+peak shortfall in symbols, and the symbols abandoned inside the episode
+(`stale` of them transition debris, excluded like fec.log's).
+`S <t_ms> <sid> <bursts> <short>` every ~10 s per layer that had bursts:
+the denominators. `flightreport.py`'s ARQ SHADOW section turns it into the
+go/no-go: short-burst share and request rate per layer, peak shortfall in
+aggregates (assumes `ampdu.max_num` 6 bodies), in-band fix delay and what a
+repair at an 8 ms round trip would save, and lost episodes split into
+burst-shaped (<= 2 aggregates, grew <= 50 ms: one repair round could have
+saved them) vs outage-shaped. `maburgs --dry-run` runs the same tracker
+over a replay and prints `arq_shadow <sid>:` totals on stderr (order-only:
+the replay clock is synthetic). Flight data does not exist yet.
 
 **scan.log (scanlog 2).** New per-session file (spec
 2026-09-13-auto-channel-select, extended by

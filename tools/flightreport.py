@@ -907,6 +907,127 @@ def print_fec_report(rows):
         print(f"    would fail at ov {fails}  (of {len(live)} non-stale)")
 
 
+def sniff_arqlog(path):
+    """True if `path` is a maburgs arq log (first line starts 'arqlog ')."""
+    with open(path) as f:
+        return f.readline().startswith("arqlog ")
+
+
+ARQ_E_COLS = ("t_open_ms", "sid", "mcs", "bw", "ov", "bpb", "dur_ms", "grow_ms",
+              "nack", "d0", "dpk", "aband", "stale")
+ARQ_S_COLS = ("t_ms", "sid", "bursts", "short")
+# Assumptions the ARQ SHADOW verdict is stated against (arq.log carries only
+# what the GS measured): the drone's A-MPDU size in radio bodies
+# (ampdu.max_num), the round trip one repair request would cost (the
+# control-path RTT, docs/tx-rx-timing.md), the S-record cadence
+# (ArqShadowCfg::summary_ms), and the growth span past which a lost episode
+# reads as an outage rather than one or two lost bursts (a same-layer AU
+# period is ~33 ms at 60 AU/s).
+ARQ_AGG_BODIES = 6
+ARQ_RTT_MS = 8.0
+ARQ_SUMMARY_S = 10.0
+ARQ_OUTAGE_GROW_MS = 50.0
+
+
+def load_arqlog(path):
+    """arq.log (gs/src/arq_log.h): `E` shortfall-episode rows and `S`
+    per-layer burst-count rows. A rejoined session re-states the marker
+    partway through; `# dropped N` is the LogWriter's gap marker. Returns
+    (episodes, summaries) as lists of dicts."""
+    eps, sums = [], []
+    with open(path) as f:
+        for line in f:
+            if line.startswith("arqlog ") or line.startswith("#"):
+                continue
+            tok = line.split()
+            if not tok:
+                continue
+            if tok[0] == "E" and len(tok) == len(ARQ_E_COLS) + 1:
+                r = {}
+                for k, v in zip(ARQ_E_COLS, tok[1:]):
+                    r[k] = float(v) if k in ("t_open_ms", "ov", "dur_ms", "grow_ms") else int(v)
+                eps.append(r)
+            elif tok[0] == "S" and len(tok) == len(ARQ_S_COLS) + 1:
+                sums.append({k: (float(v) if k == "t_ms" else int(v))
+                             for k, v in zip(ARQ_S_COLS, tok[1:])})
+    return eps, sums
+
+
+def arq_bodies(symbols, bpb):
+    """A shortfall in FEC symbols, as radio bodies (bpb symbols each)."""
+    return -(-symbols // bpb) if bpb > 0 else symbols
+
+
+def arq_saveable(e):
+    """A lost episode one repair round could plausibly have saved: small
+    enough to fit a couple of aggregates of repairs, and short -- it stopped
+    growing within ARQ_OUTAGE_GROW_MS, so it is a burst, not an outage the
+    request and its repairs would have died in too."""
+    return (arq_bodies(e["dpk"], e["bpb"]) <= 2 * ARQ_AGG_BODIES
+            and e["grow_ms"] <= ARQ_OUTAGE_GROW_MS)
+
+
+def print_arq_report(eps, sums):
+    """ARQ SHADOW: feedback-repair phase 1 (docs/feedback-repair-rollout.md).
+    Per video layer: how often a burst ended short of repair symbols (the
+    would-be request rate, i.e. uplink cost), how big those shortfalls were
+    in aggregates, and what became of each episode -- fixed later by the
+    FEC's own next-burst overlap (the latency a repair at ARQ_RTT_MS would
+    have saved), or lost (and whether it was burst-shaped, which a repair
+    round could have saved, or outage-shaped, which it could not). Episodes
+    with stale > 0 straddled a rung change and are excluded like fec.log's."""
+    if not eps and not sums:
+        return
+    print()
+    print(f"ARQ SHADOW (arq.log: repair shortfall at each burst end; assumes "
+          f"agg={ARQ_AGG_BODIES} bodies, rtt={ARQ_RTT_MS:.0f} ms)")
+    for sid in sorted({r["sid"] for r in eps} | {r["sid"] for r in sums}):
+        ss = [r for r in sums if r["sid"] == sid]
+        bursts = sum(r["bursts"] for r in ss)
+        short = sum(r["short"] for r in ss)
+        span_s = len(ss) * ARQ_SUMMARY_S
+        line = f"  sid {sid}: bursts={bursts} short={short}"
+        if bursts:
+            line += f" ({100.0 * short / bursts:.2f}%)"
+        if span_s:
+            line += f"  would-request {short / span_s:.2f}/s"
+        print(line)
+        g = [e for e in eps if e["sid"] == sid]
+        if not g:
+            continue
+        live = [e for e in g if e["stale"] == 0]
+        stale = len(g) - len(live)
+        resolved = [e for e in live if e["aband"] == 0]
+        lost = [e for e in live if e["aband"] > 0]
+        print(f"    episodes n={len(g)} (stale {stale}): resolved in-band "
+              f"{len(resolved)}, lost {len(lost)}")
+        if not live:
+            continue
+        peaks = [arq_bodies(e["dpk"], e["bpb"]) for e in live]
+        one = sum(1 for b in peaks if b <= ARQ_AGG_BODIES)
+        two = sum(1 for b in peaks if ARQ_AGG_BODIES < b <= 2 * ARQ_AGG_BODIES)
+        print(f"    peak shortfall: <=1 agg {one}  <=2 aggs {two}  "
+              f"more {len(peaks) - one - two}  (bodies p50/max="
+              f"{_pct(peaks, 0.5)}/{max(peaks)})")
+        if resolved:
+            d = [e["dur_ms"] for e in resolved]
+            saved = [max(0.0, x - ARQ_RTT_MS) for x in d]
+            print(f"    resolved: in-band fix delay p50/p90/max="
+                  f"{_pct(d, 0.5):.0f}/{_pct(d, 0.9):.0f}/{max(d):.0f} ms; "
+                  f"a repair at rtt saves p50 {_pct(saved, 0.5):.0f} ms")
+        if lost:
+            sv = sum(1 for e in lost if arq_saveable(e))
+            print(f"    lost: {len(lost)} -- saveable by a repair round {sv} "
+                  f"(<=2 aggs, grew <={ARQ_OUTAGE_GROW_MS:.0f} ms), "
+                  f"outage-shaped {len(lost) - sv}")
+        rungs = {}
+        for e in live:
+            rungs.setdefault((e["mcs"], e["bw"]), []).append(e)
+        print("    by rung: " + "  ".join(
+            f"mcs{m}/{b} n={len(v)} lost={sum(1 for e in v if e['aband'] > 0)}"
+            for (m, b), v in sorted(rungs.items())))
+
+
 def sniff_ctllog(path):
     """True if `path` is a maburgs ctl log (first line starts 'ctllog ')."""
     with open(path) as f:
@@ -1453,6 +1574,9 @@ def main(path, aulog=None, probelog_path=None, scanlog_path=None):
     if sniff_feclog(path):
         print_fec_report(load_feclog(path))
         return
+    if sniff_arqlog(path):
+        print_arq_report(*load_arqlog(path))
+        return
     if sniff_probelog(path):
         # A probe log on its own (bench use): just the per-body report and
         # the completion->probe join.
@@ -1701,5 +1825,8 @@ if __name__ == "__main__":
         # rides along whichever primary the session offered.
         if s.fec:
             print_fec_report(load_feclog(s.fec))
+        # arq.log (2026-09-28, feedback-repair shadow mode) likewise.
+        if s.arq:
+            print_arq_report(*load_arqlog(s.arq))
     else:
         main(arg, sys.argv[2] if len(sys.argv) > 2 else None)

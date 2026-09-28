@@ -86,6 +86,23 @@ echo "== 2 cards, 20% independent loss each: union recovers everything, both str
 python3 tests/integration/verify_aus.py "$TMP/aus2.bin" "$FIX" --require-all \
   --min-stream0 1.0 --min-stream1 1.0
 
+echo "== feedback-repair shadow: a clean replay is never short, a 40%-loss one is =="
+# docs/feedback-repair-rollout.md phase 1. Real maburd bodies through the real
+# decoder: every burst end of a clean replay reads zero repair symbols short
+# on both layers; seeded 40% loss leaves the base layer short, still missing
+# symbols when the replay ends (too short a stream for the horizon to evict).
+"$MABURGS" -c "$GSCFG" --dry-run --in "$TMP/frames.bin" 2> "$TMP/arq0.txt"
+for s in 0 1; do
+  grep -qE "^arq_shadow $s: bursts=([5-9]|[1-9][0-9]+) short=0 " "$TMP/arq0.txt" || {
+    echo "FAIL: clean replay, layer $s should have >=5 bursts, none short:" >&2
+    grep arq_shadow "$TMP/arq0.txt" >&2; exit 1; }
+done
+"$MABURGS" -c "$GSCFG" --dry-run --in "$TMP/frames.bin" --drop-pct 40 --seed 3 \
+  2> "$TMP/arq1.txt"
+grep -qE "^arq_shadow 0: bursts=[0-9]+ short=[1-9][0-9]* .*open_deficit=[1-9]" "$TMP/arq1.txt" || {
+  echo "FAIL: 40% loss replay should leave layer 0 short:" >&2
+  grep arq_shadow "$TMP/arq1.txt" >&2; exit 1; }
+
 echo "== in-flight hop, two-card: injected verdict -> RCF -> plan -> ladder -> verify_pass =="
 # Spec 2026-09-14-inflight-channel-hop, task-15-brief.md step 1. The
 # injection seam is MABUR_HOP_INJECT=<ch>:<score>, read only when

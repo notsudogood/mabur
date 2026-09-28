@@ -65,6 +65,8 @@
 #include "pts_anchor.h"
 #include "probe_log.h"
 #include "fec_log.h"
+#include "arq_log.h"
+#include "arq_shadow.h"
 #include "probe_track.h"
 #include "rcf_slot.h"
 #include "rtt_estimator.h"
@@ -1247,6 +1249,8 @@ static int run_radio(const maburgs::Config& cfg) {
   std::optional<maburgs::ProbeLog> probe_log;
   // Per-episode FEC loss log (fec.log), same directory and lifetime.
   std::optional<maburgs::FecLog> fec_log;
+  // Feedback-repair shadow log (arq.log), same directory and lifetime.
+  std::optional<maburgs::ArqLog> arq_log;
   // Per-AU meta log; forward-declared here so the FrameStream callbacks
   // just below can reference it by [&] capture, even though it is only
   // emplaced once debug.ok() is known (ctl/probe/au construction, below,
@@ -1397,6 +1401,29 @@ static int run_radio(const maburgs::Config& cfg) {
   vcfg.probe_pin_mcs = cfg.link.ladder_cfg.probe.pin_mcs;
   maburgs::VrxController vrx(vcfg);
 
+  // Feedback-repair shadow mode (docs/feedback-repair-rollout.md, phase 1):
+  // at every burst end, how many repair symbols each video layer is short --
+  // what a live feedback-repair loop would have requested -- into arq.log.
+  // Observes only: transmits nothing, changes no decode state. Fed by the
+  // aggregator's video hook and the probe sink below, ticked in the loop.
+  const auto arq_layers = cfg.uep_layers();
+  maburgs::ArqShadow arq_shadow(maburgs::ArqShadowCfg{}, [&](int sid) {
+    maburgs::ArqSnap s;
+    s.deficit = agg.decoder().deficit(sid);
+    const auto st = agg.decoder().stats(sid);
+    s.abandoned = st.syms_abandoned;
+    s.abandoned_stale = st.syms_abandoned_stale;
+    const auto& op = vrx.cur_op();
+    s.mcs = op.mcs;
+    s.bw = op.bw;
+    s.ov = sid == 0 ? op.overhead_base : op.overhead_enh;
+    s.bpb = arq_layers[static_cast<size_t>(sid)].blocks_per_body;
+    return s;
+  });
+  agg.set_video_hook([&](int sid, uint64_t us) {
+    arq_shadow.on_video_body(sid, static_cast<double>(us) / 1000.0);
+  });
+
   // Dedicated adaptive-link log (spec 2026-08-05-s3-probe-promote-design.md
   // section 5): maburgs' own compact S/E/P/N record of every rung decision,
   // independent of the stats sideport so the learning dataset survives a
@@ -1444,6 +1471,7 @@ static int run_radio(const maburgs::Config& cfg) {
     ctl_log.emplace(*log_writer, debug.dir(), header);
     probe_log.emplace(*log_writer, debug.dir(), probe_bpb);
     fec_log.emplace(*log_writer, debug.dir());
+    arq_log.emplace(*log_writer, debug.dir());
     // Gated on au_on too (not just debug.ok()): with au_ring.enable=false
     // there are never any rows to write, and an emplace here would leave
     // au.log containing only its "# aulog 4" header -- reads as "the
@@ -1580,6 +1608,7 @@ static int run_radio(const maburgs::Config& cfg) {
     if (ctl_log) ctl_log->rotate(debug.dir());
     if (probe_log) probe_log->rotate(debug.dir());
     if (fec_log) fec_log->rotate(debug.dir());
+    if (arq_log) arq_log->rotate(debug.dir());
     if (au_log) au_log->rotate(debug.dir());
     if (scan_log) scan_log->rotate(debug.dir());
     std::fprintf(stderr,
@@ -1651,6 +1680,9 @@ static int run_radio(const maburgs::Config& cfg) {
     // The probe is the last PPDU of its ENH burst: seeing it (any card,
     // any profile, parseable or not -- the aggregator routed it here by
     // stream id) is the slotter's "burst off air" release (rcf_slot.h).
+    // Same signal for the feedback-repair shadow's burst end, on the
+    // body's own RX stamp.
+    arq_shadow.on_probe(static_cast<double>(m.mono_us) / 1000.0);
     rcf_slot.on_probe_tail(mono_ms());
     mabur::probe::ProbeRx rx;
     if (!mabur::probe::parse_probe_body(m.body.data(), m.body.size(),
@@ -2378,6 +2410,7 @@ static int run_radio(const maburgs::Config& cfg) {
     if (fw != frame_wire) {
       frame_wire = fw;
       agg.decoder().reset_continuity();
+      arq_shadow.reset();  // its open episodes live in the old seq space
       fstream.reset();
       lat_anchor.reset();  // new session's pts space is unrelated to the old one's
       // Drop any pre-reset samples too: without this, the anchor re-warms
@@ -2479,6 +2512,13 @@ static int run_radio(const maburgs::Config& cfg) {
             fec_log->row(now_ms, sid, fop.mcs, fop.bw,
                          sid == 0 ? fop.overhead_base : fop.overhead_enh, e);
     }
+    // Feedback-repair shadow (arq.log): silence detection, settled burst-end
+    // samples and summaries, then the same drain-every-tick rule as fec.log.
+    arq_shadow.tick(now_ms);
+    for (const auto& e : arq_shadow.take_episodes())
+      if (arq_log) arq_log->episode(e);
+    for (const auto& s : arq_shadow.take_summaries())
+      if (arq_log) arq_log->summary(s);
     const auto s1_sample = s1_loss.sample(now_ms);
     s1_loss_cur.add(s1.arr_expected - s1.arr_expected_stale,
                     s1.arr_arrived - s1.arr_arrived_stale, now_ms);
@@ -3289,6 +3329,30 @@ int main(int argc, char** argv) {
   uint64_t rc_frames = 0;
   agg.set_rc_sink([&](uint8_t, const std::vector<uint8_t>&, uint64_t) { ++rc_frames; });
 
+  // Feedback-repair shadow over the replay, same tracker as run_radio. The
+  // replay clock is synthetic (FrameFileSource: 0.9 ms per air frame, every
+  // card's copy of a frame on the same stamp), so only arrival ORDER means
+  // anything: settle covers same-frame card copies and nothing else, and the
+  // timing-based burst ends are off -- layer switches end bursts here.
+  const auto arq_layers = cfg.uep_layers();
+  maburgs::ArqShadowCfg arq_cfg;
+  arq_cfg.settle_ms = 0.5;
+  arq_cfg.gap_ms = arq_cfg.quiet_ms = arq_cfg.summary_ms = 1e12;
+  maburgs::ArqShadow arq_shadow(arq_cfg, [&](int sid) {
+    maburgs::ArqSnap s;
+    s.deficit = agg.decoder().deficit(sid);
+    const auto st = agg.decoder().stats(sid);
+    s.abandoned = st.syms_abandoned;
+    s.abandoned_stale = st.syms_abandoned_stale;
+    s.ov = arq_layers[static_cast<size_t>(sid)].fec.overhead;
+    s.bpb = arq_layers[static_cast<size_t>(sid)].blocks_per_body;
+    return s;
+  });
+  agg.set_video_hook([&](int sid, uint64_t us) {
+    arq_shadow.on_video_body(sid, static_cast<double>(us) / 1000.0);
+  });
+  std::vector<maburgs::ArqEpisode> arq_eps;
+
   uint64_t last_ms = 0;
 #ifdef MABUR_TEST
   // Captured for run_hop_inject_test()'s confirm step: any body out of this
@@ -3306,12 +3370,17 @@ int main(int argc, char** argv) {
     const uint64_t now_ms = m->mono_us / 1000;
     fstream.poll(now_ms);
     if (au_on) au_bell.poll();
+    arq_shadow.tick(static_cast<double>(m->mono_us) / 1000.0);
+    for (auto& e : arq_shadow.take_episodes()) arq_eps.push_back(e);
     last_ms = now_ms;
   }
   // Let FrameStream time out whatever is still half-assembled (its gap timeout
   // is what turns an unrecoverable hole into a truncated frame).
   fstream.poll(last_ms + static_cast<uint64_t>(cfg.video.frame_gap_timeout_ms) +
                1);
+  // The last burst never saw a layer switch: end it on silence.
+  arq_shadow.tick(static_cast<double>(last_ms) + 2e12);
+  for (auto& e : arq_shadow.take_episodes()) arq_eps.push_back(e);
 
   if (au_on)
     std::fprintf(stderr, "au_ring: published=%llu dropped_oversize=%llu\n",
@@ -3352,6 +3421,23 @@ int main(int argc, char** argv) {
                  static_cast<unsigned long long>(st.packets_out),
                  maburgs::delivery_pct(
                      maburgs::residual_counts(agg.decoder(), s, false)));
+  }
+  for (int s = 0; s < 2; ++s) {
+    size_t eps = 0, lost = 0;
+    uint64_t peak = 0;
+    for (const auto& e : arq_eps) {
+      if (e.sid != s) continue;
+      ++eps;
+      if (e.aband > 0) ++lost;
+      peak = std::max(peak, e.dpk);
+    }
+    std::fprintf(stderr,
+                 "arq_shadow %d: bursts=%llu short=%llu episodes=%zu lost=%zu "
+                 "peak=%llu open_deficit=%llu\n",
+                 s, static_cast<unsigned long long>(arq_shadow.bursts(s)),
+                 static_cast<unsigned long long>(arq_shadow.short_bursts(s)), eps,
+                 lost, static_cast<unsigned long long>(peak),
+                 static_cast<unsigned long long>(agg.decoder().deficit(s)));
   }
   std::fprintf(stderr,
                "frames_out: clean=%llu truncated=%llu dropped=%llu bad_frag=%llu\n",

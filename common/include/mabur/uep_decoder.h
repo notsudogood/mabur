@@ -79,6 +79,9 @@ class UepDecoder {
   // Layer sid's observed TX window (SwDecoder::repair_window). 0 on bad sid
   // or before the first repair.
   int repair_window(int sid) const;
+  // Layer sid's repair-symbol shortfall (SwDecoder::deficit): what a
+  // feedback-repair request would ask for right now. 0 on bad sid.
+  uint64_t deficit(int sid) const;
   // Layer sid's ArrivalTracker guard (spec 2026-09-23 tx-windows §5.2). 0 on
   // bad sid.
   uint32_t arrival_guard(int sid) const;

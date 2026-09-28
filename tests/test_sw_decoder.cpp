@@ -732,3 +732,92 @@ TEST(episode_queue_is_bounded_when_never_drained) {
   // The oldest were dropped: the first kept episode is not the first hole.
   CHECK(eps.front().first_seq > (1ull << 32) + 5);
 }
+
+// ---- deficit (feedback-repair shadow mode, 2026-09-28) ----
+// deficit() = unknown live seqs - pending independent rows: the number of
+// repair symbols a "send me k more" request would have to ask for.
+
+TEST(deficit_zero_on_clean_stream_at_every_step) {
+  SwConfig cfg{64, 8, 1.0};
+  auto envs = encode_stream(cfg, 40, nullptr);
+  SwDecoder d(cfg);
+  CHECK(d.deficit() == 0);  // no anchor yet
+  for (auto& env : envs) {
+    d.add_symbol(env.data(), env.size(), 1000);
+    CHECK(d.deficit() == 0);
+  }
+}
+
+TEST(deficit_counts_hole_and_each_independent_repair_pays_one) {
+  // Drop sources 4..6 AND the repairs sealed right after them (windows
+  // ending at 4..6), so after source 7 nothing covers the hole: deficit 3.
+  // Each later repair spans the hole and adds one independent row.
+  SwConfig cfg{64, 8, 1.0};
+  auto envs = encode_stream(cfg, 30, nullptr);
+  SwDecoder d(cfg);
+  std::vector<uint64_t> after_src7;
+  bool seen7 = false;
+  for (auto& env : envs) {
+    sw::SwHeader h;
+    REQUIRE(sw::parse_header(env.data(), env.size(), &h));
+    if (!h.repair && h.seq >= 4 && h.seq <= 6) continue;
+    if (h.repair) {
+      const uint32_t last = h.seq + h.window_len - 1;
+      if (last >= 4 && last <= 6) continue;
+    }
+    d.add_symbol(env.data(), env.size(), 1000);
+    if (!h.repair && h.seq == 7) { seen7 = true; CHECK(d.deficit() == 3); }
+    if (seen7 && h.repair && after_src7.size() < 3) after_src7.push_back(d.deficit());
+  }
+  REQUIRE(after_src7.size() == 3);
+  CHECK(after_src7[0] == 2);
+  CHECK(after_src7[1] == 1);
+  CHECK(after_src7[2] == 0);  // third covering repair solves the system
+  CHECK(d.deficit() == 0);
+  CHECK(d.syms_recovered() == 3);
+  CHECK(d.syms_abandoned() == 0);
+}
+
+TEST(deficit_returns_to_zero_when_the_hole_is_evicted) {
+  SwConfig cfg{64, 4, 0.0};  // no repairs: the hole can only be abandoned
+  auto envs = encode_stream(cfg, 40, nullptr);
+  SwDecoder d(cfg, /*seq_horizon=*/16);
+  bool saw_short = false;
+  for (size_t i = 0; i < envs.size(); ++i) {
+    if (i == 3) continue;
+    d.add_symbol(envs[i].data(), envs[i].size(), 1000);
+    if (i > 3 && i < 18) { CHECK(d.deficit() == 1); saw_short = true; }
+  }
+  CHECK(saw_short);
+  CHECK(d.deficit() == 0);  // seq 3 fell below the horizon...
+  CHECK(d.syms_abandoned() == 1);  // ...and was booked lost at that moment
+}
+
+TEST(deficit_rises_when_a_stuck_row_expires) {
+  // A pending row that ages out (expire_rows_older_than) no longer counts
+  // toward solving the hole, so the shortfall it covered comes back.
+  SwConfig cfg{64, 8, 1.0};
+  auto envs = encode_stream(cfg, 12, nullptr);
+  SwDecoder d(cfg);
+  // Keep exactly one repair touching the hole, and one that spans BOTH
+  // holes: two unknowns, one pending row.
+  bool kept = false;
+  for (auto& env : envs) {
+    sw::SwHeader h;
+    REQUIRE(sw::parse_header(env.data(), env.size(), &h));
+    if (!h.repair && (h.seq == 4 || h.seq == 5)) continue;
+    if (h.repair) {
+      const uint32_t last = h.seq + h.window_len - 1;
+      if (h.seq <= 5 && last >= 4) {
+        const bool spans_both = h.seq <= 4 && last >= 5;
+        if (!spans_both || kept) continue;
+        kept = true;
+      }
+    }
+    d.add_symbol(env.data(), env.size(), 1000);
+  }
+  CHECK(d.rows_in_flight() == 1);
+  CHECK(d.deficit() == 1);
+  CHECK(d.expire_rows_older_than(10, 2000) == 1);
+  CHECK(d.deficit() == 2);
+}

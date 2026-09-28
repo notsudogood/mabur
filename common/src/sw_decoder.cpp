@@ -1,6 +1,7 @@
 #include "mabur/sw_decoder.h"
 
 #include <algorithm>
+#include <iterator>
 
 #include "mabur/gf256.h"
 #include "mabur/sw_wire.h"
@@ -355,6 +356,19 @@ std::vector<LossEpisode> SwDecoder::take_episodes() {
   std::vector<LossEpisode> out;
   out.swap(episodes_);
   return out;
+}
+
+uint64_t SwDecoder::deficit() const {
+  if (!have_seq_ || newest_v_ < base_) return 0;
+  // Below base_ everything is already booked (delivered/recovered/abandoned);
+  // during the opening horizon known_ may hold reordered seqs below base_,
+  // which lower_bound excludes. Rows never reference an evicted seq.
+  const uint64_t span = newest_v_ - base_ + 1;
+  const uint64_t known_live = static_cast<uint64_t>(
+      std::distance(known_.lower_bound(base_), known_.end()));
+  const uint64_t unknown = span > known_live ? span - known_live : 0;
+  const uint64_t rows = rows_.size();
+  return unknown > rows ? unknown - rows : 0;
 }
 
 int SwDecoder::expire_rows_older_than(uint64_t deadline_ms, uint64_t now_ms) {

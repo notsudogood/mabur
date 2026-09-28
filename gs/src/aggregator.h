@@ -107,6 +107,10 @@ class Aggregator {
                                      uint64_t mono_us)>;
   using ProbeSink = std::function<void(uint8_t card_id,
                                        const mabur::node::RxBody& m)>;
+  // Observes a CRC-clean video body (stream 0/1) immediately BEFORE it is
+  // decoded -- the arrival-order view ArqShadow finds burst ends in. Corrupt
+  // bodies are skipped: their peeked stream id is untrustworthy.
+  using VideoHook = std::function<void(int stream_id, uint64_t mono_us)>;
 
   Aggregator(const std::array<mabur::UepLayerCfg, 2>& layers,
              uint32_t seq_horizon, int n_cards, uint32_t arrival_guard = 0);
@@ -115,6 +119,7 @@ class Aggregator {
   void set_rc_sink(RcSink s) { rc_sink_ = std::move(s); }
   void set_msp_sink(MspSink s) { msp_sink_ = std::move(s); }
   void set_probe_sink(ProbeSink s) { probe_sink_ = std::move(s); }
+  void set_video_hook(VideoHook h) { video_hook_ = std::move(h); }
 
   void on_rx_body(const mabur::node::RxBody& m);
 
@@ -141,6 +146,7 @@ class Aggregator {
   RcSink rc_sink_;
   MspSink msp_sink_;
   ProbeSink probe_sink_;
+  VideoHook video_hook_;
   uint16_t last_video_seq_ = 0;
   uint64_t last_video_us_ = 0;
   uint64_t bad_card_msgs_ = 0;

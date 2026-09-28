@@ -650,3 +650,12 @@ TEST(arrival_guard_is_plumbed_from_the_constructor) {
   UepDecoder d64(layers, 0, 64);
   CHECK(d64.arrival_guard(0) == 64 && d64.arrival_guard(1) == 64);
 }
+
+TEST(deficit_passthrough_is_zero_on_bad_sid_and_idle_layers) {
+  std::array<UepLayerCfg, 2> layers{};
+  UepDecoder d(layers);
+  CHECK(d.deficit(0) == 0);
+  CHECK(d.deficit(1) == 0);
+  CHECK(d.deficit(-1) == 0);
+  CHECK(d.deficit(2) == 0);
+}

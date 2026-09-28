@@ -19,10 +19,12 @@ class TestResolve(unittest.TestCase):
     def test_session_dir_resolves_every_file(self):
         with tempfile.TemporaryDirectory() as root:
             d = make_session(root, 42, ["ctl.log", "probe.log", "au.log",
-                                        "flight.jsonl", "lat.log", "fec.log"])
+                                        "flight.jsonl", "lat.log", "fec.log",
+                                        "arq.log"])
             s = session.resolve(d)
             self.assertEqual(s.dir, d)
             self.assertEqual(s.fec, os.path.join(d, "fec.log"))
+            self.assertEqual(s.arq, os.path.join(d, "arq.log"))
             self.assertEqual(s.ctl, os.path.join(d, "ctl.log"))
             self.assertEqual(s.au, os.path.join(d, "au.log"))
             self.assertEqual(s.flight, os.path.join(d, "flight.jsonl"))
@@ -52,6 +54,13 @@ class TestResolve(unittest.TestCase):
             with open(p, "w") as f:
                 f.write("probelog 2 bpb=4\n")
             self.assertEqual(session.resolve(p).probe, p)
+
+    def test_arq_log_classified_by_marker(self):
+        with tempfile.TemporaryDirectory() as root:
+            p = os.path.join(root, "renamed.log")
+            with open(p, "w") as f:
+                f.write("arqlog 1\n")
+            self.assertEqual(session.resolve(p).arq, p)
 
     def test_latest_picks_highest_index_not_newest_mtime(self):
         with tempfile.TemporaryDirectory() as root:

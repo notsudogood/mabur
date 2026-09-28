@@ -131,6 +131,15 @@ class SwDecoder {
   uint64_t packets_out() const { return packets_out_; }
   uint64_t resets() const { return resets_; }
   size_t rows_in_flight() const { return rows_.size(); }
+  // Repair symbols still needed to solve every source seq the channel has
+  // not delivered in the live span [base_, newest] (feedback-repair shadow
+  // mode, docs/feedback-repair-rollout.md): unknown seqs minus the pending
+  // independent rows. Exact, not an estimate: rows_ is kept in echelon form
+  // over unknown seqs only, and as many independent rows as unknowns always
+  // solves, so this is 0 exactly when nothing is missing. It is also what a
+  // "send me k more" request would have to ask for, because any repair
+  // spanning a missing seq adds one independent row. O(live known seqs).
+  uint64_t deficit() const;
 
  private:
   struct Row {

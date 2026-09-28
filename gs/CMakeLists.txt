@@ -26,6 +26,8 @@ add_library(mabur_gs_core STATIC
   src/log_writer.cpp
   src/probe_log.cpp
   src/fec_log.cpp
+  src/arq_shadow.cpp
+  src/arq_log.cpp
   src/ladder_residual.cpp
   src/tx_selector.cpp
   src/rcf_slot.cpp

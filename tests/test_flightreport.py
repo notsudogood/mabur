@@ -1758,11 +1758,80 @@ def test_session_dir_mode_prints_fec_section():
     assert "FEC EPISODES" in result.stdout, result.stdout
 
 
+ARQ_LOG_ROWS = """arqlog 1
+S 10000 0 600 6
+S 10000 1 600 2
+S 20000 0 600 4
+E 1000 0 5 20 0.50 4 33 0 2 8 8 0 0
+E 2000 0 5 20 0.50 4 66 33 3 10 30 0 0
+E 3000 0 5 20 0.50 4 99 0 1 12 12 12 0
+E 4000 0 4 20 0.50 4 400 350 12 20 200 150 0
+E 5000 0 5 20 0.50 4 50 0 1 6 6 0 3
+# dropped 3
+E 6000 1 5 20 0.50 4 33 0 1 4 4 0 0
+"""
+
+
+def test_arq_section_shortfalls_outcomes_and_verdict():
+    """ARQ SHADOW (arq.log, feedback-repair phase 1). sid 0: 1200 bursts,
+    10 short over two 10 s summaries -> 0.50 requests/s. Episodes: A resolved
+    in-band after 33 ms, peak 8 symbols = 2 bodies; B resolved after 66 ms,
+    peak 30 = 8 bodies (<= 2 aggs); C lost, 3 bodies, grew 0 ms -> one
+    repair round could have saved it; D lost, 50 bodies, grew for 350 ms ->
+    an outage; E stale (straddled a rung change) -> excluded."""
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "arq.log"
+        p.write_text(ARQ_LOG_ROWS)
+        eps, sums = flightreport.load_arqlog(str(p))
+        assert len(eps) == 6 and len(sums) == 3, (eps, sums)
+        assert eps[1]["dpk"] == 30 and eps[1]["grow_ms"] == 33.0, eps[1]
+        result = subprocess.run([sys.executable, "tools/flightreport.py", str(p)],
+                                capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    assert "ARQ SHADOW" in out, out
+    sec = out[out.find("ARQ SHADOW"):]
+    s0 = sec[sec.find("sid 0"):sec.find("sid 1")]
+    assert "sid 0: bursts=1200 short=10 (0.83%)  would-request 0.50/s" in s0, s0
+    assert "episodes n=5 (stale 1): resolved in-band 2, lost 2" in s0, s0
+    assert "peak shortfall: <=1 agg 2  <=2 aggs 1  more 1  (bodies p50/max=8/50)" in s0, s0
+    assert "in-band fix delay p50/p90/max=33/66/66 ms; a repair at rtt saves p50 25 ms" in s0, s0
+    assert "lost: 2 -- saveable by a repair round 1" in s0, s0
+    assert "outage-shaped 1" in s0, s0
+    assert "mcs4/20 n=1 lost=1  mcs5/20 n=3 lost=1" in s0, s0
+    s1 = sec[sec.find("sid 1"):]
+    assert "sid 1: bursts=600 short=2 (0.33%)  would-request 0.20/s" in s1, s1
+    assert "resolved in-band 1, lost 0" in s1, s1
+
+
+def test_session_dir_mode_prints_arq_section():
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "ctl.log").write_text("ctllog 11\n")
+        (Path(d) / "arq.log").write_text(ARQ_LOG_ROWS)
+        result = subprocess.run([sys.executable, "tools/flightreport.py", d],
+                                capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "ARQ SHADOW" in result.stdout, result.stdout
+
+
+def test_arq_section_silent_without_rows():
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "arq.log"
+        p.write_text("arqlog 1\n")
+        result = subprocess.run([sys.executable, "tools/flightreport.py", str(p)],
+                                capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "ARQ SHADOW" not in result.stdout, result.stdout
+
+
 if __name__ == "__main__":
     test_fec_section_counterfactual_overhead_per_sid_and_rung()
     test_session_dir_mode_prints_fec_section()
     test_fec_section_feclog2_groups_by_mcs_and_bw()
     test_fec_section_feclog1_rows_default_bw_20()
+    test_arq_section_shortfalls_outcomes_and_verdict()
+    test_session_dir_mode_prints_arq_section()
+    test_arq_section_silent_without_rows()
     test_flightreport_structure()
     test_old_scale_snr_warns_on_stderr()
     test_overhead_scale_break_warns_on_stderr()

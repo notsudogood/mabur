@@ -92,6 +92,11 @@ int UepDecoder::repair_window(int sid) const {
   return layers_[static_cast<size_t>(sid)].sw.repair_window();
 }
 
+uint64_t UepDecoder::deficit(int sid) const {
+  if (sid < 0 || sid > 1) return 0;
+  return layers_[static_cast<size_t>(sid)].sw.deficit();
+}
+
 uint32_t UepDecoder::arrival_guard(int sid) const {
   if (sid < 0 || sid > 1) return 0;
   return layers_[static_cast<size_t>(sid)].sw.arrival_guard();

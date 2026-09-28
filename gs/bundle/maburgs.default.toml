@@ -175,9 +175,11 @@ socket     = "/run/mabur-au.sock"   # must match maburplay's socket
 slot_kb    = 512                    # largest frame that fits, in KB
 slot_count = 16                     # frames buffered
 
-# Detailed per-session logs for troubleshooting; off by default.
+# Detailed per-session logs for troubleshooting. ON in this bundle: the
+# feedback-repair data-gathering build needs arq.log from every flight
+# (docs/feedback-repair-rollout.md). Set false to stop writing to the DVR.
 [debug_log]
-enable        = false
+enable        = true
 dir           = "/media/dvr/log"
 ctl_period_ms = 50            # link-state log interval
 rung_period_s = 10            # per-rung summary log interval

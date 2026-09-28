@@ -131,7 +131,12 @@ Consume the same numbers programmatically with:
   is set — `<debug_log.dir>/NNNN/` holding `ctl.log`, `probe.log`, `au.log`,
   `scan.log`, `fec.log`, `arq.log` and `flight.jsonl`; maburplay writes `lat.log` into the same directory by
   following the `/tmp/mabur-session` marker and holds no logging config of
-  its own. Default is **off**: nothing is written until the knob is set.
+  its own. The loader default is **off**, but the shipped bundle
+  (`gs/bundle/maburgs.default.toml`) turns it **on** since the
+  feedback-repair data-gathering build (`docs/feedback-repair-rollout.md`,
+  which needs `arq.log` from every flight). A GS whose `/config/maburgs.toml`
+  predates that keeps its own value: the image seeds `/config` only with
+  files that are missing.
   The marker lives in tmpfs, so a reboot starts a new session while a 2 s
   wrapper respawn rejoins the current one and appends (which is why a format
   marker line can appear more than once in a file). **A drone restart is a

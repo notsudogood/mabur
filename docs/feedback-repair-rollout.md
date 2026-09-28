@@ -100,8 +100,12 @@ GS only, no wire change, no config key: it rides `debug_log.enable` like
 
 ### Flying it
 
-1. Set `[debug_log] enable = true` in `maburgs.toml` and deploy `maburgs`
-   (`tools/build-arm64.sh`, `docs/deploy.md`). The drone is unchanged.
+1. Deploy `maburgs` from this branch (`tools/build-arm64.sh`,
+   `docs/deploy.md`), or flash a GS image built from it. The shipped bundle
+   now has `[debug_log] enable = true`. A GS that keeps an older
+   `/config/maburgs.toml` keeps that file's value, so check it there. The
+   drone needs no change, but must be built from the same mabur commit (no
+   wire change here, but a mismatched pair across other commits can be).
 2. Fly the flights you care about. Range and obstruction are what decide
    this, not the bench.
 3. Run `python3 tools/flightreport.py /media/dvr/log/NNNN`. Its ARQ SHADOW

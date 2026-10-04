@@ -255,6 +255,18 @@ struct DebugLogCfg {
   int rung_period_s = 10;    // ctl.log R lines (the per-rung store snapshot)
 };
 
+/// Turnaround bench (feedback-repair rollout phase 2,
+/// docs/feedback-repair-rollout.md): ping the drone at random moments and log
+/// ping-on-air -> pong-on-air to ta.log, with the drone's video queue loaded.
+/// Off (rate_hz 0) by default; needs debug_log on for the log and a drone
+/// advertising CAP_TURNAROUND.
+struct TurnaroundCfg {
+  double rate_hz = 0.0;          // pings per second, jittered; 0 = off
+  std::vector<int> lanes{0, 4};  // pong hardware queues, round robin: 0 = drone default, 1..6 = BK/BE/VI/VO/Mgmt/High
+  int frames = 1;                // pong frames per ping (repair burst size)
+  int bytes = 64;                // bytes per pong frame body
+};
+
 /// Ground station configuration: radio, FEC, link, video reassembly, AU ring, MSP OSD.
 struct Config {
   RadioCfg radio;
@@ -266,6 +278,7 @@ struct Config {
   AuRingOutCfg au_ring;
   DebugLogCfg debug_log;
   HopCfg hop;
+  TurnaroundCfg turnaround;
 
   /// Builds decoder configuration with per-stream RS and UEP overhead
   /// (2 streams since the airtime-balance-uep fold-in).

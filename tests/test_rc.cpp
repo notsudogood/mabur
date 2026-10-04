@@ -574,6 +574,97 @@ TEST(telem_ack_is_the_cal_active_bit_alone) {
   CHECK((got->flags & 0x40) != 0);
 }
 
+TEST(ta_ping_golden_bytes_and_round_trip) {
+  // Pins the ping layout byte for byte: the drone and the GS must agree on
+  // it without a version bump (new types inside RC_VERSION 11).
+  mabur::rc::TaPing p;
+  p.vtx_id = 0x04030201;
+  p.seq = 0x0605;
+  p.lane = 4;
+  p.n_frames = 3;
+  p.frame_bytes = 0x0578;  // 1400
+  auto b = mabur::rc::pack_ta_ping(p);
+  REQUIRE(b.size() == 17);
+  const uint8_t head[15] = {0x43, 0x52, mabur::rc::RC_VERSION, 7, 0,
+                            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 4, 3, 0x78, 0x05};
+  for (size_t i = 0; i < 15; ++i) CHECK(b[i] == head[i]);
+  CHECK(mabur::rc::frame_type(b.data(), b.size()) == mabur::rc::T_TA_PING);
+  auto got = mabur::rc::parse_ta_ping(b.data(), b.size());
+  REQUIRE(got.has_value());
+  CHECK(got->vtx_id == p.vtx_id);
+  CHECK(got->seq == p.seq);
+  CHECK(got->lane == 4);
+  CHECK(got->n_frames == 3);
+  CHECK(got->frame_bytes == 1400);
+}
+
+TEST(ta_ping_rejects_out_of_range_and_corrupt) {
+  mabur::rc::TaPing p;
+  auto ok = mabur::rc::pack_ta_ping(p);
+  REQUIRE(mabur::rc::parse_ta_ping(ok.data(), ok.size()).has_value());
+  auto bad_crc = ok;
+  bad_crc[9] ^= 0x01;
+  CHECK(!mabur::rc::parse_ta_ping(bad_crc.data(), bad_crc.size()).has_value());
+  auto variant = [](auto edit) {
+    mabur::rc::TaPing q;
+    edit(q);
+    auto b = mabur::rc::pack_ta_ping(q);
+    return mabur::rc::parse_ta_ping(b.data(), b.size()).has_value();
+  };
+  CHECK(!variant([](mabur::rc::TaPing& q) { q.lane = mabur::rc::kTaMaxLane + 1; }));
+  CHECK(!variant([](mabur::rc::TaPing& q) { q.n_frames = 0; }));
+  CHECK(!variant([](mabur::rc::TaPing& q) { q.n_frames = mabur::rc::kTaMaxFrames + 1; }));
+  CHECK(!variant([](mabur::rc::TaPing& q) { q.frame_bytes = mabur::rc::kTaPongMinBytes - 1; }));
+  CHECK(!variant([](mabur::rc::TaPing& q) { q.frame_bytes = mabur::rc::kTaPongMaxBytes + 1; }));
+  CHECK(variant([](mabur::rc::TaPing& q) { q.lane = mabur::rc::kTaMaxLane; }));
+}
+
+TEST(ta_pong_pads_to_frame_bytes_and_round_trips) {
+  mabur::rc::TaPong p;
+  p.vtx_id = 9;
+  p.seq = 513;
+  p.lane = 5;
+  p.idx = 2;
+  p.n_frames = 3;
+  p.hold_us = 0x01020304;
+  p.txq_depth = 40;
+  p.pool_depth = 7;
+  p.air_backlog_100us = 123;
+  p.frame_bytes = 1000;
+  auto b = mabur::rc::pack_ta_pong(p);
+  REQUIRE(b.size() == 1000);
+  CHECK(mabur::rc::frame_type(b.data(), b.size()) == mabur::rc::T_TA_PONG);
+  CHECK(b[14] == 0x04 && b[17] == 0x01);  // hold_us little-endian at 14
+  CHECK(b[24] == 0 && b[997] == 0);       // zero padding up to the CRC
+  auto got = mabur::rc::parse_ta_pong(b.data(), b.size());
+  REQUIRE(got.has_value());
+  CHECK(got->vtx_id == 9);
+  CHECK(got->seq == 513);
+  CHECK(got->lane == 5);
+  CHECK(got->idx == 2);
+  CHECK(got->n_frames == 3);
+  CHECK(got->hold_us == 0x01020304u);
+  CHECK(got->txq_depth == 40);
+  CHECK(got->pool_depth == 7);
+  CHECK(got->air_backlog_100us == 123);
+  CHECK(got->frame_bytes == 1000);
+  // The CRC covers the padding: a flipped padding byte must fail.
+  b[500] ^= 0x80;
+  CHECK(!mabur::rc::parse_ta_pong(b.data(), b.size()).has_value());
+}
+
+TEST(ta_pong_clamps_size_and_minimum_is_head_plus_crc) {
+  mabur::rc::TaPong p;
+  p.frame_bytes = 3;
+  CHECK(mabur::rc::pack_ta_pong(p).size() == mabur::rc::kTaPongMinBytes);
+  p.frame_bytes = 60000;
+  CHECK(mabur::rc::pack_ta_pong(p).size() == mabur::rc::kTaPongMaxBytes);
+  p.frame_bytes = mabur::rc::kTaPongMinBytes;
+  auto b = mabur::rc::pack_ta_pong(p);
+  CHECK(mabur::rc::parse_ta_pong(b.data(), b.size()).has_value());
+  CHECK(!mabur::rc::parse_ta_pong(b.data(), b.size() - 1).has_value());
+}
+
 TEST(rc_version_is_eleven) {
   // 2026-09-26 vtx-recorder: RCF +rec, Telem +rec_status.
   CHECK(mabur::rc::RC_VERSION == 11);

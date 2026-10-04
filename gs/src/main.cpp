@@ -66,6 +66,8 @@
 #include "probe_log.h"
 #include "fec_log.h"
 #include "arq_log.h"
+#include "ta_bench.h"
+#include "ta_log.h"
 #include "arq_shadow.h"
 #include "probe_track.h"
 #include "rcf_slot.h"
@@ -1166,11 +1168,11 @@ static int run_radio(const maburgs::Config& cfg) {
   uint64_t scout_gated_sends = 0;
   // The one place a control frame leaves the GS (direct or via the RCF
   // slotter): card + RTT stamp travel with the frame (SlotFrame).
-  auto send_control_frame = [&](const maburgs::SlotFrame& f) {
+  auto send_control_frame = [&](const maburgs::SlotFrame& f) -> bool {
     if (scout && !scout_joined &&
         ((one_card && !scout->at_home()) || scout->quiet())) {
       ++scout_gated_sends;
-      return;
+      return false;
     }
     static const bool gaplog = std::getenv("MABUR_GAPLOG") != nullptr;
     if (gaplog) {
@@ -1191,7 +1193,16 @@ static int run_radio(const maburgs::Config& cfg) {
       rtt_est.on_rcf_sent(f.seq, mono_us());
       ++rcf_sent_total;
     }
+    return true;
   };
+
+  // Turnaround bench (rollout phase 2): random-phase pings, logged with the
+  // witness sightings to ta.log. Seeded from the clock: the schedule only
+  // needs to be uncorrelated with the drone's AU cadence.
+  maburgs::TaPinger ta_pinger(cfg.turnaround, cfg.link.vtx_id, mono_us());
+  if (ta_pinger.enabled())
+    std::fprintf(stderr, "turnaround: bench ON, %s\n",
+                 maburgs::TaLog::header(cfg.turnaround).c_str());
 
   maburgs::AuRingWriter au_ring;
   maburgs::AuDoorbell au_bell;
@@ -1251,6 +1262,9 @@ static int run_radio(const maburgs::Config& cfg) {
   std::optional<maburgs::FecLog> fec_log;
   // Feedback-repair shadow log (arq.log), same directory and lifetime.
   std::optional<maburgs::ArqLog> arq_log;
+  // Turnaround bench log (ta.log, rollout phase 2), same directory and
+  // lifetime; emplaced only when [turnaround] rate_hz is set.
+  std::optional<maburgs::TaLog> ta_log;
   // Per-AU meta log; forward-declared here so the FrameStream callbacks
   // just below can reference it by [&] capture, even though it is only
   // emplaced once debug.ok() is known (ctl/probe/au construction, below,
@@ -1472,6 +1486,8 @@ static int run_radio(const maburgs::Config& cfg) {
     probe_log.emplace(*log_writer, debug.dir(), probe_bpb);
     fec_log.emplace(*log_writer, debug.dir());
     arq_log.emplace(*log_writer, debug.dir());
+    if (cfg.turnaround.rate_hz > 0.0)
+      ta_log.emplace(*log_writer, debug.dir(), cfg.turnaround);
     // Gated on au_on too (not just debug.ok()): with au_ring.enable=false
     // there are never any rows to write, and an emplace here would leave
     // au.log containing only its "# aulog 4" header -- reads as "the
@@ -1609,6 +1625,7 @@ static int run_radio(const maburgs::Config& cfg) {
     if (probe_log) probe_log->rotate(debug.dir());
     if (fec_log) fec_log->rotate(debug.dir());
     if (arq_log) arq_log->rotate(debug.dir());
+    if (ta_log) ta_log->rotate(debug.dir());
     if (au_log) au_log->rotate(debug.dir());
     if (scan_log) scan_log->rotate(debug.dir());
     std::fprintf(stderr,
@@ -1616,6 +1633,9 @@ static int run_radio(const maburgs::Config& cfg) {
                  static_cast<unsigned>(from_seq), static_cast<unsigned>(to_seq),
                  old_dir.c_str(), debug.dir().c_str());
   };
+  agg.set_ta_sink([&](const mabur::node::RxBody& m) {
+    if (ta_log) ta_log->heard(m);
+  });
   agg.set_rc_sink([&](uint8_t, const std::vector<uint8_t>& f, uint64_t us) {
     if (mabur::rc::frame_type(f.data(), f.size()) == mabur::rc::T_TELEM) {
       // A CRC-clean frame can still fail to parse as a valid Telem (e.g. a
@@ -2786,6 +2806,24 @@ static int run_radio(const maburgs::Config& cfg) {
                             sel.selected(), false};
       rf.offered_ms = drained_ms;
       send_control_frame(rf);
+    }
+    // Turnaround bench ping (rollout phase 2): straight through
+    // send_control_frame at its own jittered time, deliberately NOT through
+    // rcf_slot -- the bench samples every queue state the drone can be in.
+    // Only in session, only to a drone that answers (CAP_TURNAROUND), never
+    // during a calibration sweep, and only with ta.log open to record it.
+    if (ta_pinger.enabled()) {
+      const bool can_ping = ta_log && in_session &&
+                            (vrx.peer_caps() & mabur::rc::CAP_TURNAROUND) &&
+                            !cal_session.radio_silent(drained_ms);
+      if (!can_ping) {
+        ta_pinger.pause();
+      } else if (auto ping = ta_pinger.due(mono_us())) {
+        maburgs::SlotFrame pf{mabur::rc::pack_ta_ping(*ping), 0, sel.selected(), false};
+        pf.offered_ms = drained_ms;
+        const uint64_t t_call = mono_us();
+        if (send_control_frame(pf)) ta_log->sent(*ping, pf.card, t_call, mono_us());
+      }
     }
     // ctl: rung transition line — load-bearing for post-mortems (Task 6
     // adds the sideport link.ctl block; this stderr line is independent of

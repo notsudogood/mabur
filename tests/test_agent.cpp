@@ -234,6 +234,9 @@ TEST(disc_ack_advertises_frame_wire_cap) {
   auto parsed = parse_disc_ack(act.controls[0].data(), act.controls[0].size());
   REQUIRE(parsed.has_value());
   CHECK(parsed->chip_caps & mabur::rc::CAP_FRAME_WIRE);
+  // Rollout phase 2: this build answers turnaround pings (ta_responder.h),
+  // and the GS only pings a drone that says so.
+  CHECK(parsed->chip_caps & mabur::rc::CAP_TURNAROUND);
 }
 
 // 2b. Keep-alive DISC while LINKED: ACK-ONLY. The drone must reply with a

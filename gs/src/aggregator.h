@@ -111,6 +111,11 @@ class Aggregator {
   // decoded -- the arrival-order view ArqShadow finds burst ends in. Corrupt
   // bodies are skipped: their peeked stream id is untrustworthy.
   using VideoHook = std::function<void(int stream_id, uint64_t mono_us)>;
+  // Turnaround bench (rollout phase 2): every CRC-clean T_TA_PING (the GS's
+  // own, heard back on a witness card) and T_TA_PONG, with the full RX
+  // record -- the turnaround is timed off its tsfl. Neither touches video or
+  // RC accounting beyond the self/rc frame counters.
+  using TaSink = std::function<void(const mabur::node::RxBody& m)>;
 
   Aggregator(const std::array<mabur::UepLayerCfg, 2>& layers,
              uint32_t seq_horizon, int n_cards, uint32_t arrival_guard = 0);
@@ -120,6 +125,7 @@ class Aggregator {
   void set_msp_sink(MspSink s) { msp_sink_ = std::move(s); }
   void set_probe_sink(ProbeSink s) { probe_sink_ = std::move(s); }
   void set_video_hook(VideoHook h) { video_hook_ = std::move(h); }
+  void set_ta_sink(TaSink s) { ta_sink_ = std::move(s); }
 
   void on_rx_body(const mabur::node::RxBody& m);
 
@@ -147,6 +153,7 @@ class Aggregator {
   MspSink msp_sink_;
   ProbeSink probe_sink_;
   VideoHook video_hook_;
+  TaSink ta_sink_;
   uint16_t last_video_seq_ = 0;
   uint64_t last_video_us_ = 0;
   uint64_t bad_card_msgs_ = 0;

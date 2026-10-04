@@ -184,6 +184,16 @@ dir           = "/media/dvr/log"
 ctl_period_ms = 50            # link-state log interval
 rung_period_s = 10            # per-rung summary log interval
 
+# Turnaround test (feedback-repair rollout phase 2): the ground station
+# pings the drone at random moments and logs, to ta.log, how fast each reply
+# comes back while the drone is busy sending video. Needs debug_log on and a
+# drone running firmware from the same build. 0 = off.
+[turnaround]
+rate_hz = 0                   # pings per second (10 is plenty); 0 = off
+lanes   = [0, 4]              # drone transmit queues to compare, in turn: 0 = the one control frames use today, 4 = voice (highest priority)
+frames  = 1                   # reply frames per ping, like a repair burst
+bytes   = 64                  # bytes per reply frame
+
 # In-flight channel hop: when the current channel goes bad, move the link to
 # a cleaner candidate from [radio.scan]. A spare card keeps "scouting" the
 # candidates in the background to rank them.

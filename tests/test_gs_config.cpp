@@ -1203,6 +1203,31 @@ TEST(debug_log_rejects_out_of_range_and_unknown_keys) {
 // radio.cards is the one permitted omission, and it is not laziness: its
 // ABSENCE is the auto-scan setting (a list pins cards and skips the probe),
 // so there is no value the bundle could write that means "scan the bus".
+// Turnaround bench (rollout phase 2): off unless asked, lanes and burst
+// shape bounded by the wire's own limits.
+TEST(turnaround_defaults_parse_and_bounds) {
+  auto d = maburgs::load_config(write_tmp(""));
+  CHECK(d.turnaround.rate_hz == 0.0);
+  CHECK((d.turnaround.lanes == std::vector<int>{0, 4}));
+  CHECK(d.turnaround.frames == 1);
+  CHECK(d.turnaround.bytes == 64);
+
+  auto c = maburgs::load_config(write_tmp(
+      "[turnaround]\nrate_hz = 10\nlanes = [0, 4, 5, 6]\nframes = 6\nbytes = 1400\n"));
+  CHECK(c.turnaround.rate_hz == 10.0);
+  CHECK((c.turnaround.lanes == std::vector<int>{0, 4, 5, 6}));
+  CHECK(c.turnaround.frames == 6);
+  CHECK(c.turnaround.bytes == 1400);
+
+  for (const char* bad : {"[turnaround]\nlanes = [7]\n", "[turnaround]\nlanes = []\n",
+                          "[turnaround]\nframes = 9\n", "[turnaround]\nbytes = 25\n",
+                          "[turnaround]\nrate_hz = 51\n", "[turnaround]\nrate = 5\n"}) {
+    bool threw = false;
+    try { maburgs::load_config(write_tmp(bad)); } catch (const std::exception&) { threw = true; }
+    CHECK(threw);
+  }
+}
+
 TEST(bundle_default_sets_every_known_key_but_radio_cards) {
   std::vector<std::string> defaulted;
   maburgs::load_config(std::string(MABUR_GS_BUNDLE_DIR) + "/maburgs.default.toml",

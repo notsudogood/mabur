@@ -4,6 +4,7 @@
 #include <stdexcept>
 
 #include "mabur/ht40.h"
+#include "mabur/rc_proto.h"
 #include "mabur/toml.h"
 #include "nhm_busy.h"
 
@@ -124,7 +125,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
   } clear_on_exit;
 
   check_keys(j, "", {"radio", "fec", "link", "video", "msp", "stats", "au_ring",
-                     "debug_log", "hop"});
+                     "debug_log", "hop", "turnaround"});
   // Same reason as the drone's: a missing section visits none of its keys.
   // Kept in the exact order of the check_keys list above -- if they drift a
   // section goes silently unreported.
@@ -582,6 +583,31 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
         get_int(r, "ctl_period_ms", 1000, 50, 60000, "debug_log"));
     c.debug_log.rung_period_s = static_cast<int>(
         get_int(r, "rung_period_s", 10, 1, 600, "debug_log"));
+  }
+
+  if (j.contains("turnaround")) {
+    const Value& r = j["turnaround"];
+    check_keys(r, "turnaround", {"rate_hz", "lanes", "frames", "bytes"});
+    c.turnaround.rate_hz = get_num(r, "rate_hz", 0.0, 0.0, 50.0, "turnaround");
+    if (r.contains("lanes")) {
+      g_line = r["lanes"].line();
+      if (!r["lanes"].is_array() || r["lanes"].empty())
+        fail("turnaround.lanes", "must be a non-empty array");
+      c.turnaround.lanes.clear();
+      for (const Value& v : r["lanes"]) {
+        if (!v.is_number_integer()) fail("turnaround.lanes", "not an integer");
+        const long lane = v.get<int64_t>();
+        if (lane < 0 || lane > mabur::rc::kTaMaxLane)
+          fail("turnaround.lanes", "must be in [0,6]");
+        c.turnaround.lanes.push_back(static_cast<int>(lane));
+      }
+    } else {
+      note_default("turnaround", "lanes", "0,4");
+    }
+    c.turnaround.frames = static_cast<int>(
+        get_int(r, "frames", 1, 1, mabur::rc::kTaMaxFrames, "turnaround"));
+    c.turnaround.bytes = static_cast<int>(get_int(
+        r, "bytes", 64, mabur::rc::kTaPongMinBytes, mabur::rc::kTaPongMaxBytes, "turnaround"));
   }
   return c;
 }

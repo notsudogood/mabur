@@ -108,6 +108,19 @@ void Aggregator::on_rx_body(const mabur::node::RxBody& m) {
     return;
   }
 
+  // Turnaround bench (rollout phase 2): the GS's own ping heard back on a
+  // witness card, and the drone's pong. Diverted whole, before any video
+  // accounting, under the same crc_ok gate as the self frames above (a
+  // corrupt body that happens to parse must still be booked as a frame).
+  if (m.crc_ok && (rc_t == mabur::rc::T_TA_PING || rc_t == mabur::rc::T_TA_PONG)) {
+    if (rc_t == mabur::rc::T_TA_PING)
+      ++c.self_frames;
+    else
+      ++c.rc_frames;
+    if (ta_sink_) ta_sink_(m);
+    return;
+  }
+
   const int stream_id = mabur::sbi_peek_stream_id(m.body.data(), m.body.size());
 
 #ifdef MABUR_LOSS_SIM

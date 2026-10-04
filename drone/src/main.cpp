@@ -72,6 +72,7 @@
 #include "tick_gate.h"
 #include "tx_queue.h"
 #include "usb_tx_pool.h"
+#include "ta_responder.h"
 #ifdef MABUR_HAVE_VENC
 #include "venc_core.h"  // ARM only: drone/venc is not compiled on host builds
 #endif
@@ -1612,6 +1613,13 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
   // way enhance_disagree_total mirrors its counter.
   std::atomic<uint32_t> air_backlog_max_us{0};
   std::atomic<uint64_t> air_shed_drops_total{0};
+  // The same modelled backlog, last value rather than window max: what the
+  // turnaround responder stamps into each pong (rollout phase 2).
+  std::atomic<uint32_t> air_backlog_now_us{0};
+  // Turnaround bench responder (rollout phase 2, ta_responder.h). Built
+  // below once the queues it reports exist, before StartRxLoop opens the
+  // RX callback that feeds it.
+  std::unique_ptr<mabur::TaResponder> ta_responder;
   // Agent thread -> hot thread: link came up from BOOT/RENDEZVOUS, so every
   // frame encoded so far died before the air — re-mark the discontinuity
   // window so the GS gets the re-base signal on frames that can actually
@@ -1634,7 +1642,13 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
       // GS's CalControl has no config access and always sends vtx_id=0),
       // and CalSweep's on_cmd/on_result must run on the TX writer thread,
       // not the agent thread rc_queue feeds.
-      if (rc_type == rc::T_CAL_CMD || rc_type == rc::T_CAL_RESULT) {
+      if (rc_type == rc::T_TA_PING) {
+        // Turnaround bench: answered on the responder's own thread, never
+        // the agent's -- the agent loop's tick would sit inside the very
+        // turnaround being measured. Stamped first thing.
+        if (!pkt.RxAtrib.crc_err && ta_responder)
+          ta_responder->on_ping(body, body_len, now_steady_us());
+      } else if (rc_type == rc::T_CAL_CMD || rc_type == rc::T_CAL_RESULT) {
         cal_queue.push(body, body_len);
       } else {
         rc_queue.push(body, body_len);
@@ -2010,6 +2024,7 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
           // fresh post-booking sample -- that would always include this
           // frame's own just-booked airtime (a rung-2 IDR alone ~23 ms).
           const uint32_t bl = backlog_us;
+          air_backlog_now_us.store(bl, std::memory_order_relaxed);
           uint32_t prev = air_backlog_max_us.load(std::memory_order_relaxed);
           while (bl > prev &&
                  !air_backlog_max_us.compare_exchange_weak(prev, bl)) {}
@@ -2589,6 +2604,51 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
     }
   });
 
+  // Turnaround bench responder (rollout phase 2): answers T_TA_PING with
+  // T_TA_PONG on the hardware queue the ping names. Pongs ride the same
+  // direct, mutex-guarded send as every control frame (dev_sink.send, never
+  // the video pool), at control robustness, with the lane as the devourer
+  // per-packet queue (TxMode::hw_queue; lane 0 = today's default queue).
+  // Bounded by TaResponder's rate limit; idle unless the GS pings.
+  {
+    auto radiotaps = std::make_shared<std::array<std::vector<uint8_t>, rc::kTaMaxLane + 1>>();
+    for (uint8_t lane = 0; lane <= rc::kTaMaxLane; ++lane) {
+      devourer::TxMode m = control_tx_mode();
+      m.hw_queue = static_cast<devourer::HwQueue>(lane);
+      (*radiotaps)[lane] = devourer::build_stream_radiotap(m);
+    }
+    auto ta_seq = std::make_shared<uint16_t>(0);
+    mabur::TaResponder::Cfg tc;
+    tc.vtx_id = cfg.link.vtx_id;
+    ta_responder = std::make_unique<mabur::TaResponder>(
+        tc, [] { return now_steady_us(); },
+        [radiotaps, ta_seq](uint8_t lane, const std::vector<uint8_t>& body) {
+          const auto& rt = (*radiotaps)[lane <= rc::kTaMaxLane ? lane : 0];
+          std::vector<uint8_t> frame;
+          frame.reserve(rt.size() + kDot11HeaderLen + body.size());
+          frame.insert(frame.end(), rt.begin(), rt.end());
+          const auto hdr = build_dot11_header(*ta_seq);
+          *ta_seq = static_cast<uint16_t>((*ta_seq + 1) & 0xFFF);
+          frame.insert(frame.end(), hdr.begin(), hdr.end());
+          frame.insert(frame.end(), body.begin(), body.end());
+          return frame;
+        },
+        [&](const uint8_t* f, size_t n) {
+          // Quiet during a calibration session, like telemetry and MSP.
+          if (cal_active.load(std::memory_order_relaxed)) return false;
+          return dev_sink.send(f, n);
+        },
+        [&] {
+          mabur::TaResponder::QueueState q;
+          q.txq_depth = static_cast<uint16_t>(std::min<size_t>(txq.depth(), 0xFFFF));
+          q.pool_depth = static_cast<uint16_t>(std::min<size_t>(tx_pool.depth(), 0xFFFF));
+          q.air_backlog_100us = static_cast<uint16_t>(std::min<uint32_t>(
+              air_backlog_now_us.load(std::memory_order_relaxed) / 100u, 0xFFFFu));
+          return q;
+        });
+    ta_responder->start();
+  }
+
   // Agent thread: drains the RC queue every cfg.link.rc_drain_ms, ticks
   // RcAgent on cfg.link.tick_ms, runs the watchdog, and handles SIGUSR1
   // stats dumps.
@@ -2996,6 +3056,17 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
   if (tx_thread.joinable()) tx_thread.join();
   if (agent_thread.joinable()) agent_thread.join();
   if (msp_thread.joinable()) msp_thread.join();
+  if (ta_responder) {
+    std::fprintf(stderr,
+                 "maburd turnaround: %llu pings answered, %llu pong frames sent "
+                 "(%llu failed), dropped %llu rate / %llu busy\n",
+                 static_cast<unsigned long long>(ta_responder->answered()),
+                 static_cast<unsigned long long>(ta_responder->frames_sent()),
+                 static_cast<unsigned long long>(ta_responder->send_failed()),
+                 static_cast<unsigned long long>(ta_responder->rate_dropped()),
+                 static_cast<unsigned long long>(ta_responder->busy_dropped()));
+    ta_responder->stop();  // before the pool and the device go away
+  }
   tx_pool.stop();  // drain + join senders before device teardown
 
   vtx_rec.shutdown();   // close the file before the record channel is torn down

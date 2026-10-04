@@ -69,8 +69,88 @@ constexpr size_t kCalCmdFixedLen = 5 + 4 + 4 + 1 + 2 + 2 + 2 + 1;  // 21
 // magic(2) | ver | type | flags | vtx(4) | nonce(4) | walls(8*2) |
 // legacy(2)
 constexpr size_t kCalResultLen = 5 + 4 + 4 + 16 + 2;
+// magic(2) | ver | type | flags | vtx(4) | seq(2) | lane | n | bytes(2)
+constexpr size_t kTaPingLen = 5 + 4 + 2 + 1 + 1 + 2;  // 15
+// magic(2) | ver | type | flags | vtx(4) | seq(2) | lane | idx | n |
+// hold_us(4) | txq(2) | pool(2) | backlog(2), then zero padding, then CRC
+constexpr size_t kTaPongHeadLen = 5 + 4 + 2 + 1 + 1 + 1 + 4 + 2 + 2 + 2;  // 24
+static_assert(kTaPongHeadLen + 2 == kTaPongMinBytes, "pong head + CRC");
 
 }  // namespace
+
+std::vector<uint8_t> pack_ta_ping(const TaPing& p) {
+  std::vector<uint8_t> body;
+  body.reserve(kTaPingLen + 2);
+  put16(body, RC_MAGIC);
+  body.push_back(RC_VERSION);
+  body.push_back(T_TA_PING);
+  body.push_back(0);
+  put32(body, p.vtx_id);
+  put16(body, p.seq);
+  body.push_back(p.lane);
+  body.push_back(p.n_frames);
+  put16(body, p.frame_bytes);
+  put_crc(body);
+  return body;
+}
+
+std::optional<TaPing> parse_ta_ping(const uint8_t* buf, size_t len) {
+  if (len < kTaPingLen + 2) return std::nullopt;
+  if (get16(buf, 0) != RC_MAGIC || buf[2] != RC_VERSION || buf[3] != T_TA_PING)
+    return std::nullopt;
+  if (get16(buf, kTaPingLen) != crc16_ccitt(buf, kTaPingLen)) return std::nullopt;
+  TaPing p;
+  p.vtx_id = get32(buf, 5);
+  p.seq = get16(buf, 9);
+  p.lane = buf[11];
+  p.n_frames = buf[12];
+  p.frame_bytes = get16(buf, 13);
+  if (p.lane > kTaMaxLane || p.n_frames < 1 || p.n_frames > kTaMaxFrames ||
+      p.frame_bytes < kTaPongMinBytes || p.frame_bytes > kTaPongMaxBytes)
+    return std::nullopt;
+  return p;
+}
+
+std::vector<uint8_t> pack_ta_pong(const TaPong& p) {
+  const size_t total = std::clamp<size_t>(p.frame_bytes, kTaPongMinBytes, kTaPongMaxBytes);
+  std::vector<uint8_t> body;
+  body.reserve(total);
+  put16(body, RC_MAGIC);
+  body.push_back(RC_VERSION);
+  body.push_back(T_TA_PONG);
+  body.push_back(0);
+  put32(body, p.vtx_id);
+  put16(body, p.seq);
+  body.push_back(p.lane);
+  body.push_back(p.idx);
+  body.push_back(p.n_frames);
+  put32(body, p.hold_us);
+  put16(body, p.txq_depth);
+  put16(body, p.pool_depth);
+  put16(body, p.air_backlog_100us);
+  body.resize(total - 2, 0);
+  put_crc(body);
+  return body;
+}
+
+std::optional<TaPong> parse_ta_pong(const uint8_t* buf, size_t len) {
+  if (len < kTaPongMinBytes || len > kTaPongMaxBytes) return std::nullopt;
+  if (get16(buf, 0) != RC_MAGIC || buf[2] != RC_VERSION || buf[3] != T_TA_PONG)
+    return std::nullopt;
+  if (get16(buf, len - 2) != crc16_ccitt(buf, len - 2)) return std::nullopt;
+  TaPong p;
+  p.vtx_id = get32(buf, 5);
+  p.seq = get16(buf, 9);
+  p.lane = buf[11];
+  p.idx = buf[12];
+  p.n_frames = buf[13];
+  p.hold_us = get32(buf, 14);
+  p.txq_depth = get16(buf, 18);
+  p.pool_depth = get16(buf, 20);
+  p.air_backlog_100us = get16(buf, 22);
+  p.frame_bytes = static_cast<uint16_t>(len);
+  return p;
+}
 
 std::vector<uint8_t> pack_rcf(const Rcf& r) {
   std::vector<uint8_t> body;

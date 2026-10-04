@@ -749,7 +749,9 @@ rc::DiscAck RcAgent::make_disc_ack(uint32_t nonce, uint16_t seq, uint8_t agreed)
   // CAP_CALIBRATE: this build understands T_CAL_CMD/T_CAL_RESULT (Task 11
   // wires them up in main.cpp) -- a real gate, unlike CAP_TELEMETRY:
   // gs/src/cal_session.cpp's start() refuses a session outright without it.
-  ack.chip_caps = rc::CAP_FRAME_WIRE | rc::CAP_TELEMETRY | rc::CAP_CALIBRATE;
+  // CAP_TURNAROUND: answers T_TA_PING (rollout phase 2, ta_responder.h).
+  ack.chip_caps = rc::CAP_FRAME_WIRE | rc::CAP_TELEMETRY | rc::CAP_CALIBRATE |
+                  rc::CAP_TURNAROUND;
   // agreed is follow_gs ? the DISC's proposed op_channel : home (spec
   // 2026-09-13 auto-channel-select §6) -- computed by the caller, which
   // also drives the actual retune, so the ack and the move can never

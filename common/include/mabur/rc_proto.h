@@ -66,6 +66,13 @@ constexpr uint8_t T_DISC_ACK = 3;
 constexpr uint8_t T_TELEM = 4;
 constexpr uint8_t T_CAL_CMD = 5;
 constexpr uint8_t T_CAL_RESULT = 6;
+// Turnaround bench (feedback-repair rollout phase 2,
+// docs/feedback-repair-rollout.md): VRX -> VTX ping, VTX -> VRX pong. New
+// types inside RC_VERSION 11 rather than a bump: an older peer's frame_type()
+// returns them, finds no handler and drops them, and the GS only pings a
+// drone whose DISC_ACK carries CAP_TURNAROUND, so a mixed pair never sees one.
+constexpr uint8_t T_TA_PING = 7;
+constexpr uint8_t T_TA_PONG = 8;
 
 constexpr uint8_t F_DISCOVERY = 0x04;
 
@@ -82,6 +89,10 @@ constexpr uint16_t CAP_TELEMETRY = 0x0002;
 // DiscAck.chip_caps bit: VTX understands T_CAL_CMD / T_CAL_RESULT and can run
 // a TX-power wall calibration. The GS refuses to start a session without it.
 constexpr uint16_t CAP_CALIBRATE = 0x0004;
+
+// DiscAck.chip_caps bit: VTX answers T_TA_PING with T_TA_PONG (the phase-2
+// turnaround bench). The GS pings only a drone that advertises it.
+constexpr uint16_t CAP_TURNAROUND = 0x0008;
 
 // VRX -> VTX feedback: the GS-authoritative operating point. Every field
 // here is one maburd acts on. It used to also carry ack_seq, an alink-style
@@ -317,6 +328,52 @@ struct CalResult {
   // W rows, and the drone has no use for them. Nothing on this side of
   // the wire ever read one.
 };
+
+// Turnaround bench (rollout phase 2): how long a status frame takes to turn
+// into a reply on air, with the drone's video queue loaded. The GS times it
+// on air with a witness card's hardware RX timestamp (tsfl) on both the ping
+// and the pong; the drone adds its own hold time and queue state.
+//
+// `lane` picks the hardware TX queue the pong rides: 0 = the drone's default
+// (where every control frame goes today, the queue its video shares), 1..6 =
+// a devourer::HwQueue code (BK, BE, VI, VO, Mgmt, High). `n_frames` and
+// `frame_bytes` shape the reply like a repair burst: n frames of that size,
+// each carrying the full head.
+constexpr uint8_t kTaMaxLane = 6;
+constexpr uint8_t kTaMaxFrames = 8;
+constexpr uint16_t kTaPongMinBytes = 26;  // head + CRC, no padding
+constexpr uint16_t kTaPongMaxBytes = 1400;
+
+struct TaPing {
+  uint32_t vtx_id = 0;
+  uint16_t seq = 0;
+  uint8_t lane = 0;
+  uint8_t n_frames = 1;
+  uint16_t frame_bytes = kTaPongMinBytes;
+};
+
+struct TaPong {
+  uint32_t vtx_id = 0;
+  uint16_t seq = 0;       // the ping's
+  uint8_t lane = 0;       // the ping's (the queue this frame rode)
+  uint8_t idx = 0;        // this frame's index in the reply, 0..n_frames-1
+  uint8_t n_frames = 1;
+  uint32_t hold_us = 0;   // drone: ping seen by the RX callback -> this frame's send call
+  uint16_t txq_depth = 0;   // drone: video bodies queued (TxQueue) at that send call
+  uint16_t pool_depth = 0;  // drone: frames queued for the USB senders (UsbTxPool)
+  uint16_t air_backlog_100us = 0;  // drone: air-clock backlog, 0.1 ms units, saturating
+  uint16_t frame_bytes = kTaPongMinBytes;  // total body length (pack pads to it)
+};
+
+std::vector<uint8_t> pack_ta_ping(const TaPing& p);
+// Rejects lane > kTaMaxLane, n_frames outside 1..kTaMaxFrames and
+// frame_bytes outside kTaPongMinBytes..kTaPongMaxBytes.
+std::optional<TaPing> parse_ta_ping(const uint8_t* buf, size_t len);
+
+// Pads the body with zeros to p.frame_bytes (clamped to the bounds above);
+// the CRC covers everything before it, padding included.
+std::vector<uint8_t> pack_ta_pong(const TaPong& p);
+std::optional<TaPong> parse_ta_pong(const uint8_t* buf, size_t len);
 
 std::vector<uint8_t> pack_rcf(const Rcf& r);
 std::optional<Rcf> parse_rcf(const uint8_t* buf, size_t len);

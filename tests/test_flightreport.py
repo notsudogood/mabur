@@ -1824,6 +1824,88 @@ def test_arq_section_silent_without_rows():
     assert "ARQ SHADOW" not in result.stdout, result.stdout
 
 
+TA_LOG_ROWS = """talog 1 rate_hz=10.00 lanes=0,4 frames=1 bytes=64
+S 0 0 0 999000 1000000
+H 1 0 5000000 1000400
+O 1 0 0 0 1 5009000 1009800 1500 40 6 50 -60
+S 1 4 0 1099000 1100000
+H 1 1 5100000 1100400
+O 1 1 4 0 2 5102500 1103000 1400 38 5 60 -58
+O 1 1 4 1 2 5104000 1104400 1700 38 5 60 -58
+S 2 0 0 1199000 1200000
+O 0 2 0 0 1 77 1205000 1300 10 2 5 -61
+S 3 4 0 1299000 1300000
+S 4 4 0 1399000 1400000
+H 1 4 4294963200 1400400
+O 1 4 4 0 1 2048 1406600 1200 0 0 0 -59
+talog 1 rate_hz=10.00 lanes=0,4 frames=1 bytes=64
+S 0 0 0 8999000 9000000
+H 1 0 7000000 9000400
+O 1 0 0 0 1 7003000 9003500 1100 3 1 30 -57
+"""
+
+
+def test_ta_section_pairs_witness_sightings_per_lane():
+    """TURNAROUND (ta.log, feedback-repair phase 2). Lane 0: three pings, all
+    answered; two witness-timed (9.0 ms and 3.0 ms -- the second from a
+    respawned segment whose seq 0 must not pair with the first segment's);
+    one answered with no witness sighting. Lane 4: three pings, one never
+    answered; 2.5 ms (a two-frame reply, last frame at 4.0 ms) and 6.1 ms
+    across a TSF wrap."""
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "ta.log"
+        p.write_text(TA_LOG_ROWS)
+        segs = flightreport.load_talog(str(p))
+        assert len(segs) == 2, segs
+        pings = flightreport.ta_pings(segs)
+        assert len(pings) == 6, pings
+        by_seq_lane = {(r["seq"], r["lane"], r["t_ms"]): r for r in pings}
+        assert by_seq_lane[(4, 4, 1400.0)]["onair_ms"] == 6.144
+        assert by_seq_lane[(0, 0, 9000.0)]["onair_ms"] == 3.0
+        assert by_seq_lane[(2, 0, 1200.0)]["onair_ms"] is None
+        assert by_seq_lane[(2, 0, 1200.0)]["host_ms"] == 5.0
+        assert not by_seq_lane[(3, 4, 1300.0)]["answered"]
+        result = subprocess.run([sys.executable, "tools/flightreport.py", str(p)],
+                                capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    assert "TURNAROUND" in out, out
+    l0 = out[out.find("lane 0"):out.find("lane 4")]
+    assert "lane 0 (default): pings=3 answered=3 (100%)" in l0, l0
+    assert "on air: n=2 p50/p90/p99/max=3.0/9.0/9.0/9.0 ms" in l0, l0
+    assert "PASS at 60 fps only" in l0, l0
+    l4 = out[out.find("lane 4"):]
+    assert "lane 4 (VO): pings=3 answered=2 (67%)" in l4, l4
+    assert "on air: n=2 p50/p90/p99/max=2.5/6.1/6.1/6.1 ms" in l4, l4
+    assert "whole reply burst on air: n=2" in l4, l4
+    assert "queue loaded (air backlog >= 2 ms): n=1 p50/p99=2.5/2.5 ms   idle: n=1" in l4, l4
+    assert "): PASS  (n<100: too few for a p99)" in l4, l4
+
+
+def test_session_dir_mode_prints_ta_section_with_rungs():
+    ctl = ("ctllog 12 ladder=40:0/50:25,40:4/50:25 down_util=0.35 up_util=0.15 probe_offset=1\n"
+           "S 500 1 0.0000 30.0 0.0000 0.0000 0.0000 -20.0\n")
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "ctl.log").write_text(ctl)
+        (Path(d) / "ta.log").write_text(TA_LOG_ROWS)
+        result = subprocess.run([sys.executable, "tools/flightreport.py", d],
+                                capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    assert "TURNAROUND" in out, out
+    assert "by rung: mcs4/40 n=2" in out, out
+
+
+def test_ta_section_silent_without_pings():
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "ta.log"
+        p.write_text("talog 1 rate_hz=10.00 lanes=0,4 frames=1 bytes=64\n")
+        result = subprocess.run([sys.executable, "tools/flightreport.py", str(p)],
+                                capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "TURNAROUND" not in result.stdout, result.stdout
+
+
 if __name__ == "__main__":
     test_fec_section_counterfactual_overhead_per_sid_and_rung()
     test_session_dir_mode_prints_fec_section()
@@ -1832,6 +1914,9 @@ if __name__ == "__main__":
     test_arq_section_shortfalls_outcomes_and_verdict()
     test_session_dir_mode_prints_arq_section()
     test_arq_section_silent_without_rows()
+    test_ta_section_pairs_witness_sightings_per_lane()
+    test_session_dir_mode_prints_ta_section_with_rungs()
+    test_ta_section_silent_without_pings()
     test_flightreport_structure()
     test_old_scale_snr_warns_on_stderr()
     test_overhead_scale_break_warns_on_stderr()

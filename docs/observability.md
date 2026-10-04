@@ -129,7 +129,8 @@ Consume the same numbers programmatically with:
   directly — nothing else holds the port any more.
 - Debug logs: maburgs writes a per-session directory when `debug_log.enable`
   is set — `<debug_log.dir>/NNNN/` holding `ctl.log`, `probe.log`, `au.log`,
-  `scan.log`, `fec.log`, `arq.log` and `flight.jsonl`; maburplay writes `lat.log` into the same directory by
+  `scan.log`, `fec.log`, `arq.log`, `ta.log` (only while the turnaround bench
+  runs) and `flight.jsonl`; maburplay writes `lat.log` into the same directory by
   following the `/tmp/mabur-session` marker and holds no logging config of
   its own. The loader default is **off**, but the shipped bundle
   (`gs/bundle/maburgs.default.toml`) turns it **on** since the
@@ -386,7 +387,39 @@ repair at an 8 ms round trip would save, and lost episodes split into
 burst-shaped (<= 2 aggregates, grew <= 50 ms: one repair round could have
 saved them) vs outage-shaped. `maburgs --dry-run` runs the same tracker
 over a replay and prints `arq_shadow <sid>:` totals on stderr (order-only:
-the replay clock is synthetic). Flight data does not exist yet.
+the replay clock is synthetic). First flight data: two indoor flights,
+2026-10-03 (`docs/feedback-repair-rollout.md` "Phase 1 results").
+
+**ta.log (talog 1, 2026-10-04).** The turnaround bench, phase 2 of
+`docs/feedback-repair-rollout.md`: how long a status frame takes to turn into
+a reply on air while the drone's video queue is loaded, per drone hardware TX
+queue. Written by maburgs (`gs/src/ta_log.h`) into the session directory,
+rotating with it, never fatal, and only when `[turnaround] rate_hz` is set
+(it is 0, off, in the bundle). The GS sends `T_TA_PING` at jittered random
+times (not in the RCF slot, so every queue state gets sampled), lanes round
+robin; maburd answers each with `T_TA_PONG` on the hardware queue the ping
+names (`drone/src/ta_responder.h`, devourer `TxMode::hw_queue`). Raw
+sightings, paired offline:
+`talog 1 rate_hz=<r> lanes=<a,b,..> frames=<n> bytes=<b>` header (re-written
+on a respawn, which also restarts ping seqs at 0 -- never pair across one);
+`S <seq> <lane> <card> <t_call_us> <t_done_us>` a ping handed to TX card
+`card` (the two stamps bracket the synchronous send);
+`H <card> <seq> <tsfl> <t_us>` card `card` heard the GS's own ping -- the
+witness, which can only be a card that did not send it;
+`O <card> <seq> <lane> <idx> <n> <tsfl> <t_us> <hold_us> <txq> <pool> <backlog_100us> <rssi>`
+card `card` heard reply frame `idx` of `n`, with what the drone stamped: its
+hold from RX callback to that frame's send call, its TxQueue and USB-pool
+depths and its air-clock backlog (0.1 ms units) at that call, plus the
+frame's RSSI (dBm, better chain; 0 without PHY status). `tsfl` is the
+receiving card's hardware RX TSF (us, low 32 bits, wraps every ~71.6 min),
+so `O.tsfl - H.tsfl` for one seq on one card is the on-air turnaround on a
+single clock; `t_us` is GS host mono time (the host round trip, which adds
+both USB paths). `flightreport.py`'s TURNAROUND section pairs them: per
+lane, replies received, on-air turnaround p50/p90/p99 (first reply frame,
+and the whole burst when `n` > 1), host round trip, drone hold, loaded vs
+idle queue, per rung when `ctl.log` is beside it, and the phase-2 gate on the
+on-air p99. tsfl's latch point (frame start or end) is undocumented; either
+way it moves the turnaround by one short control frame's airtime.
 
 **scan.log (scanlog 2).** New per-session file (spec
 2026-09-13-auto-channel-select, extended by

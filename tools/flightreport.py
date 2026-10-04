@@ -1028,6 +1028,210 @@ def print_arq_report(eps, sums):
             for (m, b), v in sorted(rungs.items())))
 
 
+def sniff_talog(path):
+    """True if `path` is a maburgs turnaround log (first line 'talog ')."""
+    with open(path) as f:
+        return f.readline().startswith("talog ")
+
+
+# Turnaround bench (feedback-repair rollout phase 2, ta.log): the gates the
+# TURNAROUND verdict is stated against. A repair must land well inside one
+# frame period to beat the FEC's own next-burst overlap; the rollout's kill
+# criterion is p99 well above ~8 ms at a 120 fps target, ~16 ms at 60 fps.
+TA_GATE_120FPS_MS = 8.0
+TA_GATE_60FPS_MS = 16.0
+# Drone air-clock backlog above which a ping counts as answered "loaded".
+TA_LOADED_BACKLOG_MS = 2.0
+TA_LANE_NAMES = {0: "default", 1: "BK", 2: "BE", 3: "VI", 4: "VO", 5: "Mgmt", 6: "High"}
+_TA_MAX_TURN_US = 1_000_000  # a larger tsfl difference is a seq collision, not a reply
+
+
+def load_talog(path):
+    """ta.log (gs/src/ta_log.h) -> list of segments, one per `talog` header
+    (a maburgs respawn inside the session appends a new header and restarts
+    ping seqs at 0, so pairing must never cross one). Each segment:
+    {"hdr": {k: v}, "S": {seq: row}, "H": {seq: {card: row}},
+     "O": {seq: {card: {idx: row}}}}."""
+    segs = []
+    cur = None
+    with open(path) as f:
+        for line in f:
+            tok = line.split()
+            if not tok or tok[0].startswith("#"):
+                continue
+            if tok[0] == "talog":
+                hdr = dict(t.split("=", 1) for t in tok[2:] if "=" in t)
+                cur = {"hdr": hdr, "S": {}, "H": {}, "O": {}}
+                segs.append(cur)
+                continue
+            if cur is None:
+                continue
+            try:
+                if tok[0] == "S" and len(tok) == 6:
+                    seq = int(tok[1])
+                    cur["S"][seq] = {"lane": int(tok[2]), "card": int(tok[3]),
+                                     "t_call": int(tok[4]), "t_done": int(tok[5])}
+                elif tok[0] == "H" and len(tok) == 5:
+                    card, seq = int(tok[1]), int(tok[2])
+                    cur["H"].setdefault(seq, {})[card] = {"tsfl": int(tok[3]), "t_us": int(tok[4])}
+                elif tok[0] == "O" and len(tok) == 13:
+                    card, seq, idx = int(tok[1]), int(tok[2]), int(tok[4])
+                    cur["O"].setdefault(seq, {}).setdefault(card, {})[idx] = {
+                        "lane": int(tok[3]), "n": int(tok[5]), "tsfl": int(tok[6]),
+                        "t_us": int(tok[7]), "hold_us": int(tok[8]), "txq": int(tok[9]),
+                        "pool": int(tok[10]), "backlog_100us": int(tok[11]),
+                        "rssi": int(tok[12])}
+            except ValueError:
+                continue
+    return segs
+
+
+def _tsf_delta_us(later, earlier):
+    """later - earlier on the 32-bit TSF, or None when it reads negative or
+    implausibly large (wrap-safe: one wrap is ~71.6 min)."""
+    d = (later - earlier) & 0xFFFFFFFF
+    return d if d < _TA_MAX_TURN_US else None
+
+
+def ta_pings(segs):
+    """One record per ping the GS sent: lane, send time, and -- when the drone
+    answered -- on-air turnaround (witness tsfl, first and last pong frame),
+    host round trip, and what the drone stamped on its first pong frame."""
+    out = []
+    for seg in segs:
+        for seq, srow in seg["S"].items():
+            r = {"seq": seq, "lane": srow["lane"], "t_ms": srow["t_done"] / 1000.0,
+                 "answered": False, "onair_ms": None, "onair_last_ms": None,
+                 "host_ms": None, "hold_ms": None, "txq": None, "pool": None,
+                 "backlog_ms": None}
+            pongs = seg["O"].get(seq, {})
+            if pongs:
+                r["answered"] = True
+                firsts = [frames[min(frames)] for frames in pongs.values()]
+                f0 = min(firsts, key=lambda x: x["t_us"])
+                r["host_ms"] = (f0["t_us"] - srow["t_done"]) / 1000.0
+                r["hold_ms"] = f0["hold_us"] / 1000.0
+                r["txq"], r["pool"] = f0["txq"], f0["pool"]
+                r["backlog_ms"] = f0["backlog_100us"] / 10.0
+                # On-air: the ping and the pong heard by the SAME card (one
+                # TSF clock). Idx 0 is the reply starting; the last idx is
+                # the whole burst out.
+                for card, frames in pongs.items():
+                    h = seg["H"].get(seq, {}).get(card)
+                    if h is None:
+                        continue
+                    if 0 in frames:
+                        d = _tsf_delta_us(frames[0]["tsfl"], h["tsfl"])
+                        if d is not None and (r["onair_ms"] is None or d / 1000.0 < r["onair_ms"]):
+                            r["onair_ms"] = d / 1000.0
+                    last = frames.get(frames[min(frames)]["n"] - 1)
+                    if last is not None:
+                        d = _tsf_delta_us(last["tsfl"], h["tsfl"])
+                        if d is not None and (r["onair_last_ms"] is None or d / 1000.0 < r["onair_last_ms"]):
+                            r["onair_last_ms"] = d / 1000.0
+            out.append(r)
+    out.sort(key=lambda r: r["t_ms"])
+    return out
+
+
+def _ta_dist(v):
+    return (f"p50/p90/p99/max={_pct(v, .5):.1f}/{_pct(v, .9):.1f}/"
+            f"{_pct(v, .99):.1f}/{max(v):.1f} ms")
+
+
+def ta_rung_lookup(ctl_path):
+    """(rung_at(t_ms), ladder) from a session's ctl.log: the rung of the last
+    S record at or before t_ms (None before the first). (None, None) without
+    a ctl log, so the TURNAROUND section just skips its per-rung split."""
+    if not ctl_path:
+        return None, None
+    try:
+        cl = load_ctllog(ctl_path)
+    except OSError:
+        return None, None
+    rows = sorted((r["t_ms"], r["rung"]) for r in cl.get("S", []))
+    if not rows:
+        return None, None
+    import bisect
+    ts = [t for t, _ in rows]
+
+    def rung_at(t_ms):
+        i = bisect.bisect_right(ts, t_ms) - 1
+        return rows[i][1] if i >= 0 else None
+
+    return rung_at, cl["header"].get("_ladder")
+
+
+def print_ta_report(pings, rung_at=None, ladder=None):
+    """TURNAROUND: feedback-repair phase 2 (docs/feedback-repair-rollout.md).
+    Per lane (the hardware queue the drone's reply rode): how many pings got
+    a reply, the on-air turnaround a witness card timed (ping heard -> first
+    reply frame heard, one TSF clock), the host round trip, the drone's own
+    hold, and the turnaround with the drone's queue loaded vs idle. The
+    verdict is the rollout's phase-2 gate on the on-air p99. `rung_at(t_ms)`
+    (from ctl.log) adds a per-rung split."""
+    if not pings:
+        return
+    print("TURNAROUND (ta.log: ping on air -> reply on air, timed by a GS witness card's hardware RX clock)")
+    lanes = sorted({r["lane"] for r in pings})
+    for lane in lanes:
+        g = [r for r in pings if r["lane"] == lane]
+        ans = [r for r in g if r["answered"]]
+        name = TA_LANE_NAMES.get(lane, str(lane))
+        print(f"  lane {lane} ({name}): pings={len(g)} answered={len(ans)} "
+              f"({100.0 * len(ans) / len(g):.0f}%)")
+        if not ans:
+            continue
+        on = [r["onair_ms"] for r in ans if r["onair_ms"] is not None]
+        host = [r["host_ms"] for r in ans]
+        hold = [r["hold_ms"] for r in ans]
+        if on:
+            print(f"    on air: n={len(on)} {_ta_dist(on)}")
+            outside = [r["onair_ms"] - r["hold_ms"] for r in ans if r["onair_ms"] is not None]
+            print(f"    outside the drone's hold (RX path + TX path + queue + air): "
+                  f"p50/p99={_pct(outside, .5):.1f}/{_pct(outside, .99):.1f} ms")
+            last = [r["onair_last_ms"] for r in ans if r["onair_last_ms"] is not None]
+            if last and any(r["onair_last_ms"] != r["onair_ms"] for r in ans
+                            if r["onair_last_ms"] is not None):
+                print(f"    whole reply burst on air: n={len(last)} {_ta_dist(last)}")
+        else:
+            print("    on air: no witness sightings (no second card heard both ends)")
+        print(f"    host round trip: {_ta_dist(host)}   drone hold p50/max="
+              f"{_pct(hold, .5):.2f}/{max(hold):.2f} ms")
+        loaded = [r["onair_ms"] for r in ans
+                  if r["onair_ms"] is not None and r["backlog_ms"] >= TA_LOADED_BACKLOG_MS]
+        idle = [r["onair_ms"] for r in ans
+                if r["onair_ms"] is not None and r["backlog_ms"] < TA_LOADED_BACKLOG_MS]
+        if loaded:
+            print(f"    queue loaded (air backlog >= {TA_LOADED_BACKLOG_MS:.0f} ms): n={len(loaded)} "
+                  f"p50/p99={_pct(loaded, .5):.1f}/{_pct(loaded, .99):.1f} ms"
+                  + (f"   idle: n={len(idle)} p50/p99={_pct(idle, .5):.1f}/{_pct(idle, .99):.1f} ms"
+                     if idle else ""))
+        if rung_at is not None and on:
+            by = {}
+            for r in ans:
+                if r["onair_ms"] is None:
+                    continue
+                by.setdefault(rung_at(r["t_ms"]), []).append(r["onair_ms"])
+            parts = []
+            for rung in sorted(k for k in by if k is not None):
+                lab = (f"mcs{ladder[rung]['mcs']}/{ladder[rung]['bw']}"
+                       if ladder and 0 <= rung < len(ladder) else f"rung{rung}")
+                v = by[rung]
+                parts.append(f"{lab} n={len(v)} p50/p99={_pct(v, .5):.1f}/{_pct(v, .99):.1f}")
+            if parts:
+                print("    by rung: " + "  ".join(parts))
+        if on:
+            p99 = _pct(on, .99)
+            verdict = ("PASS" if p99 <= TA_GATE_120FPS_MS else
+                       "PASS at 60 fps only" if p99 <= TA_GATE_60FPS_MS else "FAIL")
+            print(f"    phase-2 gate (on-air p99 <= {TA_GATE_120FPS_MS:.0f} ms at 120 fps, "
+                  f"<= {TA_GATE_60FPS_MS:.0f} ms at 60 fps): {verdict}"
+                  + ("  (n<100: too few for a p99)" if len(on) < 100 else ""))
+    print("  note: tsfl's latch point (frame start or end) is undocumented; either way it moves "
+          "these numbers by one short control frame's airtime, ~0.1-0.2 ms.")
+
+
 def sniff_ctllog(path):
     """True if `path` is a maburgs ctl log (first line starts 'ctllog ')."""
     with open(path) as f:
@@ -1577,6 +1781,9 @@ def main(path, aulog=None, probelog_path=None, scanlog_path=None):
     if sniff_arqlog(path):
         print_arq_report(*load_arqlog(path))
         return
+    if sniff_talog(path):
+        print_ta_report(ta_pings(load_talog(path)))
+        return
     if sniff_probelog(path):
         # A probe log on its own (bench use): just the per-body report and
         # the completion->probe join.
@@ -1828,5 +2035,10 @@ if __name__ == "__main__":
         # arq.log (2026-09-28, feedback-repair shadow mode) likewise.
         if s.arq:
             print_arq_report(*load_arqlog(s.arq))
+        # ta.log (rollout phase 2, turnaround bench) likewise, split by the
+        # ladder rung ctl.log says was flying at each ping.
+        if s.ta:
+            rung_at, ladder = ta_rung_lookup(s.ctl)
+            print_ta_report(ta_pings(load_talog(s.ta)), rung_at, ladder)
     else:
         main(arg, sys.argv[2] if len(sys.argv) > 2 else None)

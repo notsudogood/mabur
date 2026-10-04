@@ -1,7 +1,8 @@
 # Feedback repair — rollout
 
-**Status 2026-09-28: phase 1 (shadow mode) is built and host-tested. It has
-not flown.** Nothing below phase 1 exists yet. The design this rolls out is
+**Status 2026-10-04: phase 1 (shadow mode) has flown twice, indoors;
+phase 2 (the turnaround bench) is built and host-tested, not yet run on
+hardware.** Nothing below phase 2 exists yet. The design this rolls out is
 devourer's `docs/fpv-link-architecture.md` (branch
 `claude/wifi-fpv-link-architecture-1bms9l` of `notsudogood/devourer`); this
 page restates it in mabur's terms and tracks the phases.
@@ -47,10 +48,10 @@ form over unknown seqs only, so it reads 0 exactly when nothing is missing.
    shortfall on real flights. **Kill criterion:** if lost episodes are mostly
    outage-shaped (large, long-growing), the ladder and IDR already do the
    useful work; stop here.
-2. **devourer turnaround bench.** Time status-on-air → repair-on-air at a
-   passive witness (`tsfl`) with the drone's queue loaded. Add per-packet TX
-   queue selection so a repair can overtake queued video. **Kill criterion
-   (120 fps target):** p99 well above ~8 ms.
+2. **Turnaround bench — built (below).** Time status-on-air → repair-on-air
+   at a passive witness (`tsfl`) with the drone's queue loaded. Add per-packet
+   TX queue selection so a repair can overtake queued video. **Kill criterion
+   (120 fps target):** p99 well above ~8 ms (~16 ms at 60 fps).
 3. **Listen window + per-AU status frame**, FEC unchanged. A/B uplink
    delivery, `link.rcf_slot` timeouts and video loss (`ausniff.py`) against
    `RcfSlotter`.
@@ -139,3 +140,107 @@ GS only, no wire change, no config key: it rides `debug_log.enable` like
   `stale` catches rung-change debris.
 - **Nothing is transmitted,** so this cannot say whether the uplink half
   works. That is phases 2–3.
+
+## Phase 1 results (2026-10-03, two indoor flights)
+
+Two flights in and around a brick-and-wood house with a garage, about
+2.5 minutes of video each, signal −24 to −48 dBm outside the garage and down
+to −83 dBm inside it. Read `flightreport.py`'s ARQ SHADOW section with one
+correction: it drops every episode that straddled a rung change (`stale` >
+0), which here hid most of the garage losses; the counts below include them.
+
+- **Outside the garage, every lost episode was repairable-shaped:** 6 of 6
+  across both flights, all on the enhance layer, all about one aggregate or
+  less and not growing — one damaged frame each, about two a minute. Each
+  matched a damaged or missing AU in `au.log` within ~60 ms.
+- **Inside the garage, most were outages:** 14 of 20 on the second flight
+  grew past two aggregates or kept growing past 50 ms, ending in multi-second
+  shortfalls with the drone on the floor at −83 dBm. Repair cannot fix those;
+  how fast the ladder falls, and how low its floor is, decides them.
+- **The uplink survived the worst case:** the drone heard 10–14 GS frames/s
+  at −83 dBm (~20/s normally), never zero. Telemetry resolution is 1 s, so a
+  ~100 ms gap cannot be ruled out.
+- **Request cost** would have been 0.4–4 requests/s against ~20 RCF/s.
+- **Latency spikes** (a frame ≥ 70 ms, 38 one-second windows over both
+  flights) sat at demotes (16), FEC-fixed shortfalls (6), lost frames (4),
+  promotes (2) and nothing logged (10). The waits a repair round would cap
+  are the in-band fixes, 15 ms typical and 30–70 ms at worst.
+
+The adversarial counterpart: two flights, indoors, short. The stop condition
+(losses mostly outage-shaped) is met inside the garage and not outside it,
+so the repair loop's case rests on range flights, where marginal signal is
+the common case rather than a garage visit. Separately, the bottom rung
+matters more than repair for fades like these: the shipped ladder is all
+40 MHz, and `docs/bw40-sweep-findings-2026-09-23.md` measured 20/0 reaching
+4–6 dB further than 40/0.
+
+## Phase 2 as built: the turnaround bench
+
+What a repair round costs end to end, measured before any repair protocol
+exists: the GS sends a ping, the drone answers on a chosen hardware TX
+queue, and a GS card that did not send the ping times both on air.
+
+- **devourer `TxMode::hw_queue`** (`docs/aggregation.md` there): per-packet
+  hardware queue on Jaguar3 — BK, BE, VI, VO, Mgmt or High — through a
+  private radiotap TX_FLAGS field. A frame in a higher-priority queue can air
+  ahead of video already waiting in the chip; it cannot pass frames still in
+  the USB pipe ahead of it (one bulk-OUT endpoint for every queue). Which
+  queue actually overtakes the video queue is exactly what this bench
+  measures.
+- **Wire:** `T_TA_PING` (GS → drone: seq, lane, reply shape) and
+  `T_TA_PONG` (drone → GS: the ping's seq and lane, frame idx/n, the drone's
+  hold time and queue state, padded to the requested size). New types inside
+  `RC_VERSION` 11; the GS pings only a drone whose DISC_ACK carries
+  `CAP_TURNAROUND`.
+- **Drone (`drone/src/ta_responder.h`):** the RX callback stamps and
+  enqueues; a dedicated thread answers through the same direct send every
+  control frame uses (never the video pool), at control robustness, on the
+  ping's lane. Lane 0 is the default queue — the one control frames and
+  video share today. Rate-limited to 50 pings/s, quiet during calibration.
+- **GS:** `[turnaround]` in `maburgs.toml` (off by default). Pings leave at
+  jittered random times, not in the RCF slot, so they sample every queue
+  state; lanes interleave round robin. Sightings go to `ta.log`
+  (`docs/observability.md`).
+- **`flightreport.py` TURNAROUND:** per lane, replies received, on-air
+  turnaround p50/p90/p99, host round trip, drone hold, loaded vs idle, per
+  rung, and the gate.
+
+### Running it
+
+1. Flash both ends from the same build (the drone must advertise
+   `CAP_TURNAROUND`; an older drone is simply never pinged).
+2. Add to `/config/maburgs.toml` on the GS (an existing file never picks up
+   new bundle sections) and restart maburgs:
+
+   ```toml
+   [turnaround]
+   rate_hz = 10
+   lanes   = [0, 4, 5]   # today's queue, voice, management
+   frames  = 1
+   bytes   = 64
+   ```
+
+3. Run video at a steady rung for a few minutes — on the bench is fine, the
+   queue is loaded either way — then fly. `frames = 6`, `bytes = 1400`
+   shapes the reply like a one-aggregate repair burst.
+4. `python3 tools/flightreport.py /media/dvr/log/NNNN`.
+
+### Read it with these caveats
+
+- **The witness needs both GS cards on the home channel.** While the scout
+  has the second card elsewhere, pings get host round trips only.
+- **Unanswered pings are a result, not a bug.** A ping that lands while the
+  drone is transmitting is lost (half-duplex); that rate is what phase 3's
+  listen window has to beat.
+- **The pings cost a little video.** Each is ~0.1 ms of GS transmit outside
+  the RCF slot, and the other card is blanked for it (the self-blanking
+  `RcfSlotter` exists to avoid). At 10 Hz that is ~0.1% of airtime.
+- **Lane 0 is the video's queue:** the MGMT queue on singles rungs, the
+  A-MPDU TID queue on aggregating ones (`ampdu.min_mcs_20/_40`). The per-rung
+  split separates the two.
+- **On-air turnaround includes the drone's RX USB path,** which a repair
+  would pay too; "outside the drone's hold" is that plus the TX path, queue
+  and air.
+- **Not yet flown, not yet run on hardware.** Host tests pin the wire, the
+  responder, the pinger, `ta.log` and the report.
+

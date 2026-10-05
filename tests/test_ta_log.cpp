@@ -49,6 +49,16 @@ TEST(ta_log_header_rows_and_name) {
   no_phy.phy_valid = false;
   log.heard(no_phy);
 
+  // As the GS RX path really delivers it: the 4-byte FCS still attached.
+  auto with_fcs = mabur::rc::pack_ta_pong(o);
+  with_fcs.insert(with_fcs.end(), {0xde, 0xad, 0xbe, 0xef});
+  log.heard(rx(0, with_fcs, 4000005000u, 5005000));
+
+  // Typed as a pong and FCS-clean, but its own CRC is wrong: an X row.
+  auto mangled = mabur::rc::pack_ta_pong(o);
+  mangled[100] ^= 0x01;
+  log.heard(rx(1, mangled, 11, 12));
+
   auto corrupt = rx(1, mabur::rc::pack_ta_pong(o), 9, 9);
   corrupt.crc_ok = false;
   log.heard(corrupt);  // FCS-corrupt: not a sighting
@@ -62,10 +72,13 @@ TEST(ta_log_header_rows_and_name) {
   CHECK(text.find("\nO 1 17 4 1 2 4000004321 5004900 1830 41 6 87 -55\n") !=
         std::string::npos);
   CHECK(text.find("\nO 0 17 4 1 2 7 8 1830 41 6 87 0\n") != std::string::npos);
-  // Exactly the four rows above after the header.
+  CHECK(text.find("\nO 0 17 4 1 2 4000005000 5005000 1830 41 6 87 -55\n") !=
+        std::string::npos);
+  CHECK(text.find("\nX 1 8 300\n") != std::string::npos);
+  // Exactly the six rows above after the header.
   size_t lines = 0;
   for (char ch : text) lines += ch == '\n';
-  CHECK(lines == 5);
+  CHECK(lines == 7);
 }
 TEST(ta_log_bad_dir_is_nonfatal) {
   maburgs::LogWriter w;

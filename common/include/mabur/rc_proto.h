@@ -373,6 +373,8 @@ std::optional<TaPing> parse_ta_ping(const uint8_t* buf, size_t len);
 // Pads the body with zeros to p.frame_bytes (clamped to the bounds above);
 // the CRC covers everything before it, padding included.
 std::vector<uint8_t> pack_ta_pong(const TaPong& p);
+// Accepts the body as packed or with the 4-byte FCS still attached (as the GS
+// RX path delivers it); frame_bytes is the packed length either way.
 std::optional<TaPong> parse_ta_pong(const uint8_t* buf, size_t len);
 
 std::vector<uint8_t> pack_rcf(const Rcf& r);

@@ -1906,6 +1906,28 @@ def test_ta_section_silent_without_pings():
     assert "TURNAROUND" not in result.stdout, result.stdout
 
 
+def test_ta_section_warns_on_unparsed_frames():
+    """X rows (FCS-clean TA frames that did not parse) must surface as a
+    warning, not as silently unanswered pings -- the first phase-2 flight
+    lost every pong to a parser that did not expect the trailing FCS."""
+    rows = ("talog 1 rate_hz=10.00 lanes=0 frames=1 bytes=64\n"
+            "S 0 0 0 1000000 1000400\n"
+            "H 1 0 5000000 1001000\n"
+            "X 1 8 68\n"
+            "X 0 8 68\n")
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "ta.log"
+        p.write_text(rows)
+        segs = flightreport.load_talog(str(p))
+        assert segs[0]["X"] == 2, segs
+        result = subprocess.run([sys.executable, "tools/flightreport.py", str(p)],
+                                capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "WARNING: 2 ping/reply frames arrived FCS-clean but did not parse" in result.stdout, \
+        result.stdout
+    assert "lane 0 (default): pings=1 answered=0 (0%)" in result.stdout, result.stdout
+
+
 if __name__ == "__main__":
     test_fec_section_counterfactual_overhead_per_sid_and_rung()
     test_session_dir_mode_prints_fec_section()
@@ -1917,6 +1939,7 @@ if __name__ == "__main__":
     test_ta_section_pairs_witness_sightings_per_lane()
     test_session_dir_mode_prints_ta_section_with_rungs()
     test_ta_section_silent_without_pings()
+    test_ta_section_warns_on_unparsed_frames()
     test_flightreport_structure()
     test_old_scale_snr_warns_on_stderr()
     test_overhead_scale_break_warns_on_stderr()

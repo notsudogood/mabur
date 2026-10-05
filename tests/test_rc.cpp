@@ -665,6 +665,49 @@ TEST(ta_pong_clamps_size_and_minimum_is_head_plus_crc) {
   CHECK(!mabur::rc::parse_ta_pong(b.data(), b.size() - 1).has_value());
 }
 
+TEST(ta_frames_parse_as_received_with_trailing_fcs) {
+  // devourer's RX body keeps the 4-byte FCS (radio_frontend strips only the
+  // dot11 header). The pong is variable-length with its CRC at the end, so a
+  // parser that reads the CRC from the last two bytes rejects every pong as
+  // it really arrives -- the first phase-2 flight logged zero replies to 148
+  // pings this way. Both frames must parse in packed AND received shape.
+  const uint8_t fcs[4] = {0xde, 0xad, 0xbe, 0xef};
+  mabur::rc::TaPing ping;
+  ping.seq = 77;
+  ping.lane = 5;
+  auto pb = mabur::rc::pack_ta_ping(ping);
+  pb.insert(pb.end(), fcs, fcs + 4);
+  auto pg = mabur::rc::parse_ta_ping(pb.data(), pb.size());
+  REQUIRE(pg.has_value());
+  CHECK(pg->seq == 77);
+
+  for (uint16_t bytes : {mabur::rc::kTaPongMinBytes, uint16_t{64}, uint16_t{300},
+                         mabur::rc::kTaPongMaxBytes}) {
+    mabur::rc::TaPong o;
+    o.seq = 513;
+    o.lane = 4;
+    o.hold_us = 1830;
+    o.air_backlog_100us = 87;
+    o.frame_bytes = bytes;
+    auto b = mabur::rc::pack_ta_pong(o);
+    b.insert(b.end(), fcs, fcs + 4);
+    auto got = mabur::rc::parse_ta_pong(b.data(), b.size());
+    REQUIRE(got.has_value());
+    CHECK(got->seq == 513);
+    CHECK(got->lane == 4);
+    CHECK(got->hold_us == 1830u);
+    CHECK(got->air_backlog_100us == 87);
+    CHECK(got->frame_bytes == bytes);  // the packed length, FCS excluded
+    // Neither CRC position fits a body cut at the wrong place.
+    for (size_t cut = 1; cut <= 3; ++cut)
+      CHECK(!mabur::rc::parse_ta_pong(b.data(), b.size() - cut).has_value());
+    // The inner CRC still guards the body with the FCS attached.
+    auto bad = b;
+    bad[12] ^= 0x01;
+    CHECK(!mabur::rc::parse_ta_pong(bad.data(), bad.size()).has_value());
+  }
+}
+
 TEST(rc_version_is_eleven) {
   // 2026-09-26 vtx-recorder: RCF +rec, Telem +rec_status.
   CHECK(mabur::rc::RC_VERSION == 11);

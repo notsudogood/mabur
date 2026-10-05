@@ -1051,7 +1051,7 @@ def load_talog(path):
     (a maburgs respawn inside the session appends a new header and restarts
     ping seqs at 0, so pairing must never cross one). Each segment:
     {"hdr": {k: v}, "S": {seq: row}, "H": {seq: {card: row}},
-     "O": {seq: {card: {idx: row}}}}."""
+     "O": {seq: {card: {idx: row}}}, "X": count of unparseable TA bodies}."""
     segs = []
     cur = None
     with open(path) as f:
@@ -1061,7 +1061,7 @@ def load_talog(path):
                 continue
             if tok[0] == "talog":
                 hdr = dict(t.split("=", 1) for t in tok[2:] if "=" in t)
-                cur = {"hdr": hdr, "S": {}, "H": {}, "O": {}}
+                cur = {"hdr": hdr, "S": {}, "H": {}, "O": {}, "X": 0}
                 segs.append(cur)
                 continue
             if cur is None:
@@ -1081,6 +1081,8 @@ def load_talog(path):
                         "t_us": int(tok[7]), "hold_us": int(tok[8]), "txq": int(tok[9]),
                         "pool": int(tok[10]), "backlog_100us": int(tok[11]),
                         "rssi": int(tok[12])}
+                elif tok[0] == "X":
+                    cur["X"] += 1
             except ValueError:
                 continue
     return segs
@@ -1162,17 +1164,20 @@ def ta_rung_lookup(ctl_path):
     return rung_at, cl["header"].get("_ladder")
 
 
-def print_ta_report(pings, rung_at=None, ladder=None):
+def print_ta_report(pings, rung_at=None, ladder=None, unparsed=0):
     """TURNAROUND: feedback-repair phase 2 (docs/feedback-repair-rollout.md).
     Per lane (the hardware queue the drone's reply rode): how many pings got
     a reply, the on-air turnaround a witness card timed (ping heard -> first
     reply frame heard, one TSF clock), the host round trip, the drone's own
     hold, and the turnaround with the drone's queue loaded vs idle. The
     verdict is the rollout's phase-2 gate on the on-air p99. `rung_at(t_ms)`
-    (from ctl.log) adds a per-rung split."""
+    (from ctl.log) adds a per-rung split. `unparsed` is the X-row count."""
     if not pings:
         return
     print("TURNAROUND (ta.log: ping on air -> reply on air, timed by a GS witness card's hardware RX clock)")
+    if unparsed:
+        print(f"  WARNING: {unparsed} ping/reply frames arrived FCS-clean but did not parse "
+              "(wire/parser mismatch: 'answered' below undercounts)")
     lanes = sorted({r["lane"] for r in pings})
     for lane in lanes:
         g = [r for r in pings if r["lane"] == lane]
@@ -1782,7 +1787,8 @@ def main(path, aulog=None, probelog_path=None, scanlog_path=None):
         print_arq_report(*load_arqlog(path))
         return
     if sniff_talog(path):
-        print_ta_report(ta_pings(load_talog(path)))
+        segs = load_talog(path)
+        print_ta_report(ta_pings(segs), unparsed=sum(s["X"] for s in segs))
         return
     if sniff_probelog(path):
         # A probe log on its own (bench use): just the per-body report and
@@ -2039,6 +2045,8 @@ if __name__ == "__main__":
         # ladder rung ctl.log says was flying at each ping.
         if s.ta:
             rung_at, ladder = ta_rung_lookup(s.ctl)
-            print_ta_report(ta_pings(load_talog(s.ta)), rung_at, ladder)
+            segs = load_talog(s.ta)
+            print_ta_report(ta_pings(segs), rung_at, ladder,
+                            unparsed=sum(seg["X"] for seg in segs))
     else:
         main(arg, sys.argv[2] if len(sys.argv) > 2 else None)

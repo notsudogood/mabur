@@ -410,7 +410,12 @@ witness, which can only be a card that did not send it;
 card `card` heard reply frame `idx` of `n`, with what the drone stamped: its
 hold from RX callback to that frame's send call, its TxQueue and USB-pool
 depths and its air-clock backlog (0.1 ms units) at that call, plus the
-frame's RSSI (dBm, better chain; 0 without PHY status). `tsfl` is the
+frame's RSSI (dBm, better chain; 0 without PHY status);
+`X <card> <type> <len>` card `card` heard an FCS-clean `T_TA_PING`/`T_TA_PONG`
+(`type` 7/8) of `len` body bytes that did not parse -- a wire/parser mismatch,
+counted so it cannot pass for replies that never came (the first phase-2
+flight lost every pong this way: the GS RX body keeps the 4-byte FCS and the
+pong parser read its CRC from the very end). `tsfl` is the
 receiving card's hardware RX TSF (us, low 32 bits, wraps every ~71.6 min),
 so `O.tsfl - H.tsfl` for one seq on one card is the on-air turnaround on a
 single clock; `t_us` is GS host mono time (the host round trip, which adds

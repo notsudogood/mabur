@@ -52,6 +52,11 @@ void TaLog::heard(const mabur::node::RxBody& m) {
                       static_cast<unsigned>(pong->txq_depth),
                       static_cast<unsigned>(pong->pool_depth),
                       static_cast<unsigned>(pong->air_backlog_100us), rssi);
+  } else if (const int t = mabur::rc::frame_type(d, len);
+             t == mabur::rc::T_TA_PING || t == mabur::rc::T_TA_PONG) {
+    // FCS-clean and typed as ours, yet it did not parse: a wire/parser
+    // mismatch. Logged so it reads as a count, not as replies that never came.
+    n = std::snprintf(b, sizeof(b), "X %u %d %zu", static_cast<unsigned>(m.card_id), t, len);
   }
   if (n > 0) w_.line(s_, b, std::min(static_cast<size_t>(n), sizeof(b) - 1));
 }

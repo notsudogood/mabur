@@ -134,10 +134,20 @@ std::vector<uint8_t> pack_ta_pong(const TaPong& p) {
 }
 
 std::optional<TaPong> parse_ta_pong(const uint8_t* buf, size_t len) {
-  if (len < kTaPongMinBytes || len > kTaPongMaxBytes) return std::nullopt;
+  if (len < kTaPongMinBytes || len > kTaPongMaxBytes + 4) return std::nullopt;
   if (get16(buf, 0) != RC_MAGIC || buf[2] != RC_VERSION || buf[3] != T_TA_PONG)
     return std::nullopt;
-  if (get16(buf, len - 2) != crc16_ccitt(buf, len - 2)) return std::nullopt;
+  // The pong is variable-length, so its CRC sits at the END of the body --
+  // and devourer hands up the frame WITH its trailing 4-byte FCS (radio_frontend
+  // strips only the dot11 header). Accept the body as packed or as received.
+  const auto crc_at_end = [buf](size_t n) {
+    return n >= kTaPongMinBytes && n <= kTaPongMaxBytes &&
+           get16(buf, n - 2) == crc16_ccitt(buf, n - 2);
+  };
+  if (!crc_at_end(len)) {
+    if (len < 4 || !crc_at_end(len - 4)) return std::nullopt;
+    len -= 4;
+  }
   TaPong p;
   p.vtx_id = get32(buf, 5);
   p.seq = get16(buf, 9);

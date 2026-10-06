@@ -1286,6 +1286,182 @@ def print_drone_rx_report(rows):
           f"   own: p50={_pct(own, .5):.0f} p90={_pct(own, .9):.0f} max={max(own)}")
 
 
+# Listen window (feedback-repair rollout phase 3, gs/src/listen_burst.h +
+# drone/src/listen_window.h). A row this soon after an on/off switch belongs to
+# neither arm: the drone keeps its gap up to 0.5 s after the last status, and
+# the cumulative counters straddle the switch.
+LW_GUARD_MS = 1000
+LW_BINS = ["<0", "0-1", "1-2", "2-3", "3-4", "4-5", "5-7", ">=7"]
+LW_BIN_HI_MS = [0, 1, 2, 3, 4, 5, 7, None]  # upper edge of each bin, ms
+
+
+def _lw(row):
+    return ((row.get("link") or {}).get("listen")) or None
+
+
+def _get(d, *path):
+    for k in path:
+        if not isinstance(d, dict):
+            return None
+        d = d.get(k)
+    return d
+
+
+def _rcf_total(row):
+    rs = _get(row, "link", "rcf_slot") or {}
+    return sum(rs.get(k) or 0 for k in ("au", "probe", "timeout", "passthru"))
+
+
+def listen_arms(rows):
+    """flight.jsonl rows -> {"on": arm, "off": arm}. Only in-session rows (a
+    drone block) of a recording whose GS had [listen] ms > 0. Each arm sums
+    the cumulative counters' deltas over consecutive rows both in the arm and
+    clear of a switch, and averages the per-row rates; the drone's T_LWSTAT
+    reports are summed once per seq, attributed to the arm of the row that
+    first carried them. None when the recording has no listen window."""
+    rows = [r for r in rows if _lw(r) is not None and r.get("drone")]
+    if not rows or not any((_lw(r).get("ms") or 0) > 0 for r in rows):
+        return None
+    last_switch = None
+    prev_on = None
+    tagged = []
+    for r in rows:
+        on = bool(_lw(r).get("on"))
+        t = r.get("t_ms") or 0
+        if prev_on is not None and on != prev_on:
+            last_switch = t
+        prev_on = on
+        clear = last_switch is None or t - last_switch >= LW_GUARD_MS
+        tagged.append((r, on, clear))
+
+    def new_arm():
+        return {"dt_s": 0.0, "rows": 0, "rcf_sent": 0, "timeouts": 0, "sent": 0,
+                "probe": 0, "deadline": 0, "completion": 0, "trunc": 0, "drop": 0,
+                "aband": [0, 0], "rcf_rx_pps": [], "pre_fec": [], "air": [],
+                "reports": 0, "status_rx": 0, "hist": [0] * 8, "nofid": 0,
+                "gate_holds": 0, "gate_sum_ms": 0, "gate_max_ms": 0,
+                "direct_holds": 0, "t_spans": []}
+
+    arms = {"on": new_arm(), "off": new_arm()}
+    seen = set()
+    for (a, a_on, a_clear), (b, b_on, b_clear) in zip(tagged, tagged[1:]):
+        if a_on != b_on or not a_clear or not b_clear:
+            continue
+        arm = arms["on" if b_on else "off"]
+        dt = ((b.get("t_ms") or 0) - (a.get("t_ms") or 0)) / 1000.0
+        if dt <= 0 or dt > 5:
+            continue
+        arm["dt_s"] += dt
+        arm["rows"] += 1
+        arm["t_spans"].append((a.get("t_ms") or 0, b.get("t_ms") or 0))
+        d = lambda f: max(0, (f(b) or 0) - (f(a) or 0))
+        arm["rcf_sent"] += d(_rcf_total)
+        arm["timeouts"] += d(lambda r: _get(r, "link", "rcf_slot", "timeout"))
+        for k in ("sent", "probe", "deadline", "completion"):
+            arm[k] += d(lambda r, k=k: _lw(r).get(k))
+        arm["trunc"] += d(lambda r: _get(r, "link", "video", "truncated"))
+        arm["drop"] += d(lambda r: _get(r, "link", "video", "dropped"))
+        for sid in (0, 1):
+            arm["aband"][sid] += d(lambda r, sid=sid: (_get(r, "link", "streams") or [{}, {}])[sid].get("abandoned"))
+        for key, path in (("rcf_rx_pps", ("drone", "rcf", "rx_pps")),
+                          ("pre_fec", ("link", "pre_fec_loss")), ("air", ("link", "air_pct"))):
+            v = _get(b, *path)
+            if isinstance(v, (int, float)):
+                arm[key].append(v)
+        dr = _lw(b).get("drone")
+        if dr and dr.get("seq") is not None and dr["seq"] not in seen:
+            seen.add(dr["seq"])
+            arm["reports"] += 1
+            arm["status_rx"] += dr.get("status_rx") or 0
+            for i, h in enumerate((dr.get("hist") or [])[:8]):
+                arm["hist"][i] += h
+            arm["nofid"] += dr.get("nofid") or 0
+            arm["gate_holds"] += dr.get("gate_holds") or 0
+            arm["gate_sum_ms"] += dr.get("gate_hold_sum_ms") or 0
+            arm["gate_max_ms"] = max(arm["gate_max_ms"], dr.get("gate_hold_max_ms") or 0)
+            arm["direct_holds"] += dr.get("direct_holds") or 0
+    arms["ms"] = max((_lw(r).get("ms") or 0) for r in rows)
+    arms["ab_s"] = max((_lw(r).get("ab_s") or 0) for r in rows)
+    return arms
+
+
+def _lat_by_arm(lat_path, arms):
+    """lat.log (latlog 2: `<t_us> lat: n=.. e2e=p50/max ...`) -> per arm the
+    e2e p50s and maxes of the seconds that fall in that arm's row spans."""
+    out = {"on": ([], []), "off": ([], [])}
+    if not lat_path:
+        return out
+    pat = re.compile(r"^(\d+) lat: .*?e2e=(\d+)/(\d+)")
+    with open(lat_path) as f:
+        for line in f:
+            m = pat.match(line)
+            if not m:
+                continue
+            t_ms = int(m.group(1)) / 1000.0
+            for name in ("on", "off"):
+                if any(a < t_ms <= b for a, b in arms[name]["t_spans"]):
+                    out[name][0].append(int(m.group(2)))
+                    out[name][1].append(int(m.group(3)))
+                    break
+    return out
+
+
+def print_listen_report(rows, lat_path=None):
+    """LISTEN WINDOW (rollout phase 3): the drone keeps the air quiet for
+    [listen] ms after every burst and the GS sends one status into each gap.
+    Per arm (gap on vs today's predicted slot): RCF delivery and the
+    slotter's timeouts, status delivery and where statuses landed against
+    the gap, what the gap cost the video (held AUs, loss, latency)."""
+    arms = listen_arms(rows)
+    if arms is None:
+        return
+    ms = arms["ms"]
+    print(f"LISTEN WINDOW (rollout phase 3: drone quiet {ms} ms after each burst, "
+          f"GS status into the gap; ab_s={arms['ab_s']})")
+    lat = _lat_by_arm(lat_path, arms)
+    for name in ("on", "off"):
+        a = arms[name]
+        if a["dt_s"] < 1:
+            print(f"  gap {name}: no clean time in this arm")
+            continue
+        mean = lambda v: sum(v) / len(v) if v else float("nan")
+        send_pps = a["rcf_sent"] / a["dt_s"]
+        rx_pps = mean(a["rcf_rx_pps"])
+        deliv = f"{100.0 * rx_pps / send_pps:.0f}%" if send_pps > 0 and a["rcf_rx_pps"] else "-"
+        print(f"  gap {name}: {a['dt_s']:.0f} s  RCF sent {send_pps:.1f}/s heard {rx_pps:.1f}/s ({deliv})  "
+              f"slot timeouts {a['timeouts'] / a['dt_s']:.2f}/s")
+        mins = a["dt_s"] / 60.0
+        p50s, maxes = lat[name]
+        lat_txt = (f"  e2e p50 {_pct(p50s, .5):.0f} ms, worst-second p90 {_pct(maxes, .9):.0f} ms"
+                   if p50s else "")
+        print(f"    video: trunc+drop {(a['trunc'] + a['drop']) / mins:.1f}/min  "
+              f"abandoned syms base {a['aband'][0] / mins:.0f}/min enh {a['aband'][1] / mins:.0f}/min  "
+              f"pre-FEC {100.0 * mean(a['pre_fec']):.2f}%  air {mean(a['air']):.0f}%" + lat_txt)
+        if name != "on":
+            continue
+        sent = a["sent"]
+        if sent:
+            trig = f"probe {100.0 * a['probe'] / sent:.0f}% deadline {100.0 * a['deadline'] / sent:.0f}% completion {100.0 * a['completion'] / sent:.0f}%"
+            heard = a["status_rx"]
+            print(f"    statuses: sent {sent} ({sent / a['dt_s']:.0f}/s; {trig}), drone heard {heard} "
+                  f"({100.0 * heard / sent:.0f}%), no gap on record {a['nofid']}")
+        timed = sum(a["hist"])
+        if timed:
+            # Bins wholly inside [0, ms): a conservative count when ms
+            # splits a bin (6 ms splits 5-7).
+            in_gap = sum(h for i, h in enumerate(a["hist"])
+                         if i >= 1 and LW_BIN_HI_MS[i] is not None and LW_BIN_HI_MS[i] <= ms)
+            hist_txt = "  ".join(f"{LW_BINS[i]} {100.0 * h / timed:.0f}%" for i, h in enumerate(a["hist"]))
+            print(f"    landed (ms after the burst's modelled end; gap = 0-{ms}): {hist_txt}")
+            print(f"    inside the gap: {100.0 * in_gap / timed:.0f}% of {timed} timed")
+        if a["reports"]:
+            hold_mean = a["gate_sum_ms"] / a["gate_holds"] if a["gate_holds"] else 0.0
+            print(f"    gap cost: AUs held {a['gate_holds'] / a['dt_s']:.1f}/s (mean {hold_mean:.1f} ms, "
+                  f"max {a['gate_max_ms']} ms), control sends held {a['direct_holds'] / a['dt_s']:.1f}/s")
+    print("  note: arrival times are the drone's RX stamp against its MODELLED burst end "
+          "(AirClock), so they include its own USB RX latency and the model's error.")
+
+
 def print_salvage_report(rows):
     """SALVAGE: what rx.keep_corrupted (2026-09-08) bought. The sideport's
     per-card crc_fail and per-stream corrupt/salvaged/sub_fail are
@@ -1995,6 +2171,7 @@ def main(path, aulog=None, probelog_path=None, scanlog_path=None):
 
     print_salvage_report(rows)
     print_drone_rx_report(rows)
+    print_listen_report(rows)
 
     # link.attrib.suppressed was removed from the sideport 2026-09-02 with
     # the packet-level delivery window it was defined against. Old
@@ -2034,6 +2211,7 @@ if __name__ == "__main__":
         if primary != s.flight and s.flight:
             print_salvage_report(load(s.flight))
             print_drone_rx_report(load(s.flight))
+            print_listen_report(load(s.flight), s.lat)
         # fec.log (2026-09-15) is a sibling too: the FEC EPISODES section
         # rides along whichever primary the session offered.
         if s.fec:

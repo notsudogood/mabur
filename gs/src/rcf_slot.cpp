@@ -16,6 +16,7 @@ void RcfSlotter::on_au_first(uint64_t now_ms) {
 }
 
 bool RcfSlotter::idle_ahead(uint64_t now_ms) const {
+  if (window_ms_ > 0) return true;  // the drone keeps the gap; nothing to predict
   if (!have_first_) return true;
   const double next = static_cast<double>(last_first_ms_) + period_ms_;
   return static_cast<double>(now_ms) + cfg_.lead_ms < next - cfg_.guard_ms;
@@ -76,7 +77,7 @@ bool RcfSlotter::offer(SlotFrame& f, uint64_t now_ms, bool bypass) {
     return false;
   }
   if (now_ms >= idle_from_ms_ &&
-      now_ms - idle_from_ms_ <= static_cast<uint64_t>(cfg_.grace_ms) &&
+      now_ms - idle_from_ms_ <= static_cast<uint64_t>(grace_ms()) &&
       idle_ahead(now_ms)) {
     // The idle has just begun (the burst -- probe included -- is off
     // air): this IS the slot.

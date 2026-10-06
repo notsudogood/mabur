@@ -1228,6 +1228,23 @@ TEST(turnaround_defaults_parse_and_bounds) {
   }
 }
 
+// Listen window (rollout phase 3): off unless asked; the gap is bounded by
+// what the drone will keep (ListenWindow::kMaxGapUs, 10 ms).
+TEST(listen_defaults_parse_and_bounds) {
+  auto d = maburgs::load_config(write_tmp(""));
+  CHECK(d.listen.ms == 0);
+  CHECK(d.listen.ab_s == 0);
+  auto c = maburgs::load_config(write_tmp("[listen]\nms = 4\nab_s = 30\n"));
+  CHECK(c.listen.ms == 4);
+  CHECK(c.listen.ab_s == 30);
+  for (const char* bad : {"[listen]\nms = 11\n", "[listen]\nms = -1\n",
+                          "[listen]\nab_s = 3601\n", "[listen]\ngap = 4\n"}) {
+    bool threw = false;
+    try { maburgs::load_config(write_tmp(bad)); } catch (const std::exception&) { threw = true; }
+    CHECK(threw);
+  }
+}
+
 TEST(bundle_default_sets_every_known_key_but_radio_cards) {
   std::vector<std::string> defaulted;
   maburgs::load_config(std::string(MABUR_GS_BUNDLE_DIR) + "/maburgs.default.toml",

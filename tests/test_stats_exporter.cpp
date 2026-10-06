@@ -99,6 +99,59 @@ TEST(op_exports_overhead_pair_not_scalar) {
 // then carries the control-path RTT (EWMA + session min + n), the filtered
 // pts offset, and floor_ms when the anchor was usable — all from StatsInput,
 // the exporter never computes them.
+TEST(listen_window_block_with_and_without_a_drone_report) {
+  Capture cap;
+  StatsExporter ex(1, 500, cap.fn());
+  StatsInput in = base_input();
+  in.listen.on = true;
+  in.listen.ms = 4;
+  in.listen.ab_s = 30;
+  in.listen.sent = 120;
+  in.listen.probe = 110;
+  in.listen.deadline = 8;
+  in.listen.completion = 2;
+  in.listen.late_max_ms = 3;
+  ex.poll(1000, in);
+  json lw = cap.last()["link"]["listen"];
+  CHECK(lw["on"] == true);
+  CHECK(lw["ms"] == 4);
+  CHECK(lw["ab_s"] == 30);
+  CHECK(lw["sent"] == 120);
+  CHECK(lw["probe"] == 110);
+  CHECK(lw["deadline"] == 8);
+  CHECK(lw["completion"] == 2);
+  CHECK(lw["late_max_ms"] == 3);
+  CHECK(lw["drone"].is_null());
+
+  mabur::rc::LwStat d;
+  d.seq = 9;
+  d.listen_ms = 4;
+  d.status_rx = 55;
+  d.hist[2] = 40;
+  d.hist[7] = 1;
+  d.nofid = 2;
+  d.gate_holds = 6;
+  d.gate_hold_sum_ms = 9;
+  d.gate_hold_max_ms = 3;
+  d.direct_holds = 4;
+  in.listen.drone = d;
+  in.listen.drone_rx_ms = 1490;
+  ex.poll(1600, in);
+  json dj = cap.last()["link"]["listen"]["drone"];
+  CHECK(dj["seq"] == 9);
+  CHECK(dj["rx_ms"] == 1490);
+  CHECK(dj["ms"] == 4);
+  CHECK(dj["status_rx"] == 55);
+  REQUIRE(dj["hist"].size() == 8);
+  CHECK(dj["hist"][2] == 40);
+  CHECK(dj["hist"][7] == 1);
+  CHECK(dj["nofid"] == 2);
+  CHECK(dj["gate_holds"] == 6);
+  CHECK(dj["gate_hold_sum_ms"] == 9);
+  CHECK(dj["gate_hold_max_ms"] == 3);
+  CHECK(dj["direct_holds"] == 4);
+}
+
 TEST(link_rtt_null_then_values) {
   Capture cap;
   StatsExporter ex(1, 500, cap.fn());

@@ -237,6 +237,8 @@ TEST(disc_ack_advertises_frame_wire_cap) {
   // Rollout phase 2: this build answers turnaround pings (ta_responder.h),
   // and the GS only pings a drone that says so.
   CHECK(parsed->chip_caps & mabur::rc::CAP_TURNAROUND);
+  // Rollout phase 3: keeps a listen-window gap when the GS asks for one.
+  CHECK(parsed->chip_caps & mabur::rc::CAP_LISTEN);
 }
 
 // 2b. Keep-alive DISC while LINKED: ACK-ONLY. The drone must reply with a

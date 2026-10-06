@@ -390,6 +390,20 @@ over a replay and prints `arq_shadow <sid>:` totals on stderr (order-only:
 the replay clock is synthetic). First flight data: two indoor flights,
 2026-10-03 (`docs/feedback-repair-rollout.md` "Phase 1 results").
 
+**link.listen (2026-10-07).** The listen window, phase 3 of
+`docs/feedback-repair-rollout.md`. GS side, cumulative: `on` (statuses going
+out now: `[listen] ms` > 0, the A/B phase, in session, the drone advertises
+`CAP_LISTEN`, no calibration sweep), `ms`, `ab_s`, `sent` and its split by
+what marked the burst end (`probe`, `deadline`, `completion`), `late_max_ms`
+(worst core-loop delay from that mark to the send). `drone` is the latest
+`T_LWSTAT`, per drone period — sum it once per `seq` (both cards hear it):
+`ms` (the gap the drone kept), `status_rx`, `hist` (8 bins of RX time minus
+the AU's modelled burst end: <0, 0-1, 1-2, 2-3, 3-4, 4-5, 5-7, ≥7 ms),
+`nofid` (no gap on record for that AU), `gate_holds` / `gate_hold_sum_ms` /
+`gate_hold_max_ms` (AU first bodies and late repairs the gap held), and
+`direct_holds` (control/MSP/pong sends it held); `rx_ms` is the GS arrival.
+null until the first report.
+
 **ta.log (talog 1, 2026-10-04).** The turnaround bench, phase 2 of
 `docs/feedback-repair-rollout.md`: how long a status frame takes to turn into
 a reply on air while the drone's video queue is loaded, per drone hardware TX

@@ -41,6 +41,7 @@
 #endif
 
 #include "air_clock.h"
+#include "listen_window.h"
 #include "air_rate.h"
 #include "ampdu_policy.h"
 #include "cal_apply.h"
@@ -185,6 +186,8 @@ inline void await_retune_gate(const std::atomic<bool>* waiting) {
   while (waiting->load(std::memory_order_acquire)) std::this_thread::yield();
 }
 
+uint64_t now_steady_us();  // defined below, with the dq_split gauge
+
 // Wraps IRtlRadio::send_packet with a mutex — shared between the hot
 // thread (video bodies) and the agent thread (send_control / DISC_ACK).
 struct DevourerSink : mabur::FrameSink {
@@ -217,8 +220,24 @@ struct DevourerSink : mabur::FrameSink {
   // Writer-priority flag paired with `gate` — see await_retune_gate above.
   std::atomic<bool>* gate_waiting = nullptr;
 
+  // Listen window (rollout phase 3): a control/MSP/pong/telemetry send that
+  // would reach the air inside the quiet gap after a burst waits for the gap
+  // to end. Null = no gap (dry-run).
+  mabur::ListenWindow* listen = nullptr;
+
   bool send(const uint8_t* p, size_t n) override {
     if (ready && !ready->load(std::memory_order_acquire)) return false;
+    if (listen) {
+      // ~1 ms from this call to the air (control path, measured on the
+      // turnaround bench); bounded so a stale gap can never wedge a sender.
+      const uint64_t t0 = now_steady_us();
+      const uint64_t until = listen->quiet_until(t0, 1000);
+      if (until > t0) {
+        std::this_thread::sleep_for(std::chrono::microseconds(
+            std::min<uint64_t>(until - t0, mabur::ListenWindow::kMaxGapUs)));
+        listen->on_direct_hold();
+      }
+    }
     await_retune_gate(gate_waiting);
     std::shared_lock<std::shared_mutex> sg;
     if (gate) sg = std::shared_lock<std::shared_mutex>(*gate);
@@ -1317,7 +1336,13 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
   // and the writer runs on the agent thread — see await_retune_gate.
   std::atomic<bool> retune_waiting{false};
 
+  // Listen window (rollout phase 3, listen_window.h): shared by the RX
+  // callback (statuses), the hot thread (each AU's gap), the TX writer and
+  // the direct senders (holds), and the agent thread (T_LWSTAT).
+  mabur::ListenWindow listen_win;
+
   DevourerSink dev_sink;
+  dev_sink.listen = &listen_win;
   dev_sink.dev = rtl_device.get();
   dev_sink.ready = &device_ready;
   dev_sink.gate = &tx_gate;
@@ -1512,6 +1537,8 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
   // be agent_thread-local variables) is what keeps the stream single
   // regardless of which thread sent the last frame.
   std::atomic<uint16_t> telem_wire_seq{0};
+  // T_LWSTAT sequence (listen window, phase 3); agent thread only.
+  uint16_t lw_wire_seq = 0;
   std::atomic<uint16_t> telem_dot11_seq{0};
   std::vector<uint8_t> telem_radiotap = devourer::build_stream_radiotap(control_tx_mode());
   // Minor 5 fix: the TX writer thread's calibration ack (below) starts from
@@ -1648,6 +1675,14 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
         // turnaround being measured. Stamped first thing.
         if (!pkt.RxAtrib.crc_err && ta_responder)
           ta_responder->on_ping(body, body_len, now_steady_us());
+      } else if (rc_type == rc::T_STATUS) {
+        // Listen window (phase 3): timed against its AU's gap on this
+        // thread, the moment it arrives; the agent never sees it.
+        if (!pkt.RxAtrib.crc_err) {
+          const uint64_t st_us = now_steady_us();
+          if (auto st = rc::parse_status(body, body_len))
+            if (st->vtx_id == cfg.link.vtx_id) listen_win.on_status(*st, st_us);
+        }
       } else if (rc_type == rc::T_CAL_CMD || rc_type == rc::T_CAL_RESULT) {
         cal_queue.push(body, body_len);
       } else {
@@ -1784,6 +1819,10 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
     FrameSource fsrc(VENC_RING_NAME);
     FramePipeline pipe;
     AirClock air_clock;   // spec 2026-09-06; priced by apply_op_to_clock
+    // Listen window (phase 3): end of the gap the last AU keeps, 0 = none.
+    // A body pushed before it (the next AU's first, or a late repair of the
+    // last one) is held until then; see listen_window.h.
+    uint64_t gap_until_us = 0;
     std::vector<uint8_t> fbuf(VENC_FRAME_META_SIZE + 512 * 1024);
     uint64_t last_reattach = 0;
     uint64_t last_ring_stats_ms = 0;
@@ -1915,6 +1954,12 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
           b.pushed_us = p_us;
           const size_t body_bytes = b.body.size();
           const int body_sid = b.stream_id;
+          // A late repair queues behind the probe, i.e. right where the GS
+          // aims its status: it waits out the gap like the next AU does.
+          if (gap_until_us > p_us) {
+            b.not_before_us = gap_until_us;
+            air_clock.reserve_until(gap_until_us);
+          }
           txq.push(std::move(b));
           air_clock.book(p_us, body_bytes, body_sid);
           any = true;
@@ -1978,6 +2023,12 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
                       b.enqueued_ms = static_cast<uint32_t>(p_us / 1000);
                       b.pushed_us = p_us;
                       b.au_first = first;
+                      // Listen window: the AU's first body waits out the
+                      // previous burst's gap; the model starts after it.
+                      if (first && gap_until_us > p_us) {
+                        b.not_before_us = gap_until_us;
+                        air_clock.reserve_until(gap_until_us);
+                      }
                       first = false;
                       const size_t body_bytes = b.body.size();
                       const int body_sid = b.stream_id;
@@ -2003,6 +2054,18 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
           air_clock.book(p_us, pb.body.size(), AirClock::kProbeSid);
           txq.push(std::move(pb));
           txq.flush();
+        }
+        // Listen window (rollout phase 3): this AU's burst, probe included,
+        // is modelled off air at the clock's free_at; record its gap (keyed
+        // by the frame id the probe carries, which is what the GS's status
+        // names) and keep it while the GS's statuses ask for one.
+        if (!first) {
+          const uint64_t g_now = now_steady_us();
+          const uint64_t g_from = std::max(air_clock.free_at_us(), g_now);
+          const uint32_t g_us = listen_win.gap_us(g_now);
+          listen_win.on_au_gap(static_cast<uint16_t>(pipe.next_frame_id() - 1), g_from,
+                               g_from + g_us);
+          gap_until_us = g_us ? g_from + g_us : 0;
         }
         // dq_split accounting: ring wait is loop-top → read return (the
         // interval during which this frame did not yet exist for us), CPU is
@@ -2541,6 +2604,17 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
 
       batch.clear();
       if (txq.pop_batch(batch, 3, 5) == 0) continue;
+      // Listen window (phase 3): a held body starts its own batch
+      // (pop_batch); wait out the gap before it goes to the radio. Ahead of
+      // the q_ms patch below, so the hold shows in the GS's dq segment.
+      if (batch[0].not_before_us) {
+        const uint64_t h0 = now_steady_us();
+        if (batch[0].not_before_us > h0) {
+          std::this_thread::sleep_for(std::chrono::microseconds(std::min<uint64_t>(
+              batch[0].not_before_us - h0, mabur::ListenWindow::kMaxGapUs)));
+          listen_win.on_gate_hold(now_steady_us() - h0);
+        }
+      }
       // Patch each body's SBI q_ms with its TxQueue wait (push→pop), and
       // fold the batch's worst case into the window-max gauge (spec
       // 2026-08-30 latency-accounting, Task 4). enqueued_ms == 0 means the
@@ -2939,6 +3013,24 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
           frame.insert(frame.end(), hdr.begin(), hdr.end());
           frame.insert(frame.end(), telem.begin(), telem.end());
           dev_sink.send(frame.data(), frame.size());
+
+          // Listen window report (phase 3): where this period's statuses
+          // landed against their AU's gap, and what the gap cost. Only while
+          // the GS is (or just was) sending statuses -- a separate frame so
+          // T_TELEM and RC_VERSION stay untouched.
+          const uint64_t lw_now = now_steady_us();
+          if (listen_win.active(lw_now)) {
+            auto lw = rc::pack_lwstat(listen_win.take(
+                cfg.link.vtx_id, lw_wire_seq++, lw_now));
+            std::vector<uint8_t> lf;
+            lf.reserve(telem_radiotap.size() + kDot11HeaderLen + lw.size());
+            lf.insert(lf.end(), telem_radiotap.begin(), telem_radiotap.end());
+            auto lh = build_dot11_header(static_cast<uint16_t>(
+                telem_dot11_seq.fetch_add(1, std::memory_order_relaxed) & 0xFFF));
+            lf.insert(lf.end(), lh.begin(), lh.end());
+            lf.insert(lf.end(), lw.begin(), lw.end());
+            dev_sink.send(lf.data(), lf.size());
+          }
         }
       }
 

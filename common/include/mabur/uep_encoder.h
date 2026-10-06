@@ -38,6 +38,10 @@ struct UepBody {
   // whose q_ms the GS latches as the frame's dq. Lets the tx thread report
   // a queue-wait figure directly comparable to the GS dq segment.
   bool au_first = false;
+  // Listen window (rollout phase 3, drone/src/listen_window.h): the TX
+  // writer holds this body until this steady-clock µs, so the GS's status
+  // lands in a quiet gap after the previous burst. 0 = send at once.
+  uint64_t not_before_us = 0;
 };
 
 // Receives each body the instant its SBI group seals, while later FEC blocks

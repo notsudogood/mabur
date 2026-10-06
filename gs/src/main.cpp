@@ -71,6 +71,7 @@
 #include "arq_shadow.h"
 #include "probe_track.h"
 #include "rcf_slot.h"
+#include "listen_burst.h"
 #include "rtt_estimator.h"
 #include "radio_frontend.h"
 #include "rf_labels.h"
@@ -1155,6 +1156,15 @@ static int run_radio(const maburgs::Config& cfg) {
   // send lands in the drone's inter-AU idle. See rcf_slot.h.
   maburgs::RcfSlotter rcf_slot(
       maburgs::RcfSlotCfg{cfg.link.rcf_slot_hold_ms, 100, 2, 3, 1});
+  // Listen window (feedback-repair rollout phase 3, listen_burst.h): one
+  // T_STATUS per drone burst end, into the gap the drone keeps after it.
+  // Same core-thread callbacks as rcf_slot; the drone's T_LWSTAT reports
+  // land in latest_lw (rc sink).
+  maburgs::BurstEndTracker burst_end;
+  uint16_t lw_status_seq = 0;
+  maburgs::StatsListenIn lw_stats;
+  lw_stats.ms = cfg.listen.ms;
+  lw_stats.ab_s = cfg.listen.ab_s;
   // One card + a running scout: sends that leave while the card is off
   // measuring a candidate would race the scout thread's FastRetune /
   // GetRxEnergy on the same device. The DISC routing ladder checks
@@ -1284,6 +1294,7 @@ static int run_radio(const maburgs::Config& cfg) {
          if (au_on) au_ring.begin(h, sid);
          if (au_log) au_log->begin();
          rcf_slot.on_au_first(mono_ms());
+         burst_end.on_au_first(h.frame_id);
          // One probe expectation per video access unit, base and enh alike
          // (probe per AU, 2026-09-16): the probe body rides the AU's send
          // opportunity, so the AU count is what "expected" means
@@ -1314,6 +1325,11 @@ static int run_radio(const maburgs::Config& cfg) {
              mono_ms(),
              cur_au_sid < mabur::UepEncoder::kNumStreams &&
                  probe_cmd_last != mabur::rc::kNoProbeProfile);
+         burst_end.on_au_complete(
+             mono_ms(),
+             cur_au_sid < mabur::UepEncoder::kNumStreams &&
+                 probe_cmd_last != mabur::rc::kNoProbeProfile,
+             rcf_slot.tail_ub_ms());
          {
            static const bool gaplog_au = std::getenv("MABUR_GAPLOG") != nullptr;
            if (gaplog_au)
@@ -1637,6 +1653,16 @@ static int run_radio(const maburgs::Config& cfg) {
     if (ta_log) ta_log->heard(m);
   });
   agg.set_rc_sink([&](uint8_t, const std::vector<uint8_t>& f, uint64_t us) {
+    if (mabur::rc::frame_type(f.data(), f.size()) == mabur::rc::T_LWSTAT) {
+      // Listen window report (phase 3): exported as link.listen.drone; the
+      // report sums it once per seq (both cards hear the same frame).
+      if (auto lw = mabur::rc::parse_lwstat(f.data(), f.size()))
+        if (lw->vtx_id == cfg.link.vtx_id) {
+          lw_stats.drone = *lw;
+          lw_stats.drone_rx_ms = us / 1000;
+        }
+      return;
+    }
     if (mabur::rc::frame_type(f.data(), f.size()) == mabur::rc::T_TELEM) {
       // A CRC-clean frame can still fail to parse as a valid Telem (e.g. a
       // corrupted T_TELEM whose CRC happens to pass this layer but whose
@@ -1705,9 +1731,13 @@ static int run_radio(const maburgs::Config& cfg) {
     arq_shadow.on_probe(static_cast<double>(m.mono_us) / 1000.0);
     rcf_slot.on_probe_tail(mono_ms());
     mabur::probe::ProbeRx rx;
-    if (!mabur::probe::parse_probe_body(m.body.data(), m.body.size(),
-                                        probe_block_payload, &rx))
-      return;
+    const bool probe_ok = mabur::probe::parse_probe_body(m.body.data(), m.body.size(),
+                                                         probe_block_payload, &rx);
+    // Listen window: the probe names its AU (enh_fid), which is how the
+    // drone finds the gap a status is aimed at.
+    burst_end.on_probe(mono_ms(), probe_ok ? std::optional<uint16_t>(rx.hdr.enh_fid)
+                                           : std::nullopt);
+    if (!probe_ok) return;
     const double snr = m.phy_valid
                             ? std::max(m.snr[0], m.snr[1]) * maburgs::kSnrRawToDb
                             : std::nan("");
@@ -2776,6 +2806,42 @@ static int run_radio(const maburgs::Config& cfg) {
     // still queued from before the sweep started must not go out either.
     for (const auto& f : rcf_slot.take_due(drained_ms))
       if (!cal_session.radio_silent(drained_ms)) send_control_frame(f);
+    // Listen window (rollout phase 3): one T_STATUS per drone burst end,
+    // right behind any RCF/DISC the slotter just released into the same gap.
+    // Only in session, only to a drone that keeps the gap (CAP_LISTEN), never
+    // during a calibration sweep. While it is off (ms 0, an A/B off period)
+    // no status goes out, so the drone keeps no gap and the slotter predicts
+    // the idle as it always did.
+    {
+      const bool lw_on = maburgs::listen_on(cfg.listen, drained_ms) && in_session &&
+                         (vrx.peer_caps() & mabur::rc::CAP_LISTEN) &&
+                         !cal_session.radio_silent(drained_ms);
+      lw_stats.on = lw_on;
+      rcf_slot.set_window_ms(lw_on ? cfg.listen.ms : 0);
+      burst_end.poll(drained_ms);
+      const auto be = burst_end.take();
+      if (be && lw_on) {
+        mabur::rc::Status st;
+        st.vtx_id = cfg.link.vtx_id;
+        st.seq = lw_status_seq++;
+        st.trig = be->trig;
+        st.fid = be->fid;
+        st.listen_ms = static_cast<uint8_t>(cfg.listen.ms);
+        for (int sid = 0; sid < 2; ++sid)
+          st.deficit[sid] = static_cast<uint16_t>(
+              std::min<uint64_t>(agg.decoder().deficit(sid), 0xFFFF));
+        maburgs::SlotFrame sf{mabur::rc::pack_status(st), 0, sel.selected(), false};
+        sf.offered_ms = drained_ms;
+        if (send_control_frame(sf)) {
+          ++lw_stats.sent;
+          if (be->trig == mabur::rc::StatusTrig::Probe) ++lw_stats.probe;
+          else if (be->trig == mabur::rc::StatusTrig::Deadline) ++lw_stats.deadline;
+          else ++lw_stats.completion;
+          const uint64_t late = drained_ms > be->t_ms ? drained_ms - be->t_ms : 0;
+          if (late > lw_stats.late_max_ms) lw_stats.late_max_ms = late;
+        }
+      }
+    }
     // Calibration uplink (T_CAL_CMD / T_CAL_RESULT): straight through
     // send_control_frame, bypassing rcf_slot entirely -- there is no video
     // for the slotter to hide a send behind during a sweep, and
@@ -3088,6 +3154,7 @@ static int run_radio(const maburgs::Config& cfg) {
       sin.rcf_slot = {rcf_slot.released_au(), rcf_slot.released_timeout(),
                       rcf_slot.passthru(), rcf_slot.released_probe(),
                       rcf_slot.tail_ub_ms()};
+      sin.listen = lw_stats;
       // link-rtt block. floor via floor_us_from (pts_anchor.h), which owns
       // the 32-bit-seed vs 64-bit-MI-domain wrap rule.
       if (rtt_est.has_rtt()) {

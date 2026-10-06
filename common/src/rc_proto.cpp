@@ -75,6 +75,13 @@ constexpr size_t kTaPingLen = 5 + 4 + 2 + 1 + 1 + 2;  // 15
 // hold_us(4) | txq(2) | pool(2) | backlog(2), then zero padding, then CRC
 constexpr size_t kTaPongHeadLen = 5 + 4 + 2 + 1 + 1 + 1 + 4 + 2 + 2 + 2;  // 24
 static_assert(kTaPongHeadLen + 2 == kTaPongMinBytes, "pong head + CRC");
+// magic(2) | ver | type | flags | vtx(4) | seq(2) | trig | fid(2) |
+// listen_ms | deficit0(2) | deficit1(2)
+constexpr size_t kStatusLen = 5 + 4 + 2 + 1 + 2 + 1 + 2 + 2;  // 19
+// magic(2) | ver | type | flags | vtx(4) | seq(2) | listen_ms | status_rx(2) |
+// hist(8) | nofid | gate_holds(2) | gate_hold_sum_ms(2) | gate_hold_max_ms |
+// direct_holds(2)
+constexpr size_t kLwStatLen = 5 + 4 + 2 + 1 + 2 + kLwHistBins + 1 + 2 + 2 + 1 + 2;  // 30
 
 }  // namespace
 
@@ -160,6 +167,82 @@ std::optional<TaPong> parse_ta_pong(const uint8_t* buf, size_t len) {
   p.air_backlog_100us = get16(buf, 22);
   p.frame_bytes = static_cast<uint16_t>(len);
   return p;
+}
+
+std::vector<uint8_t> pack_status(const Status& s) {
+  std::vector<uint8_t> body;
+  body.reserve(kStatusLen + 2);
+  put16(body, RC_MAGIC);
+  body.push_back(RC_VERSION);
+  body.push_back(T_STATUS);
+  body.push_back(0);
+  put32(body, s.vtx_id);
+  put16(body, s.seq);
+  body.push_back(static_cast<uint8_t>(s.trig));
+  put16(body, s.fid);
+  body.push_back(s.listen_ms);
+  put16(body, s.deficit[0]);
+  put16(body, s.deficit[1]);
+  put_crc(body);
+  return body;
+}
+
+std::optional<Status> parse_status(const uint8_t* buf, size_t len) {
+  if (len < kStatusLen + 2) return std::nullopt;
+  if (get16(buf, 0) != RC_MAGIC || buf[2] != RC_VERSION || buf[3] != T_STATUS)
+    return std::nullopt;
+  if (get16(buf, kStatusLen) != crc16_ccitt(buf, kStatusLen)) return std::nullopt;
+  if (buf[11] > static_cast<uint8_t>(StatusTrig::Completion)) return std::nullopt;
+  if (buf[14] > kStatusMaxListenMs) return std::nullopt;
+  Status s;
+  s.vtx_id = get32(buf, 5);
+  s.seq = get16(buf, 9);
+  s.trig = static_cast<StatusTrig>(buf[11]);
+  s.fid = get16(buf, 12);
+  s.listen_ms = buf[14];
+  s.deficit[0] = get16(buf, 15);
+  s.deficit[1] = get16(buf, 17);
+  return s;
+}
+
+std::vector<uint8_t> pack_lwstat(const LwStat& s) {
+  std::vector<uint8_t> body;
+  body.reserve(kLwStatLen + 2);
+  put16(body, RC_MAGIC);
+  body.push_back(RC_VERSION);
+  body.push_back(T_LWSTAT);
+  body.push_back(0);
+  put32(body, s.vtx_id);
+  put16(body, s.seq);
+  body.push_back(s.listen_ms);
+  put16(body, s.status_rx);
+  for (int i = 0; i < kLwHistBins; ++i) body.push_back(s.hist[i]);
+  body.push_back(s.nofid);
+  put16(body, s.gate_holds);
+  put16(body, s.gate_hold_sum_ms);
+  body.push_back(s.gate_hold_max_ms);
+  put16(body, s.direct_holds);
+  put_crc(body);
+  return body;
+}
+
+std::optional<LwStat> parse_lwstat(const uint8_t* buf, size_t len) {
+  if (len < kLwStatLen + 2) return std::nullopt;
+  if (get16(buf, 0) != RC_MAGIC || buf[2] != RC_VERSION || buf[3] != T_LWSTAT)
+    return std::nullopt;
+  if (get16(buf, kLwStatLen) != crc16_ccitt(buf, kLwStatLen)) return std::nullopt;
+  LwStat s;
+  s.vtx_id = get32(buf, 5);
+  s.seq = get16(buf, 9);
+  s.listen_ms = buf[11];
+  s.status_rx = get16(buf, 12);
+  for (int i = 0; i < kLwHistBins; ++i) s.hist[i] = buf[14 + i];
+  s.nofid = buf[22];
+  s.gate_holds = get16(buf, 23);
+  s.gate_hold_sum_ms = get16(buf, 25);
+  s.gate_hold_max_ms = buf[27];
+  s.direct_holds = get16(buf, 28);
+  return s;
 }
 
 std::vector<uint8_t> pack_rcf(const Rcf& r) {

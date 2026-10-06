@@ -183,6 +183,19 @@ struct StatsRcfSlotIn {
   int tail_ub_ms = 0;   // learned completion->probe deadline, ms
 };
 
+// Listen window (feedback-repair rollout phase 3, listen_burst.h). GS side
+// cumulative: statuses sent, split by what marked the burst end, and the
+// worst core-loop delay from that mark to the send. `drone` is the latest
+// T_LWSTAT, per period on the drone -- count it once per seq.
+struct StatsListenIn {
+  bool on = false;   // statuses going out right now (config, A/B phase, session, caps)
+  int ms = 0, ab_s = 0;
+  uint64_t sent = 0, probe = 0, deadline = 0, completion = 0;
+  uint64_t late_max_ms = 0;
+  std::optional<mabur::rc::LwStat> drone;
+  uint64_t drone_rx_ms = 0;
+};
+
 // Continuous probe gate snapshot (probe-stream, 2026-09-04), straight from
 // LadderController::probe_gate() -- plain values only, same no-controller-
 // reference pattern as StatsCtlIn. Unlike StatsCtlIn::ctl this is NOT
@@ -253,6 +266,7 @@ struct StatsInput {
   uint64_t scan_rounds = 0;
   std::optional<int> scan_pick;
   StatsRcfSlotIn rcf_slot;
+  StatsListenIn listen;
   bool in_session = false;  // VrxState::SESSION
   int tx_card = 0;
   OpPoint op;

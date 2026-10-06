@@ -85,8 +85,10 @@ void Aggregator::on_rx_body(const mabur::node::RxBody& m) {
   // T_RCF/T_DISC must NOT be diverted here — it still owes frames/crc_fail/
   // rx_bytes accounting like any other received frame.
   const int rc_t = mabur::rc::frame_type(m.body.data(), m.body.size());
+  // T_STATUS (listen window, phase 3) is GS-originated too.
   const bool is_self =
-      m.crc_ok && (rc_t == mabur::rc::T_RCF || rc_t == mabur::rc::T_DISC);
+      m.crc_ok && (rc_t == mabur::rc::T_RCF || rc_t == mabur::rc::T_DISC ||
+                   rc_t == mabur::rc::T_STATUS);
   if (is_self) {
     ++c.self_frames;
     static const bool gaplog_self = std::getenv("MABUR_GAPLOG") != nullptr;

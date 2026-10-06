@@ -194,6 +194,14 @@ lanes   = [0, 4]              # drone transmit queues to compare, in turn: 0 = t
 frames  = 1                   # reply frames per ping, like a repair burst
 bytes   = 64                  # bytes per reply frame
 
+# Listen window (feedback-repair rollout phase 3): after every drone burst the
+# GS sends a short status and asks the drone to stay quiet for `ms` so it lands.
+# 0 = off. ab_s > 0 switches it on and off every ab_s seconds (an A/B in one
+# flight). Turn [turnaround] off while testing this: its replies use the gap.
+[listen]
+ms   = 0                      # quiet gap after each burst, ms (4 to start); 0 = off
+ab_s = 0                      # alternate on/off every N seconds; 0 = stay on
+
 # In-flight channel hop: when the current channel goes bad, move the link to
 # a cleaner candidate from [radio.scan]. A spare card keeps "scouting" the
 # candidates in the background to rank them.

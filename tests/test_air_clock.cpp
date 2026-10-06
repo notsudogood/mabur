@@ -112,4 +112,21 @@ TEST(air_clock_backlog_saturates_u32) {
   CHECK(c.backlog_us(0) == 0xFFFFFFFFu);
 }
 
+TEST(reserve_until_books_the_listen_gap) {
+  // Listen window (phase 3): the gap the drone keeps after a burst is air
+  // the model must not hand to the next AU.
+  AirClock c;
+  c.set_rates(19.5, 19.5, 0.0, 0);
+  CHECK(c.free_at_us() == 0);
+  c.book(1000, 1950, 0);  // 1950 B x 0.410256 us/B = 800 us
+  CHECK(c.free_at_us() == 1800);
+  c.reserve_until(5800);  // a 4 ms gap after the burst
+  CHECK(c.free_at_us() == 5800);
+  c.reserve_until(3000);  // never moves backwards
+  CHECK(c.free_at_us() == 5800);
+  CHECK(c.backlog_us(2000) == 3800);
+  c.book(2000, 1950, 0);  // the next AU starts after the gap
+  CHECK(c.free_at_us() == 6600);
+}
+
 MTEST_MAIN

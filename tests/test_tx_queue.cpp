@@ -25,6 +25,26 @@ TEST(fifo_order_and_batch_limit) {
   CHECK(q.dropped() == 0);
 }
 
+TEST(held_body_starts_its_own_batch) {
+  // Listen window (phase 3): the writer waits for a held body without
+  // holding back the bodies queued ahead of it.
+  TxQueue q(8);
+  q.push(body(0));
+  q.push(body(1));
+  UepBody held = body(2);
+  held.not_before_us = 12345;
+  q.push(std::move(held));
+  q.push(body(3));
+  std::vector<UepBody> out;
+  CHECK(q.pop_batch(out, 3, 0) == 2);  // stops in front of the held body
+  out.clear();
+  CHECK(q.pop_batch(out, 3, 0) == 2);  // the held body leads the next batch
+  REQUIRE(out.size() == 2);
+  CHECK(out[0].body[0] == 2);
+  CHECK(out[0].not_before_us == 12345);
+  CHECK(out[1].body[0] == 3);
+}
+
 TEST(overflow_drops_oldest) {
   TxQueue q(3);
   for (uint8_t i = 0; i < 5; ++i) q.push(body(i));  // 0,1 evicted

@@ -1906,6 +1906,95 @@ def test_ta_section_silent_without_pings():
     assert "TURNAROUND" not in result.stdout, result.stdout
 
 
+def _listen_rows():
+    """Synthetic flight.jsonl: 20 s at 5 rows/s, [listen] ms=4 ab_s=10 -- gap
+    on for 0-10 s, off for 10-20 s. On: 60 statuses/s sent, the drone hears
+    54/s, one T_LWSTAT per second (each carried on 5 rows, both cards'
+    copies alike); RCF 20/s sent, 19.5/s heard, no slot timeouts. Off: RCF
+    heard 18/s, 0.5 slot timeouts/s, 1 truncated AU."""
+    rows = []
+    sent = rcf = timeouts = trunc = 0
+    for k in range(100):
+        t = k * 200
+        on = t < 10000
+        if k:
+            rcf += 4
+            if on:
+                sent += 12
+            else:
+                timeouts += 0.1
+        if t == 15000:
+            trunc += 1
+        lw = {"on": on, "ms": 4, "ab_s": 10, "sent": sent, "probe": sent, "deadline": 0,
+              "completion": 0, "late_max_ms": 1, "drone": None}
+        if on:
+            lw["drone"] = {"seq": t // 1000, "rx_ms": t, "ms": 4, "status_rx": 54,
+                           "hist": [2, 10, 30, 8, 2, 1, 1, 0], "nofid": 0,
+                           "gate_holds": 3, "gate_hold_sum_ms": 6, "gate_hold_max_ms": 3,
+                           "direct_holds": 1}
+        rows.append({"t_ms": t, "drone": {"rcf": {"rx_pps": 19.5 if on else 18.0}},
+                     "link": {"listen": lw,
+                              "rcf_slot": {"au": rcf, "probe": 0, "timeout": int(timeouts),
+                                           "passthru": 0},
+                              "video": {"truncated": trunc, "dropped": 0},
+                              "streams": [{"abandoned": 0}, {"abandoned": 0}],
+                              "pre_fec_loss": 0.01, "air_pct": 50.0}})
+    return rows
+
+
+def test_listen_section_splits_the_ab_arms():
+    """LISTEN WINDOW (rollout phase 3): rows within LW_GUARD_MS of the 10 s
+    switch belong to neither arm; drone reports count once per seq."""
+    rows = _listen_rows()
+    arms = flightreport.listen_arms(rows)
+    assert arms is not None and arms["ms"] == 4 and arms["ab_s"] == 10
+    on, off = arms["on"], arms["off"]
+    assert abs(on["dt_s"] - 9.8) < 0.01, on["dt_s"]   # 0.0-9.8 s
+    assert abs(off["dt_s"] - 8.8) < 0.01, off["dt_s"]  # 11.0-19.8 s (guard)
+    assert on["sent"] == 12 * 49
+    assert on["reports"] == 10 and on["status_rx"] == 540, on
+    assert on["hist"][2] == 300
+    assert on["gate_holds"] == 30 and on["gate_max_ms"] == 3
+    assert on["timeouts"] == 0
+    assert off["trunc"] == 1
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "flight.jsonl"
+        p.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+        (Path(d) / "lat.log").write_text(
+            "# latlog 2\n"
+            "5000000 lat: n=60 e2e=40/50 enc=7/8 dq=0/1 air=1/2 fec=8/9 dec=8/9 reg=5/6 dsp=5/5 chk=0.0 anchor=ok\n"
+            "15000000 lat: n=60 e2e=44/70 enc=7/8 dq=0/1 air=1/2 fec=8/9 dec=8/9 reg=5/6 dsp=5/5 chk=0.0 anchor=ok\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            flightreport.print_listen_report(rows, str(Path(d) / "lat.log"))
+    text = out.getvalue()
+    assert "LISTEN WINDOW" in text, text
+    on_txt = text[text.find("gap on"):text.find("gap off")]
+    off_txt = text[text.find("gap off"):]
+    assert "RCF sent 20.0/s heard 19.5/s (97%)" in on_txt, on_txt
+    assert "slot timeouts 0.00/s" in on_txt, on_txt
+    assert "drone heard 540 (92%)" in on_txt, on_txt
+    assert "1-2 56%" in on_txt, on_txt                # 300 of 540 timed
+    assert "inside the gap: 93% of 540 timed" in on_txt, on_txt  # bins 0-1..3-4
+    assert "AUs held 3.1/s (mean 2.0 ms, max 3 ms)" in on_txt, on_txt
+    assert "e2e p50 40 ms" in on_txt, on_txt
+    # Every timeout is a send too (the slotter books each release once).
+    assert "RCF sent 20.5/s heard 18.0/s (88%)" in off_txt, off_txt
+    assert "slot timeouts 0.45/s" in off_txt, off_txt
+    assert "e2e p50 44 ms" in off_txt, off_txt
+    assert "statuses:" not in off_txt, off_txt
+
+
+def test_listen_section_silent_without_the_feature():
+    rows = _listen_rows()
+    for r in rows:
+        r["link"]["listen"]["ms"] = 0
+    assert flightreport.listen_arms(rows) is None
+    for r in rows:
+        del r["link"]["listen"]
+    assert flightreport.listen_arms(rows) is None
+
+
 def test_ta_section_warns_on_unparsed_frames():
     """X rows (FCS-clean TA frames that did not parse) must surface as a
     warning, not as silently unanswered pings -- the first phase-2 flight
@@ -1940,6 +2029,8 @@ if __name__ == "__main__":
     test_session_dir_mode_prints_ta_section_with_rungs()
     test_ta_section_silent_without_pings()
     test_ta_section_warns_on_unparsed_frames()
+    test_listen_section_splits_the_ab_arms()
+    test_listen_section_silent_without_the_feature()
     test_flightreport_structure()
     test_old_scale_snr_warns_on_stderr()
     test_overhead_scale_break_warns_on_stderr()

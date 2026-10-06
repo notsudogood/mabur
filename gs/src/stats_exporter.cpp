@@ -241,6 +241,33 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     rs["passthru"] = in.rcf_slot.passthru;
     rs["probe"] = in.rcf_slot.probe;
     rs["tail_ub_ms"] = in.rcf_slot.tail_ub_ms;
+    json& lw = link["listen"];
+    lw["on"] = in.listen.on;
+    lw["ms"] = in.listen.ms;
+    lw["ab_s"] = in.listen.ab_s;
+    lw["sent"] = in.listen.sent;
+    lw["probe"] = in.listen.probe;
+    lw["deadline"] = in.listen.deadline;
+    lw["completion"] = in.listen.completion;
+    lw["late_max_ms"] = in.listen.late_max_ms;
+    if (in.listen.drone) {
+      const mabur::rc::LwStat& d = *in.listen.drone;
+      json& dj = lw["drone"];
+      dj["seq"] = d.seq;
+      dj["rx_ms"] = in.listen.drone_rx_ms;
+      dj["ms"] = d.listen_ms;
+      dj["status_rx"] = d.status_rx;
+      json hist = json::array();
+      for (int i = 0; i < mabur::rc::kLwHistBins; ++i) hist.push_back(d.hist[i]);
+      dj["hist"] = hist;
+      dj["nofid"] = d.nofid;
+      dj["gate_holds"] = d.gate_holds;
+      dj["gate_hold_sum_ms"] = d.gate_hold_sum_ms;
+      dj["gate_hold_max_ms"] = d.gate_hold_max_ms;
+      dj["direct_holds"] = d.direct_holds;
+    } else {
+      lw["drone"] = nullptr;
+    }
   }
 
   // Measured-loss ladder controller snapshot; static-pin mode never ticks

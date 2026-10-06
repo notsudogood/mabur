@@ -1,9 +1,9 @@
 # Feedback repair — rollout
 
-**Status 2026-10-06: phase 1 (shadow mode) logs on every flight (indoors so far);
-phase 2 (the turnaround bench) has flown once, at close range (results
-below), and its loaded-queue, low-MCS half is still to fly.** Nothing below
-phase 2 exists yet. An independent take on the same problem, gilankpam's
+**Status 2026-10-07: phase 1 (shadow mode) logs on every flight; phase 2 (the
+turnaround bench) has flown twice (results below); phase 3 (the listen
+window) is built and host-tested, not yet flown.** Nothing below phase 3
+exists yet. An independent take on the same problem, gilankpam's
 `fec-nack`, is compared at the end of this page. The design this rolls out is
 devourer's `docs/fpv-link-architecture.md` (branch
 `claude/wifi-fpv-link-architecture-1bms9l` of `notsudogood/devourer`); this
@@ -54,7 +54,7 @@ form over unknown seqs only, so it reads 0 exactly when nothing is missing.
    at a passive witness (`tsfl`) with the drone's queue loaded. Add per-packet
    TX queue selection so a repair can overtake queued video. **Kill criterion
    (120 fps target):** p99 well above ~8 ms (~16 ms at 60 fps).
-3. **Listen window + per-AU status frame**, FEC unchanged. A/B uplink
+3. **Listen window + per-AU status frame**, FEC unchanged — built (below). A/B uplink
    delivery, `link.rcf_slot` timeouts and video loss (`ausniff.py`) against
    `RcfSlotter`.
 4. **Repair loop on today's FEC:**
@@ -295,6 +295,89 @@ mcs1, n = 5–7 each — not a measurement), and all four VO/Mgmt replies over
 6 ms fell at 25–36 s while the link climbed mcs0 → mcs4. Each p99 rests on
 ~4 replies. A 64-byte reply is not a repair: `frames = 3`, `bytes = 1400`
 shapes it like one. Next flight: that shape, far enough to sit at mcs0–2.
+
+## Phase 3 as built: the listen window
+
+The drone keeps the air quiet for a few ms after every burst, and the GS sends
+one short status into each of those gaps — instead of RcfSlotter predicting
+where the drone's idle will be and timing out into a random blast when there
+is none (`docs/tx-rx-timing.md` gaps #1 and #5). FEC, the ladder and the RCF
+contents are unchanged; the status carries each layer's shortfall
+(`SwDecoder::deficit()`) for phase 4, and the drone only records it.
+
+- **Wire** (`common/include/mabur/rc_proto.h`): `T_STATUS` (GS → drone: seq,
+  what marked the burst end, the AU's frame id, `listen_ms`, per-layer
+  deficit) and `T_LWSTAT` (drone → GS once a second: statuses heard, a
+  histogram of where they landed against their AU's gap, the gap's cost).
+  New types inside `RC_VERSION` 11 like the turnaround pair, fixed-length with
+  the CRC at a fixed offset (a body that still carries its FCS parses), and
+  the GS sends statuses only to a drone whose DISC_ACK carries `CAP_LISTEN` —
+  so either end can be flashed first.
+- **Drone** (`drone/src/listen_window.h`): after the hot thread books an AU
+  and its probe, the AirClock's `free_at` is the burst's modelled end on air;
+  the gap runs from there for `listen_ms`, keyed by the AU's frame id. The
+  next AU's first body — and any late repair of the last one, which would
+  otherwise air right where the status is aimed — is stamped `not_before_us`;
+  the TX writer waits for it (a held body always starts its own batch), and
+  the clock reserves the gap so the model stays honest. Control, MSP,
+  telemetry and pong sends that would land in a gap wait too. The gap exists
+  only while statuses keep arriving (0.5 s timeout) and never exceeds 10 ms,
+  so a GS that stops asking costs no video. Each status is timed against its
+  own AU's gap on the RX thread.
+- **GS** (`gs/src/listen_burst.h`): one burst end per AU — its first probe
+  copy from either card, else the learned deadline if the probe is lost, else
+  the completion when no probe is commanded — and one `T_STATUS` per burst
+  end, right behind whatever RCF/DISC the slotter just released. In this mode
+  the slotter stops predicting: every burst end releases, and grace widens to
+  `ms − 2`.
+- **`[listen]` in `maburgs.toml`** (off by default): `ms` the gap,
+  `ab_s` > 0 alternates on/off every `ab_s` seconds so one flight carries
+  both arms of the A/B. Exported as `link.listen` (the drone's latest
+  T_LWSTAT under `link.listen.drone`).
+- **`flightreport.py` LISTEN WINDOW**: per arm (gap on / off), RCF delivery
+  and slot timeouts, statuses sent and heard, where they landed, the gap's
+  cost (AUs held and for how long), and the video side (truncated + dropped
+  AUs, abandoned symbols, pre-FEC loss, e2e latency from `lat.log`). Rows
+  within 1 s of a switch belong to neither arm.
+
+### Running it
+
+Flash both ends from the same build, then add to `/config/maburgs.toml` on
+the GS (an existing file never picks up new bundle sections) and restart
+maburgs:
+
+```toml
+[listen]
+ms   = 4     # start here; the histogram says whether it is too short
+ab_s = 30    # on 30 s, off 30 s, on... -- both arms in one flight
+
+[turnaround]
+rate_hz = 0  # off: its replies would land in the gap and skew both benches
+```
+
+Fly the usual route, near and far, for long enough that each arm gets a few
+minutes; then `python3 tools/flightreport.py /media/dvr/log/NNNN`.
+
+### Read it with these caveats
+
+- **"Where it landed" is relative to a model.** The gap starts at the
+  AirClock's modelled end of the burst, and the arrival stamp is the drone's
+  RX callback (its own USB RX latency included). A histogram centred late
+  means either the GS is slow or the model ends bursts early — the same
+  number either way, and the one that sizes `ms`.
+- **The gap costs latency when a burst overruns.** The bitrate budget (0.6)
+  leaves ~6.7 ms of idle per AU on paper and 4–6 ms measured
+  (`docs/tx-rx-timing.md` §3.1), so a 4 ms gap mostly costs nothing; after a
+  burst that runs long (IDR, scene change) the next AU waits up to `ms`. The
+  LISTEN WINDOW section counts those holds, and `dq` in the GS's lat segments
+  shows them per AU.
+- **Statuses cost uplink air:** ~60 short frames/s at MCS0, ~0.2 ms each,
+  each one blinding both GS cards for ~180 µs — harmless only if they land in
+  the gap, which is the thing being measured.
+- **Status delivery is a per-second ratio,** the drone's report against the
+  GS's count, not a per-frame ledger.
+- **Not yet flown.** Host tests pin the wire, the drone's gap and timing
+  logic, the GS's burst-end detection, the export and the report.
 
 ## Compared: gilankpam's `fec-nack` (2026-10-05/06)
 

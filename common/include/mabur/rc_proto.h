@@ -73,6 +73,13 @@ constexpr uint8_t T_CAL_RESULT = 6;
 // drone whose DISC_ACK carries CAP_TURNAROUND, so a mixed pair never sees one.
 constexpr uint8_t T_TA_PING = 7;
 constexpr uint8_t T_TA_PONG = 8;
+// Listen window (feedback-repair rollout phase 3): VRX -> VTX status, one per
+// drone burst, sent into the quiet gap the drone keeps after it; VTX -> VRX
+// once-a-second report of where those statuses landed. Same compatibility
+// rule as the turnaround pair: new types inside RC_VERSION 11, and the GS
+// sends T_STATUS only to a drone whose DISC_ACK carries CAP_LISTEN.
+constexpr uint8_t T_STATUS = 9;
+constexpr uint8_t T_LWSTAT = 10;
 
 constexpr uint8_t F_DISCOVERY = 0x04;
 
@@ -93,6 +100,10 @@ constexpr uint16_t CAP_CALIBRATE = 0x0004;
 // DiscAck.chip_caps bit: VTX answers T_TA_PING with T_TA_PONG (the phase-2
 // turnaround bench). The GS pings only a drone that advertises it.
 constexpr uint16_t CAP_TURNAROUND = 0x0008;
+
+// DiscAck.chip_caps bit: VTX understands T_STATUS, keeps a quiet gap after
+// each burst while statuses arrive, and reports T_LWSTAT (phase 3).
+constexpr uint16_t CAP_LISTEN = 0x0010;
 
 // VRX -> VTX feedback: the GS-authoritative operating point. Every field
 // here is one maburd acts on. It used to also carry ack_seq, an alink-style
@@ -376,6 +387,60 @@ std::vector<uint8_t> pack_ta_pong(const TaPong& p);
 // Accepts the body as packed or with the 4-byte FCS still attached (as the GS
 // RX path delivers it); frame_bytes is the packed length either way.
 std::optional<TaPong> parse_ta_pong(const uint8_t* buf, size_t len);
+
+// Listen window (rollout phase 3, docs/feedback-repair-rollout.md).
+//
+// T_STATUS: the GS sends one at every drone burst end it sees (the burst's
+// trailing probe body, or the learned deadline if the probe is lost, or the
+// AU completion when no probe is commanded). `listen_ms` is the quiet gap the
+// GS asks the drone to keep after each burst: the drone keeps one only while
+// statuses keep arriving, so this one field switches the drone's side on and
+// off. `fid` names the AU whose burst end triggered the status (the probe's
+// enh_fid), so the drone can time the arrival against that AU's own gap.
+// `deficit` is each video layer's shortfall at that moment
+// (UepDecoder::deficit, saturating) -- carried now so the request path of
+// phase 4 has its counts on the wire; the phase-3 drone only records it.
+enum class StatusTrig : uint8_t { Probe = 0, Deadline = 1, Completion = 2 };
+constexpr uint8_t kStatusMaxListenMs = 20;
+constexpr uint16_t kStatusNoFid = 0xFFFF;
+
+struct Status {
+  uint32_t vtx_id = 0;
+  uint16_t seq = 0;
+  StatusTrig trig = StatusTrig::Probe;
+  uint16_t fid = kStatusNoFid;
+  uint8_t listen_ms = 0;  // 0..kStatusMaxListenMs; 0 = keep no gap
+  uint16_t deficit[2] = {0, 0};
+};
+
+// T_LWSTAT: the drone's per-second account of the gap. `hist` buckets each
+// status by its RX time minus the start of its AU's gap (the modelled end of
+// that burst on air), ms: <0 | 0-1 | 1-2 | 2-3 | 3-4 | 4-5 | 5-7 | >=7.
+// `nofid` counts statuses whose AU the drone no longer (or never) had a gap
+// for. `gate_*` is the video cost: AUs whose first body the gap held back,
+// and for how long; `direct_holds` is control/MSP/pong sends it delayed.
+// All per period, saturating.
+constexpr int kLwHistBins = 8;
+struct LwStat {
+  uint32_t vtx_id = 0;
+  uint16_t seq = 0;
+  uint8_t listen_ms = 0;  // the gap the drone kept at the end of the period
+  uint16_t status_rx = 0;
+  uint8_t hist[kLwHistBins] = {0, 0, 0, 0, 0, 0, 0, 0};
+  uint8_t nofid = 0;
+  uint16_t gate_holds = 0;
+  uint16_t gate_hold_sum_ms = 0;
+  uint8_t gate_hold_max_ms = 0;
+  uint16_t direct_holds = 0;
+};
+
+// Both are fixed-length with the CRC at a fixed offset, so a body that still
+// carries its 4-byte FCS (the RX path delivers it) parses the same.
+std::vector<uint8_t> pack_status(const Status& s);
+// Rejects an unknown trig and listen_ms > kStatusMaxListenMs.
+std::optional<Status> parse_status(const uint8_t* buf, size_t len);
+std::vector<uint8_t> pack_lwstat(const LwStat& s);
+std::optional<LwStat> parse_lwstat(const uint8_t* buf, size_t len);
 
 std::vector<uint8_t> pack_rcf(const Rcf& r);
 std::optional<Rcf> parse_rcf(const uint8_t* buf, size_t len);

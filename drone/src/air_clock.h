@@ -50,6 +50,17 @@ class AirClock {
     free_at_us_ = start + static_cast<uint64_t>(cost + 0.5);
   }
 
+  // When the air is modelled free of everything booked so far (0 = never
+  // booked). The listen window's gap starts here (listen_window.h).
+  uint64_t free_at_us() const { return free_at_us_; }
+
+  // Reserves the air up to t_us (a listen-window gap the drone will keep
+  // quiet): the next booking starts no earlier, so the model and the
+  // backlog it reports include the gap.
+  void reserve_until(uint64_t t_us) {
+    if (t_us > free_at_us_) free_at_us_ = t_us;
+  }
+
   uint32_t backlog_us(uint64_t now_us) const {
     if (free_at_us_ <= now_us) return 0;
     const uint64_t d = free_at_us_ - now_us;

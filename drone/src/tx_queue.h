@@ -63,6 +63,9 @@ class TxQueue {
 
   // Pops up to max_n bodies into out (appended), blocking up to timeout_ms
   // for the first one. Returns the number popped (0 on timeout/closed-empty).
+  // A body the listen window holds (not_before_us != 0) always starts a new
+  // batch, so the writer can wait for it without holding back the bodies
+  // ahead of it.
   size_t pop_batch(std::vector<UepBody>& out, size_t max_n, int timeout_ms) {
     std::unique_lock<std::mutex> l(m_);
     if (q_.empty()) {
@@ -71,6 +74,7 @@ class TxQueue {
     }
     size_t n = 0;
     while (n < max_n && !q_.empty()) {
+      if (n > 0 && q_.front().not_before_us != 0) break;
       out.push_back(std::move(q_.front()));
       q_.pop_front();
       ++n;

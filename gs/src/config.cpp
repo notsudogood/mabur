@@ -125,7 +125,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
   } clear_on_exit;
 
   check_keys(j, "", {"radio", "fec", "link", "video", "msp", "stats", "au_ring",
-                     "debug_log", "hop", "turnaround"});
+                     "debug_log", "hop", "turnaround", "listen"});
   // Same reason as the drone's: a missing section visits none of its keys.
   // Kept in the exact order of the check_keys list above -- if they drift a
   // section goes silently unreported.
@@ -608,6 +608,12 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
         get_int(r, "frames", 1, 1, mabur::rc::kTaMaxFrames, "turnaround"));
     c.turnaround.bytes = static_cast<int>(get_int(
         r, "bytes", 64, mabur::rc::kTaPongMinBytes, mabur::rc::kTaPongMaxBytes, "turnaround"));
+  }
+  if (j.contains("listen")) {
+    const Value& r = j["listen"];
+    check_keys(r, "listen", {"ms", "ab_s"});
+    c.listen.ms = static_cast<int>(get_int(r, "ms", 0, 0, 10, "listen"));
+    c.listen.ab_s = static_cast<int>(get_int(r, "ab_s", 0, 0, 3600, "listen"));
   }
   return c;
 }

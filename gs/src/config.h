@@ -267,6 +267,16 @@ struct TurnaroundCfg {
   int bytes = 64;                // bytes per pong frame body
 };
 
+// Listen window (feedback-repair rollout phase 3, gs/src/listen_burst.h): the
+// GS sends a T_STATUS at every drone burst end and asks the drone to keep a
+// quiet gap of `ms` after each burst; held RCFs release into that gap instead
+// of RcfSlotter's predicted idle. ab_s > 0 alternates on/off every ab_s
+// seconds so one flight carries both arms of the A/B.
+struct ListenCfg {
+  int ms = 0;    // 0 = off (today's behaviour), 1..10
+  int ab_s = 0;  // 0 = always on while ms > 0
+};
+
 /// Ground station configuration: radio, FEC, link, video reassembly, AU ring, MSP OSD.
 struct Config {
   RadioCfg radio;
@@ -279,6 +289,7 @@ struct Config {
   DebugLogCfg debug_log;
   HopCfg hop;
   TurnaroundCfg turnaround;
+  ListenCfg listen;
 
   /// Builds decoder configuration with per-stream RS and UEP overhead
   /// (2 streams since the airtime-balance-uep fold-in).

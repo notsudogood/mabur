@@ -708,6 +708,92 @@ TEST(ta_frames_parse_as_received_with_trailing_fcs) {
   }
 }
 
+TEST(status_golden_bytes_round_trip_and_fcs) {
+  // Pins the T_STATUS layout: both ends ship it inside RC_VERSION 11.
+  mabur::rc::Status st;
+  st.vtx_id = 0x04030201;
+  st.seq = 0x0605;
+  st.trig = mabur::rc::StatusTrig::Deadline;
+  st.fid = 0x0807;
+  st.listen_ms = 4;
+  st.deficit[0] = 0x0A09;
+  st.deficit[1] = 3;
+  auto b = mabur::rc::pack_status(st);
+  REQUIRE(b.size() == 21);
+  const uint8_t head[19] = {0x43, 0x52, mabur::rc::RC_VERSION, 9, 0, 0x01, 0x02, 0x03, 0x04,
+                            0x05, 0x06, 1, 0x07, 0x08, 4, 0x09, 0x0A, 3, 0};
+  for (size_t i = 0; i < 19; ++i) CHECK(b[i] == head[i]);
+  CHECK(mabur::rc::frame_type(b.data(), b.size()) == mabur::rc::T_STATUS);
+  // As the RX path delivers it: the 4-byte FCS still attached.
+  b.insert(b.end(), {0xde, 0xad, 0xbe, 0xef});
+  auto got = mabur::rc::parse_status(b.data(), b.size());
+  REQUIRE(got.has_value());
+  CHECK(got->vtx_id == st.vtx_id);
+  CHECK(got->seq == st.seq);
+  CHECK(got->trig == mabur::rc::StatusTrig::Deadline);
+  CHECK(got->fid == 0x0807);
+  CHECK(got->listen_ms == 4);
+  CHECK(got->deficit[0] == 0x0A09);
+  CHECK(got->deficit[1] == 3);
+  auto bad = b;
+  bad[10] ^= 0x01;
+  CHECK(!mabur::rc::parse_status(bad.data(), bad.size()).has_value());
+  CHECK(!mabur::rc::parse_status(b.data(), 20).has_value());
+}
+
+TEST(status_rejects_unknown_trig_and_oversized_gap) {
+  auto make = [](uint8_t trig, uint8_t listen) {
+    mabur::rc::Status st;
+    st.listen_ms = listen;
+    auto b = mabur::rc::pack_status(st);
+    b[11] = trig;  // re-CRC below so only the field check can reject
+    const uint16_t crc = mabur::crc16_ccitt(b.data(), 19);
+    b[19] = static_cast<uint8_t>(crc & 0xFF);
+    b[20] = static_cast<uint8_t>(crc >> 8);
+    return mabur::rc::parse_status(b.data(), b.size()).has_value();
+  };
+  CHECK(make(2, mabur::rc::kStatusMaxListenMs));
+  CHECK(!make(3, 4));
+  CHECK(!make(0, mabur::rc::kStatusMaxListenMs + 1));
+}
+
+TEST(lwstat_golden_bytes_round_trip_and_fcs) {
+  mabur::rc::LwStat s;
+  s.vtx_id = 7;
+  s.seq = 0x0201;
+  s.listen_ms = 4;
+  s.status_rx = 0x0403;
+  for (int i = 0; i < mabur::rc::kLwHistBins; ++i) s.hist[i] = static_cast<uint8_t>(10 + i);
+  s.nofid = 5;
+  s.gate_holds = 0x0605;
+  s.gate_hold_sum_ms = 0x0807;
+  s.gate_hold_max_ms = 9;
+  s.direct_holds = 0x0B0A;
+  auto b = mabur::rc::pack_lwstat(s);
+  REQUIRE(b.size() == 32);
+  CHECK(b[3] == mabur::rc::T_LWSTAT);
+  CHECK(b[11] == 4);
+  CHECK(b[14] == 10 && b[21] == 17);  // hist
+  CHECK(b[22] == 5);
+  CHECK(b[27] == 9);
+  CHECK(b[28] == 0x0A && b[29] == 0x0B);
+  b.insert(b.end(), {0xde, 0xad, 0xbe, 0xef});
+  auto got = mabur::rc::parse_lwstat(b.data(), b.size());
+  REQUIRE(got.has_value());
+  CHECK(got->vtx_id == 7);
+  CHECK(got->seq == 0x0201);
+  CHECK(got->listen_ms == 4);
+  CHECK(got->status_rx == 0x0403);
+  for (int i = 0; i < mabur::rc::kLwHistBins; ++i) CHECK(got->hist[i] == 10 + i);
+  CHECK(got->nofid == 5);
+  CHECK(got->gate_holds == 0x0605);
+  CHECK(got->gate_hold_sum_ms == 0x0807);
+  CHECK(got->gate_hold_max_ms == 9);
+  CHECK(got->direct_holds == 0x0B0A);
+  b[20] ^= 0x40;
+  CHECK(!mabur::rc::parse_lwstat(b.data(), b.size()).has_value());
+}
+
 TEST(rc_version_is_eleven) {
   // 2026-09-26 vtx-recorder: RCF +rec, Telem +rec_status.
   CHECK(mabur::rc::RC_VERSION == 11);

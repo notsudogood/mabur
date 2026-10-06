@@ -1,8 +1,10 @@
 # Feedback repair — rollout
 
-**Status 2026-10-04: phase 1 (shadow mode) has flown twice, indoors;
-phase 2 (the turnaround bench) is built and host-tested, not yet run on
-hardware.** Nothing below phase 2 exists yet. The design this rolls out is
+**Status 2026-10-06: phase 1 (shadow mode) logs on every flight (indoors so far);
+phase 2 (the turnaround bench) has flown once, at close range (results
+below), and its loaded-queue, low-MCS half is still to fly.** Nothing below
+phase 2 exists yet. An independent take on the same problem, gilankpam's
+`fec-nack`, is compared at the end of this page. The design this rolls out is
 devourer's `docs/fpv-link-architecture.md` (branch
 `claude/wifi-fpv-link-architecture-1bms9l` of `notsudogood/devourer`); this
 page restates it in mabur's terms and tracks the phases.
@@ -48,7 +50,7 @@ form over unknown seqs only, so it reads 0 exactly when nothing is missing.
    shortfall on real flights. **Kill criterion:** if lost episodes are mostly
    outage-shaped (large, long-growing), the ladder and IDR already do the
    useful work; stop here.
-2. **Turnaround bench — built (below).** Time status-on-air → repair-on-air
+2. **Turnaround bench — built, flown once (below).** Time status-on-air → repair-on-air
    at a passive witness (`tsfl`) with the drone's queue loaded. Add per-packet
    TX queue selection so a repair can overtake queued video. **Kill criterion
    (120 fps target):** p99 well above ~8 ms (~16 ms at 60 fps).
@@ -229,18 +231,99 @@ queue, and a GS card that did not send the ping times both on air.
 
 - **The witness needs both GS cards on the home channel.** While the scout
   has the second card elsewhere, pings get host round trips only.
-- **Unanswered pings are a result, not a bug.** A ping that lands while the
-  drone is transmitting is lost (half-duplex); that rate is what phase 3's
-  listen window has to beat.
+- **Unanswered pings are a result, not a bug.** The expectation was that a
+  ping landing while the drone transmits is lost (half-duplex), and that
+  rate is what phase 3's listen window has to beat. The first flight did not
+  confirm that cause (results below): know the rate, not yet the reason.
 - **The pings cost a little video.** Each is ~0.1 ms of GS transmit outside
   the RCF slot, and the other card is blanked for it (the self-blanking
   `RcfSlotter` exists to avoid). At 10 Hz that is ~0.1% of airtime.
 - **Lane 0 is the video's queue:** the MGMT queue on singles rungs, the
-  A-MPDU TID queue on aggregating ones (`ampdu.min_mcs_20/_40`). The per-rung
-  split separates the two.
+  A-MPDU TID queue on aggregating ones (`ampdu.min_mcs_20/_40`; shipped:
+  aggregation from mcs2 at 40 MHz, mcs4 at 20 MHz). So **on singles rungs
+  lane 5 (Mgmt) is the video's queue too** and only lane 4 (VO) can overtake
+  it there. The per-rung split separates the cases.
 - **On-air turnaround includes the drone's RX USB path,** which a repair
   would pay too; "outside the drone's hold" is that plus the TX path, queue
   and air.
-- **Not yet flown, not yet run on hardware.** Host tests pin the wire, the
-  responder, the pinger, `ta.log` and the report.
+- **The GS drops replies it cannot parse into `X` rows.** The first
+  phase-2 build dropped every pong (the GS RX body keeps the 4-byte FCS and
+  the pong's CRC is at its end; fixed in 495f7da), which read as "the drone
+  never answered". A TURNAROUND section with an `X` warning is a parser or
+  wire mismatch, not a link result.
+
+## Phase 2 results (2026-10-06, first flight)
+
+One flight, ~2.3 minutes, the drone in the GS's room or one room away,
+signal −20 to −50 dBm, 85% of the time at mcs4/40. `rate_hz` 10, lanes
+0/4/5, one 64-byte reply per ping. 1 187 pings; ~350 replies per lane timed
+on air by the witness card.
+
+| lane (queue) | answered | on air p50 / p90 / p99 / max | gate |
+|---|---|---|---|
+| 0 (video's) | 370/395 | 2.8 / 7.4 / 11.8 / 13.1 ms | 60 fps only |
+| 4 (VO) | 370/396 | 2.2 / 2.7 / 6.0 / 10.4 ms | PASS |
+| 5 (Mgmt) | 365/396 | 1.9 / 2.4 / 4.4 / 12.5 ms | PASS |
+
+- **The drone is not the cost:** ping → reply handed to the radio took
+  0.12 ms typical, < 2 ms worst, on every lane.
+- **Lane 0's tail is inside the chip.** All 53 lane-0 replies over 6 ms had
+  the drone's TxQueue and USB pool empty and no air-clock backlog: the reply
+  waited behind video already handed to the chip, which no host-side queue
+  metric sees. VO and Mgmt skip that wait — the reason devourer's
+  `TxMode::hw_queue` exists, now measured.
+- **The latency spikes are the losses a repair targets.** 13 of the 15
+  one-second `lat` windows with a frame ≥ 65 ms sat on an `arq.log` + `fec.log`
+  episode (the worst: 90 ms at 106 s, 85 ms at 53 s); the other two (66–67 ms)
+  were the top of the vsync-beat sawtooth. As in phase 1, every lost episode
+  (7) was repairable-shaped and none outage-shaped.
+- **7% of pings went unanswered** (82), and the cause is open. The witness
+  heard 75 of them on air, and answered pings reached both GS cards 97% of
+  the time, so the misses are on the uplink or inside the drone. They are
+  spread evenly in time and identical across both GS TX cards and all three
+  lanes. Pings inside a video receive window (`au.log` `t_first`..`t_complete`)
+  went unanswered at the same rate as the rest (52% of each), so the
+  half-duplex explanation is not supported at that resolution. The drone's
+  responder counters print only at a clean maburd exit.
+
+The adversarial counterpart, and why the gate is only half closed: **the
+queue was almost never loaded** (air backlog ≥ 2 ms on 1–2 replies per
+lane) — close range at mcs4 has headroom to spare, so the case the gate is
+about, far away at mcs0–2 with long bursts, is unmeasured. The few low-rung
+samples hint the floor rises there (VO p99 9.1 ms at mcs0, Mgmt 12.5 ms at
+mcs1, n = 5–7 each — not a measurement), and all four VO/Mgmt replies over
+6 ms fell at 25–36 s while the link climbed mcs0 → mcs4. Each p99 rests on
+~4 replies. A 64-byte reply is not a repair: `frames = 3`, `bytes = 1400`
+shapes it like one. Next flight: that shape, far enough to sit at mcs0–2.
+
+## Compared: gilankpam's `fec-nack` (2026-10-05/06)
+
+Upstream built and flew a software NACK on branch `fec-nack`
+(`docs/fec-nack.md` there; RC_VERSION 15). It is kept as a comparison, not
+merged: two independent designs on the same hardware are worth more than
+one. Where they differ:
+
+| | this rollout | `fec-nack` |
+|---|---|---|
+| request | a *count* of repairs short over `[a, b]` (phase 4) | a *list* of missing source seqs (≤ 128 per frame) |
+| answer | fresh RLC repair symbols — any one fills any hole | the original source symbols from a 150 ms ring |
+| uplink timing | a scheduled listen window after each burst (phase 3) | sent directly, mid-burst; the RCF slot filled at p50 44 ms in its spike |
+| drone queue | a hardware queue that overtakes video (phase 2) | front of TxQueue, same hardware queue as video |
+| scope | both layers; the goal is a lower FEC floor (phase 5) | base layer only; FEC and ladder unchanged ("option A") |
+| pacing | one cumulative status frame per AU period, repeated until filled (phase 3) | adaptive settle 4–24 ms, 2 tries, 12 ms minimum lead, a drone air bucket |
+
+Its bench (`docs/fec-nack-bench-findings-2026-10-06.md` there), pinned
+mcs2/40 under a co-channel jammer: base truncated + dropped AUs 12 → 0,
+fill p90 10–16 ms, `air_pct` unchanged; but 35% of requests wasted (FEC got
+there first), uplink delivery 79% (96% without the jammer), and **at rung 0
+no request was ever filled** (0 of 467). Two of those meet phase 2 head on:
+its retx bodies wait behind video inside the chip exactly like lane 0 above
+(the transport share of its fill time is about lane 0's p90), and rung 0 is
+where in-chip video drains slowest — untested, but the place a VO lane
+should show. Its 79–96% uplink delivery is the same order as the 93% above.
+
+**For a like-for-like comparison** phases 3–4 report what its sideport
+reports: base truncated + dropped AUs vs a control arm, fill ms (first
+request → hole filled) p50/p90, wasted %, uplink delivery %, `air_pct`, and
+fills per rung — rung 0 above all.
 

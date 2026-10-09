@@ -123,16 +123,43 @@ form over unknown seqs only, so it reads 0 exactly when nothing is missing.
      much of `enc` is encode rather than the frame-based VPE ahead of it and
      on `GetStream` really returning slices early. Together **~5–10 ms off
      the p50**, ~10 % of the ~75–85 ms glass-to-glass; large frames (IDR,
-     scene changes) gain most, which trims some size-driven jitter. It does
-     **not** fix the 80–90 ms spikes — those are FEC waits for lost symbols,
-     and the decoder emits whole pictures, so a frame with a missing slice
-     still waits (repair, phase 4, is that fix; the two compound). Gains
-     reach the screen only once the vsync regulator re-centres on the earlier
-     arrivals. Costs: a few % coding efficiency for 4 slices (no prediction
-     across slice boundaries), the SSC338Q drops re-encode with multi-slice
-     (bigger overshoot bursts), and work on both ends — drone per-slice
-     ring/FEC packing; GS in-order slice release, per-slice player feed, and
-     the BSP 6.1 decoder port.
+     scene changes) gain most, which trims some size-driven jitter. The
+     overlap alone does **not** fix the 80–90 ms spikes — those are FEC waits
+     for lost symbols, and a frame with a missing slice still waits as long
+     as the GS waits for it (repair, phase 4, is that fix; the two compound)
+     — unless the GS stops waiting, below. Gains reach the screen only once
+     the vsync regulator re-centres on the earlier arrivals. Costs: a few %
+     coding efficiency for 4 slices (no prediction across slice boundaries),
+     the SSC338Q drops re-encode with multi-slice (bigger overshoot bursts),
+     and work on both ends — drone per-slice ring/FEC packing; GS in-order
+     slice release, per-slice player feed, and the BSP 6.1 decoder port.
+   - *Slices also contain a loss (recorded 2026-10-09):* slices decode
+     independently, so a lost symbol damages one band (~¼ of the picture with
+     4 slices) instead of everything below the hole, and the band can be
+     concealed from the previous frame. It does not stay contained in time:
+     later frames predict from the damaged picture and, with motion, smear it
+     beyond the band until the next IDR. In mabur's SVC-T pair that splits by
+     layer — nothing references an **enh** frame, so a lost enh slice is a
+     one-frame band glitch (~17 ms) and gone; a lost **base** slice persists
+     and smears until recovery, as today, only starting smaller.
+     - *Needed first:* `FrameStream` streams a frame's contiguous prefix and
+       truncates at the first unfilled gap after `gap_timeout_ms`, so complete
+       slices after a hole are thrown away today; it would have to skip a
+       missing slice and pass the later whole ones on. And whether MPP / the
+       RK3566 decoder decodes a frame with one slice missing (and how it
+       conceals) or rejects the whole picture is unverified — testable on the
+       bench with a recorded stream with one slice NAL cut out, no flight
+       needed.
+     - *What it changes for the link:* a latency-for-quality trade. Today a
+       lost symbol holds the frame until FEC recovers it or the GS gives up —
+       the spikes. With slices the GS could show an **enh** frame on time
+       with the missing band concealed rather than wait: a one-frame band
+       instead of a stall. Enh is where most losses have landed (phase 1:
+       6 of 6 lost episodes; the 2026-10-06 garage flight: 7 of 10), and it
+       would make the enh layer's overhead the safer one to lower here. For
+       **base** frames waiting for FEC or a repair stays right because the
+       damage propagates, so phase 4 still matters there. A stall vs a brief
+       band is a pilot preference — a setting, not a fixed behaviour.
 6. **Ladder coupling** (repair demand as a demote input).
 
 ## Phase 1 as built

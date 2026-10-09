@@ -65,6 +65,33 @@ form over unknown seqs only, so it reads 0 exactly when nothing is missing.
    - Gates: `ausniff.py`, the `lat` segments, `aucadence.py`.
 5. **Lower the overhead floor in steps** (1.0 → 0.5 → 0.25 at the mcs5
    rung), each step A/B'd on the same gates plus `fec.log` and `arq.log`.
+   **Reminder when this phase starts (recorded 2026-10-09):** investigate
+   per-slice H.265 encode/decode to overlap the `fec` first-body → AU-complete
+   window (9.8 ms p50, base 12.6 / enh 6.2 —
+   `docs/latency-budget-findings-2026-08-31.md`). What is known so far:
+   - *Ground:* gehee/fpvOS decodes a picture as its slices arrive — an MPP
+     patch (`br-external/package/rockchip-mpp/0002`) plus a kernel patch
+     (`board/vrxpro/linux-patches/0003`, rkvdec2 stream mode, Rockchip BSP
+     5.10). The author's RK3568 numbers: last slice → frame 2.0 ms vs 5.1 ms
+     whole-picture; no independent or RK3566 measurement. Its patch 0001
+     (h265d: refuse a slice whose PPS names a missing SPS) is a standalone
+     crash fix worth taking regardless.
+   - *Air (SSC338Q/Star6E):* libmi_venc exports `MI_VENC_SetH265SliceSplit`
+     and mi_venc.ko has a slice-done IRQ. Slices quantize to 64-px CTU rows
+     (1080p = 17 rows) and multi-slice disables re-encode. waybeam already
+     wires it (`video0.sliceCount`, whole-AU output, for spatial
+     concealment); a realtime VPE→VENC ring is impossible on i6e (waybeam
+     `documentation/REALTIME_PIPELINE_INVESTIGATION.md`). Whether `GetStream`
+     returns slices before the frame ends is **unverified**.
+   - *mabur today:* the drone loads the SliceSplit symbol but never calls it;
+     the GS player feeds MPP one whole AU per `decode_put_packet`
+     (IMMEDIATE_OUT on).
+   - *First experiment:* `sliceCount=4` on the SSC338Q, logging per
+     `GetStream` the `packNum`, `packetInfo[].sliceId`, `endFrame` and
+     timestamps. Slices spread over several ms → worth pursuing (the FEC must
+     then also release in-order source before the AU completes). All in one
+     pack → the gain is capped at ~3 ms of decode + airtime overlap, ranking
+     below the vsync-locked regulator and the pair-policy items.
 6. **Ladder coupling** (repair demand as a demote input).
 
 ## Phase 1 as built

@@ -100,6 +100,39 @@ form over unknown seqs only, so it reads 0 exactly when nothing is missing.
      then also release in-order source before the AU completes). All in one
      pack → the gain is capped at ~3 ms of decode + airtime overlap, ranking
      below the vsync-locked regulator and the pair-policy items.
+   - *RK3566 vs RK3568 (checked 2026-10-09):* the decoder is the same block.
+     The Rockchip 5.10 BSP builds `rk3566.dtsi` as `#include "rk3568.dtsi"`
+     plus `/delete-node/`s that are all I/O (PCIe 3.0, `sata0`, `gmac0`,
+     `lvds1`, `combphy0`) and touch no codec node, clock or OPP; mainline
+     shares the codec nodes in `rk356x-base.dtsi`. What can still differ from
+     the author's numbers: **(1) the kernel** — the GS (runcam_wifilink /
+     radxa_zero3 builds) runs Radxa's Rockchip BSP **6.1.84**, not 5.10, so
+     the fpvOS kernel patch needs a port of unknown effort; **(2) DRAM** — the
+     GS boots `rk3566_ddr_1056MHz` (the BSP's rk3566.dtsi sets the same
+     1056 freq), and the decoder streams references from DRAM, so absolute
+     times may run slower than on a faster-clocked RK3568 board (the author's
+     DDR speed is not stated); **(3) CPU** — the RK3566 drops the 1.99 GHz
+     OPP (MPP parsing only, small).
+   - *What it could buy (estimate from the budget above + the author's one
+     measurement, not measured here):* `enc` (~7 ms), first-body → AU
+     complete (~8–10 ms in 2026-10 flights) and `dec` (~6–9 ms) run in
+     series today, ~22–25 ms per frame; with 4 slices they overlap. Decoder
+     side alone (whole-AU from the drone, slices decoded as they arrive):
+     **~3–6 ms** (the author's 5.1 → 2.0 ms). Encoder side too (slices leave
+     the drone as they are encoded): up to **~5 ms more**, depending on how
+     much of `enc` is encode rather than the frame-based VPE ahead of it and
+     on `GetStream` really returning slices early. Together **~5–10 ms off
+     the p50**, ~10 % of the ~75–85 ms glass-to-glass; large frames (IDR,
+     scene changes) gain most, which trims some size-driven jitter. It does
+     **not** fix the 80–90 ms spikes — those are FEC waits for lost symbols,
+     and the decoder emits whole pictures, so a frame with a missing slice
+     still waits (repair, phase 4, is that fix; the two compound). Gains
+     reach the screen only once the vsync regulator re-centres on the earlier
+     arrivals. Costs: a few % coding efficiency for 4 slices (no prediction
+     across slice boundaries), the SSC338Q drops re-encode with multi-slice
+     (bigger overshoot bursts), and work on both ends — drone per-slice
+     ring/FEC packing; GS in-order slice release, per-slice player feed, and
+     the BSP 6.1 decoder port.
 6. **Ladder coupling** (repair demand as a demote input).
 
 ## Phase 1 as built

@@ -478,3 +478,42 @@ reports: base truncated + dropped AUs vs a control arm, fill ms (first
 request → hole filled) p50/p90, wasted %, uplink delivery %, `air_pct`, and
 fills per rung — rung 0 above all.
 
+
+## Side experiment: pin the GS CPU governor (latency, not repair)
+
+Recorded 2026-10-09; not part of the phased rollout, and not yet flown.
+
+The GS image (Radxa BSP 6.1 kernel, `board/radxa/zero3/linux-fragment` in
+sbc-groundstations) boots with `CONFIG_CPU_FREQ_DEFAULT_GOV_ONDEMAND=y`:
+the RK3566's cores idle low and climb only after the governor samples the
+load. maburgs' work arrives in 60 Hz bursts (drain, FEC, reassembly, MPP
+parsing, the player), so the clock may still be ramping when a frame needs
+it — a little delay and jitter per frame. The `performance` governor keeps
+the cores at the RK3566's top in-spec OPP, 1.8 GHz, the same thing the
+player already does for the GPU's devfreq under colortrans
+(`docs/colortrans.md`). Whether ondemand actually costs anything here is
+unmeasured.
+
+Check what the GS runs, then switch for one flight (lasts until reboot;
+the governor is built as a module):
+
+```sh
+ssh root@10.18.0.1 'p=/sys/devices/system/cpu/cpufreq/policy0; cat $p/scaling_governor $p/scaling_available_governors $p/scaling_cur_freq; for d in /sys/class/devfreq/*; do echo "$d $(cat $d/governor) $(cat $d/cur_freq)"; done'
+ssh root@10.18.0.1 'modprobe cpufreq_performance 2>/dev/null; echo performance > /sys/devices/system/cpu/cpufreq/policy0/scaling_governor; cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor'
+```
+
+Fly it as its own flight, not inside another A/B, and compare the `lat`
+segments (`fec`, `dec`, `reg`, `dsp`, e2e p50/p99) against a flight on
+ondemand over the same route; a difference under a couple of ms is inside
+flight-to-flight noise. If it helps, the durable form is an init script or
+`CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE` in the GS build.
+
+Rejected alongside it: **overclocking the RK3566.** The 1.99 GHz OPP exists
+for the RK3568 and Rockchip's BSP deliberately deletes it for the RK3566
+(`/delete-node/ opp-1992000000` in its `rk3566.dtsi`; mainline stops at
+1.8 GHz). Re-adding it is a device-tree edit, but it runs the part past its
+spec (higher voltage, unbinned silicon, heat that can trigger throttling in a
+small enclosure) for ~10 % CPU clock — and the CPU does not decode video; the
+hardware decoder has its own clock. If decode time itself becomes the target,
+the bigger lever is DRAM (the GS runs it at 1056 MHz; the decoder streams
+reference frames from it), which is also out of spec and board-dependent.

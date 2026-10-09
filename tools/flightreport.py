@@ -1291,12 +1291,45 @@ def print_drone_rx_report(rows):
 # neither arm: the drone keeps its gap up to 0.5 s after the last status, and
 # the cumulative counters straddle the switch.
 LW_GUARD_MS = 1000
+# T_LWSTAT histogram edges (rc_proto.h). v1: ms after the gap's start (the
+# burst's modelled end). v2 (phase 3b): ms after the burst's modelled end,
+# the window itself sitting a learned delay later.
 LW_BINS = ["<0", "0-1", "1-2", "2-3", "3-4", "4-5", "5-7", ">=7"]
-LW_BIN_HI_MS = [0, 1, 2, 3, 4, 5, 7, None]  # upper edge of each bin, ms
+LW_BIN_HI_MS = [0, 1, 2, 3, 4, 5, 7, None]  # upper edge of each v1 bin, ms
+LW_BINS_V2 = ["<0", "0-2", "2-4", "4-6", "6-8", "8-10", "10-15", ">=15"]
+LW_V2_FLAG = 0x80
 
 
 def _lw(row):
     return ((row.get("link") or {}).get("listen")) or None
+
+
+def lw_drone(dr):
+    """A link.listen.drone report -> one normalized dict, whichever shape it
+    arrived in: v1; v2 as a v2-aware GS exports it ("v": 2, inside,
+    delay_ms, fit_skips); or v2 as a v1-only GS exports it -- the raw body,
+    flagged by bit 7 of ms, with `inside` in nofid and delay_100us << 8 |
+    fit_skips in direct_holds. v2 carries no nofid (it is status_rx minus
+    the timed ones) and no direct_holds (None)."""
+    hist = list((dr.get("hist") or [])[:8]) + [0] * max(0, 8 - len(dr.get("hist") or []))
+    ms = dr.get("ms") or 0
+    out = {"v": 1, "ms": ms, "status_rx": dr.get("status_rx") or 0, "hist": hist,
+           "nofid": dr.get("nofid") or 0, "inside": None, "delay_ms": None,
+           "fit_skips": None, "gate_holds": dr.get("gate_holds") or 0,
+           "gate_hold_sum_ms": dr.get("gate_hold_sum_ms") or 0,
+           "gate_hold_max_ms": dr.get("gate_hold_max_ms") or 0,
+           "direct_holds": dr.get("direct_holds") or 0}
+    if dr.get("v") == 2:
+        out.update(v=2, inside=dr.get("inside") or 0, delay_ms=dr.get("delay_ms"),
+                   fit_skips=dr.get("fit_skips") or 0, direct_holds=None)
+    elif dr.get("v") is None and ms & LW_V2_FLAG:
+        packed = dr.get("direct_holds") or 0
+        out.update(v=2, ms=ms & 0x7F, inside=dr.get("nofid") or 0,
+                   delay_ms=(packed >> 8) / 10.0, fit_skips=packed & 0xFF,
+                   direct_holds=None)
+    if out["v"] == 2:
+        out["nofid"] = max(0, out["status_rx"] - sum(hist))
+    return out
 
 
 def _get(d, *path):
@@ -1312,13 +1345,28 @@ def _rcf_total(row):
     return sum(rs.get(k) or 0 for k in ("au", "probe", "timeout", "passthru"))
 
 
-def listen_arms(rows):
+def _low_power(row):
+    return (row.get("drone") or {}).get("low_power") is True
+
+
+def listen_mixes_low_power(rows):
+    """True when the recording has both disarmed (low-power, half frame
+    rate, small bursts) and armed time: then the arms are compared on armed
+    time only, or the A/B would mostly measure which arm the pilot armed in
+    (first phase-3 flight, 2026-10-09)."""
+    states = {_low_power(r) for r in rows if (r.get("drone") or {}).get("low_power") is not None}
+    return states == {True, False}
+
+
+def listen_arms(rows, exclude_low_power=False):
     """flight.jsonl rows -> {"on": arm, "off": arm}. Only in-session rows (a
     drone block) of a recording whose GS had [listen] ms > 0. Each arm sums
     the cumulative counters' deltas over consecutive rows both in the arm and
     clear of a switch, and averages the per-row rates; the drone's T_LWSTAT
     reports are summed once per seq, attributed to the arm of the row that
-    first carried them. None when the recording has no listen window."""
+    first carried them. exclude_low_power drops every row pair touching
+    low-power (disarmed) time. None when the recording has no listen
+    window."""
     rows = [r for r in rows if _lw(r) is not None and r.get("drone")]
     if not rows or not any((_lw(r).get("ms") or 0) > 0 for r in rows):
         return None
@@ -1340,12 +1388,15 @@ def listen_arms(rows):
                 "aband": [0, 0], "rcf_rx_pps": [], "pre_fec": [], "air": [],
                 "reports": 0, "status_rx": 0, "hist": [0] * 8, "nofid": 0,
                 "gate_holds": 0, "gate_sum_ms": 0, "gate_max_ms": 0,
-                "direct_holds": 0, "t_spans": []}
+                "direct_holds": 0, "t_spans": [], "v": 1, "inside": 0,
+                "fit_skips": 0, "delays": [], "direct_known": False}
 
     arms = {"on": new_arm(), "off": new_arm()}
     seen = set()
     for (a, a_on, a_clear), (b, b_on, b_clear) in zip(tagged, tagged[1:]):
         if a_on != b_on or not a_clear or not b_clear:
+            continue
+        if exclude_low_power and (_low_power(a) or _low_power(b)):
             continue
         arm = arms["on" if b_on else "off"]
         dt = ((b.get("t_ms") or 0) - (a.get("t_ms") or 0)) / 1000.0
@@ -1371,15 +1422,24 @@ def listen_arms(rows):
         dr = _lw(b).get("drone")
         if dr and dr.get("seq") is not None and dr["seq"] not in seen:
             seen.add(dr["seq"])
+            d = lw_drone(dr)
             arm["reports"] += 1
-            arm["status_rx"] += dr.get("status_rx") or 0
-            for i, h in enumerate((dr.get("hist") or [])[:8]):
+            arm["v"] = max(arm["v"], d["v"])
+            arm["status_rx"] += d["status_rx"]
+            for i, h in enumerate(d["hist"]):
                 arm["hist"][i] += h
-            arm["nofid"] += dr.get("nofid") or 0
-            arm["gate_holds"] += dr.get("gate_holds") or 0
-            arm["gate_sum_ms"] += dr.get("gate_hold_sum_ms") or 0
-            arm["gate_max_ms"] = max(arm["gate_max_ms"], dr.get("gate_hold_max_ms") or 0)
-            arm["direct_holds"] += dr.get("direct_holds") or 0
+            arm["nofid"] += d["nofid"]
+            arm["gate_holds"] += d["gate_holds"]
+            arm["gate_sum_ms"] += d["gate_hold_sum_ms"]
+            arm["gate_max_ms"] = max(arm["gate_max_ms"], d["gate_hold_max_ms"])
+            if d["direct_holds"] is not None:
+                arm["direct_holds"] += d["direct_holds"]
+                arm["direct_known"] = True
+            if d["v"] == 2:
+                arm["inside"] += d["inside"]
+                arm["fit_skips"] += d["fit_skips"]
+                if d["delay_ms"] is not None and d["status_rx"]:
+                    arm["delays"].append(d["delay_ms"])
     arms["ms"] = max((_lw(r).get("ms") or 0) for r in rows)
     arms["ab_s"] = max((_lw(r).get("ab_s") or 0) for r in rows)
     return arms
@@ -1407,17 +1467,27 @@ def _lat_by_arm(lat_path, arms):
 
 
 def print_listen_report(rows, lat_path=None):
-    """LISTEN WINDOW (rollout phase 3): the drone keeps the air quiet for
-    [listen] ms after every burst and the GS sends one status into each gap.
-    Per arm (gap on vs today's predicted slot): RCF delivery and the
-    slotter's timeouts, status delivery and where statuses landed against
-    the gap, what the gap cost the video (held AUs, loss, latency)."""
-    arms = listen_arms(rows)
+    """LISTEN WINDOW (rollout phase 3, 3b): the drone keeps the air quiet for
+    [listen] ms after every burst -- from its end (v1) or a learned delay
+    after it (v2) -- and the GS sends one status into each window. Per arm
+    (window on vs today's predicted slot): RCF delivery and the slotter's
+    timeouts, status delivery and where statuses landed, what the window
+    cost the video (held bodies, skipped windows, loss, latency). Armed
+    time only when the recording also has disarmed time."""
+    armed_only = listen_mixes_low_power(rows)
+    arms = listen_arms(rows, exclude_low_power=armed_only)
     if arms is None:
         return
     ms = arms["ms"]
-    print(f"LISTEN WINDOW (rollout phase 3: drone quiet {ms} ms after each burst, "
-          f"GS status into the gap; ab_s={arms['ab_s']})")
+    v2 = max(arms["on"]["v"], arms["off"]["v"]) >= 2
+    if v2:
+        print(f"LISTEN WINDOW (rollout phase 3b: drone quiet {ms} ms, a learned delay after "
+              f"each burst; GS status into the window; ab_s={arms['ab_s']})")
+    else:
+        print(f"LISTEN WINDOW (rollout phase 3: drone quiet {ms} ms after each burst, "
+              f"GS status into the gap; ab_s={arms['ab_s']})")
+    if armed_only:
+        print("  armed time only: disarmed (low-power) rows excluded from both arms")
     lat = _lat_by_arm(lat_path, arms)
     for name in ("on", "off"):
         a = arms[name]
@@ -1446,7 +1516,14 @@ def print_listen_report(rows, lat_path=None):
             print(f"    statuses: sent {sent} ({sent / a['dt_s']:.0f}/s; {trig}), drone heard {heard} "
                   f"({100.0 * heard / sent:.0f}%), no gap on record {a['nofid']}")
         timed = sum(a["hist"])
-        if timed:
+        if timed and a["v"] >= 2:
+            hist_txt = "  ".join(f"{LW_BINS_V2[i]} {100.0 * h / timed:.0f}%" for i, h in enumerate(a["hist"]))
+            print(f"    landed (ms after the burst's modelled end): {hist_txt}")
+            dl = sorted(a["delays"])
+            delay_txt = (f"; learned delay p50 {_pct(dl, .5):.1f} ms ({dl[0]:.1f}-{dl[-1]:.1f})"
+                         if dl else "")
+            print(f"    inside the window: {100.0 * a['inside'] / timed:.0f}% of {timed} timed{delay_txt}")
+        elif timed:
             # Bins wholly inside [0, ms): a conservative count when ms
             # splits a bin (6 ms splits 5-7).
             in_gap = sum(h for i, h in enumerate(a["hist"])
@@ -1456,8 +1533,16 @@ def print_listen_report(rows, lat_path=None):
             print(f"    inside the gap: {100.0 * in_gap / timed:.0f}% of {timed} timed")
         if a["reports"]:
             hold_mean = a["gate_sum_ms"] / a["gate_holds"] if a["gate_holds"] else 0.0
-            print(f"    gap cost: AUs held {a['gate_holds'] / a['dt_s']:.1f}/s (mean {hold_mean:.1f} ms, "
-                  f"max {a['gate_max_ms']} ms), control sends held {a['direct_holds'] / a['dt_s']:.1f}/s")
+            # Bodies, not AUs: v1 held an AU's first body and any late repair,
+            # and the first flight's holds were mostly the late repairs (the
+            # GS dq segment never moved).
+            cost = (f"    gap cost: bodies held {a['gate_holds'] / a['dt_s']:.1f}/s (mean {hold_mean:.1f} ms, "
+                    f"max {a['gate_max_ms']} ms)")
+            if a["direct_known"]:
+                cost += f", control sends held {a['direct_holds'] / a['dt_s']:.1f}/s"
+            if a["v"] >= 2:
+                cost += f", windows skipped (no room before the next AU) {a['fit_skips'] / a['dt_s']:.1f}/s"
+            print(cost)
     print("  note: arrival times are the drone's RX stamp against its MODELLED burst end "
           "(AirClock), so they include its own USB RX latency and the model's error.")
 

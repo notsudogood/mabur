@@ -759,6 +759,7 @@ TEST(status_rejects_unknown_trig_and_oversized_gap) {
 
 TEST(lwstat_golden_bytes_round_trip_and_fcs) {
   mabur::rc::LwStat s;
+  s.version = 1;
   s.vtx_id = 7;
   s.seq = 0x0201;
   s.listen_ms = 4;
@@ -790,8 +791,53 @@ TEST(lwstat_golden_bytes_round_trip_and_fcs) {
   CHECK(got->gate_hold_sum_ms == 0x0807);
   CHECK(got->gate_hold_max_ms == 9);
   CHECK(got->direct_holds == 0x0B0A);
+  CHECK(got->version == 1);
   b[20] ^= 0x40;
   CHECK(!mabur::rc::parse_lwstat(b.data(), b.size()).has_value());
+}
+
+// v2 (phase 3b) keeps the v1 body and CRC offset, so a v1-only GS still
+// accepts it: bit 7 of the listen_ms byte flags the layout, the nofid byte
+// carries `inside`, and the direct_holds u16 carries delay_100us << 8 |
+// fit_skips (what that GS exports raw, and what flightreport decodes).
+TEST(lwstat_v2_golden_bytes_and_v1_view) {
+  mabur::rc::LwStat s;
+  s.version = 2;
+  s.vtx_id = 7;
+  s.seq = 3;
+  s.listen_ms = 4;
+  s.status_rx = 58;
+  s.hist[3] = 20;
+  s.hist[7] = 2;
+  s.nofid = 9;          // not on the v2 wire
+  s.direct_holds = 77;  // not on the v2 wire
+  s.inside = 31;
+  s.delay_100us = 47;
+  s.fit_skips = 5;
+  s.gate_holds = 50;
+  s.gate_hold_sum_ms = 120;
+  s.gate_hold_max_ms = 6;
+  auto b = mabur::rc::pack_lwstat(s);
+  REQUIRE(b.size() == 32);
+  CHECK(b[11] == (0x80 | 4));
+  CHECK(b[22] == 31);
+  CHECK(b[28] == 5 && b[29] == 47);
+  auto got = mabur::rc::parse_lwstat(b.data(), b.size());
+  REQUIRE(got.has_value());
+  CHECK(got->version == 2);
+  CHECK(got->listen_ms == 4);
+  CHECK(got->status_rx == 58);
+  CHECK(got->hist[3] == 20 && got->hist[7] == 2);
+  CHECK(got->inside == 31);
+  CHECK(got->delay_100us == 47);
+  CHECK(got->fit_skips == 5);
+  CHECK(got->nofid == 0);
+  CHECK(got->direct_holds == 0);
+  CHECK(got->gate_holds == 50 && got->gate_hold_sum_ms == 120 && got->gate_hold_max_ms == 6);
+  // What a v1-only GS read from the same bytes (it exports these raw).
+  CHECK(b[11] == 132);                               // ms
+  CHECK(b[22] == 31);                                // "nofid" = inside
+  CHECK((b[28] | b[29] << 8) == (47 << 8 | 5));      // "direct_holds"
 }
 
 TEST(rc_version_is_eleven) {

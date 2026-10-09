@@ -402,7 +402,16 @@ the AU's modelled burst end: <0, 0-1, 1-2, 2-3, 3-4, 4-5, 5-7, ≥7 ms),
 `nofid` (no gap on record for that AU), `gate_holds` / `gate_hold_sum_ms` /
 `gate_hold_max_ms` (AU first bodies and late repairs the gap held), and
 `direct_holds` (control/MSP/pong sends it held); `rx_ms` is the GS arrival.
-null until the first report.
+null until the first report. **Phase 3b (2026-10-09)** drones send
+`T_LWSTAT` v2 (`rc_proto.h`): `hist` bins become <0, 0-2, 2-4, 4-6, 6-8,
+8-10, 10-15, ≥15 ms after the burst's modelled end, and the report carries
+`inside` (statuses that landed inside their window), the learned window
+`delay`, and `fit_skips` (windows cut to nothing before the next AU) in
+place of `nofid` and `direct_holds`. A GS built since exports `v` (1 or 2)
+and, for v2, `inside`, `delay_ms`, `fit_skips`; an older GS exports the v2
+body raw — `ms` with bit 7 set (132 = v2, 4 ms), `nofid` = inside,
+`direct_holds` = delay_100us << 8 | fit_skips. `flightreport.py` decodes
+both.
 
 **ta.log (talog 1, 2026-10-04).** The turnaround bench, phase 2 of
 `docs/feedback-repair-rollout.md`: how long a status frame takes to turn into

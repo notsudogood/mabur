@@ -129,4 +129,19 @@ TEST(reserve_until_books_the_listen_gap) {
   CHECK(c.free_at_us() == 6600);
 }
 
+TEST(cost_us_is_what_book_charges) {
+  // Listen window (phase 3b) asks whether a body's air would overlap the
+  // window before booking it; the answer must be the booking's own price.
+  AirClock c;
+  c.set_rates(9.75, 19.5, 6.5, 100);
+  CHECK(c.cost_us(1000, 0) == 921);   // 1000 x 0.8205 + 100
+  CHECK(c.cost_us(1950, 1) == 900);   // 1950 x 0.4103 + 100
+  CHECK(c.cost_us(1000, AirClock::kProbeSid) == 1331);
+  CHECK(c.cost_us(1000, 7) == 0);     // bad sid
+  c.book(0, 1000, 0);
+  CHECK(c.free_at_us() == c.cost_us(1000, 0));
+  c.set_rates(19.5, 19.5, 0.0, 0);    // probe off: unpriced
+  CHECK(c.cost_us(1000, AirClock::kProbeSid) == 0);
+}
+
 MTEST_MAIN

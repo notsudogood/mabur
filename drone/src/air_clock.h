@@ -50,13 +50,23 @@ class AirClock {
     free_at_us_ = start + static_cast<uint64_t>(cost + 0.5);
   }
 
+  // What book() would charge for one body, µs (0 for an unpriced sid): the
+  // listen window asks whether a body's air would overlap it.
+  uint64_t cost_us(size_t bytes, int sid) const {
+    if (sid < 0 || sid > kProbeSid) return 0;
+    const double upb = us_per_byte_[sid];
+    if (upb <= 0.0) return 0;
+    return static_cast<uint64_t>(static_cast<double>(bytes) * upb +
+                                 static_cast<double>(body_us_) + 0.5);
+  }
+
   // When the air is modelled free of everything booked so far (0 = never
-  // booked). The listen window's gap starts here (listen_window.h).
+  // booked). The listen window is placed from here (listen_window.h).
   uint64_t free_at_us() const { return free_at_us_; }
 
-  // Reserves the air up to t_us (a listen-window gap the drone will keep
-  // quiet): the next booking starts no earlier, so the model and the
-  // backlog it reports include the gap.
+  // Reserves the air up to t_us (the end of a listen window a held body
+  // waits out): the next booking starts no earlier, so the model and the
+  // backlog it reports include the wait.
   void reserve_until(uint64_t t_us) {
     if (t_us > free_at_us_) free_at_us_ = t_us;
   }

@@ -253,18 +253,25 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     if (in.listen.drone) {
       const mabur::rc::LwStat& d = *in.listen.drone;
       json& dj = lw["drone"];
+      dj["v"] = d.version;
       dj["seq"] = d.seq;
       dj["rx_ms"] = in.listen.drone_rx_ms;
       dj["ms"] = d.listen_ms;
       dj["status_rx"] = d.status_rx;
       json hist = json::array();
       for (int i = 0; i < mabur::rc::kLwHistBins; ++i) hist.push_back(d.hist[i]);
-      dj["hist"] = hist;
-      dj["nofid"] = d.nofid;
+      dj["hist"] = hist;  // bin edges by version: rc_proto.h T_LWSTAT
       dj["gate_holds"] = d.gate_holds;
       dj["gate_hold_sum_ms"] = d.gate_hold_sum_ms;
       dj["gate_hold_max_ms"] = d.gate_hold_max_ms;
-      dj["direct_holds"] = d.direct_holds;
+      if (d.version >= 2) {
+        dj["inside"] = d.inside;
+        dj["delay_ms"] = d.delay_100us / 10.0;
+        dj["fit_skips"] = d.fit_skips;
+      } else {
+        dj["nofid"] = d.nofid;
+        dj["direct_holds"] = d.direct_holds;
+      }
     } else {
       lw["drone"] = nullptr;
     }

@@ -214,14 +214,15 @@ std::vector<uint8_t> pack_lwstat(const LwStat& s) {
   body.push_back(0);
   put32(body, s.vtx_id);
   put16(body, s.seq);
-  body.push_back(s.listen_ms);
+  const bool v2 = s.version >= 2;
+  body.push_back(static_cast<uint8_t>((s.listen_ms & 0x7F) | (v2 ? kLwV2Flag : 0)));
   put16(body, s.status_rx);
   for (int i = 0; i < kLwHistBins; ++i) body.push_back(s.hist[i]);
-  body.push_back(s.nofid);
+  body.push_back(v2 ? s.inside : s.nofid);
   put16(body, s.gate_holds);
   put16(body, s.gate_hold_sum_ms);
   body.push_back(s.gate_hold_max_ms);
-  put16(body, s.direct_holds);
+  put16(body, v2 ? static_cast<uint16_t>(s.delay_100us << 8 | s.fit_skips) : s.direct_holds);
   put_crc(body);
   return body;
 }
@@ -234,14 +235,22 @@ std::optional<LwStat> parse_lwstat(const uint8_t* buf, size_t len) {
   LwStat s;
   s.vtx_id = get32(buf, 5);
   s.seq = get16(buf, 9);
-  s.listen_ms = buf[11];
+  s.version = (buf[11] & kLwV2Flag) ? 2 : 1;
+  s.listen_ms = buf[11] & 0x7F;
   s.status_rx = get16(buf, 12);
   for (int i = 0; i < kLwHistBins; ++i) s.hist[i] = buf[14 + i];
-  s.nofid = buf[22];
   s.gate_holds = get16(buf, 23);
   s.gate_hold_sum_ms = get16(buf, 25);
   s.gate_hold_max_ms = buf[27];
-  s.direct_holds = get16(buf, 28);
+  if (s.version == 2) {
+    s.inside = buf[22];
+    const uint16_t packed = get16(buf, 28);  // delay_100us << 8 | fit_skips
+    s.delay_100us = static_cast<uint8_t>(packed >> 8);
+    s.fit_skips = static_cast<uint8_t>(packed & 0xFF);
+  } else {
+    s.nofid = buf[22];
+    s.direct_holds = get16(buf, 28);
+  }
   return s;
 }
 

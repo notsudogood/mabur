@@ -1976,13 +1976,70 @@ def test_listen_section_splits_the_ab_arms():
     assert "drone heard 540 (92%)" in on_txt, on_txt
     assert "1-2 56%" in on_txt, on_txt                # 300 of 540 timed
     assert "inside the gap: 93% of 540 timed" in on_txt, on_txt  # bins 0-1..3-4
-    assert "AUs held 3.1/s (mean 2.0 ms, max 3 ms)" in on_txt, on_txt
+    assert "bodies held 3.1/s (mean 2.0 ms, max 3 ms), control sends held 1.0/s" in on_txt, on_txt
     assert "e2e p50 40 ms" in on_txt, on_txt
     # Every timeout is a send too (the slotter books each release once).
     assert "RCF sent 20.5/s heard 18.0/s (88%)" in off_txt, off_txt
     assert "slot timeouts 0.45/s" in off_txt, off_txt
     assert "e2e p50 44 ms" in off_txt, off_txt
     assert "statuses:" not in off_txt, off_txt
+
+
+def _listen_rows_v2(raw):
+    """_listen_rows with phase-3b drone reports: 54 statuses/s, 40 inside
+    the window, learned delay 4.7 ms, 2 skipped windows/s. raw=True is how a
+    v1-only GS exports the same bytes (ms bit 7, inside in nofid, delay <<
+    8 | skips in direct_holds); raw=False is a v2-aware GS's keys."""
+    rows = _listen_rows()
+    for r in rows:
+        dr = r["link"]["listen"]["drone"]
+        if not dr:
+            continue
+        hist = [0, 2, 10, 30, 8, 2, 1, 1]
+        if raw:
+            dr.update(ms=0x80 | 4, hist=hist, nofid=40, direct_holds=47 << 8 | 2)
+        else:
+            dr.update(v=2, hist=hist, inside=40, delay_ms=4.7, fit_skips=2)
+            del dr["nofid"], dr["direct_holds"]
+    return rows
+
+
+def test_listen_section_reads_v2_from_either_gs():
+    for raw in (True, False):
+        rows = _listen_rows_v2(raw)
+        on = flightreport.listen_arms(rows)["on"]
+        assert on["v"] == 2, on
+        assert on["inside"] == 400 and on["fit_skips"] == 20, on
+        assert on["nofid"] == 0 and not on["direct_known"], on
+        assert on["delays"] == [4.7] * 10, on
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            flightreport.print_listen_report(rows)
+        text = out.getvalue()
+        on_txt = text[text.find("gap on"):text.find("gap off")]
+        assert "phase 3b" in text, text
+        assert "4-6 56%" in on_txt, on_txt              # 300 of 540
+        assert "10-15 2%  >=15 2%" in on_txt, on_txt
+        assert "inside the window: 74% of 540 timed; learned delay p50 4.7 ms (4.7-4.7)" in on_txt, on_txt
+        assert "windows skipped (no room before the next AU) 2.0/s" in on_txt, on_txt
+        assert "control sends held" not in on_txt, on_txt
+
+
+def test_listen_section_compares_armed_time_only_when_mixed():
+    rows = _listen_rows()
+    for r in rows:   # disarmed for the first 4 s of the on arm
+        r["drone"]["low_power"] = r["t_ms"] < 4000
+    assert flightreport.listen_mixes_low_power(rows)
+    arms = flightreport.listen_arms(rows, exclude_low_power=True)
+    assert abs(arms["on"]["dt_s"] - 5.8) < 0.01, arms["on"]["dt_s"]   # 4.0-9.8 s
+    assert abs(arms["off"]["dt_s"] - 8.8) < 0.01, arms["off"]["dt_s"]
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        flightreport.print_listen_report(rows)
+    assert "armed time only" in out.getvalue(), out.getvalue()
+    for r in rows:
+        r["drone"]["low_power"] = False
+    assert not flightreport.listen_mixes_low_power(rows)
 
 
 def test_listen_section_silent_without_the_feature():
@@ -2030,6 +2087,8 @@ if __name__ == "__main__":
     test_ta_section_silent_without_pings()
     test_ta_section_warns_on_unparsed_frames()
     test_listen_section_splits_the_ab_arms()
+    test_listen_section_reads_v2_from_either_gs()
+    test_listen_section_compares_armed_time_only_when_mixed()
     test_listen_section_silent_without_the_feature()
     test_flightreport_structure()
     test_old_scale_snr_warns_on_stderr()

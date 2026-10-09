@@ -124,6 +124,7 @@ TEST(listen_window_block_with_and_without_a_drone_report) {
   CHECK(lw["drone"].is_null());
 
   mabur::rc::LwStat d;
+  d.version = 1;
   d.seq = 9;
   d.listen_ms = 4;
   d.status_rx = 55;
@@ -150,6 +151,24 @@ TEST(listen_window_block_with_and_without_a_drone_report) {
   CHECK(dj["gate_hold_sum_ms"] == 9);
   CHECK(dj["gate_hold_max_ms"] == 3);
   CHECK(dj["direct_holds"] == 4);
+  CHECK(dj["v"] == 1);
+  CHECK(!dj.contains("inside"));
+
+  // v2 (phase 3b): the learned window's fields replace nofid/direct_holds.
+  d.version = 2;
+  d.inside = 31;
+  d.delay_100us = 47;
+  d.fit_skips = 5;
+  in.listen.drone = d;
+  ex.poll(2200, in);
+  dj = cap.last()["link"]["listen"]["drone"];
+  CHECK(dj["v"] == 2);
+  CHECK(dj["inside"] == 31);
+  CHECK(dj["delay_ms"].get<double>() > 4.69 && dj["delay_ms"].get<double>() < 4.71);
+  CHECK(dj["fit_skips"] == 5);
+  CHECK(dj["status_rx"] == 55);
+  CHECK(!dj.contains("nofid"));
+  CHECK(!dj.contains("direct_holds"));
 }
 
 TEST(link_rtt_null_then_values) {

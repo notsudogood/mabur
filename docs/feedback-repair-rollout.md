@@ -1,9 +1,10 @@
 # Feedback repair — rollout
 
-**Status 2026-10-07: phase 1 (shadow mode) logs on every flight; phase 2 (the
-turnaround bench) has flown twice (results below); phase 3 (the listen
-window) is built and host-tested, not yet flown.** Nothing below phase 3
-exists yet. An independent take on the same problem, gilankpam's
+**Status 2026-10-09: phase 1 (shadow mode) logs on every flight; phase 2 (the
+turnaround bench) has flown twice; phase 3 (the listen window) has flown
+once and its statuses landed after the gap (results below), so it is revised
+as phase 3b -- the window moves to where statuses land -- built and
+host-tested, not yet flown.** Nothing below phase 3 exists yet. An independent take on the same problem, gilankpam's
 `fec-nack`, is compared at the end of this page. The design this rolls out is
 devourer's `docs/fpv-link-architecture.md` (branch
 `claude/wifi-fpv-link-architecture-1bms9l` of `notsudogood/devourer`); this
@@ -54,9 +55,9 @@ form over unknown seqs only, so it reads 0 exactly when nothing is missing.
    at a passive witness (`tsfl`) with the drone's queue loaded. Add per-packet
    TX queue selection so a repair can overtake queued video. **Kill criterion
    (120 fps target):** p99 well above ~8 ms (~16 ms at 60 fps).
-3. **Listen window + per-AU status frame**, FEC unchanged — built (below). A/B uplink
-   delivery, `link.rcf_slot` timeouts and video loss (`ausniff.py`) against
-   `RcfSlotter`.
+3. **Listen window + per-AU status frame**, FEC unchanged — built, flown once,
+   revised as 3b (below). A/B uplink delivery, `link.rcf_slot` timeouts and
+   video loss (`ausniff.py`) against `RcfSlotter`.
 4. **Repair loop on today's FEC:**
    - GS: request from `deficit()`, and hold an incomplete AU ≥ one round trip.
    - Drone: a retained-symbol ring ≥ RTT + one burst (`fec.window` 32 is
@@ -560,8 +561,131 @@ minutes; then `python3 tools/flightreport.py /media/dvr/log/NNNN`.
   the gap, which is the thing being measured.
 - **Status delivery is a per-second ratio,** the drone's report against the
   GS's count, not a per-frame ledger.
-- **Not yet flown.** Host tests pin the wire, the drone's gap and timing
-  logic, the GS's burst-end detection, the export and the report.
+- **Flown once (2026-10-09, results below):** the statuses landed 4–7+ ms
+  after the burst's modelled end, past a gap that ended at 4 ms. Phase 3b
+  moves the window; this section stays as the record of what flew.
+
+## Phase 3 results (2026-10-09, first flight)
+
+One short flight — the battery ended it before the garage — about 2.5 min
+of video, ~77 s of it armed, all near the GS at mcs4/40 apart from one 1.7 s
+fade to mcs3. `[listen] ms = 4, ab_s = 30`. The link was clean: no truncated
+or dropped AU in either arm, no FEC failure, and 7 short FEC episodes all
+resolved in-band (`arq.log`: 0.11% / 0.08% of bursts short). The comparison
+is armed time only (`flightreport.py` now does this itself): disarmed time
+runs at half the frame rate with small bursts, and the two arms did not get
+equal shares of it.
+
+| armed, 60 fps | gap on (43 s) | gap off (34 s) |
+|---|---|---|
+| RCF heard by the drone | 94% | 93% |
+| GS slot timeouts | 0.00/s | 0.27/s |
+| e2e p50 / worst-second p90 | 42 / 60 ms | 41 / 63 ms |
+| `fec` segment, median second p50 / max | 8 / 14 ms | 8 / 16 ms |
+| truncated + dropped AUs | 0 | 0 |
+
+- **The mechanism works.** The GS sent a status after nearly every burst
+  (60/s; 96% marked by AU completion, as no probe was commanded most of the
+  time), the drone heard 98% of them, the A/B switched every 30 s, and
+  nothing regressed: latency, frame completion and loss match across the
+  arms, and the drone never shed.
+- **The statuses land after the gap.** Against the burst's modelled end:
+  3–4 ms 3%, 4–5 ms 11%, 5–7 ms 32%, ≥ 7 ms 54% — only 3% inside the
+  0–4 ms gap. Even disarmed, on small bursts, the earliest arrivals sat at
+  ~4 ms (4–5 ms 45%), so ~4 ms is the floor of the GS's reaction: USB RX of
+  the burst's last body, the core loop, the status sent behind any RCF the
+  slotter just released, the air, the drone's own USB RX. Larger armed
+  bursts land later still, which points at the AirClock ending a burst
+  early by more as the burst grows.
+- **So the gap bought nothing measurable here.** 94% vs 93% RCF delivery is
+  a one-point difference over ~40 s an arm, inside the noise; statuses got
+  through because near the GS the air is idle about half the time anyway
+  (`air` ~42%). The slot-timeout drop is by construction — in window mode
+  every burst end releases the slotter — not a result.
+- **What it cost:** ~57 held bodies/s, mean 4.7 ms, max 10 — mostly each
+  frame's late repair group (the GS's `dq` segment never moved, so AU-first
+  bodies were rarely held), which matters only to a frame that lost a
+  source. The drone's modelled air backlog rose (p50 2 vs 0 ms, max 7 vs 3)
+  because the reservation counts as busy air; nothing was shed at this
+  range.
+- **What it exposed for range:** a window moved to where statuses land
+  (~5 ms after the burst) must still fit before the next AU — at 60 fps,
+  burst + reaction + window inside 16.7 ms. After a long burst at a low
+  rung it does not, and a held next AU each frame would build a backlog.
+  Untested; 3b's fit rule is the answer.
+
+Caveats: one flight, near only, ~77 s armed. Arrival times are the drone's
+RX stamp against its *modelled* burst end (~1 ms of its own USB RX
+included, plus the model's error). RCF delivery is a per-second ratio of the
+drone's count to the GS's, not a per-frame ledger.
+
+## Phase 3b as built: the window moves to where statuses land
+
+A drone image only — the GS image and its `[listen]` config stay as they
+are.
+
+- **Placement** (`drone/src/listen_window.h`): the window starts a learned
+  `delay` after the burst's modelled end and lasts `listen_ms`. The delay is
+  where a `listen_ms`-wide window would have caught the most of the last 128
+  arrivals, less 0.25 ms (4 ms until 16 have arrived; capped at 15 ms). It
+  tracks the GS's reaction and the AirClock's error together, which is what
+  the window has to match. An arrival is counted at its estimated time on
+  air — the RX stamp less 0.8 ms of the drone's own USB RX, from the phase-2
+  bench (ping on air → reply on air 1.9 ms p50, 0.12 ms of it the drone's
+  handling, ~1 ms the send path) — since the air must be quiet while the
+  status is on it; the histogram keeps the raw stamp.
+- **Fit rule:** the window is cut to end 0.5 ms before the next AU is due
+  (`AuCadence`: the shorter of the smoothed and the last AU interval, so a
+  frame-rate step up never lets it run long) and skipped when that leaves
+  under 1 ms. A burst plus window that does not fit in a frame period never
+  holds the next AU back, so it cannot build a backlog.
+- **Only what overlaps waits:** any body whose modelled air would overlap
+  the window — a late repair, the probe, the next AU's bodies — is held
+  until it ends; a late repair that airs before the window opens now goes at
+  once. The TX writer's hold cap is the delay cap plus the width cap
+  (25 ms).
+- **Report (`T_LWSTAT` v2):** arrivals binned against the burst's end out to
+  15 ms (<0 | 0–2 | 2–4 | 4–6 | 6–8 | 8–10 | 10–15 | ≥15), plus how many
+  landed inside their window, the learned delay, and windows the fit rule
+  skipped. Same 30-byte body and CRC offset as v1, flagged by bit 7 of the
+  `listen_ms` byte, so the deployed GS still accepts it and exports it raw:
+  `ms` 132 = v2 + 4 ms, `nofid` = inside, `direct_holds` =
+  delay_100us << 8 | skips. A rebuilt GS exports `v`, `inside`, `delay_ms`
+  and `fit_skips` instead; `flightreport.py` reads both. v2 does not report
+  control-send holds (no room in the body).
+- **`flightreport.py`:** compares armed time only when a recording also has
+  disarmed time; the 3b section prints the landing histogram, the share
+  inside the window, the learned delay, and skipped windows per second.
+
+### Running it
+
+Flash the new drone image only; leave the GS and its config as they are
+(`[listen] ms = 4, ab_s = 30`, `[turnaround] rate_hz = 0`). Fly near the GS
+and out to the garage — the uplink at range and the fit rule are what this
+flight is for. The LISTEN WINDOW section of the report should say
+"phase 3b".
+
+### Read it with these caveats
+
+- **The delay learns only from statuses it hears.** Near the GS that is
+  nearly all of them; at range the statuses that miss the window are the
+  ones most likely lost, so the delay could settle on a biased sample. The
+  landing histogram shows whether the window sits on the bulk.
+- **The 0.8 ms RX allowance is an estimate,** not measured on its own; if it
+  is off, the window sits that much early or late, and the inside share
+  (counted with the same allowance) will not show it.
+- **`ms = 4` may be too narrow** for arrivals that spread from 4 to past
+  7 ms; the inside-the-window share says whether to widen it, which is a GS
+  config change, not a reflash.
+- **The fit rule trades windows for latency.** At 60 fps with ~5 ms of
+  reaction, a burst longer than ~7 ms shrinks a 4 ms window and one longer
+  than ~10 ms leaves no room at all, so at low rungs most windows may be
+  skipped — the skip count says how often. If so, that is the answer: at
+  60 fps the gap cannot be had at range without delaying video, and phase
+  4's requests must ride whatever idle air there is, or a lower frame rate.
+- **Host-tested only.** Unit tests pin the placement, the fit rule, the
+  overlap hold, the learning, the cadence, the v2 wire and what a v1 GS
+  reads from it, the export and the report.
 
 ## Compared: gilankpam's `fec-nack` (2026-10-05/06), and waybeam-link's ARQ removal
 

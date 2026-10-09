@@ -413,25 +413,43 @@ struct Status {
   uint16_t deficit[2] = {0, 0};
 };
 
-// T_LWSTAT: the drone's per-second account of the gap. `hist` buckets each
-// status by its RX time minus the start of its AU's gap (the modelled end of
-// that burst on air), ms: <0 | 0-1 | 1-2 | 2-3 | 3-4 | 4-5 | 5-7 | >=7.
-// `nofid` counts statuses whose AU the drone no longer (or never) had a gap
-// for. `gate_*` is the video cost: AUs whose first body the gap held back,
-// and for how long; `direct_holds` is control/MSP/pong sends it delayed.
-// All per period, saturating.
+// T_LWSTAT: the drone's per-second account of the gap. Two layouts share
+// one fixed 30-byte body, told apart by bit 7 of the listen_ms byte, so a GS
+// that only knows v1 still CRC-checks and exports a v2 report (raw):
+//
+// v1 (phase 3, first flight): the gap starts at the burst's modelled end.
+//   `hist` buckets each status by its RX time minus that start, ms:
+//   <0 | 0-1 | 1-2 | 2-3 | 3-4 | 4-5 | 5-7 | >=7. `nofid` counts statuses
+//   whose AU the drone no longer (or never) had a gap for; `direct_holds`
+//   is control/MSP/pong sends the gap delayed.
+// v2 (phase 3b): the quiet window starts `delay` after the burst's modelled
+//   end, a delay the drone learns from where statuses land. `hist` buckets
+//   by RX time minus the burst's modelled end (not the window), ms:
+//   <0 | 0-2 | 2-4 | 4-6 | 6-8 | 8-10 | 10-15 | >=15. On the wire the nofid
+//   byte carries `inside` (statuses that landed inside their AU's window)
+//   and the direct_holds u16 carries delay_100us << 8 | fit_skips (windows
+//   shrunk to nothing because they would not fit before the next AU). nofid
+//   stays derivable (status_rx - sum(hist)); direct_holds is not reported.
+//
+// Both: `gate_*` is the video cost -- bodies the gap held back, and for how
+// long. All per period, saturating.
 constexpr int kLwHistBins = 8;
+constexpr uint8_t kLwV2Flag = 0x80;  // in the listen_ms byte
 struct LwStat {
   uint32_t vtx_id = 0;
   uint16_t seq = 0;
+  uint8_t version = 2;    // 1 or 2; selects the wire layout (above)
   uint8_t listen_ms = 0;  // the gap the drone kept at the end of the period
   uint16_t status_rx = 0;
   uint8_t hist[kLwHistBins] = {0, 0, 0, 0, 0, 0, 0, 0};
-  uint8_t nofid = 0;
+  uint8_t nofid = 0;          // v1 on the wire
   uint16_t gate_holds = 0;
   uint16_t gate_hold_sum_ms = 0;
   uint8_t gate_hold_max_ms = 0;
-  uint16_t direct_holds = 0;
+  uint16_t direct_holds = 0;  // v1 on the wire
+  uint8_t inside = 0;         // v2 on the wire
+  uint8_t delay_100us = 0;    // v2: the window's learned delay, 0.1 ms
+  uint8_t fit_skips = 0;      // v2
 };
 
 // Both are fixed-length with the CRC at a fixed offset, so a body that still

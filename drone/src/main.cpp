@@ -220,9 +220,9 @@ struct DevourerSink : mabur::FrameSink {
   // Writer-priority flag paired with `gate` — see await_retune_gate above.
   std::atomic<bool>* gate_waiting = nullptr;
 
-  // Listen window (rollout phase 3): a control/MSP/pong/telemetry send that
-  // would reach the air inside the quiet gap after a burst waits for the gap
-  // to end. Null = no gap (dry-run).
+  // Listen window (rollout phase 3b): a control/MSP/pong/telemetry send
+  // that would reach the air inside a burst's listen window waits for the
+  // window to end. Null = no window (dry-run).
   mabur::ListenWindow* listen = nullptr;
 
   bool send(const uint8_t* p, size_t n) override {
@@ -234,7 +234,7 @@ struct DevourerSink : mabur::FrameSink {
       const uint64_t until = listen->quiet_until(t0, 1000);
       if (until > t0) {
         std::this_thread::sleep_for(std::chrono::microseconds(
-            std::min<uint64_t>(until - t0, mabur::ListenWindow::kMaxGapUs)));
+            std::min<uint64_t>(until - t0, mabur::ListenWindow::kMaxHoldUs)));
         listen->on_direct_hold();
       }
     }
@@ -1819,10 +1819,22 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
     FrameSource fsrc(VENC_RING_NAME);
     FramePipeline pipe;
     AirClock air_clock;   // spec 2026-09-06; priced by apply_op_to_clock
-    // Listen window (phase 3): end of the gap the last AU keeps, 0 = none.
-    // A body pushed before it (the next AU's first, or a late repair of the
-    // last one) is held until then; see listen_window.h.
-    uint64_t gap_until_us = 0;
+    // Listen window (phase 3b): the window the last AU keeps, [from, until)
+    // (until == from: none). A body whose modelled air would overlap it --
+    // the next AU's, a late repair or probe of the last one -- is held until
+    // it ends; see listen_window.h. au_cadence says when the next AU is due
+    // so a window never reaches into it.
+    uint64_t gap_from_us = 0, gap_until_us = 0;
+    mabur::AuCadence au_cadence;
+    auto listen_gate = [&](UepBody& b, uint64_t p_us, size_t bytes, int sid) {
+      const uint64_t start = std::max(air_clock.free_at_us(), p_us);
+      const uint64_t hold = mabur::ListenWindow::hold_until(
+          start, air_clock.cost_us(bytes, sid), gap_from_us, gap_until_us);
+      if (hold) {
+        b.not_before_us = hold;
+        air_clock.reserve_until(hold);
+      }
+    };
     std::vector<uint8_t> fbuf(VENC_FRAME_META_SIZE + 512 * 1024);
     uint64_t last_reattach = 0;
     uint64_t last_ring_stats_ms = 0;
@@ -1954,12 +1966,9 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
           b.pushed_us = p_us;
           const size_t body_bytes = b.body.size();
           const int body_sid = b.stream_id;
-          // A late repair queues behind the probe, i.e. right where the GS
-          // aims its status: it waits out the gap like the next AU does.
-          if (gap_until_us > p_us) {
-            b.not_before_us = gap_until_us;
-            air_clock.reserve_until(gap_until_us);
-          }
+          // A late repair queues behind the probe: it goes now if its air
+          // ends before the window opens, else it waits the window out.
+          listen_gate(b, p_us, body_bytes, body_sid);
           txq.push(std::move(b));
           air_clock.book(p_us, body_bytes, body_sid);
           any = true;
@@ -2023,15 +2032,14 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
                       b.enqueued_ms = static_cast<uint32_t>(p_us / 1000);
                       b.pushed_us = p_us;
                       b.au_first = first;
-                      // Listen window: the AU's first body waits out the
-                      // previous burst's gap; the model starts after it.
-                      if (first && gap_until_us > p_us) {
-                        b.not_before_us = gap_until_us;
-                        air_clock.reserve_until(gap_until_us);
-                      }
+                      if (first) au_cadence.on_au_first(p_us);
                       first = false;
                       const size_t body_bytes = b.body.size();
                       const int body_sid = b.stream_id;
+                      // Listen window: a body that would reach into the
+                      // previous burst's window waits it out; the model
+                      // starts the rest of the AU after it.
+                      listen_gate(b, p_us, body_bytes, body_sid);
                       txq.push(std::move(b));
                       air_clock.book(p_us, body_bytes, body_sid);
                       split_sink_sum_us += now_steady_us() - s_us;
@@ -2051,21 +2059,32 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
           const uint64_t p_us = now_steady_us();
           pb.enqueued_ms = static_cast<uint32_t>(p_us / 1000);
           pb.pushed_us = p_us;
+          listen_gate(pb, p_us, pb.body.size(), AirClock::kProbeSid);
           air_clock.book(p_us, pb.body.size(), AirClock::kProbeSid);
           txq.push(std::move(pb));
           txq.flush();
         }
-        // Listen window (rollout phase 3): this AU's burst, probe included,
-        // is modelled off air at the clock's free_at; record its gap (keyed
-        // by the frame id the probe carries, which is what the GS's status
-        // names) and keep it while the GS's statuses ask for one.
+        // Listen window (rollout phase 3b): this AU's burst, probe
+        // included, is modelled off air at the clock's free_at. While the
+        // GS's statuses ask for a window, place it the learned delay after
+        // that end, cut to end before the next AU is due (skipped if that
+        // leaves too little). Record it keyed by the frame id the probe
+        // carries, which is what the GS's status names; with no window the
+        // record still times the statuses against the burst's end.
         if (!first) {
           const uint64_t g_now = now_steady_us();
-          const uint64_t g_from = std::max(air_clock.free_at_us(), g_now);
+          const uint64_t g_end = std::max(air_clock.free_at_us(), g_now);
           const uint32_t g_us = listen_win.gap_us(g_now);
-          listen_win.on_au_gap(static_cast<uint16_t>(pipe.next_frame_id() - 1), g_from,
-                               g_from + g_us);
-          gap_until_us = g_us ? g_from + g_us : 0;
+          mabur::ListenWindow::Window win{g_end, g_end, false};
+          if (g_us) {
+            win = mabur::ListenWindow::place(g_end, listen_win.delay_us(), g_us,
+                                             au_cadence.next_due_us());
+            if (win.skipped) listen_win.on_fit_skip();
+          }
+          listen_win.on_au_gap(static_cast<uint16_t>(pipe.next_frame_id() - 1), g_end,
+                               win.from, win.until);
+          gap_from_us = win.from;
+          gap_until_us = win.until;
         }
         // dq_split accounting: ring wait is loop-top → read return (the
         // interval during which this frame did not yet exist for us), CPU is
@@ -2604,14 +2623,15 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
 
       batch.clear();
       if (txq.pop_batch(batch, 3, 5) == 0) continue;
-      // Listen window (phase 3): a held body starts its own batch
-      // (pop_batch); wait out the gap before it goes to the radio. Ahead of
-      // the q_ms patch below, so the hold shows in the GS's dq segment.
+      // Listen window (phase 3b): a held body starts its own batch
+      // (pop_batch); wait out the window before it goes to the radio. Ahead
+      // of the q_ms patch below, so a held AU-first body shows in the GS's
+      // dq segment (a held late repair or probe has no dq of its own).
       if (batch[0].not_before_us) {
         const uint64_t h0 = now_steady_us();
         if (batch[0].not_before_us > h0) {
           std::this_thread::sleep_for(std::chrono::microseconds(std::min<uint64_t>(
-              batch[0].not_before_us - h0, mabur::ListenWindow::kMaxGapUs)));
+              batch[0].not_before_us - h0, mabur::ListenWindow::kMaxHoldUs)));
           listen_win.on_gate_hold(now_steady_us() - h0);
         }
       }

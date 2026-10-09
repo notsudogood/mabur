@@ -793,6 +793,122 @@ def print_display_clock_report(au_path, lat_path):
                   f"setpoint {min(cmds)}..{max(cmds)} mfps")
 
 
+def load_regulator_lines(lat_path):
+    """lat.log's 1 Hz `regulator:` lines (maburplay, since 2026-10-09):
+    cumulative counters -> list of (t_s, {key: number})."""
+    out = []
+    if not lat_path or not os.path.exists(lat_path):
+        return out
+    with open(lat_path) as f:
+        for line in f:
+            p = line.split()
+            if len(p) < 3 or p[1] != "regulator:" or not p[0].isdigit():
+                continue
+            r = {}
+            for kv in p[2:]:
+                k, _, v = kv.partition("=")
+                try:
+                    r[k] = float(v.rstrip("ms"))
+                except ValueError:
+                    pass
+            out.append((int(p[0]) / 1e6, r))
+    return out
+
+
+def _counter_total(rows, key):
+    """Sum of increases of a cumulative counter; a drop is a player restart
+    (counters back at 0), so the new value counts in full."""
+    total, prev = 0.0, None
+    for _, r in rows:
+        v = r.get(key)
+        if v is None:
+            continue
+        total += v if prev is None or v < prev else v - prev
+        prev = v
+    first = next((r.get(key) for _, r in rows if r.get(key) is not None), 0.0)
+    return total - first
+
+
+def au_arrival_stats(au_path, refresh_ms=1000.0 / 60.0):
+    """Per minute, from au.log: AUs completing more than 1/2/3 refreshes
+    behind the fastest AU within +-2 s (a frame that late misses its refresh:
+    the screen shows the previous one again), and frames never delivered
+    while the camera ran 1:1 (a pts hole between two single-frame steps --
+    low power's every-other-frame cadence is not loss)."""
+    if not au_path or not os.path.exists(au_path):
+        return None
+    rows = []
+    with open(au_path) as f:
+        for line in f:
+            p = line.split()
+            if len(p) < 9 or p[0] == "#":
+                continue
+            try:
+                rows.append((int(p[1]), int(p[8])))
+            except ValueError:
+                continue
+    if len(rows) < 100:
+        return None
+    rows.sort()
+    pts = [r[0] for r in rows]
+    mins = (pts[-1] - pts[0]) / 60e6
+    if mins <= 0:
+        return None
+    import bisect
+    late = [0, 0, 0]
+    off = [tc - pt for pt, tc in rows]
+    for i, pt in enumerate(pts):
+        lo = bisect.bisect_left(pts, pt - 2_000_000)
+        hi = bisect.bisect_right(pts, pt + 2_000_000)
+        e_ms = (off[i] - min(off[lo:hi])) / 1000.0
+        for j in range(3):
+            if e_ms > (j + 1) * refresh_ms:
+                late[j] += 1
+    upts = sorted(set(pts))
+    cam = camera_clock(upts)
+    holes = 0
+    if cam:
+        T = cam["step_us"]
+        steps = [round((b - a) / T) for a, b in zip(upts, upts[1:])]
+        for i, n in enumerate(steps):
+            if n < 2:
+                continue
+            # Full rate around it: >= 18 of the 20 neighbouring steps single
+            # (low power's 1:2 cadence, and the switch in and out of it, is
+            # not loss).
+            near = steps[max(0, i - 10):i] + steps[i + 1:i + 11]
+            if len(near) >= 10 and sum(1 for x in near if x == 1) >= 0.9 * len(near):
+                holes += n - 1
+    return {"mins": mins, "late": [x / mins for x in late], "holes": holes / mins}
+
+
+def print_display_smoothness_report(au_path, lat_path):
+    """DISPLAY SMOOTHNESS: what the screen dropped or showed late (lat.log
+    regulator counters) and how unevenly frames arrived (au.log)."""
+    reg = load_regulator_lines(lat_path)
+    au = au_arrival_stats(au_path)
+    if not reg and au is None:
+        return
+    print("\nDISPLAY SMOOTHNESS (lat.log regulator lines; au.log arrivals)")
+    if len(reg) >= 2:
+        mins = (reg[-1][0] - reg[0][0]) / 60.0
+        if mins > 0:
+            per = lambda k: _counter_total(reg, k) / mins
+            print(f"  player dropped {per('replaced') + per('pdrop'):.1f} frames/min "
+                  f"(chain cuts {per('cuts'):.1f}, burst skips {per('skips'):.1f}, "
+                  f"other replaced {per('replaced') - per('cuts') - per('skips'):.1f}, "
+                  f"presenter {per('pdrop'):.1f}); released late {per('late'):.1f}/min; "
+                  f"fallback (no refresh lock) {per('fallback'):.1f}/min  [{mins:.1f} min]")
+    else:
+        print("  no regulator lines in lat.log (a player before 2026-10-09 kept them "
+              "in /tmp/maburplay.log only)")
+    if au:
+        l1, l2, l3 = au["late"]
+        print(f"  arrivals behind their neighbours: >1 refresh {l1:.1f}/min, >2 {l2:.1f}/min, "
+              f">3 {l3:.1f}/min; never delivered at full rate {au['holes']:.1f}/min "
+              f"[{au['mins']:.1f} min]")
+
+
 def find_aulog_for(probe_path, pl):
     """The au log is written by flightrec under ITS OWN index (max+1 in
     /media/dvr/log), not the ctl/probe NNNN, and into a different directory
@@ -2415,6 +2531,7 @@ if __name__ == "__main__":
             print_listen_report(load(s.flight), s.lat)
         # CAMERA vs SCREEN rides on au.log and lat.log, whatever the primary.
         print_display_clock_report(s.au, s.lat)
+        print_display_smoothness_report(s.au, s.lat)
         # fec.log (2026-09-15) is a sibling too: the FEC EPISODES section
         # rides along whichever primary the session offered.
         if s.fec:

@@ -755,14 +755,19 @@ int main(int argc, char** argv) {
   // the DrmPresenter's mailbox engagement count (frame parked, or displacing
   // one already parked because a flip was in flight) -- 0 when there is no
   // presenter (decode-only, or init failed).
-  auto log_regulator_line = [&regulator, &presenter, &present_jitter_ema_ms]() {
+  // Since 2026-10-09 the same line also goes into the session's lat.log
+  // (flightreport's DISPLAY SMOOTHNESS section differences its cumulative
+  // counters), so a flight keeps what the screen dropped instead of losing
+  // it with /tmp at power-off.
+  auto log_regulator_line = [&regulator, &presenter, &present_jitter_ema_ms, &lat_log]() {
+    char buf[512];
     if (regulator.enabled()) {
       const uint64_t pend = presenter ? presenter->mailbox_engagements() : 0;
-      std::fprintf(stderr,
+      std::snprintf(buf, sizeof(buf),
                    "regulator: held=%llu late=%llu replaced=%llu disconts=%llu "
                    "hold_ema=%.2fms present_jitter=%.2fms vsync=%s skips=%llu "
                    "fallback=%llu pend=%llu heals=%llu pdrop=%llu "
-                   "chained=%llu chain=%llu chain_max=%llu chains=%llu cuts=%llu\n",
+                   "chained=%llu chain=%llu chain_max=%llu chains=%llu cuts=%llu",
                    static_cast<unsigned long long>(regulator.held_count()),
                    static_cast<unsigned long long>(regulator.late_count()),
                    static_cast<unsigned long long>(regulator.replaced_count()),
@@ -781,9 +786,11 @@ int main(int argc, char** argv) {
                    static_cast<unsigned long long>(regulator.chains_count()),
                    static_cast<unsigned long long>(regulator.chain_cuts()));
     } else {
-      std::fprintf(stderr, "regulator: off present_jitter=%.2fms\n",
-                   present_jitter_ema_ms);
+      std::snprintf(buf, sizeof(buf), "regulator: off present_jitter=%.2fms",
+                    present_jitter_ema_ms);
     }
+    std::fprintf(stderr, "%s\n", buf);
+    lat_log.write(mono_us(), buf);
   };
 #endif
 

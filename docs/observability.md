@@ -627,8 +627,11 @@ read the sideport. Reach for other tools only in these cases:**
   ~4 s of pts (drone clock), `panel=` the screen rate, `phase=` the median
   time from a frame's capture to its next release deadline, `target=` where
   the loop holds it, `err=` the wrapped difference, `cmd=` the milli-fps
-  setpoint sent (0 when observing), `n=` frames that second. Parsers that
-  match `lat:` skip it. `tools/bench/latab.py
+  setpoint sent (0 when observing), `n=` frames that second. The 1 Hz
+  `regulator:` line (format below) is written there too since the same
+  day — its counters are cumulative per player process, and flightreport's
+  DISPLAY SMOOTHNESS section differences them (a drop = a player restart).
+  Parsers that match `lat:` skip both. `tools/bench/latab.py
   latA.log latB.log` reads a pair of these logs and prints the vsync
   A/B verdict (four log-derived gates:
   `e2e` p50 B≤A−8, `dsp` p50 B≤6 (level), `dsp` p99 B≤A−8, `dsp` p50

@@ -2140,6 +2140,59 @@ def test_display_clock_section_silent_without_logs():
     assert out.getvalue() == ""
 
 
+def _reg_line(t_s, replaced, cuts, skips, late, pdrop=0):
+    return (f"{int(t_s * 1e6)} regulator: held=100 late={late} replaced={replaced} disconts=0 "
+            f"hold_ema=4.20ms present_jitter=0.30ms vsync=locked skips={skips} fallback=0 "
+            f"pend=0 heals=0 pdrop={pdrop} chained=0 chain=0 chain_max=2 chains=0 cuts={cuts}")
+
+
+def test_smoothness_section_differences_counters_across_a_restart():
+    with tempfile.TemporaryDirectory() as d:
+        lines = ["# latlog 2",
+                 _reg_line(10, 100, 40, 10, 5),
+                 _reg_line(40, 130, 52, 13, 8),
+                 # player restart: counters back near zero
+                 _reg_line(50, 6, 2, 1, 1),
+                 _reg_line(70, 18, 8, 2, 3)]
+        (Path(d) / "lat.log").write_text("\n".join(lines) + "\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            flightreport.print_display_smoothness_report(None, str(Path(d) / "lat.log"))
+    text = out.getvalue()
+    # 60 s: replaced +30 +6 +12 = 48 -> 48/min; cuts 12+2+6 = 20; skips 3+1+1 = 5
+    assert "player dropped 48.0 frames/min" in text, text
+    assert "chain cuts 20.0, burst skips 5.0, other replaced 23.0" in text, text
+    assert "released late 6.0/min" in text, text  # 3 + 1 (restart) + 2
+
+
+def test_smoothness_section_counts_full_rate_holes_not_low_power():
+    with tempfile.TemporaryDirectory() as d:
+        rows, pts = ["# aulog 4"], 1_000_000
+        for i in range(600):          # 10 s low power: every other frame
+            rows.append(f"{pts} {pts} 0 {i} 1000 0x80 1 {pts} {pts + 9000} 6000 0 1")
+            pts += 2 * 16645
+        for i in range(1200):         # 20 s full rate, one frame missing
+            if i != 700:
+                rows.append(f"{pts} {pts} {i % 2} {i} 1000 0x80 1 {pts} {pts + 9000} 6000 0 1")
+            pts += 16645
+        (Path(d) / "au.log").write_text("\n".join(rows) + "\n")
+        st = flightreport.au_arrival_stats(str(Path(d) / "au.log"))
+    assert st is not None
+    assert abs(st["holes"] * st["mins"] - 1) < 1e-6, st
+    assert st["late"][0] == 0, st
+
+
+def test_smoothness_section_notes_missing_regulator_lines():
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "au.log").write_text(_au_rows(400, 16645))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            flightreport.print_display_smoothness_report(str(Path(d) / "au.log"), None)
+    text = out.getvalue()
+    assert "no regulator lines in lat.log" in text, text
+    assert "never delivered at full rate 0.0/min" in text, text
+
+
 if __name__ == "__main__":
     test_fec_section_counterfactual_overhead_per_sid_and_rung()
     test_session_dir_mode_prints_fec_section()
@@ -2160,6 +2213,9 @@ if __name__ == "__main__":
     test_display_clock_section_free_running_beat()
     test_display_clock_section_reports_steering()
     test_display_clock_section_silent_without_logs()
+    test_smoothness_section_differences_counters_across_a_restart()
+    test_smoothness_section_counts_full_rate_holes_not_low_power()
+    test_smoothness_section_notes_missing_regulator_lines()
     test_flightreport_structure()
     test_old_scale_snr_warns_on_stderr()
     test_overhead_scale_break_warns_on_stderr()

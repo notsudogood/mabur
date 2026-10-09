@@ -51,6 +51,44 @@ The two places the link is inside the frontier:
    peers, and FEC is the only thing standing between a lost symbol and a
    stalled frame.
 
+## Smoothness: what the 2026-10-09 garage flight shows
+
+Full power, 1.6 min, the last ~38 s in the garage (flightreport's DISPLAY
+SMOOTHNESS and EVENTS sections; the player's own drop counters were not in
+the session logs before this date, so on-screen drops are not in here):
+
+- **Late frames are most of the stutter.** 87 AUs/min completed more than
+  one refresh behind the fastest AU around them, 37/min more than two, 16/min
+  more than three — each one a refresh the screen fills with the previous
+  frame. The first flight, mostly not in the garage: 25/min, 0.4/min, 0
+  (diluted: about half of it was the disarmed 30 fps mode).
+- **Rung churn.** 16 rung changes in the garage's ~38 s; climbs lasted
+  0.4–3 s before falling back, and 11 of the flight's 13 falls were the enh
+  layer's loss (`s3_residual` / `s3_util`) — the layer flying 0.25 FEC. Each
+  change leaves transition debris (a third of the floor's FEC failures).
+- **Frames never delivered are rare** (garage flight 23 at full rate, first
+  flight 7) — and not all are radio loss: one frame vanishes every
+  **10.15 s** like clockwork at full rate in both flights (15.2, 25.4,
+  35.5 … s; 57.2, 67.3, 77.5 … s — 6 of the 23, all 7 of the first
+  flight's), a drone-side drop. One candidate is the encoder path discarding the camera's
+  surplus over 60 fps; step 2's bench probe tells (slow the camera to 59.900
+  and see whether the holes stop).
+- **Deliberate drops:** `display.chain_budget = 3` drops a frame to end a
+  chain of back-to-back releases (bench 2026-09-02: 1.44 drops/s for
+  e2e p50 −3.9 ms; 6 was 0.56/s for −2.4 ms). Its flight rate is unknown
+  until a flight carries the `regulator:` lines.
+
+What each lever buys, in the steps below: genlock removes the beat's
+thrown-away frames and the slow swing, and `genlock_miss_pct` is the
+smoothness-for-latency dial (lower = later phase = fewer late frames shown
+late); thicker enh FEC at the low rungs (step 5a, widened) should cut both
+the enh stutters and the churn they drive, since the controller's enh budget
+grows with it; `chain_budget` 0 or 6 trades its ~4 ms for fewer dropped
+frames; source-first ordering (step 3) evens out clean frames. The worst
+late frames (> 50 ms) are loss recovery — only link margin or concealment
+(step 4) moves those. Not proposed: a deep jitter buffer, which would hide
+late frames by making every frame later.
+
 ## The design
 
 - **Ladder:** 20 MHz for MCS0–4, then 40 MHz MCS3/4 at the top (where 40 MHz
@@ -134,7 +172,9 @@ The two places the link is inside the frontier:
      `wget -qO- --post-data= 'http://127.0.0.1:8301/venc/set?sensor_mfps=59900'`
      (then 59920, 59940, 59960, finally `0` to restore) while watching the
      GS's `genlock:` lines (`/tmp/maburplay.log`, or the session's
-     `lat.log`): `cam=` should follow within ~4 s. `{"ok":false}` and a
+     `lat.log`): `cam=` should follow within ~4 s. Leave it at 59.900 for a
+     minute and check the session's DISPLAY SMOOTHNESS line: if the
+     10.15 s full-rate holes stop, they were the camera's surplus. `{"ok":false}` and a
      `> genlock: MI_SNR_SetFps ... failed` drone line = no milli-fps path;
      `cam=` not moving = the driver accepted and ignored it. Either kills
      this route (fallbacks: a sensor-register VMAX write, or a 120 Hz screen
@@ -166,7 +206,9 @@ The two places the link is inside the frontier:
 5. **FEC shaped per rung.** Each rung already carries its own overhead pair,
    so this is configuration, in two halves:
    - *5a, thicken the floor — config, fly after step 1's flight:* 20/0 from
-     0.5/0.25 to 1.0/0.5 (floor video ~2.8 → ~2.2 Mb/s). The 2026-10-09
+     0.5/0.25 to 1.0/0.5 (floor video ~2.8 → ~2.2 Mb/s); if the churn above
+     persists on the new ladder, widen it to enh 0.5 on 20/1–20/2 in the
+     same A/B. The 2026-10-09
      garage flight's `fec.log` at the floor (40/0 then): the enh layer at
      0.25 failed 6 of its 15 real loss episodes and every one would have been
      repaired at 0.5; the base layer at 0.5 failed none of its real episodes

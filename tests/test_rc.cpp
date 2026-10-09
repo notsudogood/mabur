@@ -757,6 +757,45 @@ TEST(status_rejects_unknown_trig_and_oversized_gap) {
   CHECK(!make(0, mabur::rc::kStatusMaxListenMs + 1));
 }
 
+TEST(genlock_golden_bytes_round_trip_and_fcs) {
+  // Pins the T_GENLOCK layout: both ends ship it inside RC_VERSION 11.
+  mabur::rc::Genlock g;
+  g.vtx_id = 0x04030201;
+  g.seq = 0x0605;
+  g.mfps = 59940;  // 0x0000EA24
+  auto b = mabur::rc::pack_genlock(g);
+  REQUIRE(b.size() == 17);
+  const uint8_t head[15] = {0x43, 0x52, mabur::rc::RC_VERSION, 11, 0, 0x01, 0x02, 0x03,
+                            0x04, 0x05, 0x06, 0x24, 0xEA, 0x00, 0x00};
+  for (size_t i = 0; i < 15; ++i) CHECK(b[i] == head[i]);
+  CHECK(mabur::rc::frame_type(b.data(), b.size()) == mabur::rc::T_GENLOCK);
+  b.insert(b.end(), {0xde, 0xad, 0xbe, 0xef});
+  auto got = mabur::rc::parse_genlock(b.data(), b.size());
+  REQUIRE(got.has_value());
+  CHECK(got->vtx_id == g.vtx_id);
+  CHECK(got->seq == g.seq);
+  CHECK(got->mfps == 59940);
+  auto bad = b;
+  bad[12] ^= 0x01;
+  CHECK(!mabur::rc::parse_genlock(bad.data(), bad.size()).has_value());
+  CHECK(!mabur::rc::parse_genlock(b.data(), 16).has_value());
+  // Not mistaken for another type's body.
+  CHECK(!mabur::rc::parse_status(b.data(), b.size()).has_value());
+}
+
+TEST(genlock_rejects_rates_no_sensor_runs_at) {
+  mabur::rc::Genlock g;
+  g.mfps = 0;  // release
+  auto b = mabur::rc::pack_genlock(g);
+  CHECK(mabur::rc::parse_genlock(b.data(), b.size()).has_value());
+  g.mfps = mabur::rc::kGenlockMaxMfps;
+  b = mabur::rc::pack_genlock(g);
+  CHECK(mabur::rc::parse_genlock(b.data(), b.size()).has_value());
+  g.mfps = mabur::rc::kGenlockMaxMfps + 1;
+  b = mabur::rc::pack_genlock(g);
+  CHECK(!mabur::rc::parse_genlock(b.data(), b.size()).has_value());
+}
+
 TEST(lwstat_golden_bytes_round_trip_and_fcs) {
   mabur::rc::LwStat s;
   s.version = 1;

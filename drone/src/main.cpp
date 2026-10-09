@@ -670,6 +670,20 @@ struct RealActuator : mabur::Actuator {
     if (recorder) recorder->request(on);   // non-blocking; outcome in rec_status
     return true;
   }
+
+  // Genlock: the venc layer clamps, skips repeats and prints the outcome
+  // (the first few lines only), so this stays a straight pass-through.
+  bool set_sensor_mfps(uint32_t mfps) override {
+    if (dry_run) {
+      std::fprintf(stderr, "[dry-run] set_sensor_mfps(%u)\n", static_cast<unsigned>(mfps));
+      return true;
+    }
+#ifdef MABUR_HAVE_VENC
+    return venc_set_sensor_mfps(static_cast<int>(mfps)) == 0;
+#else
+    return false;
+#endif
+  }
 };
 
 uint64_t now_steady_ms() {

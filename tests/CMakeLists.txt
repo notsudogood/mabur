@@ -175,6 +175,7 @@ if(MABUR_BUILD_GS)
   add_mtest(test_frame_regulator test_frame_regulator.cpp LIBS mabur_player_core)
   add_mtest(test_lat_tracker test_lat_tracker.cpp LIBS mabur_player_core)
   add_mtest(test_vblank_estimator test_vblank_estimator.cpp LIBS mabur_player_core)
+  add_mtest(test_genlock test_genlock.cpp LIBS mabur_player_core)
   add_mtest(test_lat_log test_lat_log.cpp LIBS mabur_player_core)
   add_mtest(test_rec_button test_rec_button.cpp LIBS mabur_player_core)
   add_mtest(test_ring_client test_ring_client.cpp LIBS mabur_player_core pthread)
@@ -191,6 +192,8 @@ if(MABUR_BUILD_GS)
   # Round-trips maburplay's VtxRecClient against maburgs' RecControl
   # (gs/src/rec_control.h) over real loopback sockets on a test-only port.
   add_mtest(test_vtx_rec_client test_vtx_rec_client.cpp LIBS mabur_player_core)
+  # Same shape for the genlock setpoint: GenlockClient -> GenlockControl.
+  add_mtest(test_genlock_client test_genlock_client.cpp LIBS mabur_player_core)
   add_mtest(test_gs_source test_gs_source.cpp LIBS mabur_player_core)
   add_mtest(test_gs_overlay test_gs_overlay.cpp LIBS mabur_player_core)
   add_dependencies(test_gs_overlay gsfont_fixtures)

@@ -112,6 +112,11 @@ class Actuator {
   // recorder. true = handed over (the recorder reports its own outcome in
   // Telem::rec_status); RcAgent latches the wish only on true.
   virtual bool set_record(bool on) = 0;
+  // Genlock (efficient-link plan step 2): the sensor's own frame rate in
+  // milli-fps, 0 = back to the configured rate. true iff the sensor took
+  // it. Fire-and-forget from RcAgent's side: the GS re-sends its setpoint
+  // about once a second, so a refused value is simply tried again.
+  virtual bool set_sensor_mfps(uint32_t mfps) = 0;
 };
 
 // Radio-side health signals sampled once per tick. thermal_delta is
@@ -193,6 +198,12 @@ class RcAgent {
   bool have_feedback() const { return have_last_fb_; }
   uint64_t last_feedback_ms() const { return last_fb_ms_; }
   uint64_t rcf_accepted() const { return rcf_accepted_; }
+  // Genlock: T_GENLOCK frames for this drone, how many the sensor took and
+  // refused, and the last setpoint heard (0 = none / release). Agent thread.
+  uint64_t genlock_rx() const { return genlock_rx_; }
+  uint64_t genlock_applied() const { return genlock_applied_; }
+  uint64_t genlock_refused() const { return genlock_refused_; }
+  uint32_t genlock_mfps() const { return genlock_mfps_; }
   // link-rtt: seq of the RCF that last_feedback_ms/rcf_age_ms age against.
   // Empty whenever the seq window is reset (DISC re-establish, failsafe) —
   // in that state last_fb_ms_ was refreshed by a non-RCF event and echoing
@@ -284,6 +295,10 @@ class RcAgent {
   // Telem.rcf_rx. Never reset (a session-boundary reset would make the GS's
   // rate computation, which is over a measured interval, ambiguous).
   uint64_t rcf_accepted_ = 0;
+  uint64_t genlock_rx_ = 0;
+  uint64_t genlock_applied_ = 0;
+  uint64_t genlock_refused_ = 0;
+  uint32_t genlock_mfps_ = 0;
 
   // IDR policy state (spec 2026-08-28 venc-foldin §4). Every IDR producer
   // — the GS-driven RCF-after-failsafe path and the encoder's chain-break

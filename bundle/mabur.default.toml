@@ -91,6 +91,13 @@ bitrate_kbps = 1000
 fps          = 30
 stale_ms     = 2000        # no arm-state report for this long = assume armed, full power
 
+[genlock]
+# Let the ground station nudge the camera's frame rate (by at most 1 %) so
+# each frame finishes just before the screen refreshes, instead of drifting
+# in and out of step with it. Needs the ground station's display.genlock on
+# too. Off until a bench shows this camera's rate actually follows the nudge.
+enable = false
+
 [ampdu]
 # Frame aggregation: packs several frames into one transmission at the
 # faster link rates, raising throughput.

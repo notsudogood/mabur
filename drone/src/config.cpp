@@ -557,6 +557,11 @@ void parse_record(const Value& j, RecordCfg& r) {
     fail("record.min_free_mb", "must be in [0,1000000]");
 }
 
+void parse_genlock(const Value& j, GenlockCfg& g) {
+  check_known_keys(j, {"enable"}, "genlock");
+  assign_if_present(j, "enable", g.enable, "genlock");
+}
+
 void parse_ampdu(const Value& j, AmpduCfg& a) {
   check_known_keys(j, {"max_num", "max_time", "min_mcs_20", "min_mcs_40"}, "ampdu");
   assign_if_present(j, "max_num", a.max_num, "ampdu");
@@ -631,8 +636,9 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
   } clear_on_exit;
 
   static const char* kSections[] = {"radio", "fec", "encoder", "venc",
-                                    "link", "msp", "ampdu", "air_clock", "low_power", "record"};
-  check_known_keys(j, {"radio", "fec", "encoder", "venc", "link", "msp", "ampdu", "air_clock", "low_power", "record"}, "");
+                                    "link", "msp", "ampdu", "air_clock", "low_power", "record",
+                                    "genlock"};
+  check_known_keys(j, {"radio", "fec", "encoder", "venc", "link", "msp", "ampdu", "air_clock", "low_power", "record", "genlock"}, "");
 
   // A whole missing section means none of its keys are visited below, so
   // report the section itself. Dropping a [table] while hand-transcribing is
@@ -651,6 +657,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
   if (j.contains("air_clock")) parse_air_clock(j.at("air_clock"), cfg.air_clock);
   if (j.contains("low_power")) parse_low_power(j.at("low_power"), cfg.low_power);
   if (j.contains("record")) parse_record(j.at("record"), cfg.record);
+  if (j.contains("genlock")) parse_genlock(j.at("genlock"), cfg.genlock);
 
   // Cross-section checks, only when the mode is on: a disabled mode's
   // values are irrelevant and the minimal configs the tests load (msp off,

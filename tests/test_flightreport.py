@@ -2074,6 +2074,72 @@ def test_ta_section_warns_on_unparsed_frames():
     assert "lane 0 (default): pings=1 answered=0 (0%)" in result.stdout, result.stdout
 
 
+def _au_rows(n, step_us, t0=1_000_000):
+    lines = ["# aulog 4"]
+    for i in range(n):
+        pts = t0 + i * step_us
+        lines.append(f"{pts} {pts} {i % 2} {i} 1000 0x80 1 {pts} {pts + 9000} 6000 0 1")
+    return "\n".join(lines) + "\n"
+
+
+def test_camera_clock_from_pts_ignores_lost_frames():
+    pts = [1_000_000 + i * 16645 for i in range(300)]
+    del pts[100:103]  # a hole: one 4-frame step
+    c = flightreport.camera_clock(pts)
+    assert c is not None
+    assert c["step_us"] == 16645
+    assert abs(c["fps"] - 60.078) < 0.001
+    assert flightreport.camera_clock(pts[:10]) is None
+
+
+def test_display_clock_section_free_running_beat():
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "au.log").write_text(_au_rows(400, 16645))
+        lat = ["# latlog 2"]
+        e2e = 34
+        for t in range(60):
+            e2e = 34 if t % 13 == 0 else e2e + 1
+            lat.append(f"{(t + 1) * 1_000_000} lat: n=58 e2e={e2e}/60 enc=6/7 dq=0/1 air=1/2 "
+                       f"fec=7/12 dec=8/12 reg=6/20 dsp=5/5 chk=0.0 anchor=ok")
+        (Path(d) / "lat.log").write_text("\n".join(lat) + "\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            flightreport.print_display_clock_report(str(Path(d) / "au.log"),
+                                                    str(Path(d) / "lat.log"))
+    text = out.getvalue()
+    assert "camera 60.078 fps" in text, text
+    assert "screen 60.000 Hz assumed" in text, text
+    assert "one refresh slip every 12.8 s (camera faster" in text, text
+    assert "sawtooth: 4 wraps, median 13 s apart" in text, text
+
+
+def test_display_clock_section_reports_steering():
+    with tempfile.TemporaryDirectory() as d:
+        lat = ["# latlog 2"]
+        for t in range(10):
+            on = 1 if t >= 4 else 0
+            err = [0.4, -0.8, 1.6, -0.2, 0.1, 0.3][t % 6]
+            lat.append(f"{(t + 1) * 1_000_000} genlock: on={on} cam=59.999 panel=60.000 "
+                       f"phase=13.0 target=13.2 err={err} cmd={59910 + t} n=58")
+        (Path(d) / "lat.log").write_text("\n".join(lat) + "\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            flightreport.print_display_clock_report(None, str(Path(d) / "lat.log"))
+    text = out.getvalue()
+    assert "screen 60.000 Hz (maburplay's refresh estimate)" in text, text
+    assert "genlock: steering 6 of 10 s" in text, text
+    assert "|err| p50/p90/max" in text, text
+    assert "setpoint 59914..59919 mfps" in text, text
+    assert "beat:" not in text, text
+
+
+def test_display_clock_section_silent_without_logs():
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        flightreport.print_display_clock_report(None, None)
+    assert out.getvalue() == ""
+
+
 if __name__ == "__main__":
     test_fec_section_counterfactual_overhead_per_sid_and_rung()
     test_session_dir_mode_prints_fec_section()
@@ -2090,6 +2156,10 @@ if __name__ == "__main__":
     test_listen_section_reads_v2_from_either_gs()
     test_listen_section_compares_armed_time_only_when_mixed()
     test_listen_section_silent_without_the_feature()
+    test_camera_clock_from_pts_ignores_lost_frames()
+    test_display_clock_section_free_running_beat()
+    test_display_clock_section_reports_steering()
+    test_display_clock_section_silent_without_logs()
     test_flightreport_structure()
     test_old_scale_snr_warns_on_stderr()
     test_overhead_scale_break_warns_on_stderr()

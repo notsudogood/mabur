@@ -677,6 +677,122 @@ def load_aulog(path):
     return rows
 
 
+def load_au_pts(path):
+    """Every distinct pts (drone µs) in an au log, sorted -- any version: pts
+    is column 2 in all of them. For the camera's own frame rate."""
+    pts = set()
+    with open(path) as f:
+        for line in f:
+            p = line.split()
+            if len(p) < 7 or p[0] == "#":
+                continue
+            try:
+                pts.add(int(p[1]))
+            except ValueError:
+                continue
+    return sorted(pts)
+
+
+def camera_clock(pts):
+    """Camera rate from consecutive pts: the median single-frame step. A step
+    outside 0.5..1.5x the overall median is a lost frame, a restart or a
+    non-1:1 rate, not cadence. None when there are too few steps."""
+    steps = [b - a for a, b in zip(pts, pts[1:]) if b > a]
+    if len(steps) < 20:
+        return None
+    mid = sorted(steps)[len(steps) // 2]
+    one = sorted(s for s in steps if 0.5 * mid < s < 1.5 * mid)
+    if len(one) < 20:
+        return None
+    step = one[len(one) // 2]
+    return {"fps": 1e6 / step, "step_us": step, "n": len(one)}
+
+
+def load_genlock_lines(lat_path):
+    """lat.log's 1 Hz `genlock:` lines (maburplay, efficient-link plan step
+    2): `<t_us> genlock: on=0|1 cam= panel= phase= target= err= cmd= n=`."""
+    rows = []
+    if not lat_path or not os.path.exists(lat_path):
+        return rows
+    with open(lat_path) as f:
+        for line in f:
+            p = line.split()
+            if len(p) < 3 or p[1] != "genlock:":
+                continue
+            r = {"t_us": int(p[0])} if p[0].isdigit() else {}
+            for kv in p[2:]:
+                k, _, v = kv.partition("=")
+                try:
+                    r[k] = float(v)
+                except ValueError:
+                    pass
+            rows.append(r)
+    return rows
+
+
+def lat_wraps(lat_path, drop_ms=8):
+    """Times (s) where lat.log's e2e p50 falls by >= drop_ms from one second
+    to the next: the wrap of a camera/screen beat sawtooth."""
+    if not lat_path or not os.path.exists(lat_path):
+        return []
+    pat = re.compile(r"^(\d+) lat: n=(\d+) e2e=(\d+)/")
+    rows = []
+    with open(lat_path) as f:
+        for line in f:
+            m = pat.match(line)
+            if m:
+                rows.append((int(m.group(1)) / 1e6, int(m.group(2)), int(m.group(3))))
+    return [t1 for (t0, n0, e0), (t1, n1, e1) in zip(rows, rows[1:])
+            if e0 - e1 >= drop_ms and n1 > 20]
+
+
+def print_display_clock_report(au_path, lat_path):
+    """CAMERA vs SCREEN: the camera's measured rate (au.log pts), the
+    screen's (lat.log genlock lines, else assumed 60.000 Hz), the beat they
+    make, and -- when the genlock loop steered -- how well it held."""
+    cam = camera_clock(load_au_pts(au_path)) if au_path and os.path.exists(au_path) else None
+    gl = load_genlock_lines(lat_path)
+    if cam is None and not gl:
+        return
+    print("\nCAMERA vs SCREEN (au.log pts; lat.log genlock lines)")
+    panels = [r["panel"] for r in gl if r.get("panel")]
+    panel = sorted(panels)[len(panels) // 2] if panels else None
+    if cam:
+        print(f"  camera {cam['fps']:.3f} fps (median frame step {cam['step_us']} us, "
+              f"n={cam['n']}; whole flight, drone clock)")
+    if panel:
+        print(f"  screen {panel:.3f} Hz (maburplay's refresh estimate)")
+    else:
+        panel = 60.0
+        print("  screen 60.000 Hz assumed (no genlock lines in lat.log)")
+    steered = [r for r in gl if r.get("on") == 1.0]
+    if cam and not steered:
+        diff = cam["fps"] - panel
+        if abs(diff) > 1e-3:
+            beat = 1.0 / abs(diff)
+            what = ("camera faster: one frame thrown away per slip"
+                    if diff > 0 else "camera slower: one frame shown twice per slip")
+            print(f"  beat: one refresh slip every {beat:.1f} s ({what}, "
+                  f"{60.0 / beat:.1f}/min); latency sweeps up to one refresh "
+                  f"({1000.0 / panel:.1f} ms) over each")
+    w = lat_wraps(lat_path)
+    if len(w) >= 3:
+        iv = sorted(b - a for a, b in zip(w, w[1:]))
+        print(f"  lat.log e2e p50 sawtooth: {len(w)} wraps, median {iv[len(iv) // 2]:.0f} s apart")
+    if gl:
+        print(f"  genlock: steering {len(steered)} of {len(gl)} s")
+    if steered:
+        errs = sorted(abs(r.get("err", 0.0)) for r in steered)
+        q = lambda f: errs[min(len(errs) - 1, int(f * (len(errs) - 1)))]
+        cams = sorted(r["cam"] for r in steered if r.get("cam"))
+        cmds = [int(r["cmd"]) for r in steered if r.get("cmd")]
+        print(f"    phase error |err| p50/p90/max {q(0.5):.1f}/{q(0.9):.1f}/{errs[-1]:.1f} ms "
+              f"(held at target p50 {sorted(r.get('target', 0.0) for r in steered)[len(steered) // 2]:.1f} ms)")
+        if cams:
+            print(f"    camera while steering {cams[len(cams) // 2]:.3f} fps (p50); "
+                  f"setpoint {min(cmds)}..{max(cmds)} mfps")
+
+
 def find_aulog_for(probe_path, pl):
     """The au log is written by flightrec under ITS OWN index (max+1 in
     /media/dvr/log), not the ctl/probe NNNN, and into a different directory
@@ -2297,6 +2413,8 @@ if __name__ == "__main__":
             print_salvage_report(load(s.flight))
             print_drone_rx_report(load(s.flight))
             print_listen_report(load(s.flight), s.lat)
+        # CAMERA vs SCREEN rides on au.log and lat.log, whatever the primary.
+        print_display_clock_report(s.au, s.lat)
         # fec.log (2026-09-15) is a sibling too: the FEC EPISODES section
         # rides along whichever primary the session offered.
         if s.fec:

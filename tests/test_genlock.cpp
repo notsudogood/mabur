@@ -1,0 +1,178 @@
+#include <cmath>
+#include <cstdint>
+#include <deque>
+#include <vector>
+
+#include "genlock.h"
+#include "mtest.h"
+
+using maburplay::Genlock;
+
+namespace {
+
+// Deterministic jitter source (LCG) so a failure reproduces exactly.
+struct Lcg {
+  uint32_t s = 12345;
+  double uni() {
+    s = s * 1664525u + 1013904223u;
+    return static_cast<double>(s >> 8) / static_cast<double>(1u << 24);
+  }
+};
+
+// A sensor that, like a SigmaStar driver, turns a milli-fps request into a
+// whole number of lines per frame: rate = lines_per_s / floor(K / mfps).
+// K and lines_per_s are set so the nominal 60000 request runs at 60.078 fps
+// (the 2026-10-09 flights) and one line is ~27 mfps.
+struct Sensor {
+  double K = 2247.0 * 60000.0;
+  double lines_per_s = 60.078 * 2247.0;
+  double period_us(uint32_t mfps) const {
+    const double vts = std::floor(K / static_cast<double>(mfps));
+    return 1e6 * vts / lines_per_s;
+  }
+};
+
+struct SimResult {
+  std::vector<double> errs_ms;  // per tick after settling
+  double mean_latency_ms = 0;   // deadline - c over the settled frames
+  double ready_by_target = 0;   // share of settled frames ready by c + target
+  std::vector<Genlock::Tick> ticks;
+};
+
+// Panel 60.000 Hz; drone clock 10 ppm off the GS's; uplink delay `delay`
+// ticks; every `lose_every`-th setpoint lost (0 = none).
+SimResult simulate(bool steer, int seconds, int settle_s, int delay, int lose_every,
+                   Genlock::Params params = {}) {
+  Genlock g(params);
+  Sensor sensor;
+  Lcg rng;
+  const double P = 1e6 / 60.0;
+  const double grid0 = 1234.0;
+  const double lead = 6000.0;
+  const double skew = 1.0 + 10e-6;
+  uint32_t applied = 60000;
+  std::deque<uint32_t> in_flight;
+  double t_drone = 1'000'000.0;
+  double next_tick = 2'000'000.0;
+  int tick_no = 0;
+  SimResult r;
+  double lat_sum = 0;
+  int lat_n = 0, ready_ok = 0;
+  double target_ms = 0;
+  while (t_drone < 1e6 * (seconds + 1)) {
+    t_drone += sensor.period_us(applied);
+    const double cap_gs = t_drone * skew;
+    const double c = cap_gs + 3000.0;
+    // Transit + FEC + decode above the floor: mostly 6-14 ms, 10% tail.
+    double x = 6000.0 + 8000.0 * rng.uni();
+    if (rng.uni() < 0.10) x += 10000.0 * rng.uni();
+    const double ready = c + x;
+    const double k = std::floor((ready - grid0) / P);
+    const double flip_phase = grid0 + k * P;
+    g.on_frame(static_cast<uint64_t>(t_drone), static_cast<uint64_t>(c),
+               static_cast<uint64_t>(ready), static_cast<uint64_t>(flip_phase), P,
+               static_cast<uint64_t>(lead));
+    if (tick_no >= settle_s) {
+      // Shown at the first deadline (refresh - lead) at or after ready.
+      const double n = std::ceil((ready - (grid0 - lead)) / P);
+      const double deadline = grid0 - lead + n * P;
+      lat_sum += deadline - c;
+      ++lat_n;
+      if (x <= target_ms * 1000.0 + 1.0) ++ready_ok;
+    }
+    if (cap_gs >= next_tick) {
+      next_tick += 1e6;
+      ++tick_no;
+      const auto t = g.tick(steer);
+      r.ticks.push_back(t);
+      target_ms = t.target_ms;
+      if (t.steering) {
+        const bool lost = lose_every > 0 && tick_no % lose_every == 0;
+        in_flight.push_back(lost ? 0u : t.cmd_mfps);
+      } else {
+        in_flight.push_back(0u);
+      }
+      if (static_cast<int>(in_flight.size()) > delay) {
+        const uint32_t v = in_flight.front();
+        in_flight.pop_front();
+        if (v != 0) applied = v;
+      }
+      if (tick_no > settle_s && t.valid) r.errs_ms.push_back(t.err_ms);
+    }
+  }
+  r.mean_latency_ms = lat_n ? lat_sum / lat_n / 1000.0 : 0;
+  r.ready_by_target = lat_n ? static_cast<double>(ready_ok) / lat_n : 0;
+  return r;
+}
+
+double max_abs(const std::vector<double>& v) {
+  double m = 0;
+  for (double e : v) m = std::max(m, std::fabs(e));
+  return m;
+}
+
+}  // namespace
+
+TEST(measures_camera_and_panel_rates_without_steering) {
+  auto r = simulate(false, 20, 5, 2, 0);
+  REQUIRE(r.ticks.size() > 10);
+  const auto& t = r.ticks.back();
+  CHECK(t.valid);
+  CHECK(!t.steering);
+  CHECK(t.cmd_mfps == 0);
+  CHECK(std::fabs(t.cam_hz - 60.078) < 0.01);
+  CHECK(std::fabs(t.panel_hz - 60.0) < 0.001);
+  // Free-running, the phase sweeps: errors cover most of a period.
+  CHECK(max_abs(r.errs_ms) > 6.0);
+}
+
+TEST(locks_through_whole_line_steps_delay_and_loss) {
+  auto r = simulate(true, 240, 60, 2, 5);
+  REQUIRE(r.errs_ms.size() > 100);
+  CHECK(max_abs(r.errs_ms) < 3.0);
+  // Setpoints stay inside the +-1% band around 60 fps.
+  for (const auto& t : r.ticks)
+    if (t.steering) {
+      CHECK(t.cmd_mfps >= 59400u);
+      CHECK(t.cmd_mfps <= 60600u);
+    }
+}
+
+TEST(locked_is_faster_on_average_than_free_running) {
+  auto free_run = simulate(false, 240, 60, 2, 0);
+  auto locked = simulate(true, 240, 60, 2, 0);
+  // Free-running waits a uniform 0..one period for its refresh; locked waits
+  // only for the slower frames. Both include the same transit.
+  CHECK(locked.mean_latency_ms < free_run.mean_latency_ms - 1.0);
+  // About the configured share is ready by the target phase.
+  CHECK(locked.ready_by_target > 0.85);
+  CHECK(locked.ready_by_target < 0.95);
+}
+
+TEST(does_not_steer_a_camera_off_the_screen_rate) {
+  // Low power delivers every other frame: steps are two periods, not one.
+  Genlock g;
+  const double P = 1e6 / 60.0;
+  for (int i = 0; i < 60; ++i) {
+    const uint64_t pts = 1'000'000 + static_cast<uint64_t>(i * 2 * P);
+    g.on_frame(pts, pts + 3000, pts + 13000, pts, P, 6000);
+  }
+  auto t = g.tick(true);
+  CHECK(t.valid);
+  CHECK(t.cam_hz == 0);
+  CHECK(!t.steering);
+}
+
+TEST(too_few_frames_is_not_a_measurement) {
+  Genlock g;
+  const double P = 1e6 / 60.0;
+  for (int i = 0; i < Genlock::kMinFrames - 1; ++i) {
+    const uint64_t pts = 1'000'000 + static_cast<uint64_t>(i * P);
+    g.on_frame(pts, pts, pts + 10000, pts, P, 6000);
+  }
+  auto t = g.tick(true);
+  CHECK(!t.valid);
+  CHECK(!t.steering);
+}
+
+MTEST_MAIN

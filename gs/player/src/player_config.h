@@ -111,6 +111,16 @@ struct DisplayCfg {
   // bench A/B in docs/observability.md: e2e p50 -3.9 ms for 1.44 drops/s;
   // 6 was -2.4 ms for 0.56/s; p99 unchanged at any value).
   int chain_budget = 3;
+  // Genlock (docs/efficient-link-plan.md step 2, genlock.h): steer the
+  // drone camera's frame rate onto this screen's refresh grid. The phase is
+  // measured (and logged as the 1 Hz `genlock:` line) whenever vsync_lock
+  // is on; this switch only decides whether a setpoint is sent. Needs the
+  // drone's [genlock] enable too. Off until a bench shows the camera
+  // follows.
+  bool genlock = false;
+  // Share of frames, in percent, allowed to miss the refresh the lock aims
+  // them at (they show one refresh later). Lower = a later, safer phase.
+  int genlock_miss_pct = 10;
 };
 
 // GS-side reverse of the drone's ColorTrans sensor tuning (docs/colortrans.md).

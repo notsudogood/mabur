@@ -620,7 +620,15 @@ read the sideport. Reach for other tools only in these cases:**
   directory needs none of it, since `lat.log` is simply the file next to
   `ctl.log`.) A failed open (DVR not mounted yet, or no session yet) is
   retried every 30 s and never blocks or spams; it never blocks the stderr
-  line either, which keeps going regardless. `tools/bench/latab.py
+  line either, which keeps going regardless. Since 2026-10-09 the same file
+  also carries a 1 Hz `genlock:` line whenever `display.vsync_lock` is on
+  (`gs/player/src/genlock.h`, `docs/efficient-link-plan.md` step 2):
+  `on=` 1 while steering the camera, `cam=` the camera rate from the last
+  ~4 s of pts (drone clock), `panel=` the screen rate, `phase=` the median
+  time from a frame's capture to its next release deadline, `target=` where
+  the loop holds it, `err=` the wrapped difference, `cmd=` the milli-fps
+  setpoint sent (0 when observing), `n=` frames that second. Parsers that
+  match `lat:` skip it. `tools/bench/latab.py
   latA.log latB.log` reads a pair of these logs and prints the vsync
   A/B verdict (four log-derived gates:
   `e2e` p50 B≤A−8, `dsp` p50 B≤6 (level), `dsp` p99 B≤A−8, `dsp` p50
@@ -639,9 +647,13 @@ read the sideport. Reach for other tools only in these cases:**
   later one and the older occupant is dropped (bench steady state
   ~1–1.4/s at the mcs5 park, from fec-batch 4-frame bursts; ordinary
   servo drops surface as `replaced=` evictions instead). The beat wrap
-  itself never drops: the 59.939 Hz sensor is slower than the 60.000 Hz
-  panel, so the ~16.4 s wrap produces one panel repeat, visible in
-  `--fps-log`, not here; `fallback=` counts frames
+  depends on which clock is faster. The 2026-08-31 bench measured a
+  59.939 Hz sensor, slower than the 60.000 Hz panel: a ~16.4 s wrap with one
+  panel repeat, visible in `--fps-log`, not here. The 2026-10-09 flights
+  measured the camera at 60.078 fps — faster — so each ~12.8 s wrap throws
+  one frame away instead (the CAMERA vs SCREEN report section reads the
+  camera's rate from `au.log` on every flight;
+  `docs/efficient-link-plan.md` step 2); `fallback=` counts frames
   released via the fallback rule while `display.vsync_lock` is on (climbs
   during a cold start or a stale estimator; cold start needs 8 exact flips
   to first warm, but validity is recency-based, so after a stall the
@@ -854,7 +866,11 @@ read the sideport. Reach for other tools only in these cases:**
     500 on a capture failure — the two are deliberately distinguishable.
   - `POST /venc/set?k=v`, whitelist `bitrate` / `qp_delta` / `roi_qp` /
     `max_ipprop` / `superframe_p_pct` (the last two are volatile encoder
-    pokes, `docs/airtime-model.md` §3; `min_qp` was deleted 2026-09-03). **An
+    pokes, `docs/airtime-model.md` §3; `min_qp` was deleted 2026-09-03) /
+    `sensor_mfps` (the genlock bench probe: the sensor's own frame rate in
+    milli-fps, ±1% of the configured rate, `0` = back to it; prints a
+    `> genlock:` line with the outcome; `docs/efficient-link-plan.md`
+    step 2). **An
     override is not self-clearing.** RcAgent pushes a bitrate only when its
     computed value changes, so on a parked link whatever you set here holds
     until the next rung change or failsafe entry (measured: 20 s+ with no

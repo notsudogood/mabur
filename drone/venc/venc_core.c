@@ -361,6 +361,19 @@ int venc_set_fps(int fps)
 	return rc == 0 ? 0 : -1;
 }
 
+int venc_set_sensor_mfps(int mfps)
+{
+	int rc;
+
+	if (mfps < 0 || !venc_core_running())
+		return -1;
+
+	pthread_mutex_lock(&g_verb_lock);
+	rc = star6e_controls_apply_sensor_mfps((uint32_t)mfps);
+	pthread_mutex_unlock(&g_verb_lock);
+	return rc == 0 ? 0 : -1;
+}
+
 int venc_set_roi_qp(int qp)
 {
 	int rc;

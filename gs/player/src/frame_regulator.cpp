@@ -24,12 +24,17 @@ bool FrameRegulator::offer(const DmaFrame& f, uint64_t mono_us,
     // let the NEXT frame seed a fresh floor.
     while (count_ > 0) displace(0, out);
     ++discont_count_;
+    // A new pts space is a restarted drone, back at its configured rate.
+    if (genlock_) genlock_->reset_steering();
     return true;
   }
 
   uint64_t release = 0;
   uint64_t target_v = 0;
   servo_now_ = vsync_lock_ && est_.valid(mono_us);
+  if (genlock_ && servo_now_ && anchor_.usable())
+    genlock_->on_frame(obs.pts64, anchor_.map_us(obs.pts64), mono_us, est_.phase_us(),
+                       est_.period_us(), lead_us_);
   if (servo_now_) {
     const auto r = est_.next_release(mono_us, lead_us_);
     const uint64_t clamp =

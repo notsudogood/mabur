@@ -84,6 +84,8 @@ class VblankEstimator {
   }
 
   double period_us() const { return period_us_; }
+  // The grid's anchor: the last exact flip (genlock measures phase off it).
+  uint64_t phase_us() const { return phase_us_; }
   int exact_flips() const { return exact_flips_; }
 
  private:

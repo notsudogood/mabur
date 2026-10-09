@@ -69,7 +69,9 @@ the floor, not absolutely. Follow-up #7 pins the absolutes once.
   number; the old "pts→publish <1 ms" was cross-timebase and only proved
   flatness (`docs/airtime-model.md` note).
 - **`dsp` fluctuates 10–25 ms with a ~16 s period** — vsync quantization
-  swept by the 59.939-vs-60.000 Hz sensor↔panel beat, plus one extra
+  swept by the 59.939-vs-60.000 Hz sensor↔panel beat (60.078 fps on the
+  2026-10-09 flights, a ~12.8 s period; `docs/efficient-link-plan.md`
+  step 2), plus one extra
   vsync of flip serialization at p99. Largest single reducible segment.
 
 ## Follow-ups (ranked by ms recovered / effort)

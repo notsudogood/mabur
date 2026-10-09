@@ -3,6 +3,7 @@
 
 #include <cstdint>
 
+#include "genlock.h"
 #include "pts_anchor.h"
 #include "vblank_estimator.h"
 #include "video_backend.h"
@@ -69,6 +70,12 @@ class FrameRegulator {
   // when the regulator holds it. Either way, any frame(s) displaced from
   // the queue are returned in *out and must be released by the caller.
   bool offer(const DmaFrame& f, uint64_t mono_us, Displaced* out);
+
+  // Genlock (efficient-link plan step 2): every frame offered while the
+  // vblank grid is valid and the anchor usable is also handed to `g` (its
+  // capture time, readiness and the grid), and a pts discontinuity resets
+  // its steering. Not owned; null (the default) = no genlock measurement.
+  void set_genlock(Genlock* g) { genlock_ = g; }
 
   // True (and fills *out) once the earliest held frame's release time has
   // arrived. Call in a loop to drain — more than one entry can be due in
@@ -154,6 +161,7 @@ class FrameRegulator {
 
   maburgs::PtsAnchor anchor_;
   VblankEstimator est_;
+  Genlock* genlock_ = nullptr;
   Held held_[kMaxHeld];  // held_[0] releases first (sorted by release_us)
   int count_ = 0;
   bool servo_now_ = false;

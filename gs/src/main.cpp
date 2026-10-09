@@ -27,6 +27,7 @@
 #include "au_ring.h"
 #include "body_queue.h"
 #include "cal_control.h"
+#include "genlock_control.h"
 #include "rec_control.h"
 #include "cal_log.h"
 #include "cal_session.h"
@@ -778,6 +779,17 @@ static int run_radio(const maburgs::Config& cfg) {
     std::fprintf(stderr,
                  "warning: record control port %d unusable; the VTX recorder "
                  "will not follow the record button\n", maburgs::kRecControlPort);
+  // Genlock camera-rate setpoints from maburplay (genlock_control.h),
+  // forwarded to a CAP_GENLOCK drone as T_GENLOCK. Loopback only; a failure
+  // just means the camera is never steered.
+  maburgs::GenlockControl genlock_ctl;
+  if (!genlock_ctl.open(maburgs::kGenlockControlPort))
+    std::fprintf(stderr,
+                 "warning: genlock control port %d unusable; the drone camera "
+                 "will not be steered onto the screen's refresh\n",
+                 maburgs::kGenlockControlPort);
+  uint16_t genlock_seq = 0;
+  uint64_t genlock_fwd = 0;
   // Telem (the drone's only calibration ack signal, flags bit6 cal_active)
   // carries no nonce of its own, so this is what the T_TELEM handler below
   // hands back to CalSession::on_ack() -- stashed from the CalCmd the last
@@ -2872,6 +2884,22 @@ static int run_radio(const maburgs::Config& cfg) {
                             sel.selected(), false};
       rf.offered_ms = drained_ms;
       send_control_frame(rf);
+    }
+    // Genlock: forward each new setpoint once, only in session, only to a
+    // drone that opted in (CAP_GENLOCK), never during a calibration sweep.
+    // The player's ~1 Hz cadence is the repeat; a dropped one only delays
+    // the next correction.
+    if (genlock_ctl.poll() && in_session && (vrx.peer_caps() & mabur::rc::CAP_GENLOCK) &&
+        !cal_session.radio_silent(drained_ms)) {
+      mabur::rc::Genlock gl;
+      gl.vtx_id = cfg.link.vtx_id;
+      gl.seq = genlock_seq++;
+      gl.mfps = genlock_ctl.mfps();
+      maburgs::SlotFrame gf{mabur::rc::pack_genlock(gl), 0, sel.selected(), false};
+      gf.offered_ms = drained_ms;
+      if (send_control_frame(gf) && genlock_fwd++ == 0)
+        std::fprintf(stderr, "maburgs: genlock: first camera setpoint %u mfps sent\n",
+                     static_cast<unsigned>(gl.mfps));
     }
     // Turnaround bench ping (rollout phase 2): straight through
     // send_control_frame at its own jittered time, deliberately NOT through

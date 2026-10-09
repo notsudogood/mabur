@@ -26,6 +26,9 @@ sensor and panel clocks free-run, so the phase sweeps in real flight).
   holes — no display-side mechanism reaches it.
 - Clock beat floor: the sensor runs 59.939 fps effective vs the 60.000
   panel → ~3.7 unavoidable slips/min. Irrelevant at current levels.
+  (2026-10-09: the flights on the current firmware measure the camera at
+  60.078 fps, faster than the panel — 4.7 slips/min, a frame thrown away
+  each; `docs/efficient-link-plan.md` step 2.)
 
 ## Why a pts-anchored display regulator (and not TX pacing)
 

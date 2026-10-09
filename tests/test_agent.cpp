@@ -66,6 +66,12 @@ struct MockActuator : Actuator {
     records.push_back(on);
     return record_ok;
   }
+  std::vector<uint32_t> mfps;
+  bool mfps_ok = true;
+  bool set_sensor_mfps(uint32_t v) override {
+    mfps.push_back(v);
+    return mfps_ok;
+  }
 };
 
 Config make_cfg() {
@@ -239,6 +245,62 @@ TEST(disc_ack_advertises_frame_wire_cap) {
   CHECK(parsed->chip_caps & mabur::rc::CAP_TURNAROUND);
   // Rollout phase 3: keeps a listen-window gap when the GS asks for one.
   CHECK(parsed->chip_caps & mabur::rc::CAP_LISTEN);
+  // Genlock is opt-in: not advertised unless [genlock] enable.
+  CHECK(!(parsed->chip_caps & mabur::rc::CAP_GENLOCK));
+}
+
+TEST(disc_ack_advertises_genlock_only_when_enabled) {
+  Config cfg = make_cfg();
+  cfg.genlock.enable = true;
+  MockActuator act;
+  RcAgent agent(cfg, act);
+  agent.tick(0, RadioHealth{});
+  auto wire = make_disc_wire(cfg.link.vtx_id, 0xCAFEF00D, 136, 40, 0, 2);
+  agent.on_rc_frame(wire.data(), wire.size(), 100);
+  REQUIRE(act.controls.size() == 1);
+  auto parsed = parse_disc_ack(act.controls[0].data(), act.controls[0].size());
+  REQUIRE(parsed.has_value());
+  CHECK(parsed->chip_caps & mabur::rc::CAP_GENLOCK);
+}
+
+TEST(genlock_setpoint_applied_only_when_enabled_and_addressed) {
+  auto genlock_wire = [](uint32_t vtx, uint16_t seq, uint32_t mfps) {
+    mabur::rc::Genlock g;
+    g.vtx_id = vtx;
+    g.seq = seq;
+    g.mfps = mfps;
+    return mabur::rc::pack_genlock(g);
+  };
+  {
+    // Off (the default): ignored outright, nothing reaches the sensor.
+    auto cfg = make_cfg(); MockActuator act; RcAgent agent(cfg, act);
+    auto w = genlock_wire(cfg.link.vtx_id, 1, 59940);
+    agent.on_rc_frame(w.data(), w.size(), 100);
+    CHECK(act.mfps.empty());
+    CHECK(agent.genlock_rx() == 0);
+  }
+  {
+    auto cfg = make_cfg(); cfg.genlock.enable = true;
+    MockActuator act; RcAgent agent(cfg, act);
+    auto other = genlock_wire(cfg.link.vtx_id + 1, 1, 59940);
+    agent.on_rc_frame(other.data(), other.size(), 100);
+    CHECK(act.mfps.empty());
+    auto w = genlock_wire(cfg.link.vtx_id, 2, 59940);
+    agent.on_rc_frame(w.data(), w.size(), 110);
+    REQUIRE(act.mfps.size() == 1);
+    CHECK(act.mfps[0] == 59940);
+    CHECK(agent.genlock_applied() == 1);
+    CHECK(agent.genlock_mfps() == 59940);
+    // Every setpoint is handed on (the venc layer skips repeats itself);
+    // a refusal is counted, not retried here.
+    act.mfps_ok = false;
+    auto r = genlock_wire(cfg.link.vtx_id, 3, 0);
+    agent.on_rc_frame(r.data(), r.size(), 120);
+    REQUIRE(act.mfps.size() == 2);
+    CHECK(act.mfps[1] == 0);
+    CHECK(agent.genlock_refused() == 1);
+    CHECK(agent.genlock_rx() == 2);
+  }
 }
 
 // 2b. Keep-alive DISC while LINKED: ACK-ONLY. The drone must reply with a

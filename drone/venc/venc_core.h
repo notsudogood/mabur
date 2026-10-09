@@ -31,6 +31,7 @@ int venc_core_preload(void);
 int venc_set_bitrate_kbps(int kbps);
 int venc_set_roi_qp(int qp);
 int venc_set_fps(int fps);           /* live frame rate: rebind + RC fps + GOP; agent thread */
+int venc_set_sensor_mfps(int mfps);  /* genlock: sensor rate in milli-fps, +-1%; 0 = configured */
 int venc_request_idr(void);          /* goes through idr_rate_limit */
 int venc_set_qp_delta(int qp_delta); /* boot + debug endpoint only */
 int venc_set_max_ipprop(int prop);   /* boot + debug endpoint only; u32MaxIPProp */

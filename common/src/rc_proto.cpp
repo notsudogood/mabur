@@ -82,6 +82,8 @@ constexpr size_t kStatusLen = 5 + 4 + 2 + 1 + 2 + 1 + 2 + 2;  // 19
 // hist(8) | nofid | gate_holds(2) | gate_hold_sum_ms(2) | gate_hold_max_ms |
 // direct_holds(2)
 constexpr size_t kLwStatLen = 5 + 4 + 2 + 1 + 2 + kLwHistBins + 1 + 2 + 2 + 1 + 2;  // 30
+// magic(2) | ver | type | flags | vtx(4) | seq(2) | mfps(4)
+constexpr size_t kGenlockLen = 5 + 4 + 2 + 4;  // 15
 
 }  // namespace
 
@@ -252,6 +254,33 @@ std::optional<LwStat> parse_lwstat(const uint8_t* buf, size_t len) {
     s.direct_holds = get16(buf, 28);
   }
   return s;
+}
+
+std::vector<uint8_t> pack_genlock(const Genlock& g) {
+  std::vector<uint8_t> body;
+  body.reserve(kGenlockLen + 2);
+  put16(body, RC_MAGIC);
+  body.push_back(RC_VERSION);
+  body.push_back(T_GENLOCK);
+  body.push_back(0);
+  put32(body, g.vtx_id);
+  put16(body, g.seq);
+  put32(body, g.mfps);
+  put_crc(body);
+  return body;
+}
+
+std::optional<Genlock> parse_genlock(const uint8_t* buf, size_t len) {
+  if (len < kGenlockLen + 2) return std::nullopt;
+  if (get16(buf, 0) != RC_MAGIC || buf[2] != RC_VERSION || buf[3] != T_GENLOCK)
+    return std::nullopt;
+  if (get16(buf, kGenlockLen) != crc16_ccitt(buf, kGenlockLen)) return std::nullopt;
+  Genlock g;
+  g.vtx_id = get32(buf, 5);
+  g.seq = get16(buf, 9);
+  g.mfps = get32(buf, 11);
+  if (g.mfps > kGenlockMaxMfps) return std::nullopt;
+  return g;
 }
 
 std::vector<uint8_t> pack_rcf(const Rcf& r) {

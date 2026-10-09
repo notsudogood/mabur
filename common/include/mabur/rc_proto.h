@@ -80,6 +80,11 @@ constexpr uint8_t T_TA_PONG = 8;
 // sends T_STATUS only to a drone whose DISC_ACK carries CAP_LISTEN.
 constexpr uint8_t T_STATUS = 9;
 constexpr uint8_t T_LWSTAT = 10;
+// Genlock (efficient-link plan step 2): VRX -> VTX camera frame-rate
+// setpoint that steers the drone's sensor onto the GS screen's refresh grid.
+// Same compatibility rule again: a new type inside RC_VERSION 11, sent only
+// to a drone whose DISC_ACK carries CAP_GENLOCK.
+constexpr uint8_t T_GENLOCK = 11;
 
 constexpr uint8_t F_DISCOVERY = 0x04;
 
@@ -104,6 +109,11 @@ constexpr uint16_t CAP_TURNAROUND = 0x0008;
 // DiscAck.chip_caps bit: VTX understands T_STATUS, keeps a quiet gap after
 // each burst while statuses arrive, and reports T_LWSTAT (phase 3).
 constexpr uint16_t CAP_LISTEN = 0x0010;
+
+// DiscAck.chip_caps bit: VTX applies T_GENLOCK to its sensor frame rate.
+// Advertised only when the drone's [genlock] enable is set, so a GS never
+// steers a camera whose owner has not opted in.
+constexpr uint16_t CAP_GENLOCK = 0x0020;
 
 // VRX -> VTX feedback: the GS-authoritative operating point. Every field
 // here is one maburd acts on. It used to also carry ack_seq, an alink-style
@@ -459,6 +469,23 @@ std::vector<uint8_t> pack_status(const Status& s);
 std::optional<Status> parse_status(const uint8_t* buf, size_t len);
 std::vector<uint8_t> pack_lwstat(const LwStat& s);
 std::optional<LwStat> parse_lwstat(const uint8_t* buf, size_t len);
+
+// T_GENLOCK: the camera frame rate the GS wants, in milli-fps (60000 =
+// 60.000 fps), recomputed about once a second by the GS's phase loop. The
+// value is the standing setpoint, not a step: repeats are idempotent and a
+// lost frame only delays the next correction. 0 = release: go back to the
+// configured rate. The drone clamps whatever it accepts to a narrow band
+// around its configured rate; parse only rejects values no sensor runs at.
+constexpr uint32_t kGenlockMaxMfps = 240000;
+struct Genlock {
+  uint32_t vtx_id = 0;
+  uint16_t seq = 0;
+  uint32_t mfps = 0;
+};
+std::vector<uint8_t> pack_genlock(const Genlock& g);
+// Fixed-length, CRC at a fixed offset (a trailing FCS parses the same).
+// Rejects mfps > kGenlockMaxMfps.
+std::optional<Genlock> parse_genlock(const uint8_t* buf, size_t len);
 
 std::vector<uint8_t> pack_rcf(const Rcf& r);
 std::optional<Rcf> parse_rcf(const uint8_t* buf, size_t len);

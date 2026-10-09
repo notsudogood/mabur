@@ -47,4 +47,11 @@ TEST(fps_key_whitelisted) {
   CHECK(p.key == "fps");
   CHECK(p.val == 15);
 }
+TEST(sensor_mfps_key_whitelisted) {
+  // Genlock bench probe: milli-fps values are above every other verb's range.
+  auto p = debug_http_parse("POST /venc/set?sensor_mfps=59940 HTTP/1.0");
+  CHECK(p.kind == DebugReq::SET);
+  CHECK(p.key == "sensor_mfps");
+  CHECK(p.val == 59940);
+}
 MTEST_MAIN

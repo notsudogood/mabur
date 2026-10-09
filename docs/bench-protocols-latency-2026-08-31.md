@@ -80,7 +80,10 @@ Plus, in **arm B only**:
    runs ~38/s riding the resubmit mailbox, record it for the comparison.
 2. `vsync_skips`: bench steady state ≈ 1–1.4/s at the mcs5 park — these
    are fec-batch 4-frame bursts exceeding the 2-deep queue (freshest-wins
-   by design), NOT beat-wrap contentions. ⚠ Physics: the 59.939 fps
+   by design), NOT beat-wrap contentions. (2026-10-09: the flights' camera
+   ran 60.078 fps, faster than the panel, so check which side of 60 the
+   CAMERA vs SCREEN report section puts it before reading this.) ⚠ Physics:
+   the 59.939 fps
    sensor is SLOWER than the 60.000 Hz panel, so the ~16.4 s wrap
    produces one PANEL REPEAT (visible in `--fps-log`), never a drop.
    A `skips` rate well above ~2/s at the park is a real fault.

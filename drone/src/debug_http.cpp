@@ -43,7 +43,7 @@ bool key_whitelisted(const std::string& k) {
   return k == "bitrate" || k == "qp_delta" || k == "roi_qp" ||
          k == "max_ipprop" || k == "superframe_p_pct" ||
          k == "min_iqp" || k == "max_iqp" || k == "fps" ||
-         k == "ov_base_pct" || k == "ov_enh_pct";
+         k == "ov_base_pct" || k == "ov_enh_pct" || k == "sensor_mfps";
 }
 
 }  // namespace
@@ -204,6 +204,10 @@ void handle_set(int fd, const DebugReq& req, mabur::OvOverride* feed) {
     ok = venc_set_max_iqp(v) == 0;
   } else if (req.key == "fps") {
     ok = venc_set_fps(v) == 0;
+  } else if (req.key == "sensor_mfps") {
+    // Genlock bench probe: the sensor's own rate in milli-fps (0 = back to
+    // the configured rate), bypassing the GS loop.
+    ok = venc_set_sensor_mfps(v) == 0;
   }
   send_json(fd, "200 OK", ok ? "{\"ok\":true}\n" : "{\"ok\":false}\n");
 #else

@@ -30,6 +30,12 @@ int star6e_controls_apply_bitrate(uint32_t kbps);
  *  restores the previous bind.  Never requests an IDR (RcAgent's job). */
 int star6e_controls_apply_fps(uint32_t fps);
 
+/** Genlock trim: the sensor's own frame rate in milli-fps (MI_SNR_SetFps's
+ *  >1000 path), clamped to +-1% of the configured rate; 0 restores the
+ *  configured rate.  -1 when the bind is not 1:1 (low power) or the driver
+ *  refuses the value.  Leaves the bind and the RC untouched. */
+int star6e_controls_apply_sensor_mfps(uint32_t mfps);
+
 /** Apply ROI-based QP adjustment for FPV center emphasis. */
 int star6e_controls_apply_roi_qp(int qp);
 

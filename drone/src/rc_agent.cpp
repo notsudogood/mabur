@@ -436,6 +436,20 @@ void RcAgent::run_congestion_guard(uint64_t now_ms, const RadioHealth& health) {
 
 void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
   int type = rc::frame_type(body, len);
+  if (type == rc::T_GENLOCK) {
+    // Genlock (efficient-link plan step 2): a standing camera-rate setpoint.
+    // Only when this drone opted in -- without [genlock] enable it never
+    // advertised CAP_GENLOCK, so a setpoint here is a GS that ignored that.
+    auto g = rc::parse_genlock(body, len);
+    if (!g.has_value() || g->vtx_id != cfg_.link.vtx_id || !cfg_.genlock.enable) return;
+    ++genlock_rx_;
+    genlock_mfps_ = g->mfps;
+    if (act_.set_sensor_mfps(g->mfps))
+      ++genlock_applied_;
+    else
+      ++genlock_refused_;
+    return;
+  }
   if (type == rc::T_DISC) {
     auto d = rc::parse_disc(body, len);
     if (!d.has_value() || d->vtx_id != cfg_.link.vtx_id) return;
@@ -752,8 +766,12 @@ rc::DiscAck RcAgent::make_disc_ack(uint32_t nonce, uint16_t seq, uint8_t agreed)
   // CAP_TURNAROUND: answers T_TA_PING (rollout phase 2, ta_responder.h).
   // CAP_LISTEN: keeps a quiet gap after each burst while T_STATUS arrives
   // and reports T_LWSTAT (rollout phase 3, listen_window.h).
+  // CAP_GENLOCK: applies T_GENLOCK to the sensor rate -- only when the
+  // owner opted in ([genlock] enable), so the GS never steers a camera
+  // nobody asked it to.
   ack.chip_caps = rc::CAP_FRAME_WIRE | rc::CAP_TELEMETRY | rc::CAP_CALIBRATE |
                   rc::CAP_TURNAROUND | rc::CAP_LISTEN;
+  if (cfg_.genlock.enable) ack.chip_caps |= rc::CAP_GENLOCK;
   // agreed is follow_gs ? the DISC's proposed op_channel : home (spec
   // 2026-09-13 auto-channel-select §6) -- computed by the caller, which
   // also drives the actual retune, so the ack and the move can never

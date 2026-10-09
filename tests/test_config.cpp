@@ -1330,6 +1330,27 @@ TEST(low_power_defaults_are_disabled_and_parse) {
   }
 }
 
+TEST(genlock_defaults_off_and_parses) {
+  {
+    auto path = write_temp_toml("");
+    auto cfg = load_config(path.string());
+    CHECK(cfg.genlock.enable == false);
+    std::filesystem::remove(path);
+  }
+  {
+    auto path = write_temp_toml("[genlock]\nenable = true\n");
+    auto cfg = load_config(path.string());
+    CHECK(cfg.genlock.enable == true);
+    std::filesystem::remove(path);
+  }
+  {
+    auto path = write_temp_toml("[genlock]\nrate = 60\n");
+    std::string msg = what_of([&] { (void)load_config(path.string()); });
+    CHECK(msg.find("genlock") != std::string::npos);
+    std::filesystem::remove(path);
+  }
+}
+
 TEST(low_power_unknown_key_throws_naming_it) {
   auto path = write_temp_toml("[low_power]\nbogus = 1\n");
   std::string msg = what_of([&] { (void)load_config(path.string()); });

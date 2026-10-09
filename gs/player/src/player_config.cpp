@@ -203,7 +203,8 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
   if (j.contains("display")) {
     const Value& d = j["display"];
     check_keys(d, "display",
-               {"regulate_ms", "vsync_lock", "vsync_lead_ms", "chain_budget"});
+               {"regulate_ms", "vsync_lock", "vsync_lead_ms", "chain_budget", "genlock",
+                "genlock_miss_pct"});
     c.display.regulate_ms =
         static_cast<int>(get_int(d, "regulate_ms", 12, 0, 100, "display"));
     c.display.vsync_lock = get_bool(d, "vsync_lock", c.display.vsync_lock, "display");
@@ -211,6 +212,9 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
         static_cast<int>(get_int(d, "vsync_lead_ms", 6, 1, 10, "display"));
     c.display.chain_budget =
         static_cast<int>(get_int(d, "chain_budget", 3, 0, 60, "display"));
+    c.display.genlock = get_bool(d, "genlock", c.display.genlock, "display");
+    c.display.genlock_miss_pct =
+        static_cast<int>(get_int(d, "genlock_miss_pct", 10, 1, 50, "display"));
   }
 
   if (j.contains("colortrans")) {

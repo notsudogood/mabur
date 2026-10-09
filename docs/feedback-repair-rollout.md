@@ -563,7 +563,7 @@ minutes; then `python3 tools/flightreport.py /media/dvr/log/NNNN`.
 - **Not yet flown.** Host tests pin the wire, the drone's gap and timing
   logic, the GS's burst-end detection, the export and the report.
 
-## Compared: gilankpam's `fec-nack` (2026-10-05/06)
+## Compared: gilankpam's `fec-nack` (2026-10-05/06), and waybeam-link's ARQ removal
 
 Upstream built and flew a software NACK on branch `fec-nack`
 (`docs/fec-nack.md` there; RC_VERSION 15). It is kept as a comparison, not
@@ -624,9 +624,9 @@ His estimate, not a measurement. On our own numbers it is half right:
   power): at the far point of one walk the craft heard the ground at −86
   dBm while the ground heard the craft at −56, and a bench sweep put the
   gap at 22 dB (`docs/findings.md` 2026-08-21; unmeasured on our pair). It
-  went the other way on 2026-09-13 — ARQ deleted, FEC kept: 115 frames by
-  ARQ vs 3,687 by FEC at 120‰ synthetic loss, with the hardware A/B waived
-  and FEC at full strength, which is not the thinner-FEC case below.
+  went the other way on 2026-09-13 — ARQ deleted, FEC kept (next
+  subsection: one synthetic-loss bench run, its FEC left at its normal
+  setting, the hardware A/B waived).
 - **Where this rollout sits: between the two.** Phase 5 keeps a thinner FEC
   (1.0 → 0.5 → 0.25) and lets repair cover the shortfall, taking a share
   of the clean-frame gain without making every loss a round trip. A
@@ -636,6 +636,54 @@ His estimate, not a measurement. On our own numbers it is half right:
   air and a lossy one still gets its FEC. Caveat: `SwEncoder`'s sliding
   window is built around interleaved repair, so deferring repair to frame
   end is a change to the code's structure, not a knob.
+
+### snokvist/waybeam-link removed its ARQ (2026-09-13)
+
+The other independent design on this hardware family went the opposite way
+to this rollout: it deleted its NACK/retransmit plane (Pass 205) and kept
+FEC (that repo's `docs/findings.md` 2026-09-13 and README "Loss
+recovery"). Its repair plane is now FEC, multi-adapter receive diversity
+on the ground (its primary redundancy), a spatial cache from a second
+listener, decoder recovery requests and slice concealment (§6.3b); the
+return path carries reports, not repair.
+
+- **The measurement:** one craft (SSC338Q, one 8812EU) at 100 fps on a
+  slice-based GDR stream, FEC `rlc256` at 20% repair on P frames (`p=200`)
+  and 30% on IDRs, every frame NACK-able, ~70 s at 120‰ **synthetic**
+  i.i.d. loss on a bench. ARQ touched 115 frames against 3,687
+  FEC-decoded ones; 1,179 NACKs bought 174 gap fills, most resends
+  arriving after FEC had already completed the block ("ARQ races FEC").
+  NACK round trip p95 7 ms, max 13 ms; every fill ≤ 16 ms, 95% inside the
+  10 ms frame period.
+- **Its reasons:** (1) on a GDR stream a late resend repairs no decoder
+  state — the picture heals at the next refresh anyway; (2) the deadline
+  that matters is one frame period (10 ms at 100 fps), which the round
+  trip barely fits; (3) it needs a working return path, which a
+  receive-only spectator lacks, and a single-adapter ground deafens its
+  own RX while sending NACKs. At 300‰ ARQ's share rose (573 recoveries),
+  but that is where the return path is itself stressed.
+- **The adversarial counterpart:** its hardware A/B (FEC-only vs ARQ-on at
+  ~120‰/~300‰, healthy and weak uplinks, matched airtime) was **waived**,
+  so the decision rests on that one synthetic run, and i.i.d. loss is
+  FEC's best case, not a fade. None of its reasons is about the latency of
+  a frame waiting for FEC, and it never tested repair as a way to *thin*
+  FEC — the bet this rollout makes.
+- **What it says for this rollout:** the same "FEC got there first" shape
+  as fec-nack's 35% wasted requests — repair on top of an unchanged FEC
+  mostly duplicates it. That is why phase 4 asks for a repair *count* only
+  when the GS is short and phase 5 lowers the floor, and why phase 5's
+  A/B has to read wasted repairs as well as fills. Its round trip sits
+  beside phase 2's turnaround (1.9–2.8 ms p50, 4.4–11.8 ms p99). Note the
+  overhead gap: 20% P-frame repair against our 1.0 at the mcs5 rung — it
+  leans on receive diversity for much of what our overhead buys.
+- **Its quiet gap, the nearest thing to phase 3:** before removing ARQ it
+  scheduled ground returns into gaps the ground *predicted* in the craft's
+  transmissions; the craft held nothing. On its deployed stack those hit
+  11.2% of the time (15,995 hits against 126,351 misses, ~58 fps video;
+  `docs/findings.md` 2026-08-30), a candidate but unattributed cause of
+  its 2.1% residual hardware-ACK failures. Phase 3's drone-held gap is the
+  alternative, and the `LISTEN WINDOW` landing histogram is the
+  like-for-like number.
 
 
 ## Side experiment: pin the GS CPU governor (latency, not repair)

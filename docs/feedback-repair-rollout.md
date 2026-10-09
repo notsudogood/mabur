@@ -1,10 +1,14 @@
 # Feedback repair — rollout
 
-**Status 2026-10-09: phase 1 (shadow mode) logs on every flight; phase 2 (the
-turnaround bench) has flown twice; phase 3 (the listen window) has flown
-once and its statuses landed after the gap (results below), so it is revised
-as phase 3b -- the window moves to where statuses land -- built and
-host-tested, not yet flown.** Nothing below phase 3 exists yet. An independent take on the same problem, gilankpam's
+**Status 2026-10-09: parked.** Phase 3b (the listen window placed where
+statuses land) flew to the garage and landed 64% of statuses inside the
+window — but uplink delivery was the same with and without it: at range the
+uplink loses messages to signal strength, not to the drone talking over the
+GS (results below). With the turnaround and uplink measurements from phases
+2–3, a repair loop would pay least and work worst exactly where loss happens.
+Work moves to `docs/efficient-link-plan.md`; the shadow log keeps running,
+the turnaround bench and the listen window stay in the code, off. Phases 4–6
+were never built. An independent take on the same problem, gilankpam's
 `fec-nack`, is compared at the end of this page. The design this rolls out is
 devourer's `docs/fpv-link-architecture.md` (branch
 `claude/wifi-fpv-link-architecture-1bms9l` of `notsudogood/devourer`); this
@@ -686,6 +690,54 @@ flight is for. The LISTEN WINDOW section of the report should say
 - **Host-tested only.** Unit tests pin the placement, the fit rule, the
   overlap hold, the learning, the cadence, the v2 wire and what a v1 GS
   reads from it, the export and the report.
+
+## Phase 3b results (2026-10-09, garage flight)
+
+One flight, room → garage, ~93 s armed, most of it in the garage; the
+(all-40 MHz) ladder fell to 40/0–40/1 there. `[listen] ms = 4, ab_s = 30`,
+compared on armed time only.
+
+| armed | window on (39 s) | window off (51 s) |
+|---|---|---|
+| RCF heard by the drone | 89% | 88% |
+| GS slot timeouts | 0.15/s | 0.20/s |
+| e2e p50 / worst-second p90 | 41 / 75 ms | 43 / 76 ms |
+| truncated + dropped AUs | 21.5/min | 44.7/min |
+| pre-FEC loss | 0.33% | 0.78% |
+
+- **3b does what it was built to do.** 64% of statuses landed inside the
+  window (3% on the first flight); the learned delay settled at 2.6 ms after
+  the burst's modelled end (0–3.4 over the flight); the drone heard 95% of
+  ~59 statuses/s; the fit rule skipped ~1.5 windows/s (~2.5% of AUs).
+  Arrivals against the burst's end: 2–4 ms 15%, 4–6 ms 41%, 6–8 ms 22%,
+  8–10 ms 11%, 10–15 ms 8%, ≥ 15 ms 1% — a 4 ms window cannot catch much
+  more than two thirds.
+- **It does not change uplink delivery.** 89% vs 88% overall, and per rung
+  91/90% (mcs2), 82/80% (mcs1), 80/74% (mcs0, on 2 s vs 8 s). At ~49% air
+  the uplink's losses in the garage are signal strength, not collisions with
+  the drone's own TX, and a quiet window cannot fix a weak signal.
+- **The video difference is location, not the window.** The deepest garage
+  stretch (100–110 s, rung 0) fell in an off arm: 15% of the off arm's time
+  at mcs0 vs 5% of the on arm's, and pre-FEC loss — which the window cannot
+  touch — more than doubled with it. Per-rung splits are 2–30 s each and
+  point both ways.
+- **Its cost:** ~39 held bodies/s, mean 7.5 ms, max 11 — mostly each frame's
+  late repair group, so a frame that needed one waited ~7 ms longer, which is
+  the opposite of what phase 4 exists for.
+- **The shadow log at range:** 9 lost enh episodes (7 repair-shaped: ≤ 2
+  aggregates, grew ≤ 50 ms) and 1 lost base episode (outage-shaped);
+  requests would have run at ~1.3–2/s; on the episodes FEC fixed in-band
+  (p50 10 ms), a repair at one round trip would have saved p50 ~2 ms.
+
+**Read against the design:** leg 1 (the GS tells the drone what is missing,
+reliably) is the weak one — uplink delivery 74–82% at the bottom rungs here,
+69% of turnaround pings answered at MCS0 in phase 2, and gilankpam's
+`fec-nack` filled 0 of 467 requests at rung 0. The payoff (leg 3) is a
+handful of frames a minute at range, at exactly the moments leg 1 is
+weakest. snokvist/waybeam-link reached the same place from the other side
+(next section). Caveats: one flight, 30 s arms that cover different places
+(`ab_s = 10` would interleave them), arrival times against a modelled burst
+end.
 
 ## Compared: gilankpam's `fec-nack` (2026-10-05/06), and waybeam-link's ARQ removal
 

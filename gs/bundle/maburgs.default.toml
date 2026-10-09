@@ -82,22 +82,39 @@ static_overhead_enh    = 0.5    # ...and on the enhance layer
 # the extra FEC repair data per layer (0.5 = +50 %). Keep
 # overhead_base >= overhead_enh on every rung: the base layer is the one
 # every frame depends on.
+#
+# Slow rungs at 20 MHz, 40 MHz only at the top: at the same MCS a 40 MHz
+# signal reaches less far (4-6 dB less at MCS0), while 40 MHz MCS3 and MCS4
+# reach as far as 20 MHz MCS5 and MCS6 with more capacity. Putting the slow
+# rungs at 40 MHz buys a faster slowest rung by giving up that range.
 
 [[link.ladder]]
 mcs = 0
-bw  = 40
+bw  = 20
 overhead_base = 0.5
 overhead_enh  = 0.25
 
 [[link.ladder]]
 mcs = 1
-bw  = 40
+bw  = 20
 overhead_base = 0.5
 overhead_enh  = 0.25
 
 [[link.ladder]]
 mcs = 2
-bw  = 40
+bw  = 20
+overhead_base = 0.5
+overhead_enh  = 0.25
+
+[[link.ladder]]
+mcs = 3
+bw  = 20
+overhead_base = 0.5
+overhead_enh  = 0.25
+
+[[link.ladder]]
+mcs = 4
+bw  = 20
 overhead_base = 0.5
 overhead_enh  = 0.25
 

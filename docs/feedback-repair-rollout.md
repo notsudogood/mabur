@@ -65,10 +65,74 @@ form over unknown seqs only, so it reads 0 exactly when nothing is missing.
    - Gates: `ausniff.py`, the `lat` segments, `aucadence.py`.
 5. **Lower the overhead floor in steps** (1.0 → 0.5 → 0.25 at the mcs5
    rung), each step A/B'd on the same gates plus `fec.log` and `arq.log`.
-   **Reminder when this phase starts (recorded 2026-10-09):** investigate
-   per-slice H.265 encode/decode to overlap the `fec` first-body → AU-complete
-   window (9.8 ms p50, base 12.6 / enh 6.2 —
-   `docs/latency-budget-findings-2026-08-31.md`). What is known so far:
+   **Reminder when this phase starts (recorded 2026-10-09, revised the same
+   day):** investigate per-slice H.265 to overlap the `fec` first-body →
+   AU-complete window (9.8 ms p50, base 12.6 / enh 6.2 —
+   `docs/latency-budget-findings-2026-08-31.md`) and to contain losses. On
+   the SSC338Q only the **ground** half is open: the drone cannot release a
+   slice before the whole frame is encoded (first bullet), but the radio
+   still spreads a frame's slices across that window, so the GS can decode
+   each one as it lands.
+   - *Air (SSC338Q/Star6E) — no early slices, and no fix on our side:*
+     - *Input is frame-based.* The H.265 core (MHE) only accepts a complete
+       frame from the VPE: its input port advertises frame-base only
+       (`SupportRing=0`, `SupportImi=0`), so the streaming VPE→VENC bind is
+       refused and encoding cannot start while the frame is still arriving.
+       Root-caused against the vendor SDK and its kernel module by the
+       waybeam team (waybeam `documentation/REALTIME_PIPELINE_INVESTIGATION.md`
+       §6a/§6b, 2026-07-18); only a SigmaStar firmware with
+       `bExternalRingSupport=1` would change it.
+     - *Output is whole-frame.* gilankpam's SSC338Q bench (unpublished,
+       shared 2026-10-09 — link it when it lands): latency to `GetStream`
+       return is 7.17 ms in by-frame mode with or without slices; in
+       per-packet mode the first NAL comes at 6.71 ms and the spacing after
+       it is a software copy (~200 µs + 17 µs/kB), not progressive encode,
+       so the complete frame arrives 0.2 ms *later*. A forum member's
+       recollection (OpenIPC forum, 2026-10-09) that `GetStream` returns
+       slices early does not survive it. mi_venc.ko
+       has a slice-done IRQ, so a modified driver might release slices
+       sooner, but that means reverse-engineering SigmaStar's closed module
+       and firmware (nobody has), and it could only save part of the encode
+       time, since the input wait above stays.
+     - *Other SoCs, untested:* the SSC378QE (Infinity6C) H.265 core does
+       take streaming input (waybeam runs it that way); whether it also
+       releases slices early is unmeasured. The Hi3516CV610's vendor API has
+       an early slice output switch (`slice_output_en`) plus VI/VPSS
+       low-delay APIs; waybeam keeps it off (its output loop assumes whole
+       AUs) and calls the CV610 "the better candidate for a future
+       sub-frame-latency experiment" (`documentation/CV610_RESILIENCE_SLICES_PLAN.md`).
+       waybeam's estimate for streaming input alone is 5.9 → ~3 ms
+       capture-to-wire at 90 fps (`documentation/LOW_DELAY_PIPELINE.md`),
+       never measured, because the SSC30KQ it was estimated on cannot do it.
+       Either chip means porting mabur's drone side.
+     - *Slice geometry:* the SDK takes slice height in 32-px rows and rounds
+       it up to whole 64-px CTU rows, so 1080p (17 CTU rows) can only
+       deliver 1, 2, 3, 4, 5, 6, 9 or 17 slices (snokvist/waybeam-link
+       `docs/findings.md` 2026-08-20; 4 → 4 and 17 → 17 measured, 8 → 6).
+       Count the slices in the stream, not the config: waybeam-link's crafts
+       ran 4 slices for two days while their modes asked for 9, because the
+       deploy script never wrote the setting (`5c8c7ef`). gilankpam saw 3
+       NALs at every setting he tried, so check his setting applied before
+       reading his geometry. The GDR refresh frame has its own geometry,
+       independent of the slice count: waybeam-link saw 17 or 9 slices on
+       it (varying between sessions), gilankpam saw refresh-start frames come
+       out unsplit — a ground-side consumer must take the geometry from each
+       frame, never assume it.
+     - *Coding cost (waybeam-link, SSC338Q 1080p60 CBR, one scene per arm):*
+       1 → 4 slices ≤ 0.9 QP (6 s captures: mean slice QP 26.3 → 26.8);
+       4 → 17 not resolvable at 18 Mbps (< 0.4 QP, inside the 0.36 QP drift
+       between two identical control runs). Overhead ≈ 26 B per extra slice,
+       from one adjacent pair: 4 → 17 costs 0.9 % of the frame at 18 Mbps but
+       6.1 % at 2.8 Mbps, where that arm only resolves ~0.7 QP. Unmeasured at
+       mabur's bitrates or with the SVC-T pair. Also: the SSC338Q drops
+       re-encode with multi-slice (bigger overshoot bursts).
+     - *A conformance trap:* with slices and a non-reference picture, the
+       SSC338Q marks the first slice TRAIL_N and the rest TRAIL_R in the same
+       picture (HEVC 7.4.2.2 violation); ffmpeg, AMD VAAPI and MPP then
+       reconstruct that picture differently (~42 dB, 1 picture in 5 on
+       waybeam-link's stream, findings 2026-08-20). Every mabur enh frame is
+       non-reference, so check whether ours does the same once sliced; if it
+       does, any decode comparison has to expect it.
    - *Ground:* gehee/fpvOS decodes a picture as its slices arrive — an MPP
      patch (`br-external/package/rockchip-mpp/0002`) plus a kernel patch
      (`board/vrxpro/linux-patches/0003`, rkvdec2 stream mode, Rockchip BSP
@@ -76,30 +140,20 @@ form over unknown seqs only, so it reads 0 exactly when nothing is missing.
      whole-picture; no independent or RK3566 measurement. Its patch 0001
      (h265d: refuse a slice whose PPS names a missing SPS) is a standalone
      crash fix worth taking regardless.
-   - *Air (SSC338Q/Star6E):* libmi_venc exports `MI_VENC_SetH265SliceSplit`
-     and mi_venc.ko has a slice-done IRQ. Slices quantize to 64-px CTU rows
-     (1080p = 17 rows) and multi-slice disables re-encode. waybeam already
-     wires it (`video0.sliceCount`, whole-AU output, for spatial
-     concealment); a realtime VPE→VENC ring is impossible on i6e (waybeam
-     `documentation/REALTIME_PIPELINE_INVESTIGATION.md`). Whether `GetStream`
-     returns slices before the frame ends is **unverified**; a forum member
-     recalls that it does (OpenIPC forum, 2026-10-09: "IIRC yes — the problem
-     has always been the receiver side; most decoders wait for all parts of
-     the frame"). Recollection, not measurement — the first experiment below
-     settles it.
-   - *So the blockers are on the ground:* the decoder (what the fpvOS patches
+   - *So the work is all on the ground:* the decoder (what the fpvOS patches
      address) and mabur itself — the GS's FEC releases a frame only once the
      whole AU has arrived, and the player hands MPP the whole AU. Slice-level
      decode needs both to release in-order source as it arrives.
    - *mabur today:* the drone loads the SliceSplit symbol but never calls it;
      the GS player feeds MPP one whole AU per `decode_put_packet`
      (IMMEDIATE_OUT on).
-   - *First experiment:* `sliceCount=4` on the SSC338Q, logging per
-     `GetStream` the `packNum`, `packetInfo[].sliceId`, `endFrame` and
-     timestamps. Slices spread over several ms → worth pursuing (the FEC must
-     then also release in-order source before the AU completes). All in one
-     pack → the gain is capped at ~3 ms of decode + airtime overlap, ranking
-     below the vsync-locked regulator and the pair-policy items.
+   - *First experiments (bench, no flight):* (1) record a sliced stream from
+     the drone, cut one slice out of one frame, and decode it on the GS with
+     the player's own MPP settings — once with the hole, once with the hole
+     filled by a skip slice (below); waybeam-link's `tools/spatial_conceal/`
+     (`slice_drop.py`, `mpp_dec_yuv.c`, `decode_compare.py`) is the
+     template. (2) Port the fpvOS kernel patch to BSP 6.1 and measure last
+     slice → frame on the RK3566.
    - *RK3566 vs RK3568 (checked 2026-10-09):* the decoder is the same block.
      The Rockchip 5.10 BSP builds `rk3566.dtsi` as `#include "rk3568.dtsi"`
      plus `/delete-node/`s that are all I/O (PCIe 3.0, `sata0`, `gmac0`,
@@ -116,50 +170,78 @@ form over unknown seqs only, so it reads 0 exactly when nothing is missing.
    - *What it could buy (estimate from the budget above + the author's one
      measurement, not measured here):* `enc` (~7 ms), first-body → AU
      complete (~8–10 ms in 2026-10 flights) and `dec` (~6–9 ms) run in
-     series today, ~22–25 ms per frame; with 4 slices they overlap. Decoder
-     side alone (whole-AU from the drone, slices decoded as they arrive):
-     **~3–6 ms** (the author's 5.1 → 2.0 ms). Encoder side too (slices leave
-     the drone as they are encoded): up to **~5 ms more**, depending on how
-     much of `enc` is encode rather than the frame-based VPE ahead of it and
-     on `GetStream` really returning slices early. Together **~5–10 ms off
-     the p50**, ~10 % of the ~75–85 ms glass-to-glass; large frames (IDR,
-     scene changes) gain most, which trims some size-driven jitter. The
-     overlap alone does **not** fix the 80–90 ms spikes — those are FEC waits
-     for lost symbols, and a frame with a missing slice still waits as long
-     as the GS waits for it (repair, phase 4, is that fix; the two compound)
-     — unless the GS stops waiting, below. Gains reach the screen only once
-     the vsync regulator re-centres on the earlier arrivals. Costs: a few %
-     coding efficiency for 4 slices (no prediction across slice boundaries),
-     the SSC338Q drops re-encode with multi-slice (bigger overshoot bursts),
-     and work on both ends — drone per-slice ring/FEC packing; GS in-order
-     slice release, per-slice player feed, and the BSP 6.1 decoder port.
-   - *Slices also contain a loss (recorded 2026-10-09):* slices decode
-     independently, so a lost symbol damages one band (~¼ of the picture with
-     4 slices) instead of everything below the hole, and the band can be
-     concealed from the previous frame. It does not stay contained in time:
-     later frames predict from the damaged picture and, with motion, smear it
-     beyond the band until the next IDR. In mabur's SVC-T pair that splits by
-     layer — nothing references an **enh** frame, so a lost enh slice is a
-     one-frame band glitch (~17 ms) and gone; a lost **base** slice persists
-     and smears until recovery, as today, only starting smaller.
+     series today, ~22–25 ms per frame. On the SSC338Q only the decoder
+     overlap is available: **~3–6 ms off the p50** (the author's 5.1 → 2.0
+     ms), ~4–7 % of the ~75–85 ms glass-to-glass; large frames (IDR, scene
+     changes) gain most, which trims some size-driven jitter. The earlier
+     "up to ~5 ms more" from overlapping the encoder is withdrawn (first
+     bullet). The overlap alone does **not** fix the 80–90 ms spikes —
+     those are FEC waits for lost symbols, and a frame with a missing slice
+     still waits as long as the GS waits for it (repair, phase 4, is that
+     fix; the two compound) — unless the GS stops waiting, below. Gains
+     reach the screen only once the vsync regulator re-centres on the
+     earlier arrivals. Costs: the coding cost above, lost re-encode, and GS
+     work — in-order slice release, per-slice player feed, skip-slice
+     repair, and the BSP 6.1 decoder port.
+   - *Slices also contain a loss — but only if the decoder gets a complete
+     picture (corrected 2026-10-09):* slices decode independently, so a lost
+     symbol can cost one band (~¼ of the picture with 4 slices) instead of
+     everything below the hole. Handing MPP the frame with the slice simply
+     missing does **not** get that:
+     - *A hole decodes silently wrong.* waybeam-link measured it on an
+       RK3566 GS running kernel 6.1.84 — ours — with waybeam-hub's MPP
+       settings (`split_parse=1`, DISABLE_ERROR / IMMEDIATE_OUT /
+       FAST_PLAY): with one slice cut out, MPP reports `errinfo 0 discard 0`
+       on every frame, the damage runs from the hole to the bottom of the
+       picture, and two frames later it is worse, not better (findings
+       2026-08-21, "Phase C"). An external lab (josephnef/rkvdec-slice-lab,
+       RK3588) found MPP drops the whole picture when the **first** slice is
+       lost. Since MPP stays silent, a GS keyframe or recovery request keyed
+       on MPP decode errors never fires for this fault.
+     - *A skip slice in the hole works.* waybeam-link §6.3b
+       (`docs/spatial-concealment.md`; code in `core/src/hevc_conceal.cpp` +
+       `core/src/spatial_repair.cpp`, GPL-2.0-or-later — check before
+       lifting code) writes a 10–21 B all-skip slice where the missing one
+       was, its header rewritten from a surviving slice of the same picture,
+       so every block copies from the reference. MPP accepts it: MPP and
+       ffmpeg agree to 89 dB, and the damage stays inside its band and fades
+       within two frames.
+     - *Caveats on both:* one 40-frame recording with one slice cut, decoded
+       by a test tool on the device rather than the live player, no flight;
+       our player's MPP settings may differ.
+     - *Value, measured by waybeam-link:* at 20 % synthetic loss on a
+       loopback bench fed a real SSC338Q recording, 231 vs 50 of 362 frames
+       delivered with vs without the repair (findings 2026-08-20); on one RF
+       walk, 95 frames salvaged, 116 frozen and 709 slices synthesized,
+       against 5 salvage failures over 141,233 delivered (2026-08-21).
+       i.i.d. synthetic loss, one walk, one craft; repair cost averaged
+       58–97 µs per frame on x86, unmeasured on the RK3566.
+     - *It does not stay contained in time:* later frames predict from the
+       concealed picture and, with motion, smear it beyond the band. In
+       mabur's SVC-T pair that splits by layer — nothing references an
+       **enh** frame, so a lost enh slice is a one-frame band glitch (~17 ms)
+       and gone; a lost **base** slice persists and smears until the GDR
+       refresh sweeps it (0.5 s cycle), not "until the next IDR" as first
+       written. waybeam-link measured that healing as gradual, not exact:
+       x265's refresh cut a concealment error ~10× in its first wave and
+       left a small residual that crept with motion, while an IDR cleared it
+       exactly; SigmaStar's refresh is unmeasured.
      - *Needed first:* `FrameStream` streams a frame's contiguous prefix and
        truncates at the first unfilled gap after `gap_timeout_ms`, so complete
-       slices after a hole are thrown away today; it would have to skip a
-       missing slice and pass the later whole ones on. And whether MPP / the
-       RK3566 decoder decodes a frame with one slice missing (and how it
-       conceals) or rejects the whole picture is unverified — testable on the
-       bench with a recorded stream with one slice NAL cut out, no flight
-       needed.
+       slices after a hole are thrown away today. It would have to keep the
+       later whole slices **and fill the hole with a skip slice** — passing
+       them on with the hole left in is worse than today's truncation.
      - *What it changes for the link:* a latency-for-quality trade. Today a
        lost symbol holds the frame until FEC recovers it or the GS gives up —
        the spikes. With slices the GS could show an **enh** frame on time
-       with the missing band concealed rather than wait: a one-frame band
-       instead of a stall. Enh is where most losses have landed (phase 1:
-       6 of 6 lost episodes; the 2026-10-06 garage flight: 7 of 10), and it
-       would make the enh layer's overhead the safer one to lower here. For
-       **base** frames waiting for FEC or a repair stays right because the
-       damage propagates, so phase 4 still matters there. A stall vs a brief
-       band is a pilot preference — a setting, not a fixed behaviour.
+       with the missing band filled from the previous frame rather than
+       wait: a one-frame band instead of a stall. Enh is where most losses
+       have landed (phase 1: 6 of 6 lost episodes; the 2026-10-06 garage
+       flight: 7 of 10), and it would make the enh layer's overhead the
+       safer one to lower here. For **base** frames waiting for FEC or a
+       repair stays right because the damage propagates, so phase 4 still
+       matters there. A stall vs a brief band is a pilot preference — a
+       setting, not a fixed behaviour.
 6. **Ladder coupling** (repair demand as a demote input).
 
 ## Phase 1 as built

@@ -137,7 +137,8 @@ form over unknown seqs only, so it reads 0 exactly when nothing is missing.
      patch (`br-external/package/rockchip-mpp/0002`) plus a kernel patch
      (`board/vrxpro/linux-patches/0003`, rkvdec2 stream mode, Rockchip BSP
      5.10). The author's RK3568 numbers: last slice → frame 2.0 ms vs 5.1 ms
-     whole-picture; no independent or RK3566 measurement. Its patch 0001
+     whole-picture; no independent or RK3566 measurement (gilankpam's
+     2.7 ms, under *What it could buy*, may become the first). Its patch 0001
      (h265d: refuse a slice whose PPS names a missing SPS) is a standalone
      crash fix worth taking regardless.
    - *So the work is all on the ground:* the decoder (what the fpvOS patches
@@ -173,7 +174,13 @@ form over unknown seqs only, so it reads 0 exactly when nothing is missing.
      series today, ~22–25 ms per frame. On the SSC338Q only the decoder
      overlap is available: **~3–6 ms off the p50** (the author's 5.1 → 2.0
      ms), ~4–7 % of the ~75–85 ms glass-to-glass; large frames (IDR, scene
-     changes) gain most, which trims some size-driven jitter. The earlier
+     changes) gain most, which trims some size-driven jitter. gilankpam's
+     figure sits just under that range: "with slices, the frame comes out
+     about 2.7 ms sooner" on the GS (chat, 2026-10-09). Whether it was
+     measured or estimated, on which board and kernel (an RK3566 on BSP 6.1
+     would mean he ported the decoder patch) and at how many slices is not
+     yet known; if it is an RK3566 measurement it replaces the fpvOS number
+     here. The earlier
      "up to ~5 ms more" from overlapping the encoder is withdrawn (first
      bullet). The overlap alone does **not** fix the 80–90 ms spikes —
      those are FEC waits for lost symbols, and a frame with a missing slice
@@ -586,6 +593,49 @@ should show. Its 79–96% uplink delivery is the same order as the 93% above.
 reports: base truncated + dropped AUs vs a control arm, fill ms (first
 request → hole filled) p50/p90, wasted %, uplink delivery %, `air_pct`, and
 fills per rung — rung 0 above all.
+
+### "Remove FEC and go with ARQ: another 5–10 ms" (gilankpam, chat, 2026-10-09)
+
+His estimate, not a measurement. On our own numbers it is half right:
+
+- **Right on clean frames.** The drone interleaves repair bodies with
+  source bodies (`docs/airtime-model.md` §5: "only the TX-side
+  source/repair interleaving couples parity to completion time"), so
+  repair airtime sits inside `fec` (first body → AU complete, ~8–10 ms p50
+  in 2026-10 flights). At overhead 1.0 roughly half of that window is
+  repair — base `fec` 12.6 vs enh 6.2 ms in the August budget, base flying
+  ~2× the air (`docs/latency-budget-findings-2026-08-31.md`) — and few
+  frames need it: the repair tail was 1.3% of AUs
+  (`docs/handover-fec-latency-2026-08-31.md`). By that arithmetic dropping
+  FEC takes roughly **4–6 ms** off a clean frame, more on large base
+  frames, so 5–10 is the high side. Not measured.
+- **Wrong on lossy frames.** Without FEC every lost body costs a round
+  trip: the turnaround alone (request on air → answer on air) was 1.9–2.8
+  ms p50 and 4.4–11.8 ms p99 in phase 2 (close range, an unloaded queue),
+  and fec-nack's own fill p90 was 10–16 ms. A frame is ~28 bodies, so with
+  i.i.d. loss, 2% body loss puts 43% of frames on that slower path and 5%
+  puts 76% there (arithmetic, not flight data). A lost request costs a
+  second round or the frame: fec-nack's uplink delivered 79–96% and filled
+  nothing at rung 0. And the single-radio drone has to stop sending to
+  hear a request — the gap phase 3 measures the price of.
+- **Wrong where it matters most.** Loss concentrates at range, which is
+  where the uplink fails first. snokvist/waybeam-link measured it on its
+  own hardware (8812AU ground, 8812EU craft, each at its own maximum
+  power): at the far point of one walk the craft heard the ground at −86
+  dBm while the ground heard the craft at −56, and a bench sweep put the
+  gap at 22 dB (`docs/findings.md` 2026-08-21; unmeasured on our pair). It
+  went the other way on 2026-09-13 — ARQ deleted, FEC kept: 115 frames by
+  ARQ vs 3,687 by FEC at 120‰ synthetic loss, with the hardware A/B waived
+  and FEC at full strength, which is not the thinner-FEC case below.
+- **Where this rollout sits: between the two.** Phase 5 keeps a thinner FEC
+  (1.0 → 0.5 → 0.25) and lets repair cover the shortfall, taking a share
+  of the clean-frame gain without making every loss a round trip. A
+  separate, cheaper experiment: send each frame's sources first and its
+  repairs after (`docs/airtime-model.md` §5, "source-priority TX
+  scheduling"), so a clean frame completes without waiting behind repair
+  air and a lossy one still gets its FEC. Caveat: `SwEncoder`'s sliding
+  window is built around interleaved repair, so deferring repair to frame
+  end is a change to the code's structure, not a knob.
 
 
 ## Side experiment: pin the GS CPU governor (latency, not repair)

@@ -82,7 +82,15 @@ form over unknown seqs only, so it reads 0 exactly when nothing is missing.
      wires it (`video0.sliceCount`, whole-AU output, for spatial
      concealment); a realtime VPE→VENC ring is impossible on i6e (waybeam
      `documentation/REALTIME_PIPELINE_INVESTIGATION.md`). Whether `GetStream`
-     returns slices before the frame ends is **unverified**.
+     returns slices before the frame ends is **unverified**; a forum member
+     recalls that it does (OpenIPC forum, 2026-10-09: "IIRC yes — the problem
+     has always been the receiver side; most decoders wait for all parts of
+     the frame"). Recollection, not measurement — the first experiment below
+     settles it.
+   - *So the blockers are on the ground:* the decoder (what the fpvOS patches
+     address) and mabur itself — the GS's FEC releases a frame only once the
+     whole AU has arrived, and the player hands MPP the whole AU. Slice-level
+     decode needs both to release in-order source as it arrives.
    - *mabur today:* the drone loads the SliceSplit symbol but never calls it;
      the GS player feeds MPP one whole AU per `decode_put_packet`
      (IMMEDIATE_OUT on).

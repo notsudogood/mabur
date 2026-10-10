@@ -1,5 +1,6 @@
 /* ported from waybeam_venc f956a52:src/star6e_controls.c */
 #include "star6e_controls.h"
+#include "genlock_trim.h"
 
 #include "idr_rate_limit.h"
 #include "pipeline_common.h"
@@ -66,6 +67,7 @@ static int g_rc_readback_done;
 static uint32_t g_sensor_mfps;
 static struct timespec g_sensor_mfps_ts;
 static unsigned g_sensor_mfps_logged;
+static unsigned g_sensor_mfps_refused_logged;  /* not-1:1 refusals printed */
 
 static uint32_t align_down(uint32_t value, uint32_t align)
 {
@@ -283,30 +285,37 @@ int star6e_controls_apply_fps(uint32_t fps)
  * rate moves in whole-line steps; a driver without that path rejects the
  * value, which is returned and logged, never retried here.
  *
- * Only on a 1:1 bind, with the sensor at its mode rate: when the bind drops
- * frames (low power) a sensor trim does not put the delivered cadence on
- * any grid.  Clamped to +-1% of the configured rate -- far below one frame a
- * second, so the bind ratio and RC fpsNum stay as they are.  0 restores the
+ * Only on a 1:1 bind -- the encoder fed every frame the sensor makes at the
+ * rate it runs (genlock_trim_allowed) -- since when the bind drops frames
+ * (low power) a sensor trim does not put the delivered cadence on any grid.
+ * Clamped to +-1% of that rate (genlock_trim_clamp).  0 restores the
  * configured integer rate.  An unchanged value is skipped for 5 s, then
  * re-written: the cold-boot fps re-kick, or anything else that rewrites
- * the sensor's timing, is undone within one re-assert. */
+ * the sensor's timing, is undone within one re-assert.  A refusal before
+ * the SDK call is logged too (the first few), so a silent no-op cannot
+ * hide again. */
 int star6e_controls_apply_sensor_mfps(uint32_t mfps)
 {
 	Star6ePipelineState *p = g_star6e_control_ctx.pipeline;
 	struct timespec now;
-	uint32_t fps, lo, hi, v;
+	uint32_t fps, v;
 	MI_S32 ret;
 	long age_ms;
 
 	if (!p || p->sensor.fps == 0)
 		return -1;
 	fps = p->sensor.fps;
-	if (g_star6e_control_ctx.sensor_fps != fps ||
-	    g_star6e_control_ctx.delivered_fps != fps)
+	if (!genlock_trim_allowed(fps, g_star6e_control_ctx.delivered_fps)) {
+		if (g_sensor_mfps_refused_logged < 4) {
+			++g_sensor_mfps_refused_logged;
+			printf("> genlock: not trimming -- sensor runs %u fps, encoder "
+				"fed %u fps (not 1:1)\n", (unsigned)fps,
+				(unsigned)g_star6e_control_ctx.delivered_fps);
+			fflush(stdout);
+		}
 		return -1;
-	lo = fps * 990;
-	hi = fps * 1010;
-	v = mfps == 0 ? 0 : (mfps < lo ? lo : (mfps > hi ? hi : mfps));
+	}
+	v = genlock_trim_clamp(mfps, fps);
 
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	age_ms = (now.tv_sec - g_sensor_mfps_ts.tv_sec) * 1000L +

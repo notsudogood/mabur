@@ -541,10 +541,19 @@ static int run_radio(const maburgs::Config& cfg) {
   // send lands in the drone's inter-AU idle. See rcf_slot.h.
   maburgs::RcfSlotter rcf_slot(
       maburgs::RcfSlotCfg{cfg.link.rcf_slot_hold_ms, 100, 2, 3, 1});
-  // Software NACK (spec 2026-10-05 fec-nack), base layer only. Core-thread
-  // owned, like the decoder it reads. nack_interval_t0 = previous sideport
-  // export, for link.nack.fill_pps.
+  // Software NACK (spec 2026-10-05 fec-nack). Core-thread owned, like the
+  // decoder it reads. nack_interval_t0 = previous sideport export, for
+  // link.nack.fill_pps. Since 2026-10-10 a second tracker asks for the
+  // enhance layer ([link.nack] enh): flight 2026-10-10 lost 23 of 23 enh
+  // frames hit by a whole lost aggregate at the top rung, and the arq
+  // shadow scored every one of them saveable by one request. Both draw
+  // from ONE counter -- the drone accepts each counter once per session.
   mabur::NackTracker nack(cfg.link.nack);
+  mabur::NackCfg nack_cfg1 = cfg.link.nack;
+  nack_cfg1.sid = 1;
+  nack_cfg1.enable = cfg.link.nack.enable && cfg.link.nack.enh;
+  mabur::NackTracker nack1(nack_cfg1);
+  nack1.share_counter(nack);
   // The vtx nonce the NACK counter belongs to. The drone accepts counter >
   // last under one vtx nonce and starts over only on a new one, so the GS
   // restarts its counter exactly there -- not on a frame_wire edge.
@@ -572,6 +581,15 @@ static int run_radio(const maburgs::Config& cfg) {
                  "does not carry exactly one fragment per source symbol "
                  "(gap trigger only)\n",
                  cfg.fec.symbol_size[0]);
+  // The same one-fragment-per-symbol geometry for the enhance layer: its
+  // tail trigger and FrameStream's early give-up both map fragment -> seq.
+  const mabur::SwConfig nack_sw1{cfg.fec.symbol_size[1]};
+  const int nack_usable1 =
+      nack_sw1.max_packet_size() - static_cast<int>(mabur::Fragmenter::kHdrLen);
+  const bool nack_tail_ok1 =
+      nack_usable1 > 0 &&
+      nack_usable1 + static_cast<int>(mabur::Fragmenter::kHdrLen) ==
+          nack_sw1.max_packet_size();
   // Declared ahead of the FrameStream below: ChannelCore needs it, and
   // the end-of-AU callback calls chan.note_au_end().
   maburgs::VrxController vrx(maburgs::vrx_cfg_from(cfg, start_ch));
@@ -847,6 +865,19 @@ static int run_radio(const maburgs::Config& cfg) {
       fstream.push_fragment(f.stream_id, f.frag.data(), f.frag.size(), mono_ms(),
                             {f.body_mono_us, f.q_ms, f.enc_us, f.air_ms, f.sw_seq, true, f.retx});
   });
+  // Early give-up (frame_stream.h set_doom_check): a gap no repair still on
+  // its way can include, and no retransmit is pending for, is finished now
+  // -- slice salvage keeps the rest of the frame -- instead of holding every
+  // later frame for the rest of the gap timeout. While a layer's NACK
+  // tracker still has a live request, it waits for the answer.
+  fstream.set_seq_map_ok(0, nack_tail_ok);
+  fstream.set_seq_map_ok(1, nack_tail_ok1);
+  fstream.set_doom_check([&](uint8_t sid, uint32_t seq) {
+    if (!agg.decoder().fec_final(sid, seq)) return false;
+    const bool asks = nack_on && (sid == 0 || nack_cfg1.enable);
+    const mabur::NackTracker& t = sid == 0 ? nack : nack1;
+    return !(asks && t.live(mono_ms()));
+  });
 
   // Dedicated adaptive-link log (spec 2026-08-05-s3-probe-promote-design.md
   // section 5): maburgs' own compact S/E/P/N record of every rung decision,
@@ -1047,17 +1078,8 @@ static int run_radio(const maburgs::Config& cfg) {
     s.bpb = arq_layers[static_cast<size_t>(sid)].blocks_per_body;
     return s;
   });
-  // Base-layer burst state for the NACK's wait-for-burst-end rule: the base
-  // burst is over once an enh body lands after the newest base body (the
-  // drone sends an AU's bodies, repairs included, before the next AU's), or
-  // after kNackBaseQuietUs without a base body (enh shed). Same RX stamps as
-  // the shadow.
-  uint64_t nack_base_last_us = 0, nack_enh_last_us = 0;
-  constexpr uint64_t kNackBaseQuietUs = 8000;
   agg.set_video_hook([&](int sid, uint64_t us) {
     arq_shadow.on_video_body(sid, static_cast<double>(us) / 1000.0);
-    uint64_t& last = sid == 0 ? nack_base_last_us : nack_enh_last_us;
-    last = std::max(last, us);
   });
   agg.set_probe_sink([&](uint8_t card, const mabur::node::RxBody& m) {
     // The probe is the last PPDU of its ENH burst: seeing it (any card,
@@ -1277,52 +1299,59 @@ static int run_radio(const maburgs::Config& cfg) {
     nack_on = cfg.link.nack.enable &&
               (cfg.link.nack.ab_s <= 0 ||
                (drained_ms / (static_cast<uint64_t>(cfg.link.nack.ab_s) * 1000u)) % 2 == 0);
-    if (cfg.link.nack.enable && !nack_on) nack.clear();
+    if (cfg.link.nack.enable && !nack_on) { nack.clear(); nack1.clear(); }
     if (nack_on) {
       const auto sctx = vrx.session_ctx();
       // != 0: session_ctx() keeps reporting the held nonce in BEACONING.
       if (sctx.vtx_nonce != 0 && sctx.vtx_nonce != nack_vtx_seen) {
         nack_vtx_seen = sctx.vtx_nonce;
-        nack.restart_counter();
+        nack.restart_counter();  // the shared counter: nack1 draws from it too
       }
       if (sctx.vtx_nonce == 0 || !frame_wire) {
         nack.clear();
+        nack1.clear();
       } else {
-        mabur::NackInputs ni;
-        ni.missing = [&] {
-          return agg.decoder().missing_sources(
-              0, static_cast<uint32_t>(cfg.link.nack.lookback));
+        auto poll_layer = [&](mabur::NackTracker& t, int sid, bool tail_ok) {
+          mabur::NackInputs ni;
+          ni.missing = [&] {
+            return agg.decoder().missing_sources(
+                sid, static_cast<uint32_t>(cfg.link.nack.lookback));
+          };
+          ni.state = [&](uint32_t s) { return agg.decoder().source_state(sid, s); };
+          ni.tail = [&]() -> std::optional<mabur::NackTailView> {
+            if (!tail_ok) return std::nullopt;
+            auto tv = fstream.tail_view(static_cast<uint8_t>(sid));
+            if (!tv) return std::nullopt;
+            return mabur::NackTailView{tv->count, tv->max_idx, tv->seq_at_max,
+                                       tv->last_progress_ms};
+          };
+          // The stop rule's util is the ladder's own demote input:
+          // LadderController::u_ = base pre-FEC loss / budget_base(), compared
+          // against cfg.down_util in its util-pressure block. One input for
+          // both layers: a channel that is already saturating the base layer
+          // has no air to spend on enhance re-sends either.
+          ni.util = [&] { return vrx.ctl().util(); };
+          ni.down_util = cfg.link.ladder_cfg.down_util;
+          ni.gap_timeout_ms = fstream.gap_ms(static_cast<uint8_t>(sid));
+          // Shortfall only: a seq whose repair already arrived is not asked
+          // for, and a first request waits until no repair still on its way
+          // can include it (fec_final -- this replaced the base-burst-end
+          // proxy, which the 2026-10-10 bench showed never held a request:
+          // a burst ends in ~5 ms, inside the settle wait, while the repairs
+          // that later rebuilt the loss came with the NEXT AU, 33 ms on).
+          ni.covered = [&](uint32_t s) { return agg.decoder().source_covered(sid, s); };
+          ni.fec_final = [&](uint32_t s) { return agg.decoder().fec_final(sid, s); };
+          if (auto n = t.poll(drained_ms, ni)) {
+            mabur::rc::TagCtx ctx = sctx;
+            ctx.seq32 = n->counter;
+            maburgs::SlotFrame sf{mabur::rc::pack_nack(*n, cfg.link.key, ctx), 0,
+                                  sel.selected(), false};
+            sf.offered_ms = drained_ms;
+            if (!cal_session.radio_silent(drained_ms)) send_control_frame(sf);
+          }
         };
-        ni.state = [&](uint32_t s) { return agg.decoder().source_state(0, s); };
-        ni.tail = [&]() -> std::optional<mabur::NackTailView> {
-          if (!nack_tail_ok) return std::nullopt;
-          auto tv = fstream.tail_view(0);
-          if (!tv) return std::nullopt;
-          return mabur::NackTailView{tv->count, tv->max_idx, tv->seq_at_max,
-                                     tv->last_progress_ms};
-        };
-        // The stop rule's util is the ladder's own demote input:
-        // LadderController::u_ = base pre-FEC loss / budget_base(), compared
-        // against cfg.down_util in its util-pressure block.
-        ni.util = [&] { return vrx.ctl().util(); };
-        ni.down_util = cfg.link.ladder_cfg.down_util;
-        ni.gap_timeout_ms = fstream.gap_ms(0);
-        // Shortfall only: a seq whose repair already arrived is not asked
-        // for, and a first request waits for its base burst to end.
-        ni.covered = [&](uint32_t s) { return agg.decoder().source_covered(0, s); };
-        ni.burst_open = [&] {
-          const uint64_t now_us = drained_ms * 1000u;
-          return nack_base_last_us > nack_enh_last_us &&
-                 (now_us <= nack_base_last_us || now_us - nack_base_last_us < kNackBaseQuietUs);
-        };
-        if (auto n = nack.poll(drained_ms, ni)) {
-          mabur::rc::TagCtx ctx = sctx;
-          ctx.seq32 = n->counter;
-          maburgs::SlotFrame sf{mabur::rc::pack_nack(*n, cfg.link.key, ctx), 0,
-                                sel.selected(), false};
-          sf.offered_ms = drained_ms;
-          if (!cal_session.radio_silent(drained_ms)) send_control_frame(sf);
-        }
+        poll_layer(nack, 0, nack_tail_ok);
+        if (nack_cfg1.enable) poll_layer(nack1, 1, nack_tail_ok1);
       }
     }
     // Compiled into every prod build, unlike loss_ctl above (cal_control.h).
@@ -1381,6 +1410,7 @@ static int run_radio(const maburgs::Config& cfg) {
       agg.decoder().reset_continuity();
       fstream.reset();
       nack.clear();  // tracked seqs dropped; the counter is kept (nack_vtx_seen)
+      nack1.clear();
       arq_shadow.reset();  // its open episodes live in the old seq space
       lat_anchor.reset();  // new session's pts space is unrelated to the old one's
       // Drop any pre-reset samples too: without this, the anchor re-warms
@@ -1816,6 +1846,8 @@ static int run_radio(const maburgs::Config& cfg) {
       sin.frames_dropped = fstream.frames_dropped();
       sin.stall_resets = fstream.stall_resets();
       sin.slice_salvaged = fstream.slice_salvaged();
+      sin.early_finished[0] = fstream.early_finished(0);
+      sin.early_finished[1] = fstream.early_finished(1);
       sin.slices_kept = fstream.slices_kept();
       sin.slices_filled = fstream.slices_filled();
       sin.slices_after_hole = fstream.slices_after_hole();
@@ -1838,6 +1870,11 @@ static int run_radio(const maburgs::Config& cfg) {
         sin.nack.cum = nack.stats();
         sin.nack.win = nack.take_window();
         sin.nack.settle_ms = nack.settle_ms();
+        sin.nack.enh_enabled = nack_cfg1.enable;
+        if (nack_cfg1.enable) {
+          sin.nack.enh_cum = nack1.stats();
+          sin.nack.enh_win = nack1.take_window();
+        }
         sin.nack.interval_s =
             nack_interval_t0 ? (drained_ms - nack_interval_t0) / 1000.0 : 0.0;
         nack_interval_t0 = drained_ms;

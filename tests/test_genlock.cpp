@@ -45,14 +45,21 @@ struct SimResult {
   double mean_latency_ms = 0;   // deadline - c over the settled frames
   double ready_by_target = 0;   // share of settled frames ready by c + target
   std::vector<Genlock::Tick> ticks;
+  Genlock::Cal cal;
+  uint64_t ref_steps = 0;
 };
 
 // Panel 60.000 Hz; drone clock 10 ppm off the GS's; uplink delay `delay`
 // ticks; every `lose_every`-th setpoint lost (0 = none).
 // order: 0 = frames reach the player in capture order; 1 = each pair swapped
 // (t+1 before t); 2 = every second frame repeats the previous frame's pts.
+// anchor_step_s > 0: at that second the GS's capture mapping steps by
+// anchor_step_us (the regulator's floor anchor finding a faster transit:
+// every later capture time moves, the camera does not -- the 2026-10-10
+// bench's 1-3 ms phase jumps with an unchanged frame period).
 SimResult simulate(bool steer, int seconds, int settle_s, int delay, int lose_every,
-                   Genlock::Params params = {}, int order = 0, Sensor sensor = {}) {
+                   Genlock::Params params = {}, int order = 0, Sensor sensor = {},
+                   int anchor_step_s = 0, double anchor_step_us = 0.0) {
   Genlock g(params);
   Lcg rng;
   const double P = 1e6 / 60.0;
@@ -61,6 +68,7 @@ SimResult simulate(bool steer, int seconds, int settle_s, int delay, int lose_ev
   const double skew = 1.0 + 10e-6;
   uint32_t applied = 0;  // the drone's configured rate
   uint64_t since_change = 1000;
+  double last_write_s = -100.0;  // the drone re-applies an unchanged value after 5 s
   struct Send { bool sent; uint32_t mfps; };
   std::deque<Send> in_flight;
   double t_drone = 1'000'000.0;
@@ -76,7 +84,8 @@ SimResult simulate(bool steer, int seconds, int settle_s, int delay, int lose_ev
   while (t_drone < 1e6 * (seconds + 1)) {
     t_drone += sensor.period_us(applied, since_change++);
     const double cap_gs = t_drone * skew;
-    const double c = cap_gs + 3000.0;
+    const double c = cap_gs + 3000.0 +
+                     (anchor_step_s > 0 && cap_gs >= anchor_step_s * 1e6 ? anchor_step_us : 0.0);
     // Transit + FEC + decode above the floor: mostly 6-14 ms, 10% tail.
     double x = 6000.0 + 8000.0 * rng.uni();
     if (rng.uni() < 0.10) x += 10000.0 * rng.uni();
@@ -120,18 +129,24 @@ SimResult simulate(bool steer, int seconds, int settle_s, int delay, int lose_ev
       r.ticks.push_back(t);
       target_ms = t.target_ms;
       const bool lost = lose_every > 0 && tick_no % lose_every == 0;
-      in_flight.push_back(Send{t.steering && !lost, t.cmd_mfps});
+      in_flight.push_back(Send{t.send && !lost, t.cmd_mfps});
       if (static_cast<int>(in_flight.size()) > delay) {
         const Send v = in_flight.front();
         in_flight.pop_front();
-        if (v.sent && v.mfps != applied) {
+        // star6e_controls_apply_sensor_mfps: a changed value is written at
+        // once, an unchanged one again after 5 s -- and every write restarts
+        // the sensor's post-change window (the burst in the ignored region).
+        if (v.sent && (v.mfps != applied || tick_no - last_write_s >= 5.0)) {
           applied = v.mfps;
           since_change = 0;
+          last_write_s = tick_no;
         }
       }
       if (tick_no > settle_s && t.valid) r.errs_ms.push_back(t.err_ms);
     }
   }
+  r.cal = g.cal();
+  r.ref_steps = g.reference_steps();
   r.mean_latency_ms = lat_n ? lat_sum / lat_n / 1000.0 : 0;
   r.ready_by_target = lat_n ? static_cast<double>(ready_ok) / lat_n : 0;
   return r;
@@ -293,6 +308,36 @@ TEST(too_few_frames_is_not_a_measurement) {
   auto t = g.tick(true, 2'000'000);
   CHECK(!t.valid);
   CHECK(!t.steering);
+}
+
+
+// 2026-10-10 bench: native read 60.132 for a 60.078 camera -- the 0 sent
+// every tick made the drone re-apply it every 5 s, and each re-apply in the
+// ignored region is a burst at the fast rate. Sent twice then quiet, the
+// reading is the camera's.
+TEST(native_reading_is_not_inflated_by_repeated_sends) {
+  auto r = simulate(true, 40, 30, 1, 0);
+  int cal = -1;
+  for (size_t i = 0; i < r.ticks.size(); ++i)
+    if (r.ticks[i].calibrated) cal = static_cast<int>(i);
+  REQUIRE(cal >= 0);
+  int native_sends = 0;
+  for (const auto& t : r.ticks)
+    if (t.stage == Genlock::kCalNative && t.send) ++native_sends;
+  CHECK(native_sends == 2);
+  CHECK(std::fabs(r.cal.native_hz - 60.078) < 0.01);
+}
+
+// The GS's capture mapping steps (a faster transit lowers the floor anchor):
+// capture times jump, the camera does not. The loop follows the step
+// instead of steering the camera to chase it.
+TEST(a_capture_reference_step_is_absorbed_not_chased) {
+  auto base = simulate(true, 240, 60, 2, 0);
+  auto stepped = simulate(true, 240, 60, 2, 0, Genlock::Params{}, 0, Sensor{}, 150, -2500.0);
+  REQUIRE(stepped.errs_ms.size() > 100);
+  CHECK(max_abs(stepped.errs_ms) < max_abs(base.errs_ms) + 0.7);
+  CHECK(stepped.ref_steps == 1);
+  CHECK(base.ref_steps == 0);
 }
 
 MTEST_MAIN

@@ -808,9 +808,64 @@ def print_display_clock_report(au_path, lat_path):
         cmds = [int(r["cmd"]) for r in steered if r.get("cmd")]
         print(f"    phase error |err| p50/p90/max {q(0.5):.1f}/{q(0.9):.1f}/{errs[-1]:.1f} ms "
               f"(held at target p50 {sorted(r.get('target', 0.0) for r in steered)[len(steered) // 2]:.1f} ms)")
+        within = sum(1 for e in errs if e <= 2.0)
+        beyond = sum(1 for e in errs if e > 8.0)
+        print(f"    lock: |err| <= 2 ms in {within / len(errs) * 100:.0f}% of steered seconds; "
+              f"> 8 ms (half a refresh) in {beyond} s")
+        refs = [r["ref"] for r in gl if "ref" in r]
+        if refs:
+            steps = int(refs[0]) + _counter_growth(refs)[0]
+            print(f"    capture-reference steps absorbed: {steps} (GS timing jumps; target moved with them)")
         if cams:
             print(f"    camera while steering {cams[len(cams) // 2]:.3f} fps (p50); "
                   f"setpoint {min(cmds)}..{max(cmds)} mfps")
+
+
+REC_SPIKE_MS = 70  # a second whose e2e p99 reaches this counts as spiky
+
+
+def lat_by_recording(lat_path):
+    """lat.log 1 Hz `lat:` lines grouped by the GS recorder state maburplay
+    appends since 2026-10-10 (`rec=off|raw|burned`): per state the seconds,
+    the median e2e p50 and p99, and the seconds whose p99 reached
+    REC_SPIKE_MS. Empty when no line carries the field (older maburplay).
+    Flight 2026-10-10, before the field existed: burned recording put a
+    spike into 58% of seconds against 5% without."""
+    out = {}
+    if not lat_path or not os.path.exists(lat_path):
+        return out
+    with open(lat_path) as f:
+        for line in f:
+            p = line.split()
+            if len(p) < 3 or p[1] != "lat:":
+                continue
+            kv = dict(t.partition("=")[::2] for t in p[2:] if "=" in t)
+            rec = kv.get("rec")
+            e2e = kv.get("e2e", "").split("/")
+            if not rec or len(e2e) != 2 or not all(x.isdigit() for x in e2e):
+                continue
+            g = out.setdefault(rec, {"s": 0, "p50": [], "p99": [], "spiky": 0})
+            g["s"] += 1
+            g["p50"].append(int(e2e[0]))
+            g["p99"].append(int(e2e[1]))
+            if int(e2e[1]) >= REC_SPIKE_MS:
+                g["spiky"] += 1
+    return out
+
+
+def print_recording_report(lat_path):
+    """GS RECORDING: latency per recorder state, so a recording's cost shows
+    up as its own row instead of being averaged into the flight."""
+    groups = lat_by_recording(lat_path)
+    if not groups:
+        return
+    print("\nGS RECORDING (lat.log rec= field: latency per recorder state)")
+    for rec in sorted(groups, key=lambda k: ("off", "raw", "burned").index(k)
+                      if k in ("off", "raw", "burned") else 9):
+        g = groups[rec]
+        print(f"  {rec:>6} {g['s']:6d} s  e2e p50 {_pct(g['p50'], 0.5)} ms  "
+              f"p99 median {_pct(g['p99'], 0.5)} ms  "
+              f"p99 >= {REC_SPIKE_MS} ms in {g['spiky'] / g['s'] * 100:.0f}% of seconds")
 
 
 def load_regulator_lines(lat_path):
@@ -1126,6 +1181,19 @@ def fec_ov_req(m, r, ov):
     return (math.sqrt(1.0 + 4.0 * c) - 1.0) / 2.0
 
 
+def fec_loss_mode(ms):
+    """The most common episode size (missing symbols) and how many episodes
+    had it; ties go to the larger size. On an aggregating rung one lost
+    transmission is one A-MPDU, so the mode is usually ampdu.max_num x
+    blocks per body (flight 2026-10-10: 24 at 40 MHz MCS4, 4 on the
+    non-aggregated 20 MHz rungs) -- the loss unit FEC and NACK must cover."""
+    counts = {}
+    for m in ms:
+        counts[m] = counts.get(m, 0) + 1
+    mode = max(counts, key=lambda k: (counts[k], k))
+    return mode, counts[mode]
+
+
 def print_fec_report(rows):
     """FEC EPISODES: per (sid, mcs, bw, ov) group -- the rung and layer the
     episode flew on -- how many episodes, how many fell inside a transition
@@ -1157,6 +1225,9 @@ def print_fec_report(rows):
         print(f"    m p50/p90/max={_pct(ms, 0.5)}/{_pct(ms, 0.9)}/{max(ms)}  "
               f"r p50={_pct([r['r'] for r in live], 0.5)}  "
               f"w={_pct([r['w'] for r in live], 0.5)}")
+        mode, mode_n = fec_loss_mode(ms)
+        print(f"    loss size: {mode} symbols in {mode_n} of {len(ms)} episodes "
+              f"({mode_n / len(ms) * 100:.0f}%), the most common size")
         print(f"    ov_req p50/p90/p99/max={_pct(reqs, 0.5):.2f}/"
               f"{_pct(reqs, 0.9):.2f}/{_pct(reqs, 0.99):.2f}/{max(reqs):.2f}")
         fails = " ".join(f"{c:.2f}:{sum(1 for x in reqs if x > c)}"
@@ -1912,7 +1983,7 @@ def print_nack_report(rows):
     p90 = [r["link"]["nack"].get("fill_ms", {}).get("p90") for r in nrows]
     mx = [r["link"]["nack"].get("fill_ms", {}).get("max") for r in nrows]
     p50 = [x for x in p50 if x is not None]; p90 = [x for x in p90 if x is not None]; mx = [x for x in mx if x is not None]
-    print("NACK (base-layer selective repeat, link.nack / drone.nack)")
+    print("NACK (selective repeat, link.nack / drone.nack; base layer unless marked enh)")
     print(f"  requests={last.get('requests', 0)} ({d('requests') / span_s * 60:.1f}/min) repeats={last.get('repeats', 0)}"
           f" syms={last.get('syms_requested', 0)} tail={last.get('tail_requests', 0)}")
     print(f"  filled={last.get('filled', 0)} late_fill={last.get('late_fill', 0)} wasted={last.get('wasted', 0)}"
@@ -1930,7 +2001,32 @@ def print_nack_report(rows):
         print(f"  shortfall only: held_covered={last.get('held_covered', 0)} (a repair already here covers them)"
               f" held_burst={last.get('held_burst', 0)} (first ask waited for the burst's end)"
               f" urgent={last.get('urgent', 0)} (asked inside the burst, deadline near)")
+    if "held_fec" in last:
+        print(f"  held_fec={last.get('held_fec', 0)} (first ask waited until no later repair could"
+              " rebuild the symbol)")
+    print_nack_enh(nrows, span_s)
     print_nack_ab(rows)
+
+
+def print_nack_enh(nrows, span_s):
+    """The enhancement layer's own tracker (link.nack.enh, 2026-10-10):
+    same counters as the base block, cumulative, absent when [link.nack]
+    enh = false or on older recordings. drone.nack counts both layers."""
+    erows = [r for r in nrows if isinstance(r["link"]["nack"].get("enh"), dict)]
+    if not erows:
+        return
+    e = erows[-1]["link"]["nack"]["enh"]
+    def d(k):
+        return _counter_growth([r["link"]["nack"]["enh"].get(k) for r in erows])[0]
+    print(f"  enh: requests={e.get('requests', 0)} ({d('requests') / span_s * 60:.1f}/min)"
+          f" syms={e.get('syms_requested', 0)} filled={e.get('filled', 0)}"
+          f" late_fill={e.get('late_fill', 0)} wasted={e.get('wasted', 0)}"
+          f" dropped_deadline={e.get('dropped_deadline', 0)} held_fec={e.get('held_fec', 0)}"
+          f" urgent={e.get('urgent', 0)}")
+    fill = [((r["link"]["nack"]["enh"].get("fill_ms") or {}).get("p50")) for r in erows]
+    fill = [x for x in fill if x is not None]
+    if fill:
+        print(f"  enh fill_ms p50 {_pct(fill, 0.5)}")
 
 
 NACK_GUARD_MS = 1000  # rows this soon after an A/B switch belong to neither arm
@@ -2040,6 +2136,12 @@ def print_slice_salvage_report(rows):
     print(f"  truncated={d('truncated')} salvaged={d('slice_salvaged')}  "
           f"slices kept={d('slices_kept')} filled={d('slices_filled')} after_hole={d('slices_after_hole')}")
     print("  fallback " + " ".join(f"{k}={v}" for k, v in fb.items()))
+    erows = [r for r in vrows if isinstance(r["link"]["video"].get("early_finished"), list)]
+    if erows:
+        eb = _counter_growth([r["link"]["video"]["early_finished"][0] for r in erows])[0]
+        ee = _counter_growth([r["link"]["video"]["early_finished"][1] for r in erows])[0]
+        print(f"  early give-up (no repair or re-send could still arrive): base={eb} enh={ee}"
+              " -- frames finished before the gap timeout")
 
 
 def print_salvage_report(rows):
@@ -2825,6 +2927,7 @@ if __name__ == "__main__":
         # CAMERA vs SCREEN rides on au.log and lat.log, whatever the primary.
         print_display_clock_report(s.au, s.lat)
         print_display_smoothness_report(s.au, s.lat)
+        print_recording_report(s.lat)
         # fec.log (2026-09-15) is a sibling too: the FEC EPISODES section
         # rides along whichever primary the session offered.
         if s.fec:

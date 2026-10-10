@@ -2429,6 +2429,89 @@ def test_display_clock_section_silent_without_logs():
     assert out.getvalue() == ""
 
 
+def test_fec_loss_mode_is_the_aggregate_size():
+    # One lost 40 MHz MCS4 transmission = one 6-frame A-MPDU of 4-symbol
+    # bodies: most episodes are exactly 24 missing.
+    assert flightreport.fec_loss_mode([24, 24, 16, 24, 25, 24]) == (24, 4)
+    assert flightreport.fec_loss_mode([4, 8]) == (8, 1)   # tie -> the larger
+
+
+def test_nack_section_reports_the_enh_tracker_and_held_fec():
+    rows = []
+    for i, (req, ereq) in enumerate([(0, 0), (6, 10), (12, 30)]):
+        rows.append({"t_ms": 1000 + 1000 * i, "drone": {},
+                     "link": {"nack": {"requests": req, "syms_requested": req * 4, "held_fec": 9,
+                                       "on": True, "ab_s": 0,
+                                       "enh": {"requests": ereq, "syms_requested": ereq * 4,
+                                               "filled": ereq, "held_fec": 3, "urgent": 2,
+                                               "fill_ms": {"p50": 11, "p90": 15, "max": 20}}}}})
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        flightreport.print_nack_report(rows)
+    text = out.getvalue()
+    assert "held_fec=9" in text, text
+    assert re.search(r"enh: requests=30 \(900\.0/min\) syms=120 filled=30 .*held_fec=3 urgent=2", text), text
+    assert "enh fill_ms p50 11" in text, text
+
+
+def test_slice_salvage_section_reports_early_give_up():
+    rows = []
+    for i, (b, e) in enumerate([(0, 0), (2, 5), (3, 9)]):
+        rows.append({"t_ms": 1000 * i,
+                     "link": {"video": {"truncated": 0, "slice_salvaged": 0, "early_finished": [b, e]}}})
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        flightreport.print_slice_salvage_report(rows)
+    assert "early give-up (no repair or re-send could still arrive): base=3 enh=9" in out.getvalue()
+
+
+def test_genlock_lock_quality_and_reference_steps():
+    with tempfile.TemporaryDirectory() as d:
+        lat = ["# latlog 2"]
+        for t, err in enumerate([0.5, 1.0, 1.5, 3.0, 9.0]):
+            lat.append(f"{(t + 1) * 1_000_000} genlock: on=1 cam=60.000 panel=60.000 "
+                       f"phase=13.0 target=13.0 err={err} cmd=59730 n=60 cal=0 ref={1 if t >= 2 else 0}")
+        (Path(d) / "lat.log").write_text("\n".join(lat) + "\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            flightreport.print_display_clock_report(None, str(Path(d) / "lat.log"))
+    text = out.getvalue()
+    assert "|err| <= 2 ms in 60% of steered seconds; > 8 ms (half a refresh) in 1 s" in text, text
+    assert "capture-reference steps absorbed: 1" in text, text
+
+
+def _lat_line(t_s, p50, p99, rec=None):
+    tail = f" rec={rec}" if rec else ""
+    return (f"{int(t_s * 1e6)} lat: n=60 e2e={p50}/{p99} enc=6/11 dq=0/1 air=1/9 fec=4/13 "
+            f"dec=7/17 reg=12/22 dsp=5/5 chk=0.0 anchor=ok{tail}")
+
+
+def test_recording_section_splits_latency_by_recorder_state():
+    with tempfile.TemporaryDirectory() as d:
+        lines = ["# latlog 2"]
+        lines += [_lat_line(t, 36, 52, "off") for t in range(1, 11)]
+        lines += [_lat_line(t, 45, 90 if t % 2 else 60, "burned") for t in range(11, 21)]
+        lines += [_lat_line(t, 37, 54, "raw") for t in range(21, 25)]
+        (Path(d) / "lat.log").write_text("\n".join(lines) + "\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            flightreport.print_recording_report(str(Path(d) / "lat.log"))
+    text = out.getvalue()
+    rows = [l.split()[0] for l in text.splitlines()[2:]]
+    assert rows == ["off", "raw", "burned"], text
+    assert re.search(r"burned\s+10 s .*p99 >= 70 ms in 50% of seconds", text), text
+    assert re.search(r"off\s+10 s  e2e p50 36 ms  p99 median 52 ms .* in 0% of seconds", text), text
+
+
+def test_recording_section_silent_on_older_lat_logs():
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "lat.log").write_text("# latlog 2\n" + _lat_line(1, 36, 52) + "\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            flightreport.print_recording_report(str(Path(d) / "lat.log"))
+    assert out.getvalue() == ""
+
+
 def _reg_line(t_s, replaced, cuts, skips, late, pdrop=0):
     return (f"{int(t_s * 1e6)} regulator: held=100 late={late} replaced={replaced} disconts=0 "
             f"hold_ema=4.20ms present_jitter=0.30ms vsync=locked skips={skips} fallback=0 "
@@ -2503,6 +2586,12 @@ if __name__ == "__main__":
     test_display_clock_section_reports_steering()
     test_display_clock_section_separates_calibration()
     test_display_clock_section_silent_without_logs()
+    test_fec_loss_mode_is_the_aggregate_size()
+    test_nack_section_reports_the_enh_tracker_and_held_fec()
+    test_slice_salvage_section_reports_early_give_up()
+    test_genlock_lock_quality_and_reference_steps()
+    test_recording_section_splits_latency_by_recorder_state()
+    test_recording_section_silent_on_older_lat_logs()
     test_smoothness_section_differences_counters_across_a_restart()
     test_smoothness_section_counts_full_rate_holes_not_low_power()
     test_smoothness_section_notes_missing_regulator_lines()

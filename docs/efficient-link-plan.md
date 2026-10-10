@@ -334,6 +334,50 @@ repairs from the next base AU would be the next suspect). Caveats: one
 route, 30 s arms that cover different places (`ab_s = 10` interleaves them
 more finely), and a single delivery probe is worth ±3 points.
 
+## Second build, 2026-10-10 (night): what the flight showed, what changed
+
+**Genlock flew.** 528 s of `genlock:` lines: steering 442 s, calibrating
+17 s; camera 60.002 fps over the flight against a 60.003 Hz screen (free
+running it beats a slip every ~13 s). Phase error |err| p50/p90/max
+1.6/5.3/6.8 ms, within 2 ms in 60 % of steered seconds, never past half a
+refresh. *Against it:* the bench hold was much tighter (p50 0.3 ms over
+209 s), so flight costs lock quality; flightreport still counted 27
+sawtooth-shaped drops in lat.log's e2e p50 (median 14 s apart), not split
+by steering state, so some fall in the 86 s it was not steering; and the
+bench calibration read native at 60.132 against the fitted model's 60.078
+(the flight's read 60.082). Two fixes:
+
+- **Native is measured from two sends, not one a second.** The drone
+  re-applies an unchanged setpoint after 5 s, and each apply gives ~1 s at
+  the bare (faster) period, so a 1 Hz resend during the native stage
+  inflated the reading. The calibration now sends at the stage's ticks 0
+  and 2 only (`genlock.h`, `Tick::send`). Simulated: native within 0.01 of
+  60.078 (`test_genlock`). Unflown.
+- **A jump in the GS's capture timing is absorbed, not chased.** The
+  phase is `capture_us` against the drone's pts; when their offset steps
+  by more than 400 µs (and under 1 s) the target and the loop state move
+  with it instead of steering the camera toward a phantom error. Counted
+  as `ref=` on the `genlock:` line and in flightreport. Simulated: a
+  −2.5 ms step at 150 s costs < 0.7 ms of extra error. How often real
+  steps happen is what the `ref=` count will show.
+
+**Spikes and recording.** The remaining 46→90 ms spikes were lost enhance
+layer aggregates nothing repaired (`docs/fec-nack.md`, "Second build"):
+this build adds NACK for the enhance layer, asks once FEC is final rather
+than at the burst's end, and finishes a doomed frame at once instead of
+waiting out the gap timeout. The other spike source was GS **burned**
+recording (58 % of seconds with p99 ≥ 70 ms vs 5 % without): the default
+is now raw recording with `.osd`/`.srt` sidecars (`docs/gs-recording.md`).
+
+**maburcal** sweeps the flight frame (LDPC/STBC on) and a lone shallow
+miss no longer ends a row (`docs/calibration.md`). That raises MCS 4–7 by
+4–6 dB on the next run; the EVM cost of that is unmeasured.
+
+**flightreport** gained: loss size per rung and layer (FEC), the enh
+tracker, `held_fec` and early give-ups (NACK, SLICE SALVAGE), genlock lock
+share and reference steps, and GS RECORDING (latency per recorder state,
+from `rec=`).
+
 ## Kept from feedback repair
 
 The shadow log (`arq.log`) and `fec.log` stay on every flight — they are how

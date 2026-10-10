@@ -3,7 +3,10 @@
 #include "mabur/cal_wire.h"
 #include "radio_tx.h"
 
+#include <algorithm>
 #include <vector>
+
+#include "RadiotapBuilder.h"
 
 using namespace mabur;
 
@@ -74,6 +77,36 @@ bool payload_of(const std::vector<uint8_t>& frame, cal::CalFrameInfo* out) {
 }
 
 }  // namespace
+
+// The sweep measures the frame the link flies (2026-10-10): HT20 with STBC
+// and LDPC (per radio.ldpc), not the flags-off frame it used to air, whose
+// wall sits 4-6 dB lower at mcs4-7.
+TEST(sweep_frames_carry_the_flight_flags) {
+  for (const bool ldpc : {true, false}) {
+    CaptureSink sink;
+    RadioTx tx(sink);
+    FakePowerCtl pwr;
+    CalSweepCfg cfg;
+    cfg.ldpc = ldpc;
+    CalSweep s(cfg);
+    s.on_cmd(small_cmd(), 0, pwr);
+    run_to_quiescence(s, tx, pwr);
+    REQUIRE(sink.frames.size() == 40);
+    for (const size_t i : {size_t{0}, size_t{39}}) {
+      cal::CalFrameInfo info;
+      REQUIRE(payload_of(sink.frames[i], &info));
+      devourer::TxMode want;
+      want.mode = devourer::TxMode::Mode::HT;
+      want.ht_mcs = info.rate;
+      want.bw_mhz = 20;
+      want.ldpc = ldpc;
+      want.stbc = true;
+      const auto rt = devourer::build_stream_radiotap(want);
+      REQUIRE(sink.frames[i].size() > rt.size());
+      CHECK(std::equal(rt.begin(), rt.end(), sink.frames[i].begin()));
+    }
+  }
+}
 
 TEST(walks_every_cell_in_the_plan) {
   CaptureSink sink;

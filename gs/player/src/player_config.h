@@ -18,6 +18,11 @@ struct DvrCfg {
   // "raw"    — remux the received AUs untouched (byte-exact, the default).
   // "burned" — transcode with the MSP OSD composited in by the encoder.
   std::string mode = "raw";
+  // Raw mode only (2026-10-10, osd_recorder.h): write the flight
+  // controller's OSD next to the video as a Walksnail-format .osd, plus an
+  // .srt link summary, same folder and name, for walksnail-osd-tool.
+  bool osd_file = true;
+  std::string osd_fc = "BTFL";  // .osd header firmware tag: BTFL, INAV or ARDU
   struct BurnedCfg {
     int bitrate_kbps = 12000;
     int fps_cap = 30;   // encode is capped independently of display rate

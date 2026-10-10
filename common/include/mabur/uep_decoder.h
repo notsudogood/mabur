@@ -93,6 +93,7 @@ class UepDecoder {
   std::vector<uint32_t> missing_sources(int sid, uint32_t lookback) const;
   SwDecoder::SourceState source_state(int sid, uint32_t wire_seq) const;
   bool source_covered(int sid, uint32_t wire_seq) const;  // SwDecoder::source_covered
+  bool fec_final(int sid, uint32_t wire_seq) const;       // SwDecoder::fec_final
 
   // Drops per-layer decode state — call on a session change, where the peer's
   // seqs restart from an unrelated value.

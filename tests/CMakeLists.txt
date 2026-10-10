@@ -233,6 +233,7 @@ if(MABUR_BUILD_GS)
   add_mtest(test_zpos_plan test_zpos_plan.cpp LIBS mabur_player_core)
   add_mtest(test_in_formats test_in_formats.cpp LIBS mabur_player_core)
   add_mtest(test_osd_source test_osd_source.cpp LIBS mabur_player_core)
+  add_mtest(test_osd_recorder test_osd_recorder.cpp LIBS mabur_player_core)
   add_mtest(test_osd_palette test_osd_palette.cpp LIBS mabur_player_core)
   target_compile_definitions(test_osd_palette PRIVATE
     MABUR_PLAY_BUNDLE_DIR="${CMAKE_SOURCE_DIR}/gs/player/bundle")

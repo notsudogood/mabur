@@ -561,4 +561,64 @@ TEST(producer_rebase_forgets_params) {             // Review Focus 5
   CHECK(fs.slice_salvaged() == 0);
 }
 
+
+// Early give-up (2026-10-10): a mid-frame gap the caller says nothing can
+// still fill is finished at once -- the frames behind it stop waiting --
+// while one that may still be filled keeps the gap timeout.
+TEST(doomed_gap_finishes_at_once_and_frees_the_frames_behind) {
+  Capture cap;
+  FrameStream fs({50, 8}, cap.cbs());
+  fs.set_seq_map_ok(1, true);
+  std::vector<uint32_t> asked;
+  bool doomed = false;
+  fs.set_doom_check([&](uint8_t sid, uint32_t seq) {
+    CHECK(sid == 1);
+    asked.push_back(seq);
+    return doomed;
+  });
+  mabur::Fragmenter fa, fb;
+  std::vector<uint8_t> pay(6 * 300, 0x22);
+  auto frags = frag_frame(fa, 0, pay);
+  REQUIRE(frags.size() >= 6);
+  for (uint16_t idx = 0; idx < frags.size(); ++idx) {
+    if (idx == 3 || idx == 4) continue;  // a lost aggregate's worth
+    FragArrival a;
+    a.sw_seq = 700 + idx;
+    a.have_sw_seq = true;
+    fs.push_fragment(1, frags[idx].data(), frags[idx].size(), 10, a);
+  }
+  // The next frame is complete and queued behind the hole.
+  std::vector<uint8_t> pay1(300, 0x33);
+  for (auto& p : frag_frame(fa, 1, pay1)) fs.push_fragment(1, p.data(), p.size(), 11);
+  CHECK(fs.frames_truncated() == 0);
+  REQUIRE(!asked.empty());
+  CHECK(asked.back() == 703);          // the first missing fragment's wire seq
+  doomed = true;
+  fs.poll(12);                          // well inside the 50 ms gap timeout
+  CHECK(fs.frames_truncated() == 1);
+  CHECK(fs.early_finished(1) == 1);
+  CHECK(fs.frames_clean() == 1);        // frame 1 went straight out behind it
+}
+
+TEST(no_early_give_up_without_the_fragment_symbol_map) {
+  Capture cap;
+  FrameStream fs({50, 8}, cap.cbs());
+  fs.set_doom_check([](uint8_t, uint32_t) { return true; });  // map not declared ok
+  mabur::Fragmenter fa;
+  std::vector<uint8_t> pay(6 * 300, 0x44);
+  auto frags = frag_frame(fa, 0, pay);
+  for (uint16_t idx = 0; idx < frags.size(); ++idx) {
+    if (idx == 2) continue;
+    FragArrival a;
+    a.sw_seq = 100 + idx;
+    a.have_sw_seq = true;
+    fs.push_fragment(0, frags[idx].data(), frags[idx].size(), 10, a);
+  }
+  fs.poll(20);
+  CHECK(fs.frames_truncated() == 0);
+  fs.poll(61);
+  CHECK(fs.frames_truncated() == 1);    // the ordinary gap timeout
+  CHECK(fs.early_finished(0) == 0);
+}
+
 MTEST_MAIN

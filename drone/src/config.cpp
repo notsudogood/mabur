@@ -605,7 +605,8 @@ void parse_genlock(const Value& j, GenlockCfg& g) {
 }
 
 void parse_nack(const Value& j, NackDroneCfg& n) {
-  check_known_keys(j, {"ring_ms", "air_pct", "burst_ms", "queue"}, "nack");
+  check_known_keys(j, {"ring_ms", "air_pct", "burst_ms", "queue", "enh"}, "nack");
+  assign_if_present(j, "enh", n.enh, "nack");
   assign_if_present(j, "ring_ms", n.ring_ms, "nack");
   assign_if_present(j, "air_pct", n.air_pct, "nack");
   assign_if_present(j, "burst_ms", n.burst_ms, "nack");

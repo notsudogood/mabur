@@ -15,6 +15,7 @@ add_library(mabur_player_core STATIC
   src/osd_raster.cpp
   src/osd_compose.cpp
   src/osd_source.cpp
+  src/osd_recorder.cpp
   src/osd_palette.cpp
   src/in_formats.cpp
   src/frame_regulator.cpp

@@ -547,7 +547,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
     if (r.contains("nack")) {
       const Value& nj = r["nack"];
       check_keys(nj, "link.nack", {"enable", "lookback", "repeat_ms", "max_tries", "min_lead_ms",
-                                   "shortfall_only", "wait_burst_end", "urgent_slack_ms", "ab_s"});
+                                   "shortfall_only", "wait_burst_end", "urgent_slack_ms", "ab_s", "enh"});
       auto& nc = c.link.nack;
       nc.enable = get_bool(nj, "enable", nc.enable, "link.nack");
       nc.lookback = static_cast<int>(get_int(nj, "lookback", 256, 8, 4096, "link.nack"));
@@ -559,6 +559,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
       nc.urgent_slack_ms =
           static_cast<int>(get_int(nj, "urgent_slack_ms", 10, 0, 100, "link.nack"));
       nc.ab_s = static_cast<int>(get_int(nj, "ab_s", 0, 0, 3600, "link.nack"));
+      nc.enh = get_bool(nj, "enh", nc.enh, "link.nack");
     }  // absent = off; not a defaulted key (bench knob)
     // Cross-section: [fec] is parsed above. A lookback at or past the
     // decoder's seq horizon would ask about seqs the decoder has already

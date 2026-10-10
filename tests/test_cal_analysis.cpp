@@ -83,6 +83,74 @@ TEST(mcs0_no_dip_parks_at_the_diff_field_rail) {
   CHECK(w.wall == kRailRel);
 }
 
+// The coarse grid (-41..63 step 4, 20 frames a cell) with one cell set to
+// `pct` at `bad_idx` -- and optionally a second one at `bad2_idx`.
+namespace {
+std::vector<CalCell> coarse_row(int bad_idx, int pct, int bad2_idx = 999, int pct2 = 0) {
+  std::vector<CalCell> cells;
+  for (int i = -41; i <= 63; i += 4)
+    cells.push_back(cell(i, i == bad_idx ? pct : i == bad2_idx ? pct2 : 100, -70, 20));
+  return cells;
+}
+}  // namespace
+
+// The 2026-09 defect: one clean mcs2 cell losing 4 of 20 frames ended a row
+// that never compresses and put it on the wall path. A lone shallow miss
+// with good cells after it is noise: the row stays no_dip at the rail, and
+// says so with kCalNoiseCell.
+TEST(lone_shallow_coarse_miss_is_noise_not_a_wall) {
+  const auto w = analyze_rate(coarse_row(-1, 80), CalThresholds{});
+  CHECK(w.wall == kRailRel);
+  CHECK((w.flags & kCalNoDip) != 0);
+  CHECK((w.flags & kCalNoiseCell) != 0);
+  // 15 of 20 is still shallow enough.
+  CHECK(analyze_rate(coarse_row(-1, 75), CalThresholds{}).wall == kRailRel);
+}
+
+// Past a real wall the bench saw deep dips (63%, 32%, 4%): a deep miss ends
+// the run as it always did, even with good cells after it.
+TEST(deep_coarse_miss_still_ends_the_run) {
+  const auto w = analyze_rate(coarse_row(-1, 60), CalThresholds{});
+  CHECK(w.wall == -5);
+  CHECK((w.flags & kCalNoDip) == 0);
+  CHECK((w.flags & kCalNoiseCell) == 0);
+}
+
+// Two misses in a row are a dip, however shallow.
+TEST(two_shallow_misses_in_a_row_end_the_run) {
+  const auto w = analyze_rate(coarse_row(-1, 85, 3, 85), CalThresholds{});
+  CHECK(w.wall == -5);
+  CHECK((w.flags & kCalNoiseCell) == 0);
+}
+
+// The overdrive guard: a shallow miss followed by ONE good cell and then a
+// collapse is a dip with an island after it (mcs6 measured 63% at idx 52,
+// 95-97% at 53-57, collapsed by 64) -- the run must not climb through it.
+TEST(shallow_miss_needs_two_good_cells_after_it) {
+  std::vector<CalCell> cells;
+  for (int i = -41; i <= 47; i += 4) cells.push_back(cell(i, 100, -70, 20));
+  cells.push_back(cell(51, 80, -70, 20));  // shallow miss
+  cells.push_back(cell(55, 95, -70, 20));  // island
+  cells.push_back(cell(59, 0, -70, 20));
+  cells.push_back(cell(63, 0, -70, 20));
+  const auto w = analyze_rate(cells, CalThresholds{});
+  CHECK(w.wall == 47);
+  CHECK((w.flags & kCalNoiseCell) == 0);
+  // ...and a miss on the second-to-last cell has only one cell after it:
+  // it ends the run (under-drive by one coarse step, never overdrive).
+  CHECK(analyze_rate(coarse_row(59, 80), CalThresholds{}).wall == 55);
+}
+
+// The 100-frame fine pass keeps the strict 90% bar: there, 85% is 15 frames
+// lost, not noise.
+TEST(fine_cells_keep_the_strict_bar) {
+  std::vector<CalCell> cells;
+  for (int i = 40; i <= 56; ++i) cells.push_back(cell(i, i == 48 ? 85 : 99));
+  const auto w = analyze_rate(cells, CalThresholds{});
+  CHECK(w.wall == 47);
+  CHECK((w.flags & kCalNoiseCell) == 0);
+}
+
 TEST(row_never_reaching_threshold_is_undetermined) {
   std::vector<CalCell> cells;
   for (int i = 0; i <= 127; i += 4) cells.push_back(cell(i, 40));

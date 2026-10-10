@@ -253,6 +253,9 @@ struct NackDroneCfg {
   // 11.8 on video's queue, close range) or "video" (video's own queue,
   // upstream's behaviour).
   std::string queue = "vo";
+  // Also keep and re-send the enhance (in-between frame) layer (2026-10-10):
+  // a GS with [link.nack] enh asks for it.
+  bool enh = true;
 };
 
 struct Config {

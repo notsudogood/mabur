@@ -65,11 +65,13 @@ struct NackCfg {
   bool wait_burst_end = true;   // first request of a gap seq waits for the base burst to end
   int urgent_slack_ms = 10;     // ...unless the deadline is within min_lead_ms + this
   int ab_s = 0;                 // maburgs only: alternate on/off every ab_s seconds (0 = always on)
+  bool enh = true;              // maburgs only: a second tracker asks for the enhance layer too
+  uint8_t sid = 0;              // the layer this tracker asks for (stamped on every T_NACK)
 };
 
 struct NackTailView { uint16_t count; uint16_t max_idx; uint32_t seq_at_max; uint64_t last_progress_ms; };
 
-struct NackInputs {           // all sid 0
+struct NackInputs {           // all for the tracker's own sid
   std::function<std::vector<uint32_t>()> missing;                // decoder erasure set (ascending)
   std::function<SwDecoder::SourceState(uint32_t)> state;
   std::function<std::optional<NackTailView>()> tail;
@@ -79,6 +81,12 @@ struct NackInputs {           // all sid 0
   // Shortfall only (both optional; null = nothing covered / burst ended):
   std::function<bool(uint32_t)> covered;  // pivot of a pending repair row (SwDecoder::source_covered)
   std::function<bool()> burst_open;       // base bodies still arriving: its repairs may still come
+  // No repair still on its way can include this seq (SwDecoder::fec_final).
+  // When given, it replaces settle + burst_open for a gap seq's FIRST
+  // request: a seq the encoder has moved a window past is lost, not late,
+  // so it is asked for at once; one it has not is held (held_fec) while a
+  // repair may still bring it, unless the deadline is near (urgent).
+  std::function<bool(uint32_t)> fec_final;
 };
 
 struct NackStats {            // cumulative
@@ -88,6 +96,7 @@ struct NackStats {            // cumulative
   uint64_t held_covered = 0;  // seqs a request skipped (at least once) because a repair covers them
   uint64_t held_burst = 0;    // seqs whose first request waited for the base burst to end
   uint64_t urgent = 0;        // first requests sent inside a burst because the deadline was near
+  uint64_t held_fec = 0;      // seqs whose first request waited for the encoder to move past them
 };
 
 struct NackWindow {           // since the last take_window()
@@ -103,9 +112,22 @@ struct NackWindow {           // since the last take_window()
 class NackTracker {
  public:
   explicit NackTracker(NackCfg cfg);
+  // Not copyable: counter_ may point into this object (own_counter_) or
+  // another tracker's, and a copy would silently keep the old pointer.
+  NackTracker(const NackTracker&) = delete;
+  NackTracker& operator=(const NackTracker&) = delete;
   std::optional<rc::Nack> poll(uint64_t now_ms, const NackInputs& in);
   void clear();                      // frame_wire edge: entries only, counter kept
-  void restart_counter() { counter_ = 0; }  // new vtx nonce: next NACK is counter 1
+  void restart_counter() { *counter_ = 0; }  // new vtx nonce: next NACK is counter 1
+  // Two trackers (one per layer) must draw from ONE request counter: the
+  // drone accepts each counter once per session, whichever layer it names.
+  // Points this tracker at another's counter (which outlives it).
+  void share_counter(NackTracker& owner) { counter_ = owner.counter_; }
+  // True while an entry may still be filled by a retransmit: admitted and
+  // not dead, and either not yet asked max_tries times or asked recently
+  // enough that the answer may still land. FrameStream's early give-up
+  // waits only while this holds.
+  bool live(uint64_t now_ms) const;
   const NackStats& stats() const;
   NackWindow take_window();
   int settle_ms() const;
@@ -121,6 +143,7 @@ class NackTracker {
     bool burst_ended = false;        // a poll saw the base burst closed since admission
     bool held_covered = false;       // counted in held_covered
     bool held_burst = false;         // counted in held_burst
+    bool held_fec = false;           // counted in held_fec
   };
   void resolve(uint64_t now_ms, const NackInputs& in);
   void admit(uint64_t now_ms, const NackInputs& in);
@@ -129,7 +152,8 @@ class NackTracker {
   std::map<uint32_t, Entry> entries_;         // wire seq -> entry (sid 0)
   std::deque<std::pair<uint64_t, uint32_t>> late_;  // (t_ms, late_ms) sliding window
   int settle_ms_;
-  uint32_t counter_ = 0;
+  uint32_t own_counter_ = 0;
+  uint32_t* counter_ = &own_counter_;
   NackStats stats_;
   NackWindow win_;
 };

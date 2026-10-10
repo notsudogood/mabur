@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstdlib>
-#include <utility>
 
 namespace maburgs {
 namespace {
@@ -14,22 +13,40 @@ double delivery_pct(const CalCell& c, int card) {
 }
 
 // End of the first contiguous run at or above threshold, scanning up from the
-// first cell that reaches it. Returns {floor_idx, wall}; both kNoWall when
-// the row never reaches threshold at all.
-std::pair<int, int> first_run(const std::vector<CalCell>& cells, int card,
-                              double pct) {
+// first cell that reaches it; a noise cell (CalThresholds) does not end it.
+// floor_idx and wall are both kNoWall when the row never reaches threshold.
+struct Run {
+  int floor_idx = kNoWall;
+  int wall = kNoWall;
+  bool noise_cell = false;
+};
+
+Run first_run(const std::vector<CalCell>& cells, int card, const CalThresholds& th) {
+  const auto good = [&](size_t k) {
+    return delivery_pct(cells[k], card) >= th.deliver_pct;
+  };
+  const auto noise = [&](size_t k) {
+    return k + 2 < cells.size() && cells[k].expected <= th.noise_max_frames &&
+           delivery_pct(cells[k], card) >= th.noise_pct && good(k + 1) && good(k + 2);
+  };
+  Run r;
   size_t i = 0;
-  while (i < cells.size() && delivery_pct(cells[i], card) < pct) ++i;
-  if (i == cells.size()) return {kNoWall, kNoWall};
-  const int floor_idx = static_cast<int>(cells[i].idx);
-  int wall = floor_idx;
-  while (i < cells.size() && delivery_pct(cells[i], card) >= pct) {
-    wall = static_cast<int>(cells[i].idx);
-    ++i;
+  while (i < cells.size() && !good(i)) ++i;
+  if (i == cells.size()) return r;
+  r.floor_idx = static_cast<int>(cells[i].idx);
+  r.wall = r.floor_idx;
+  for (; i < cells.size(); ++i) {
+    if (good(i)) {
+      r.wall = static_cast<int>(cells[i].idx);
+    } else if (noise(i)) {
+      r.noise_cell = true;  // the next cell is good, so the wall moves past it
+    } else {
+      break;
+    }
   }
   // i == cells.size() here means the run never ended -- the caller detects
   // that as no-dip by comparing wall against the last measured index.
-  return {floor_idx, wall};
+  return r;
 }
 
 }  // namespace
@@ -69,8 +86,11 @@ RateWall analyze_rate(const std::vector<CalCell>& cells,
   if (peak != kRssiNone && static_cast<double>(peak) > th.sat_rssi_dbm)
     out.flags |= kCalSaturated;
 
-  const auto [floor_idx, wall] = first_run(cells, best, th.deliver_pct);
+  const Run run = first_run(cells, best, th);
+  const int floor_idx = run.floor_idx;
+  const int wall = run.wall;
   out.floor_idx = floor_idx;
+  if (run.noise_cell) out.flags |= kCalNoiseCell;
 
   if (floor_idx == kNoWall) {
     // Never reached threshold anywhere: there is no first contiguous run to
@@ -111,8 +131,8 @@ RateWall analyze_rate(const std::vector<CalCell>& cells,
   for (const auto& c : cells)
     if (c.received[static_cast<size_t>(other)] > 0) other_has_data = true;
   if (other_has_data) {
-    const auto [ofloor, owall] = first_run(cells, other, th.deliver_pct);
-    if (ofloor != kNoWall && std::abs(owall - wall) > th.card_disagree)
+    const Run o = first_run(cells, other, th);
+    if (o.floor_idx != kNoWall && std::abs(o.wall - wall) > th.card_disagree)
       out.flags |= kCalCardDisagree;
   }
 

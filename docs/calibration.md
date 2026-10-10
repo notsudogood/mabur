@@ -73,6 +73,34 @@ pause and resume with the session.
 `maburcal status` polls a running session; `maburcal abort` cancels one.
 None of the three take arguments.
 
+### The sweep frame is the flight frame (2026-10-10)
+
+Sweep and verify frames now carry the flags every video rung flies: STBC
+always, LDPC per the drone's `radio.ldpc` (`rc::ladder_from`,
+`drone/src/cal_sweep.cpp`). Until this build they aired HT20 with both
+flags **off**, a frame nothing flies. Width stays 20 MHz: the per-rate
+table serves both widths, and with the flight flags the 20 MHz wall was
+the lower of the two at every MCS on the bench, so a 20 MHz sweep can only
+under-drive a 40 MHz rung (`docs/bw40-sweep-findings-2026-09-23.md`,
+*TX-power walls*).
+
+**What changes when you rerun, and the catch.** On the one bench unit the
+flags-on delivery walls sat **+17..+23 indices (about 4-6 dB) higher** at
+mcs4-7 than the flags-off ones, and mcs3 stopped dipping at all. A run on
+this build will therefore park MCS 4-7 4-6 dB hotter than a table from an
+earlier build. The frames still decode there, which is all this kit
+measures. What it cannot see is EVM: past the old (flags-off) wall the PA
+is already compressing, and the flags only make the frame *tolerate* the
+distortion (coding and diversity gain). Some of the extra drive may buy
+nothing at range. That question is open
+(`docs/bw40-sweep-findings-2026-09-23.md`, finding 4), and two more side
+effects follow. STBC drives the second PA chain, so sweep RSSI peaks run
+~5 dB higher and `saturated` fires sooner at a given distance (walls then
+read low, the safe direction). And the walls are not comparable with any
+table measured before this build. If high-MCS loss gets worse after a
+rerun, roll back with the `/etc/mabur.toml.pre-cal` backup (see *What gets
+written, and how to roll back*).
+
 ## Prerequisite: the pair must already be linked and flying video
 
 There is no other way to reach the drone. `T_CAL_CMD` rides the same
@@ -212,6 +240,7 @@ the PA.
 | `narrow` | The floor edge (where delivery first reaches 90%, ascending) sits within ~4 indices of the wall. The usable window between "too weak to hear" and "compressing" is too thin to trust. | Move closer and rerun; a wall this close to its own floor is not a reliable measurement. |
 | `card_disagree` | The two GS RX cards' independently-computed walls differ by more than a couple of indices. | Points at an antenna or card problem, not a PA — check cabling/orientation on the disagreeing card before trusting either number. |
 | `drift` | The coarse and fine phases measured the same cell differently. | Informational; large drift suggests thermal movement in the PA during the run — a rerun after the hardware has settled is reasonable if it's large. |
+| `noise_cell` | One coarse cell in the row read below 90% but lost no more than a quarter of its frames, and the next two cells were back at 90%+, so it was read as noise and did not end the row (2026-10-10; see *Fixed: one noisy coarse cell* below). | Informational. On MCS 0-2 it is the case the rule exists for. On MCS 3-7 the fine pass re-measures the wall at 100 frames a cell with the strict rule, but if the row also shows `drift`, rerun. |
 
 ### `legacy_wall_rel` is derived, not swept
 
@@ -458,7 +487,39 @@ earlier claim that "a ch149 table flown on ch136 parks every rate ~1.5 dB
 high" had the sign wrong — under the diff formula the chip adds the
 ch136 anchor, so the old absolute table parked *low* there.
 
-### Defect: one noisy coarse cell reroutes a no-dip row
+### Fixed (2026-10-10): one noisy coarse cell reroutes a no-dip row
+
+A coarse cell no longer ends a row when it is a **lone shallow miss**: at
+most 50 frames (the 20-frame coarse pass; the fine pass keeps the strict
+bar), at least 75 % delivered (15 of 20), and the **next two** cells back
+at 90 %+. Such a cell is flagged `noise_cell` and the run continues
+through it (`gs/src/cal_analysis.h`, `CalThresholds`). A deeper miss, two
+misses in a row, or a miss with only one good cell after it ends the row
+exactly as before.
+
+Why those three conditions, and the risk they carry: the rule extends a
+run across a failed cell, which is the overdriving direction. Past a real
+wall the bench data (`docs/txagc-calibration.md`, 100-frame cells) shows
+deep dips — 63 %, 32 %, 4 %, 1 % — that the 75 % bar refuses. The one
+measured island of good delivery past a wall (mcs6, 95–97 % at idx 53–57)
+is 5 indices wide, narrower than the two coarse cells (8 indices) the
+rule demands after a miss. What is **not** covered: a real wall whose
+first dip is shallow (75–90 % at 20 frames) *and* is followed by an
+island at least two coarse cells wide. Nothing measured looks like that,
+but only one unit has been measured at full resolution. And a 63 % comb
+dip read at 20 frames comes out at 75 %+ about one time in five, so the
+two-good-cells condition is doing the real work there. For MCS 3-7 the
+fine pass then re-reads ±8 around the coarse wall at 100 frames a cell
+with the strict rule; a coarse wall pushed past the true first dip by
+more than 8 indices would escape that check.
+
+What it does not fix: a noise cell deeper than 75 %, e.g. an interference
+burst that takes 6 of 20 frames, still ends the row, which under-drives
+that rate. That error is in the safe direction.
+
+The original write-up follows.
+
+#### Original defect
 
 MCS 0-2 never compress, so they are supposed to take the no-dip path.
 In two runs of four, a *single* coarse cell in the mcs2 row read below
@@ -538,7 +599,8 @@ Three things make this better than the knee, not merely more stable:
   knee, firing early by construction, was giving up ~1-1.5 dB on
   precisely the rates the link falls back to when it is struggling.
 
-One defect remains -- the noisy-cell reroute above. MCS 3-7 are the
+The noisy-cell reroute above was the remaining defect; it is fixed as of
+2026-10-10, with the residual risks listed there. MCS 3-7 are the
 measured product; a no-dip MCS 0-2 row is now a deterministic constant.
 
 ## Hardware acceptance checklist

@@ -18,6 +18,18 @@ void NackTracker::clear() { entries_.clear(); }
 const NackStats& NackTracker::stats() const { return stats_; }
 int NackTracker::settle_ms() const { return settle_ms_; }
 
+bool NackTracker::live(uint64_t now_ms) const {
+  // An answer to the last try may still be in the air: one repeat interval
+  // plus a round trip's worth of slack.
+  const uint64_t grace = static_cast<uint64_t>(cfg_.repeat_ms) + 24u;
+  for (const auto& [s, e] : entries_) {
+    if (e.dead) continue;
+    if (e.tries < cfg_.max_tries) return true;
+    if (now_ms < e.last_sent_ms + grace) return true;
+  }
+  return false;
+}
+
 size_t NackTracker::outstanding() const {
   size_t n = 0;
   for (const auto& [s, e] : entries_)
@@ -89,7 +101,7 @@ void NackTracker::resolve(uint64_t now_ms, const NackInputs& in) {
 
 void NackTracker::admit(uint64_t now_ms, const NackInputs& in) {
   for (uint32_t s : in.missing())
-    if (!entries_.count(s)) entries_[s] = Entry{now_ms, 0, 0, 0, false, false, false, false, false, false};
+    if (!entries_.count(s)) entries_[s] = Entry{now_ms, 0, 0, 0, false, false, false, false, false, false, false};
   if (auto tv = in.tail()) {
     if (now_ms >= tv->last_progress_ms + static_cast<uint64_t>(settle_ms_) &&
         tv->max_idx + 1 < tv->count) {
@@ -99,7 +111,7 @@ void NackTracker::admit(uint64_t now_ms, const NackInputs& in) {
         // Only still-unknown seqs: a stale tail view (slot not advanced past
         // a seq that already resolved) must not re-admit it every poll.
         if (!entries_.count(s) && in.state(s) == S::kUnknown)
-          entries_[s] = Entry{tv->last_progress_ms, 0, 0, 0, true, false, false, false, false, false};
+          entries_[s] = Entry{tv->last_progress_ms, 0, 0, 0, true, false, false, false, false, false, false};
       }
     }
   }
@@ -115,11 +127,32 @@ std::optional<rc::Nack> NackTracker::poll(uint64_t now_ms, const NackInputs& in)
   for (auto& [s, e] : entries_) {
     if (burst_closed) e.burst_ended = true;
     if (e.dead || e.tries >= cfg_.max_tries) continue;
-    const uint64_t since = e.tries == 0 ? e.first_missing_ms : e.last_sent_ms;
-    const uint64_t wait = e.tries == 0 ? static_cast<uint64_t>(settle_ms_)
-                                       : static_cast<uint64_t>(cfg_.repeat_ms);
-    if (now_ms < since + wait) continue;
     const uint64_t deadline = e.first_missing_ms + in.gap_timeout_ms;
+    // fec_final gate (first request of a gap seq): asked the moment the
+    // encoder has moved past it -- no settle wait, it is lost, not late --
+    // and held while a repair may still bring it, unless the deadline is
+    // near. Replaces settle + the burst rule below for these seqs.
+    const bool fec_gate = !e.from_tail && e.tries == 0 && in.fec_final && cfg_.wait_burst_end;
+    bool fec_urgent = false;
+    // Even a seq the encoder has moved past gets settle_min_ms: a copy can
+    // still be a few ms late on the other card.
+    if (fec_gate && now_ms < e.first_missing_ms + static_cast<uint64_t>(cfg_.settle_min_ms)) continue;
+    if (fec_gate && !in.fec_final(s)) {
+      if (now_ms + static_cast<uint64_t>(cfg_.min_lead_ms + cfg_.urgent_slack_ms) < deadline) {
+        if (!e.held_fec) {
+          e.held_fec = true;
+          ++stats_.held_fec;
+        }
+        continue;
+      }
+      fec_urgent = true;  // the deadline will not wait for the encoder to move on
+    }
+    if (!fec_gate) {
+      const uint64_t since = e.tries == 0 ? e.first_missing_ms : e.last_sent_ms;
+      const uint64_t wait = e.tries == 0 ? static_cast<uint64_t>(settle_ms_)
+                                         : static_cast<uint64_t>(cfg_.repeat_ms);
+      if (now_ms < since + wait) continue;
+    }
     if (now_ms + static_cast<uint64_t>(cfg_.min_lead_ms) > deadline) {
       e.dead = true;  // the answer could not land in time: never asked (again)
       ++stats_.lead_skipped;
@@ -134,7 +167,8 @@ std::optional<rc::Nack> NackTracker::poll(uint64_t now_ms, const NackInputs& in)
       }
       continue;
     }
-    if (!e.from_tail && e.tries == 0 && cfg_.wait_burst_end && !e.burst_ended) {
+    if (fec_urgent) urgent.push_back(s);
+    if (!fec_gate && !e.from_tail && e.tries == 0 && cfg_.wait_burst_end && !e.burst_ended) {
       if (now_ms + static_cast<uint64_t>(cfg_.min_lead_ms + cfg_.urgent_slack_ms) < deadline) {
         if (!e.held_burst) {
           e.held_burst = true;
@@ -155,8 +189,8 @@ std::optional<rc::Nack> NackTracker::poll(uint64_t now_ms, const NackInputs& in)
     return std::nullopt;
   }
   rc::Nack n;
-  n.counter = ++counter_;
-  n.sid = 0;
+  n.counter = ++*counter_;
+  n.sid = cfg_.sid;
   size_t i = 0;
   bool any_repeat = false;
   while (i < due.size() && n.n < rc::kMaxNackEntries) {

@@ -38,6 +38,7 @@ enum CalFlag : uint32_t {
   kCalSaturated = 1u << 3,      // RX front-end compression suspected
   kCalCardDisagree = 1u << 4,   // per-card walls differ materially
   kCalDrift = 1u << 5,          // coarse and fine disagree (set by CalSession)
+  kCalNoiseCell = 1u << 6,      // a lone shallow miss was read as noise (see below)
 };
 
 struct CalThresholds {
@@ -45,6 +46,22 @@ struct CalThresholds {
   double sat_rssi_dbm = -45.0;  // above this, suspect RX saturation
   int narrow_span = 4;          // wall - floor <= this => kCalNarrow
   int card_disagree = 2;        // per-card wall gap beyond this => flag
+  // Noise cell (2026-10-10). At 20 frames a cell, a 90% bar has no noise
+  // margin: one clean cell losing 4 frames (80%) ended an mcs2 row that
+  // never compresses in two bench runs of four, dropping a rail-parked rate
+  // onto a "wall" -- up to ~16 dB low had the cell sat at idx 40
+  // (docs/calibration.md). So a cell does not end the run when ALL of:
+  //   - it has at most noise_max_frames frames (the 20-frame coarse pass;
+  //     the 100-frame fine pass keeps the strict bar),
+  //   - it delivered at least noise_pct (a shallow miss: 15+ of 20), and
+  //   - the next TWO cells are back at deliver_pct.
+  // The last two guard the overdriving direction. Past a real wall the
+  // bench saw deep dips (63%, 32%, 4%, 1%) and one island of good delivery
+  // 5 indices wide (mcs6, idx 53-57, docs/txagc-calibration.md): two
+  // coarse cells span 8, so the run cannot climb through that island. A
+  // forgiven cell is flagged kCalNoiseCell in cal.log either way.
+  double noise_pct = 75.0;
+  uint16_t noise_max_frames = 50;
 };
 
 struct RateWall {
@@ -57,7 +74,8 @@ struct RateWall {
 // `cells` must be sorted ascending by idx. Returns the wall as the END OF THE
 // FIRST CONTIGUOUS run at or above `deliver_pct`, scanned upward from the
 // sensitivity-floor edge -- never "the last index that happened to be good",
-// which the measured comb makes meaningless.
+// which the measured comb makes meaningless. A noise cell (CalThresholds)
+// does not end the run.
 RateWall analyze_rate(const std::vector<CalCell>& cells,
                       const CalThresholds& th);
 

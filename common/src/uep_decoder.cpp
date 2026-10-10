@@ -161,4 +161,9 @@ bool UepDecoder::source_covered(int sid, uint32_t wire_seq) const {
   return layers_[static_cast<size_t>(sid)].sw.source_covered(wire_seq);
 }
 
+bool UepDecoder::fec_final(int sid, uint32_t wire_seq) const {
+  if (sid < 0 || sid >= 2) return false;
+  return layers_[static_cast<size_t>(sid)].sw.fec_final(wire_seq);
+}
+
 }  // namespace mabur

@@ -140,3 +140,4 @@ ring_ms = 150     # history of base-layer symbols kept, at encoder.bitrate_max_k
 air_pct = 5       # re-send budget, % of the rung's delivered capacity
 burst_ms = 20     # first-answer burst: this much air of re-sends at the current rung
 queue = "vo"      # "vo": re-sends jump ahead of video already inside the radio; "video": wait behind it
+enh = true        # also keep and re-send the in-between frame layer (the GS asks with [link.nack] enh)

@@ -374,6 +374,61 @@ alternates re-sending on and off every N seconds so one flight carries both
 arms; flightreport's NACK section splits them (lost AUs/min, base abandoned
 symbols/min, fills/min, overall and per rung) and prints the waste share.
 
+## Second build on notsudogood/mabur (2026-10-10 night)
+
+Flight 2026-10-10 (genlock on, NACK on) put the remaining 46→90 ms spikes
+on the **enhance layer**. The loss unit there is one lost A-MPDU: 24
+symbols at 40 MHz MCS4 (6 frames × 4), 16 at 40/MCS3, 4 on the
+non-aggregated 20 MHz rungs (`flightreport`'s FEC section now prints this
+as "loss size"). The base layer's 50 % FEC rebuilt every one; the
+enhance layer's 25 % rebuilt none at 40/MCS4 (23 of 23 failed), and
+nothing asked for them again, so the frame waited out the ~60 ms gap
+timeout. Every one of the flight's 30 `s3_residual` demotes coincided with
+an enhance loss. The other half of that flight's NACK numbers: of 11
+symbols asked for, 7 (64 %) were wasted because FEC rebuilt them first.
+Three changes, none on the wire (RC_VERSION stays 15):
+
+- **The first request waits for FEC to be final, not for the burst's end**
+  (GS). `SwDecoder::fec_final(seq)`: a repair whose window *starts* past
+  the seq has arrived, so no repair still to come can include it. A gap
+  seq's first request now goes out once that holds (after `settle_min`,
+  4 ms) and is held while it does not (counter `held_fec`), unless the
+  deadline is within `min_lead_ms + urgent_slack_ms` (`urgent`). This
+  replaces the burst-end proxy (an enh body after the newest base body,
+  or 8 ms of quiet), which cannot see repairs that are late but still
+  coming. `wait_burst_end` still switches the gate; tail seqs bypass it.
+  Expected effect: fewer wasted re-sends. Not yet measured in flight.
+- **NACK for the enhance layer** (drone `[nack] enh`, GS `[link.nack] enh`,
+  both default true). The GS runs a second `NackTracker` (sid 1) that
+  shares the base tracker's request counter (the drone accepts each
+  counter once per session, whichever layer it names). The drone keeps a
+  second ring for stream 1 (sized by `ring_ms` at the enhance symbol
+  size, 0.4 of the base share), answers with stream byte
+  `1 | kSbiRetxMark`, and charges both layers to the **one** `air_pct`
+  bucket, each re-send costed by its envelope size. Mixed pairs: an older
+  drone drops a sid-1 request as malformed (`nack_bad`) before the counter
+  check, so the base layer keeps working; an older GS never sends one.
+  The cost: enhance re-sends compete with base re-sends for the same
+  bucket, and at 25 % FEC there are more enhance symbols to ask for.
+  `link.nack.enh` in the sideport shows the split; whether the bucket
+  starves base asks under a loss burst is unmeasured.
+- **Early give-up on a doomed frame** (GS `FrameStream`). When the gap in
+  a partly received frame is FEC-final *and* no live NACK entry could
+  still fill it (`NackTracker::live`: not dead, and either retries left or
+  the last ask's answer could still land), the frame is finished at once
+  (slice salvage rebuilds what it can) instead of waiting out the gap
+  timeout. It needs the seq map (`set_seq_map_ok`, on when one fragment =
+  one symbol). Counter: `video.early_finished [base, enh]`. The risk is
+  giving up on a frame a late re-send would have completed; the `live`
+  window adds 24 ms past the last ask's repeat time for that.
+
+Validation: unit tests (`test_nack_tracker` +6, `test_sw_decoder` +2,
+`test_frame_stream` +2, `test_agent`, `test_config`), host builds of
+maburd/maburgs/maburplay. No bench or flight run yet: the first flight is
+the measurement. Compare `flightreport`'s FEC section (sid 1 `failed`
+counts), NACK section (`wasted share`, `held_fec`, the `enh:` line) and
+SLICE SALVAGE (`early give-up`) against the 2026-10-10 flight.
+
 ## Known limitations
 
 - The tail-trigger geometry guard in `gs/src/main.cpp` is a tautology:

@@ -39,6 +39,7 @@ void SwDecoder::reset_state(uint64_t v) {
   wm_open_ = false;
   wm_valid_ = false;
   repairs_seen_.clear();
+  max_repair_ws_ = 0;
   ep_open_ = false;  // a half-built episode from the old seq space is meaningless
 }
 
@@ -85,6 +86,15 @@ SwDecoder::SourceState SwDecoder::source_state(uint32_t wire_seq) const {
   if (!known_.count(v)) return SourceState::kUnknown;
   if (retx_await_src_.count(v)) return SourceState::kRetx;
   return recovered_await_src_.count(v) ? SourceState::kRecovered : SourceState::kDirect;
+}
+
+bool SwDecoder::fec_final(uint32_t wire_seq) const {
+  if (!have_seq_ || max_repair_ws_ == 0) return false;
+  const uint64_t v = unwrap(wire_seq);
+  if (v < live_floor() || v < base_ || known_.count(v)) return false;
+  // Strictly past v, plus a one-symbol guard: the async FEC worker can
+  // surface a repair a few positions out of order, never a whole window.
+  return max_repair_ws_ > v + 1;
 }
 
 bool SwDecoder::source_covered(uint32_t wire_seq) const {
@@ -333,6 +343,7 @@ std::vector<std::vector<uint8_t>> SwDecoder::add_symbol(const uint8_t* env, size
   if (b == SwBoundary::kPre && wm_valid_ && wend - 1 > wm_) wm_ = wend - 1;
   advance(wend - 1);  // a repair implies its whole window was sent
   arr_.advance(wend - 1, arr_stale_end());
+  if (ws > max_repair_ws_) max_repair_ws_ = ws;
   if (ws < live_floor()) {
     // References a seq older than the horizon — unsolvable, and (if any
     // covered seq is still unknown) that seq is already booked abandoned.

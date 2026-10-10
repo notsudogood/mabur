@@ -200,6 +200,11 @@ struct StatsNackIn {
   mabur::NackWindow win;         // since last export
   int settle_ms = 0;
   double interval_s = 0.0;       // for fill_pps; 0 = no window yet -> null
+  // The enhance layer's tracker ([link.nack] enh, 2026-10-10): exported as
+  // link.nack.enh while it runs.
+  bool enh_enabled = false;
+  mabur::NackStats enh_cum;
+  mabur::NackWindow enh_win;
 };
 
 // Continuous probe gate snapshot (probe-stream, 2026-09-04), straight from
@@ -314,6 +319,9 @@ struct StatsInput {
   uint64_t stall_resets = 0;
   // Slice salvage (spec 2026-10-10-h265-slices §5.6): FrameStream counters.
   uint64_t slice_salvaged = 0, slices_kept = 0, slices_filled = 0, slices_after_hole = 0;
+  // Frames finished at once because nothing could still fill their gap
+  // (FrameStream early give-up, 2026-10-10), per layer [base, enh].
+  uint64_t early_finished[2] = {0, 0};
   uint64_t slice_fallback[kSliceFbCount] = {};  // indexed by SliceFallback
   // AU ring publish health (PR C: replaced the rtp/udp blocks -- video
   // leaves maburgs via the shm ring now; schema note in stats_exporter.cpp).

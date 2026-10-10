@@ -253,7 +253,12 @@ void CalSweep::pump_sweeping(uint64_t now_ms, RadioTx& tx, PowerCtl& pwr) {
     // chip's usable span).
     pwr.set_index_override(
         std::clamp(anchor_idx_ + static_cast<int>(cell.idx), 0, 127));
-    tx.set_ladder({rc::LayerTxSpec{rc::PhyMode::HT, cell.rate, 20},
+    // The flight frame (CalSweepCfg::ldpc): same flags as a video rung.
+    // Always 20 MHz: the per-rate table this sweep produces serves both
+    // widths, and with the flight flags the 20 MHz wall was the lower of
+    // the two at every MCS (same doc, finding 2), so a 20 MHz sweep can
+    // only under-drive a 40 MHz rung, never overdrive it.
+    tx.set_ladder({rc::ladder_from(rc::PhyMode::HT, cell.rate, 20, cfg_.ldpc)[0],
                    rc::LayerTxSpec{}},
                   std::nullopt);
     cell_seq_ = 0;

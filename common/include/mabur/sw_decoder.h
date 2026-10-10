@@ -172,6 +172,15 @@ class SwDecoder {
   // kDirect = a source copy was heard; kRecovered = known via repair only;
   // kRetx = known via a retransmit only.
   SourceState source_state(uint32_t wire_seq) const;
+  // True iff this source is unknown and no repair still on its way can
+  // include it: a repair whose window STARTS after it has already arrived,
+  // and windows only move forward, so every later repair starts later
+  // still. From here only a retransmit can supply it. (A seq that is the
+  // pivot of an arrived row can still resolve once the free unknowns are
+  // known -- this says nothing more can come from the encoder, not that the
+  // seq is unrecoverable.) False for a known or out-of-span seq, and before
+  // the first repair.
+  bool fec_final(uint32_t wire_seq) const;
 
  private:
   struct Row {
@@ -216,6 +225,9 @@ class SwDecoder {
   uint64_t symbols_in_ = 0, symbols_dropped_bad_cfg_ = 0;
   uint64_t symbols_dropped_stale_ = 0, packets_out_ = 0, resets_ = 0;
   int repair_window_hwm_ = 0;
+  // Highest repair window START seen (virtual seq; 0 = none since reset).
+  // fec_final()'s "the encoder has moved past it" watermark.
+  uint64_t max_repair_ws_ = 0;
 
   bool wm_open_ = false, wm_valid_ = false;
   uint64_t wm_ = 0;

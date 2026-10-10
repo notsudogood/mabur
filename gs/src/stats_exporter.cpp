@@ -273,6 +273,7 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     nk["lead_skipped"] = c.lead_skipped;
     nk["held_covered"] = c.held_covered;
     nk["held_burst"] = c.held_burst;
+    nk["held_fec"] = c.held_fec;
     nk["urgent"] = c.urgent;
     nk["on"] = in.nack.on;
     nk["ab_s"] = in.nack.ab_s;
@@ -291,6 +292,32 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
                      {"max", f.empty() ? json(nullptr) : json(f.back())}};
     nk["settle_ms"] = in.nack.settle_ms;
     nk["late_ms_max"] = in.nack.win.late_ms_max;
+    if (in.nack.enh_enabled) {
+      const auto& e = in.nack.enh_cum;
+      std::vector<uint32_t> fe = in.nack.enh_win.fill_ms;
+      std::sort(fe.begin(), fe.end());
+      auto pcte = [&fe](double p) -> json {
+        if (fe.empty()) return nullptr;
+        const double rank = std::ceil(p * static_cast<double>(fe.size()));
+        const size_t i = rank < 1.0 ? 0 : static_cast<size_t>(rank) - 1;
+        return fe[std::min(fe.size() - 1, i)];
+      };
+      nk["enh"] = {{"requests", e.requests},
+                   {"repeats", e.repeats},
+                   {"syms_requested", e.syms_requested},
+                   {"tail_requests", e.tail_requests},
+                   {"filled", e.filled},
+                   {"late_fill", e.late_fill},
+                   {"wasted", e.wasted},
+                   {"dropped_deadline", e.dropped_deadline},
+                   {"suppressed", e.suppressed},
+                   {"lead_skipped", e.lead_skipped},
+                   {"held_covered", e.held_covered},
+                   {"held_fec", e.held_fec},
+                   {"urgent", e.urgent},
+                   {"fill_ms", {{"p50", pcte(0.5)}, {"p90", pcte(0.9)},
+                                {"max", fe.empty() ? json(nullptr) : json(fe.back())}}}};
+    }
   }
 
   // Measured-loss ladder controller snapshot; static-pin mode never ticks
@@ -503,6 +530,7 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
   v["dropped"] = in.frames_dropped;
   v["stall_resets"] = in.stall_resets;
   v["slice_salvaged"] = in.slice_salvaged;
+  v["early_finished"] = {in.early_finished[0], in.early_finished[1]};
   v["slices_kept"] = in.slices_kept;
   v["slices_filled"] = in.slices_filled;
   v["slices_after_hole"] = in.slices_after_hole;

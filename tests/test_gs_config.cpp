@@ -346,11 +346,13 @@ TEST(link_nack_shortfall_and_ab_keys) {
   auto d = maburgs::load_config(write_tmp(""));
   CHECK(d.link.nack.shortfall_only && d.link.nack.wait_burst_end);
   CHECK(d.link.nack.urgent_slack_ms == 10 && d.link.nack.ab_s == 0);
+  CHECK(d.link.nack.enh);
   auto c = maburgs::load_config(write_tmp(
       "[link.nack]\nshortfall_only = false\nwait_burst_end = false\n"
-      "urgent_slack_ms = 0\nab_s = 30\n"));
+      "urgent_slack_ms = 0\nab_s = 30\nenh = false\n"));
   CHECK(!c.link.nack.shortfall_only && !c.link.nack.wait_burst_end);
   CHECK(c.link.nack.urgent_slack_ms == 0 && c.link.nack.ab_s == 30);
+  CHECK(!c.link.nack.enh);
   for (const char* bad : {"[link.nack]\nurgent_slack_ms = 101\n", "[link.nack]\nab_s = -1\n",
                           "[link.nack]\nab_s = 3601\n"}) {
     bool threw = false;

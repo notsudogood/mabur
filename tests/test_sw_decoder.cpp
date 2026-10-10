@@ -566,7 +566,6 @@ TEST(retx_cascade_solve_inherits_retx_class) {
   CHECK(eps[0].missing == 2 && eps[0].retx == 2 && eps[0].recovered == 0 && eps[0].abandoned == 0);
 }
 
-MTEST_MAIN
 
 TEST(arrival_salvage_only_from_corrupt_body_copies) {
   // add_symbol's `clean` flag is the body's FCS verdict (UepDecoder passes
@@ -1048,3 +1047,48 @@ TEST(retx_is_boundary_neutral) {
   CHECK(d.syms_abandoned() == 2);
   CHECK(d.syms_abandoned_stale() == 2);
 }
+
+// fec_final (2026-10-10): a lost source stays "repair may still come" until
+// a repair whose window STARTS after it arrives -- windows only move
+// forward, so from then on only a retransmit can supply it.
+TEST(fec_final_once_a_repair_window_starts_past_the_seq) {
+  SwConfig cfg{64, 8, 0.25};
+  auto envs = encode_stream(cfg, 60, nullptr);
+  SwDecoder d(cfg);
+  bool before_checked = false, after_checked = false;
+  for (size_t i = 0; i < envs.size(); ++i) {
+    sw::SwHeader h;
+    REQUIRE(sw::parse_header(envs[i].data(), envs[i].size(), &h));
+    if (!h.repair && h.seq >= 10 && h.seq <= 13) continue;            // lose 4 sources
+    if (h.repair && h.seq <= 13 && h.seq + h.window_len - 1 >= 10) continue;  // and every repair over them
+    d.add_symbol(envs[i].data(), envs[i].size(), 1000);
+    if (h.repair && h.seq <= 13 && !before_checked) {
+      // A repair arrived, but its window starts at or before the hole.
+      CHECK(!d.fec_final(10));
+      before_checked = true;
+    }
+    if (h.repair && h.seq > 14 && !after_checked) {
+      CHECK(d.fec_final(10) && d.fec_final(12));
+      CHECK(!d.fec_final(14));   // known, so not "final"
+      CHECK(d.source_state(10) == SwDecoder::SourceState::kUnknown);
+      after_checked = true;
+    }
+  }
+  CHECK(after_checked);
+}
+
+TEST(fec_final_is_false_before_any_repair_and_after_reset_state) {
+  SwConfig cfg{64, 8, 0.25};
+  auto envs = encode_stream(cfg, 6, nullptr);
+  SwDecoder d(cfg);
+  for (auto& e : envs) {
+    sw::SwHeader h;
+    REQUIRE(sw::parse_header(e.data(), e.size(), &h));
+    if (h.repair) continue;
+    if (h.seq == 2) continue;
+    d.add_symbol(e.data(), e.size(), 1000);
+  }
+  CHECK(!d.fec_final(2));    // no repair seen: no watermark yet
+}
+
+MTEST_MAIN

@@ -38,6 +38,7 @@
 #include "ring_client.h"
 #include "video_backend.h"
 #include "genlock_client.h"   // camera-rate setpoint to maburgs (genlock.h)
+#include "osd_recorder.h"     // dvr.osd_file: .osd/.srt next to a raw recording
 #include "genlock_control.h"  // maburgs::kGenlockControlPort
 #include "vtx_rec_client.h"  // sends the button's VTX wish to maburgs (Task 8)
 #include "splash_image.h"  // startup splash asset + cover-fit painter
@@ -1096,11 +1097,21 @@ int main(int argc, char** argv) {
   // Raw-mode recorder (common/raw_dvr.h): sync gate + params + mux. Its
   // Error state is what the GS overlay's REC "broken" reads.
   mabur::RawDvr dvr;
+  // OSD sidecars for raw recordings (osd_recorder.h): armed with each raw
+  // start, begun when the video file gets its first frame, fed every
+  // complete OSD screen, flushed and subtitled in the 1 Hz idle slot.
+  const bool osd_rec_on = cfg.dvr.osd_file && !burned_mode;
+  maburplay::OsdRecorder osd_rec({cfg.dvr.osd_fc, true});
+  uint64_t osd_rec_mark_ms = 0;
+  auto start_raw = [&]() {
+    const std::string path = dvr_filename(cfg.dvr.dir);
+    dvr.start(path, bcfg.width, bcfg.height, cfg.dvr.fragment_ms);
+    if (osd_rec_on) osd_rec.arm(path);
+  };
   // Autostart: dvr.autostart armed rec_on before this point (see rec_on's
   // declaration above), but the actual start() call has to wait until here,
   // where bcfg is in scope.
-  if (rec_on && rec_gs && !burned_mode)
-    dvr.start(dvr_filename(cfg.dvr.dir), bcfg.width, bcfg.height, cfg.dvr.fragment_ms);
+  if (rec_on && rec_gs && !burned_mode) start_raw();
 
   // The button's two actions. Both modes are handled here so the press
   // handler stays one line; the raw path is a flag plus a close, the
@@ -1136,7 +1147,7 @@ int main(int argc, char** argv) {
       }
     }
 #endif
-    if (!burned_mode) dvr.start(dvr_filename(cfg.dvr.dir), bcfg.width, bcfg.height, cfg.dvr.fragment_ms);
+    if (!burned_mode) start_raw();
     std::fprintf(stderr, "maburplay: rec: START (%s)\n", cfg.dvr.mode.c_str());
   };
 
@@ -1153,7 +1164,13 @@ int main(int argc, char** argv) {
       // so a quick START->STOP lands before any file exists.
       const unsigned long long n = dvr.samples();
       dvr.stop();
-      std::fprintf(stderr, "maburplay: rec: STOP (%llu samples)\n", n);
+      const unsigned long long osd_n = osd_rec.records();
+      const bool had_osd = osd_rec.running();
+      osd_rec.stop();
+      if (had_osd)
+        std::fprintf(stderr, "maburplay: rec: STOP (%llu samples, %llu OSD screens)\n", n, osd_n);
+      else
+        std::fprintf(stderr, "maburplay: rec: STOP (%llu samples)\n", n);
       return;
     }
 #ifdef MABUR_PLAYER_HW
@@ -1230,8 +1247,15 @@ int main(int argc, char** argv) {
     // writes the encoder's output to its own DvrMux instead. RawDvr applies
     // the raw path's rules itself (complete AUs only, file begins at a
     // parameter-set AU) and ignores AUs while not armed.
-    if (rec_on && !burned_mode && rec_gs)
+    if (rec_on && !burned_mode && rec_gs) {
       dvr.feed(ev.au.data(), ev.au.size(), ev.meta.pts_us, decodable);
+      // The OSD clock starts with the video file's first frame.
+      if (osd_rec.armed() && !osd_rec.running() && dvr.opened()) {
+        osd_rec.begin(mono_ms());
+        std::fprintf(stderr, "maburplay: rec: OSD -> %s%s\n", osd_rec.osd_path().c_str(),
+                     osd_rec.error() ? " (could not open)" : "");
+      }
+    }
 
     if (ev.flush_before) {
       // Flush-ordering contract carried from Task 8's review:
@@ -1645,6 +1669,7 @@ int main(int argc, char** argv) {
                                   .count();
       msp_ready = osd_src->poll(now_ms);
       msp_stale = osd_src->stale(now_ms);
+      if (msp_ready && osd_rec.running()) osd_rec.screen(mono_ms(), osd_src->screen());
       // Fires at most once per process: either traffic arrived (nothing to
       // report, latch it shut) or 10 s passed with none (report, latch shut).
       if (!osd_silence_warned) {
@@ -1659,6 +1684,38 @@ int main(int argc, char** argv) {
           osd_silence_warned = true;
         }
       }
+    }
+    // OSD sidecars (osd_recorder.h): one link-summary subtitle a second,
+    // and the buffered OSD screens written out -- in the idle slot, so an
+    // SD card write that stalls cannot hold a frame past its refresh.
+    if (osd_rec.running() && idle_ok && mono_ms() - osd_rec_mark_ms >= 1000) {
+      osd_rec_mark_ms = mono_ms();
+      std::string t;
+      char b[96];
+      if (gs_src && gs_src->have_any()) {
+        const maburplay::GsSnapshot& sn = gs_src->snapshot();
+        if (sn.channel) { std::snprintf(b, sizeof(b), "CH%d ", *sn.channel); t += b; }
+        if (sn.mcs) {
+          std::snprintf(b, sizeof(b), "MCS%d/%dMHz ", *sn.mcs, sn.bw ? *sn.bw : 20);
+          t += b;
+        }
+        if (!sn.cards.empty() && sn.cards[0].rssi_dbm) {
+          std::snprintf(b, sizeof(b), "RSSI %.0fdBm ", *sn.cards[0].rssi_dbm);
+          t += b;
+        }
+        if (sn.pre_loss_pct) {
+          std::snprintf(b, sizeof(b), "loss %.1f/%.1f%% ", *sn.pre_loss_pct,
+                        sn.post_loss_pct ? *sn.post_loss_pct : 0.0);
+          t += b;
+        }
+        if (sn.soc_temp_c) { std::snprintf(b, sizeof(b), "VTX %dC ", *sn.soc_temp_c); t += b; }
+      }
+      if (gs_ps.lat_valid) {
+        std::snprintf(b, sizeof(b), "lat %d/%dms", gs_ps.lat_p50_e2e_ms, gs_ps.lat_e2e_ms);
+        t += b;
+      }
+      osd_rec.subtitle(mono_ms(), t.empty() ? std::string("-") : t);
+      osd_rec.flush();
     }
     // GS link-status overlay. Drained every iteration whether or not
     // anything can be drawn -- the counters stay honest and an undrained
@@ -1848,13 +1905,16 @@ int main(int argc, char** argv) {
         char lat_buf[256];
         std::snprintf(lat_buf, sizeof(lat_buf),
             "lat: n=%d e2e=%u/%u enc=%u/%u dq=%u/%u air=%u/%u fec=%u/%u "
-            "dec=%u/%u reg=%u/%u dsp%s=%u/%u chk=%.1f anchor=%s",
+            "dec=%u/%u reg=%u/%u dsp%s=%u/%u chk=%.1f anchor=%s rec=%s",
             L.n, L.p50[7]/1000, L.p99[7]/1000, L.p50[0]/1000, L.p99[0]/1000,
             L.p50[1]/1000, L.p99[1]/1000, L.p50[2]/1000, L.p99[2]/1000,
             L.p50[3]/1000, L.p99[3]/1000, L.p50[4]/1000, L.p99[4]/1000,
             L.p50[5]/1000, L.p99[5]/1000, L.dsp_exact ? "" : "~",
             L.p50[6]/1000, L.p99[6]/1000, L.chk_ms,
-            L.anchor_ok ? "ok" : "warm");
+            L.anchor_ok ? "ok" : "warm",
+            // GS recorder state, so flightreport can split latency by it
+            // (burned recording cost a spike in 58% of seconds, 2026-10-10).
+            !(rec_on && rec_gs) ? "off" : burned_mode ? "burned" : "raw");
         std::fprintf(stderr, "%s\n", lat_buf);
         lat_log.write(mono_us(), lat_buf);
       }
@@ -1868,15 +1928,16 @@ int main(int argc, char** argv) {
       // phase whether or not the loop was steering.
       if (cfg.display.vsync_lock) {
         const auto gt = genlock.tick(cfg.display.genlock, mono_us());
-        if (gt.steering) genlock_cli.send(gt.cmd_mfps);
+        if (gt.send) genlock_cli.send(gt.cmd_mfps);
         if (gt.valid) {
           char gl_buf[240];
           std::snprintf(gl_buf, sizeof(gl_buf),
                         "genlock: on=%d cam=%.3f panel=%.3f phase=%.1f target=%.1f "
-                        "err=%.1f cmd=%u n=%d fps=%.1f pstep=%.0f pback=%d cal=%d",
+                        "err=%.1f cmd=%u n=%d fps=%.1f pstep=%.0f pback=%d cal=%d ref=%llu",
                         gt.steering ? 1 : 0, gt.cam_hz, gt.panel_hz, gt.phase_ms,
                         gt.target_ms, gt.err_ms, static_cast<unsigned>(gt.cmd_mfps), gt.n,
-                        gt.fps, gt.pstep_us, gt.pts_back, gt.stage);
+                        gt.fps, gt.pstep_us, gt.pts_back, gt.stage,
+                        static_cast<unsigned long long>(genlock.reference_steps()));
           std::fprintf(stderr, "%s\n", gl_buf);
           lat_log.write(mono_us(), gl_buf);
         }

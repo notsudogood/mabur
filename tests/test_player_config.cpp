@@ -101,6 +101,14 @@ TEST(dvr_mode_defaults_to_raw) {
   CHECK(c.dvr.burned.fps_cap == 30);
 }
 
+TEST(dvr_osd_file_keys) {
+  auto d = maburplay::load_config(write_tmp_play("backend = \"null\"\n"));
+  CHECK(d.dvr.osd_file && d.dvr.osd_fc == "BTFL");
+  auto c = maburplay::load_config(write_tmp_play(
+      "backend = \"null\"\n\n[dvr]\nosd_file = false\nosd_fc = \"ARDU\"\n"));
+  CHECK(!c.dvr.osd_file && c.dvr.osd_fc == "ARDU");
+}
+
 TEST(dvr_burned_block_parses) {
   auto c = maburplay::load_config(write_tmp_play(
       "backend = \"null\"\n\n[dvr]\nmode = \"burned\"\n\n"

@@ -66,6 +66,7 @@ DEFAULT_DEBUG_LOG_DIR = "/media/dvr/log"
 KNOWN_CALLOG_VERSIONS = (1, 2, 3)
 
 # flags: 1=no_dip 2=undetermined 4=narrow 8=saturated 16=card_disagree 32=drift
+# 64=noise_cell
 FLAG_NAMES = (
     (1, "no_dip"),
     (2, "undetermined"),
@@ -73,6 +74,7 @@ FLAG_NAMES = (
     (8, "saturated"),
     (16, "card_disagree"),
     (32, "drift"),
+    (64, "noise_cell"),
 )
 
 

@@ -22,6 +22,7 @@ maburcal = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(maburcal)
 
 # flags: 1=no_dip 2=undetermined 4=narrow 8=saturated 16=card_disagree 32=drift
+# 64=noise_cell
 GOOD = """callog 1
 R 42 53 1.00
 C 1 0 88 20 20 0 0 -62 -999

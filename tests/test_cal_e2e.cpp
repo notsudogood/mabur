@@ -532,11 +532,14 @@ TEST(a_lossy_measurement_never_reads_a_wall_HIGHER_than_the_truth) {
   // the first contiguous run short. That is not a defect to fix but a
   // property to pin, because the direction matters: truncating a run can
   // only move the wall DOWN (under-power, the safe direction), never up
-  // past the true compression point. If this ever fails, some path is
-  // extending a run across a failed cell -- landing inside the comb and
+  // past the true compression point. The one run extension that exists --
+  // a lone shallow coarse miss read as noise (CalThresholds::noise_pct,
+  // 2026-10-10) -- must not change that: it lets mcs0-2 reach the rail
+  // through random loss (on this seed mcs0/1 do, flagged noise_cell), and
+  // the rail is still under their true wall. If this ever fails, some path
+  // is extending a run across a real dip -- landing inside the comb and
   // overdriving the PA, which is the one outcome this kit exists to
   // prevent.
-  const int kKneeWall[8] = {88, 88, 88, 95, 73, 54, 51, 49};  // physical
   Pair p("cal_e2e_lossy_meas");
   p.drop_downlink_pct = 5;
   std::string err;
@@ -547,7 +550,7 @@ TEST(a_lossy_measurement_never_reads_a_wall_HIGHER_than_the_truth) {
   const auto& w = p.gs.walls();
   for (int r = 0; r < 8; ++r) {
     if (w[r].flags & maburgs::kCalUndetermined) continue;  // no wall claimed
-    CHECK(w[r].wall <= kKneeWall[r] - kAnchor);
+    CHECK(w[r].wall <= kTrueWallRel(r));
   }
   // And whatever it concluded, it either applied it or it did not -- never
   // "reported an apply that did not happen".

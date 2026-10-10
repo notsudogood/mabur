@@ -16,6 +16,8 @@ struct World {
   std::set<uint32_t> covered;   // pivots of arrived repair rows
   bool burst_open = false;      // base bodies still arriving
   bool hooks = false;           // false: leave covered/burst_open null (upstream behaviour)
+  bool fec_hook = false;        // true: wire fec_final (2026-10-10)
+  std::set<uint32_t> final_;    // seqs no repair on its way can include
   NackInputs in() {
     NackInputs i;
     i.missing = [this] { return missing; };
@@ -28,6 +30,7 @@ struct World {
       i.covered = [this](uint32_t s) { return covered.count(s) != 0; };
       i.burst_open = [this] { return burst_open; };
     }
+    if (fec_hook) i.fec_final = [this](uint32_t s) { return final_.count(s) != 0; };
     return i;
   }
   void lose(std::initializer_list<uint32_t> seqs) {
@@ -357,6 +360,85 @@ TEST(shortfall_rules_off_is_the_old_behaviour) {
   auto n = t.poll(1012, w.in());
   REQUIRE(n.has_value());
   CHECK(n->e[0].first_seq == 100 && n->e[0].bitmap == 0x3u);
+}
+
+
+// 2026-10-10: the bench's wasted requests came from losses the NEXT AU's
+// repairs rebuilt, 33 ms on -- long after any burst-end proxy had passed.
+// With fec_final wired, a gap seq is held while a repair may still bring it
+// and asked for as soon as none can, without the settle wait.
+TEST(fec_final_holds_until_the_encoder_moves_past_then_asks_at_once) {
+  World w; w.fec_hook = true; w.hooks = true; w.lose({200, 201});
+  NackTracker t(cfg_on());                 // settle seeded 12
+  CHECK(!t.poll(1000, w.in()).has_value());
+  CHECK(!t.poll(1020, w.in()).has_value());  // past settle, but repairs may still come
+  CHECK(t.stats().held_fec == 2);
+  w.final_ = {200, 201};
+  auto n = t.poll(1021, w.in());
+  REQUIRE(n.has_value());
+  CHECK(n->n == 1 && n->e[0].first_seq == 200 && n->e[0].bitmap == 0x3u);
+  CHECK(t.stats().urgent == 0);
+}
+
+TEST(fec_final_seq_still_waits_settle_min_for_a_late_copy) {
+  World w; w.fec_hook = true; w.lose({300});
+  w.final_ = {300};
+  NackTracker t(cfg_on());                 // settle_min_ms 4
+  CHECK(!t.poll(1000, w.in()).has_value());
+  CHECK(!t.poll(1003, w.in()).has_value());
+  CHECK(t.poll(1004, w.in()).has_value());
+}
+
+TEST(fec_final_rebuilt_by_a_late_repair_is_never_asked) {
+  World w; w.fec_hook = true; w.lose({400});
+  NackTracker t(cfg_on());
+  CHECK(!t.poll(1000, w.in()).has_value());
+  CHECK(!t.poll(1010, w.in()).has_value());
+  w.st[400] = S::kRecovered;               // the next AU's repairs rebuilt it
+  w.missing.clear();
+  CHECK(!t.poll(1015, w.in()).has_value());
+  CHECK(t.stats().requests == 0 && t.stats().wasted == 0);
+}
+
+TEST(fec_final_not_reached_goes_out_urgent_near_the_deadline) {
+  World w; w.fec_hook = true; w.lose({500});
+  NackTracker t(cfg_on());                 // gap 50, min_lead 12 + slack 10
+  CHECK(!t.poll(1000, w.in()).has_value());
+  CHECK(!t.poll(1027, w.in()).has_value());   // 1027 + 22 < 1050: still held
+  auto n = t.poll(1028, w.in());              // 1028 + 22 == 1050: urgent
+  REQUIRE(n.has_value());
+  CHECK(t.stats().urgent == 1);
+}
+
+TEST(tracker_stamps_its_sid_and_shares_one_counter) {
+  World w; w.lose({10});
+  NackTracker base(cfg_on());
+  NackCfg c1 = cfg_on(); c1.sid = 1;
+  NackTracker enh(c1);
+  enh.share_counter(base);
+  auto a = base.poll(1000, w.in()); a = base.poll(1012, w.in());
+  REQUIRE(a.has_value());
+  CHECK(a->sid == 0 && a->counter == 1);
+  auto b = enh.poll(1000, w.in()); b = enh.poll(1012, w.in());
+  REQUIRE(b.has_value());
+  CHECK(b->sid == 1 && b->counter == 2);   // one counter across both layers
+  enh.restart_counter();                   // resets the shared counter
+  World w2; w2.lose({50});
+  auto c = base.poll(2000, w2.in()); c = base.poll(2012, w2.in());
+  REQUIRE(c.has_value());
+  CHECK(c->counter == 1);
+}
+
+TEST(live_while_a_request_may_still_be_answered) {
+  World w; w.lose({600});
+  NackCfg c = cfg_on(); c.max_tries = 1;
+  NackTracker t(c);
+  CHECK(!t.live(1000));                    // nothing admitted yet
+  CHECK(!t.poll(1000, w.in()).has_value());
+  CHECK(t.live(1000));                     // admitted, not yet asked
+  CHECK(t.poll(1012, w.in()).has_value()); // asked once = max_tries
+  CHECK(t.live(1012 + 16 + 23));           // answer may still land
+  CHECK(!t.live(1012 + 16 + 24));          // nothing more can come
 }
 
 MTEST_MAIN

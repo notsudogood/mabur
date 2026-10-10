@@ -1476,13 +1476,15 @@ TEST(nack_section_defaults_and_bounds) {
     CHECK(cfg.nack.ring_ms == 150 && cfg.nack.air_pct == 5);
     CHECK(cfg.nack.burst_ms == 20);
     CHECK(cfg.nack.queue == "vo");
+    CHECK(cfg.nack.enh);
     std::filesystem::remove(path);
   }
   {
-    auto path = write_temp_toml("[nack]\nring_ms = 300\nair_pct = 10\nburst_ms = 40\n");
+    auto path = write_temp_toml("[nack]\nring_ms = 300\nair_pct = 10\nburst_ms = 40\nenh = false\n");
     auto cfg = load_config(path.string());
     CHECK(cfg.nack.ring_ms == 300 && cfg.nack.air_pct == 10);
     CHECK(cfg.nack.burst_ms == 40);
+    CHECK(!cfg.nack.enh);
     std::filesystem::remove(path);
   }
   {

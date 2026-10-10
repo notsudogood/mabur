@@ -51,6 +51,12 @@ struct CalSweepCfg {
   // (see on_result(), which sets it from its own now_ms rather than
   // inheriting whatever was left over from the last phase finishing).
   uint32_t await_next_ms = 15000;
+  // Sweep frames carry the flight flags (2026-10-10): STBC always and LDPC
+  // per radio.ldpc, exactly what rc::ladder_from gives every video rung.
+  // Until then the sweep aired HT20 with both flags off -- a frame nobody
+  // flies, whose delivery wall sits 4-6 dB below the flight frame's at
+  // mcs4-7 (docs/bw40-sweep-findings-2026-09-23.md, TX-power walls).
+  bool ldpc = true;
 };
 
 // Sweeps the cells of one CalCmd at a time and reports the (rate, idx)

@@ -102,6 +102,21 @@ class FrameStream {
   // otherwise. Consumed by the NACK tail trigger (Task 6/7).
   std::optional<TailView> tail_view(uint8_t sid) const;
 
+  // Early give-up (2026-10-10): a mid-frame gap whose missing fragment
+  // nothing can still bring -- no repair on its way can include it and no
+  // retransmit is pending (the caller's predicate, over the gap's wire seq)
+  // -- finishes the frame now (slice salvage, or truncation) instead of
+  // waiting out the gap timeout with every later frame queued behind it.
+  // Bench and flight 2026-10-10: a lost 6-body aggregate cost an enhance
+  // frame ~60 ms here and put a 40 ms spike on the screen. Needs the
+  // fragment -> symbol map to be 1:1 for that sid (set_seq_map_ok): one
+  // fragment is one source symbol, consecutive within an AU.
+  void set_doom_check(std::function<bool(uint8_t sid, uint32_t seq)> f) { doom_ = std::move(f); }
+  void set_seq_map_ok(int sid, bool ok) {
+    if (sid >= 0 && sid <= 1) seq_map_ok_[sid] = ok;
+  }
+  uint64_t early_finished(uint8_t sid) const { return early_[sid <= 1 ? sid : 0]; }
+
  private:
   struct Slot {
     uint8_t sid = 0;
@@ -115,6 +130,9 @@ class FrameStream {
     uint64_t last_progress_ms = 0;  // last time emitted_upto advanced
     uint64_t last_arrival_ms = 0;   // last fragment arrival of this AU (any idx)
     uint16_t emitted_upto = 0;      // next chunk idx to emit
+    bool have_seq0 = false;         // a fragment with a known sw_seq arrived:
+    uint16_t idx0 = 0;              //   its idx and seq anchor the fragment ->
+    uint32_t seq0 = 0;              //   symbol map (early give-up)
     uint16_t max_idx = 0;           // highest idx seen with a known sw_seq
     uint32_t seq_at_max = 0;        // sw_seq of that fragment
     bool have_seq_at_max = false;   // false => no fragment with a known sw_seq yet
@@ -161,6 +179,9 @@ class FrameStream {
   mabur::hevc::ParamTracker params_;   // SPS/PPS from complete parameter-set AUs
   uint64_t slice_salvaged_ = 0, slices_kept_ = 0, slices_filled_ = 0, slices_after_hole_ = 0;
   uint64_t slice_fallback_[kSliceFbCount] = {};
+  std::function<bool(uint8_t, uint32_t)> doom_;
+  bool seq_map_ok_[2] = {false, false};
+  uint64_t early_[2] = {0, 0};
 };
 
 }  // namespace maburgs

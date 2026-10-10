@@ -457,6 +457,7 @@ void CalSession::finish_phase(uint64_t now_ms) {
 
     RateWall merged = fw;
     if (std::abs(fw.wall - cw.wall) > 1) merged.flags |= kCalDrift;
+    merged.flags |= cw.flags & kCalNoiseCell;  // coarse placed the fine window
     final_walls_[static_cast<size_t>(r)] = merged;
   }
   if (log_)

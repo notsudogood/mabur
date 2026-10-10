@@ -37,6 +37,11 @@ void FrameStream::push_fragment(uint8_t sid, const uint8_t* pkt, size_t len,
   if (s.chunks.empty()) { s.sid = sid; s.fseq = fseq; s.first_ms = now_ms;
                           s.last_progress_ms = now_ms; s.count = count; }
   s.chunks[idx].assign(pkt + 6, pkt + len);
+  if (arr.have_sw_seq && !s.have_seq0) {
+    s.have_seq0 = true;
+    s.idx0 = idx;
+    s.seq0 = arr.sw_seq;
+  }
   if (arr.have_sw_seq && (!s.have_seq_at_max || idx > s.max_idx)) {
     s.max_idx = idx;
     s.seq_at_max = arr.sw_seq;
@@ -156,6 +161,16 @@ void FrameStream::try_emit(uint64_t now_ms) {
     }
     if (head->sa) head->sa->drain(head->chunks, cb_.frame_data);
     if (head->emitted_upto == head->count) { finish(*head, true); continue; }
+    // Mid-frame gap nothing can still fill: finish now (set_doom_check).
+    if (doom_ && head->sid <= 1 && seq_map_ok_[head->sid] && head->have_seq0) {
+      const uint32_t gap_seq = head->seq0 + (static_cast<uint32_t>(head->emitted_upto) -
+                                             static_cast<uint32_t>(head->idx0));
+      if (doom_(head->sid, gap_seq)) {
+        ++early_[head->sid];
+        finish(*head, false);
+        continue;
+      }
+    }
     // Mid-frame gap: give repairs gap_timeout_ms to fill it; force-advance
     // if the stream has run lookahead frames ahead.
     bool stale = now_ms >= head->last_progress_ms + gap_ms(head->sid);

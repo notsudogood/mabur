@@ -1650,6 +1650,18 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   std::fprintf(stderr, "maburd: nack retx ring %zu slots x %zu B = %zu B (ring_ms %d at %d kbps)\n",
                retx.slots(), retx_env_len, retx.slots() * retx_env_len, cfg.nack.ring_ms,
                cfg.encoder.bitrate_max_kbps);
+  // 2026-10-10: the enhance layer's own ring ([nack] enh): a lost 6-body
+  // aggregate takes a whole enh frame's worth of symbols, more than its 25%
+  // repair overhead can rebuild, and the GS now asks for those too. Sized
+  // for the enh share of the stream (0.4 of it) at its own symbol_size.
+  const size_t retx_env_len1 = static_cast<size_t>(mabur::sw::kSwHeaderLen) + static_cast<size_t>(cfg.fec.symbol_size[1]);
+  mabur::RetxRing retx1(cfg.nack.enh ? mabur::RetxRing::slots_for(cfg.encoder.bitrate_max_kbps, cfg.nack.ring_ms,
+                                                                  cfg.fec.symbol_size[1], 0.4)
+                                     : 1,
+                        retx_env_len1);
+  if (cfg.nack.enh)
+    std::fprintf(stderr, "maburd: nack enh retx ring %zu slots x %zu B = %zu B\n",
+                 retx1.slots(), retx_env_len1, retx1.slots() * retx_env_len1);
   std::function<void(const uint8_t*, size_t)> nack_hook;
   std::atomic<uint64_t> nack_rx{0}, nack_bad{0}, retx_syms{0}, retx_refused{0}, retx_miss{0};
   auto rx_callback = [&](const Packet& pkt) {
@@ -1802,7 +1814,11 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   TokenBucket retx_bucket(64.0);  // re-sized from the op at every refill
   mabur::SbiPacker retx_packer(static_cast<int>(retx_env_len), cfg.fec.blocks_per_body[0],
                                static_cast<uint8_t>(0 | mabur::kSbiRetxMark));
-  std::vector<uint8_t> retx_env(retx_env_len);
+  // Enhance re-sends: same bucket (one air budget for both layers), their
+  // own packer so the SBI stream byte routes them to the GS's enh decoder.
+  mabur::SbiPacker retx_packer1(static_cast<int>(retx_env_len1), cfg.fec.blocks_per_body[1],
+                                static_cast<uint8_t>(1 | mabur::kSbiRetxMark));
+  std::vector<uint8_t> retx_env(std::max(retx_env_len, retx_env_len1));
   std::vector<std::vector<uint8_t>> retx_out;
   nack_hook = [&](const uint8_t* body, size_t len) {
     // A malformed frame (radio corruption, sid != 0) counts nack_bad only;
@@ -1821,20 +1837,30 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     if (op) retx_bucket.set_depth(TokenBucket::depth_for(sym_per_s, cfg.nack.burst_ms));
     retx_bucket.refill(now_steady_us(), sym_per_s * cfg.nack.air_pct / 100.0);
     const bool twice = (n->flags & rc::kNackFlagRepeat) != 0;
-    const double cost = twice ? 2.0 : 1.0;
+    // The bucket counts base-envelope-sized symbols: an enh symbol costs its
+    // size relative to that.
+    const bool enh = n->sid == 1;
+    if (enh && !cfg.nack.enh) {
+      nack_bad.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+    const size_t env_len = enh ? retx_env_len1 : retx_env_len;
+    const double cost = (twice ? 2.0 : 1.0) * static_cast<double>(env_len) / static_cast<double>(retx_env_len);
+    mabur::RetxRing& ring = enh ? retx1 : retx;
+    mabur::SbiPacker& packer = enh ? retx_packer1 : retx_packer;
     retx_out.clear();
     for (uint8_t i = 0; i < n->n; ++i) {
       for (int b = 0; b < 32; ++b) {
         if (!(n->e[i].bitmap & (1u << b))) continue;
         const uint32_t seq = n->e[i].first_seq + static_cast<uint32_t>(b);
-        if (!retx.get(seq, retx_env.data())) { retx_miss.fetch_add(1, std::memory_order_relaxed); continue; }
+        if (!ring.get(seq, retx_env.data())) { retx_miss.fetch_add(1, std::memory_order_relaxed); continue; }
         if (!retx_bucket.take(cost)) { retx_refused.fetch_add(1, std::memory_order_relaxed); continue; }
         retx_syms.fetch_add(1, std::memory_order_relaxed);
-        auto out = retx_packer.add_one(retx_env.data(), retx_env.size());
+        auto out = packer.add_one(retx_env.data(), env_len);
         if (!out.empty()) retx_out.push_back(std::move(out));
       }
     }
-    auto tail = retx_packer.flush_one();
+    auto tail = packer.flush_one();
     if (!tail.empty()) retx_out.push_back(std::move(tail));
     // push_front stacks, so push each pass back-to-front: the bodies then
     // leave in request order (pass 1 then pass 2) ahead of queued video.
@@ -1886,8 +1912,10 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     // unpinned). Sending it to kRestCore is what makes the policy a win.
     FecWorker fec_worker(two_core_target() ? kRestCore : -1);
     UepEncoder uep(cfg.uep_layers(), cfg.fec.flush_ms, &fec_worker);
-    uep.set_source_tap([&retx](uint8_t sid, uint32_t seq, const uint8_t* env, size_t n) {
-      if (sid == 0) retx.put(seq, env, n);  // base layer only (fec-nack)
+    const bool enh_retx = cfg.nack.enh;
+    uep.set_source_tap([&retx, &retx1, enh_retx](uint8_t sid, uint32_t seq, const uint8_t* env, size_t n) {
+      if (sid == 0) retx.put(seq, env, n);
+      else if (sid == 1 && enh_retx) retx1.put(seq, env, n);  // [nack] enh, 2026-10-10
     });
 
     // Probe stream (spec 2026-09-04 §2): same FEC geometry as the enh layer
@@ -2279,7 +2307,9 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   std::thread tx_thread([&]() {
     name_thread("mbr-txw");
     std::vector<UepBody> batch;
-    CalSweep cal_sweep(CalSweepCfg{});
+    CalSweepCfg cal_cfg;
+    cal_cfg.ldpc = cfg.radio.ldpc;
+    CalSweep cal_sweep(cal_cfg);
     DevicePowerCtl pwr;
     pwr.dev = rtl_device.get();
     pwr.gate = &tx_gate;

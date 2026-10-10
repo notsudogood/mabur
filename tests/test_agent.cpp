@@ -1971,9 +1971,9 @@ TEST(nack_check_separates_malformed_from_rejected) {
   CHECK(!agent.take_auth_reject());
   CHECK(agent.check_nack(good.data(), 5, &out) == RcAgent::NackCheck::kMalformed);  // truncated
   CHECK(!agent.take_auth_reject());
-  // Wrong stream: malformed too.
-  Nack s1 = n; s1.sid = 1;
-  auto wsid = pack_nack(s1, mabur::kDefaultLinkKey, TagCtx{kVrx, vtx, 3});
+  // Wrong stream (not base, not enhance): malformed too.
+  Nack s2 = n; s2.sid = 2;
+  auto wsid = pack_nack(s2, mabur::kDefaultLinkKey, TagCtx{kVrx, vtx, 3});
   CHECK(agent.check_nack(wsid.data(), wsid.size(), &out) == RcAgent::NackCheck::kMalformed);
   CHECK(!agent.take_auth_reject());
   // Parsed, but tagged under the wrong ctx: rejected, auth_reject raised.
@@ -1987,6 +1987,12 @@ TEST(nack_check_separates_malformed_from_rejected) {
   // Replay of the same counter: rejected.
   CHECK(agent.check_nack(good.data(), good.size(), &out) == RcAgent::NackCheck::kRejected);
   CHECK(agent.take_auth_reject());
+  // The enhance layer (2026-10-10) on the same counter sequence: accepted.
+  Nack e1 = n; e1.sid = 1; e1.counter = 4;
+  auto enh = pack_nack(e1, mabur::kDefaultLinkKey, TagCtx{kVrx, vtx, 4});
+  CHECK(agent.check_nack(enh.data(), enh.size(), &out) == RcAgent::NackCheck::kOk);
+  CHECK(out.sid == 1 && out.counter == 4);
+  CHECK(!agent.take_auth_reject());
 }
 
 MTEST_MAIN

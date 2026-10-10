@@ -105,7 +105,8 @@ bool RcAgent::accept_nack_counter(uint32_t counter, uint64_t session) {
 
 RcAgent::NackCheck RcAgent::check_nack(const uint8_t* body, size_t len, rc::Nack* out) {
   auto n = rc::parse_nack(body, len);
-  if (!n || n->sid != 0) return NackCheck::kMalformed;
+  // sid 0 (base) and, since 2026-10-10, 1 (enhance); anything else is not ours.
+  if (!n || n->sid > 1) return NackCheck::kMalformed;
   uint64_t session = 0;
   if (!verify_session_tagged(body, len, n->counter, &session) ||
       !accept_nack_counter(n->counter, session)) {

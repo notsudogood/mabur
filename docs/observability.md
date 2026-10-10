@@ -627,7 +627,13 @@ read the sideport. Reach for other tools only in these cases:**
   ~4 s of pts (drone clock), `panel=` the screen rate, `phase=` the median
   time from a frame's capture to its next release deadline, `target=` where
   the loop holds it, `err=` the wrapped difference, `cmd=` the milli-fps
-  setpoint sent (0 when observing), `n=` frames that second. The 1 Hz
+  setpoint sent (0 when observing), `n=` frames that second, `fps=` frames
+  per real second (the 1:1 check: low power reads ~30), and two diagnostics
+  of the raw pts the player sees, `pstep=` (median forward step, µs) and
+  `pback=` (steps that went backwards or repeated). `cam=` is the phase
+  slope against capture time (`f_screen × (1 + slope)`), not a pts step —
+  the 2026-10-10 bench read `cam=0` at 60 fps from pts steps while the phase
+  slope showed the beat exactly. The 1 Hz
   `regulator:` line (format below) is written there too since the same
   day — its counters are cumulative per player process, and flightreport's
   DISPLAY SMOOTHNESS section differences them (a drop = a player restart).

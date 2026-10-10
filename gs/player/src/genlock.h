@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace maburplay {
@@ -30,6 +31,15 @@ namespace maburplay {
 // the camera locked there, that share of frames is ready by its deadline and
 // shows at c + target, the rest one refresh later.
 //
+// The camera's rate comes from the same phase: delta drifts by (P - T_cam) per
+// frame, so its slope against capture time is f_cam / f_screen - 1. That is
+// a least-squares fit over the last few seconds of (capture, phase) points,
+// sorted by capture time -- it needs no frame order and survives repeated
+// timestamps (bench 2026-10-10: the per-frame pts steps the player sees did
+// not give the camera's period, while the phase slope read the beat exactly).
+// Whether the camera runs one frame per refresh at all (low power's 30 fps
+// does not) is judged from frames per real second between ticks.
+//
 // What it does: once a tick (~1 s), a PI loop on the wrapped phase error
 // turns into a camera-rate setpoint in milli-fps, sent to the drone, which
 // trims its sensor's frame length. The first setpoint is a feed-forward from
@@ -50,7 +60,7 @@ class Genlock {
 
   static constexpr int kMinFrames = 20;       // per tick, to say anything
   static constexpr size_t kReadyRing = 600;   // ~10 s of x for the quantile
-  static constexpr size_t kPtsRing = 240;     // ~4 s of pts steps
+  static constexpr size_t kSlopeRing = 240;   // ~4 s of (capture, phase) points
 
   Genlock() : Genlock(Params{}) {}
   explicit Genlock(Params p) : p_(p) {}
@@ -63,26 +73,38 @@ class Genlock {
                 uint64_t flip_phase_us, double period_us, uint64_t lead_us) {
     if (period_us <= 0) return;
     period_us_ = period_us;
-    if (have_pts_ && pts64_us > last_pts_) {
-      push_ring(pts_steps_, static_cast<double>(pts64_us - last_pts_), kPtsRing, pts_pos_);
+    // Diagnostic only (the `pstep=` / `pback=` log fields): what the raw
+    // pts sequence looks like from here.
+    if (have_pts_) {
+      const int64_t d = static_cast<int64_t>(pts64_us - last_pts_);
+      if (d > 0) push_ring(pts_steps_, static_cast<double>(d), kSlopeRing, pts_pos_);
+      else ++pts_back_;
     }
-    if (!have_pts_ || pts64_us > last_pts_) {
-      last_pts_ = pts64_us;
-      have_pts_ = true;
-    }
+    last_pts_ = pts64_us;
+    have_pts_ = true;
     const double x = static_cast<double>(static_cast<int64_t>(ready_us - capture_us));
     // A frame later than two periods misses whatever the phase; keeping it
     // out stops a loss burst from dragging the target around.
     push_ring(ready_, std::clamp(x, 0.0, 2.0 * period_us), kReadyRing, ready_pos_);
     const double d = static_cast<double>(static_cast<int64_t>(flip_phase_us - lead_us)) -
                      static_cast<double>(capture_us);
-    phases_.push_back(wrap0p(d, period_us));
+    const double delta = wrap0p(d, period_us);
+    phases_.push_back(delta);
+    if (slope_.size() < kSlopeRing) {
+      slope_.push_back({static_cast<double>(capture_us), delta});
+    } else {
+      slope_[slope_pos_] = {static_cast<double>(capture_us), delta};
+      slope_pos_ = (slope_pos_ + 1) % kSlopeRing;
+    }
   }
 
   struct Tick {
     bool valid = false;     // enough frames this tick to measure the phase
     double cam_hz = 0;      // camera rate on the drone clock, 0 = unknown
     double panel_hz = 0;    // screen rate
+    double fps = 0;         // frames per real second since the last tick
+    double pstep_us = 0;    // diagnostic: median forward pts step seen
+    int pts_back = 0;       // diagnostic: pts steps <= 0 this tick
     double phase_ms = 0;    // capture -> next deadline (median)
     double target_ms = 0;   // where the phase is being held (mod one period)
     double err_ms = 0;      // phase - target, wrapped to +-half a period
@@ -91,10 +113,18 @@ class Genlock {
     int n = 0;              // frames this tick
   };
 
-  // ~1 Hz. steer=false measures only (no setpoint, integrator untouched).
-  Tick tick(bool steer) {
+  // ~1 Hz, now_us on the same clock as on_frame's times. steer=false
+  // measures only (no setpoint, integrator untouched).
+  Tick tick(bool steer, uint64_t now_us) {
     Tick t;
     t.n = static_cast<int>(phases_.size());
+    if (have_tick_ && now_us > last_tick_us_)
+      t.fps = t.n * 1e6 / static_cast<double>(now_us - last_tick_us_);
+    last_tick_us_ = now_us;
+    have_tick_ = true;
+    t.pts_back = pts_back_;
+    pts_back_ = 0;
+    if (!pts_steps_.empty()) t.pstep_us = median(pts_steps_);
     const double P = period_us_;
     if (P <= 0 || t.n < kMinFrames) {
       phases_.clear();
@@ -102,14 +132,8 @@ class Genlock {
     }
     t.valid = true;
     t.panel_hz = 1e6 / P;
-    // Camera period: median single-frame pts step. Steps outside 0.5..1.5
-    // periods are a dropped frame or a non-1:1 rate (low power), not cadence.
-    std::vector<double> steps;
-    for (double s : pts_steps_)
-      if (s > 0.5 * P && s < 1.5 * P) steps.push_back(s);
-    double cam_period = 0;
-    if (steps.size() >= static_cast<size_t>(kMinFrames)) cam_period = median(steps);
-    if (cam_period > 0) t.cam_hz = 1e6 / cam_period;
+    const double slope = phase_slope(P);
+    if (slope_.size() >= static_cast<size_t>(kMinFrames)) t.cam_hz = t.panel_hz * (1.0 + slope);
 
     const double target_raw = quantile(ready_, 1.0 - p_.miss_frac);
     if (!have_target_) {
@@ -128,10 +152,12 @@ class Genlock {
     t.phase_ms = wrap0p(target_mod + err_us, P) / 1000.0;
     phases_.clear();
 
-    // Steer only a camera that runs 1:1 against the screen: within 1% of
-    // its period. Anything else (low power's 30 fps, no estimate yet) holds
-    // whatever the drone has.
-    const bool steerable = cam_period > 0 && std::fabs(cam_period - P) <= 0.01 * P;
+    // Steer only a camera that runs 1:1 against the screen: one frame per
+    // refresh by the clock (low power's 30 fps is not), and a rate within 1%
+    // of the screen's. Anything else holds whatever the drone has.
+    const bool one_to_one = t.fps >= 0.8 * t.panel_hz && t.fps <= 1.2 * t.panel_hz;
+    const bool steerable = one_to_one && t.cam_hz > 0 &&
+                           std::fabs(t.cam_hz - t.panel_hz) <= 0.01 * t.panel_hz;
     if (!steer || !steerable) return t;
 
     const double nominal = std::round(t.cam_hz) * 1000.0;
@@ -155,10 +181,49 @@ class Genlock {
   }
 
   // Forget the setpoint history (the next steering tick re-seeds from the
-  // feed-forward). For a drone restart or a camera-mode change.
-  void reset_steering() { have_cmd_ = false; }
+  // feed-forward) and the old pts space's phase points. For a drone restart.
+  void reset_steering() {
+    have_cmd_ = false;
+    slope_.clear();
+    slope_pos_ = 0;
+  }
 
  private:
+  // d(phase)/d(capture) by least squares over the ring, sorted by capture
+  // time and unwrapped point to point; one pass drops points more than 3x
+  // the median residual (an anchor snap, a stray frame) and refits.
+  double phase_slope(double P) const {
+    if (slope_.size() < 3) return 0;
+    std::vector<std::pair<double, double>> pts(slope_.begin(), slope_.end());
+    std::sort(pts.begin(), pts.end());
+    for (size_t i = 1; i < pts.size(); ++i)
+      pts[i].second = pts[i - 1].second + wrap_half(pts[i].second - pts[i - 1].second, P);
+    auto fit = [](const std::vector<std::pair<double, double>>& v, double* a, double* b) {
+      double mx = 0, my = 0;
+      for (const auto& p : v) { mx += p.first; my += p.second; }
+      mx /= v.size();
+      my /= v.size();
+      double sxx = 0, sxy = 0;
+      for (const auto& p : v) {
+        sxx += (p.first - mx) * (p.first - mx);
+        sxy += (p.first - mx) * (p.second - my);
+      }
+      *b = sxx > 0 ? sxy / sxx : 0;
+      *a = my - *b * mx;
+    };
+    double a = 0, b = 0;
+    fit(pts, &a, &b);
+    std::vector<double> res;
+    res.reserve(pts.size());
+    for (const auto& p : pts) res.push_back(std::fabs(p.second - (a + b * p.first)));
+    const double cut = 3.0 * median(res) + 1.0;
+    std::vector<std::pair<double, double>> keep;
+    for (size_t i = 0; i < pts.size(); ++i)
+      if (res[i] <= cut) keep.push_back(pts[i]);
+    if (keep.size() >= 3 && keep.size() < pts.size()) fit(keep, &a, &b);
+    return b;
+  }
+
   static void push_ring(std::vector<double>& r, double v, size_t cap, size_t& pos) {
     if (r.size() < cap) {
       r.push_back(v);
@@ -195,10 +260,15 @@ class Genlock {
   std::vector<double> phases_;
   std::vector<double> ready_;
   size_t ready_pos_ = 0;
-  std::vector<double> pts_steps_;
+  std::vector<std::pair<double, double>> slope_;  // (capture_us, phase_us)
+  size_t slope_pos_ = 0;
+  std::vector<double> pts_steps_;  // diagnostic
   size_t pts_pos_ = 0;
+  int pts_back_ = 0;
   uint64_t last_pts_ = 0;
   bool have_pts_ = false;
+  uint64_t last_tick_us_ = 0;
+  bool have_tick_ = false;
   bool have_target_ = false;
   double target_us_ = 0;
   bool have_cmd_ = false;

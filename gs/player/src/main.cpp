@@ -1894,15 +1894,16 @@ int main(int argc, char** argv) {
       // parsers match "lat:" only), so a flight shows the camera/screen
       // phase whether or not the loop was steering.
       if (cfg.display.vsync_lock) {
-        const auto gt = genlock.tick(cfg.display.genlock);
+        const auto gt = genlock.tick(cfg.display.genlock, mono_us());
         if (gt.steering) genlock_cli.send(gt.cmd_mfps);
         if (gt.valid) {
-          char gl_buf[192];
+          char gl_buf[224];
           std::snprintf(gl_buf, sizeof(gl_buf),
                         "genlock: on=%d cam=%.3f panel=%.3f phase=%.1f target=%.1f "
-                        "err=%.1f cmd=%u n=%d",
+                        "err=%.1f cmd=%u n=%d fps=%.1f pstep=%.0f pback=%d",
                         gt.steering ? 1 : 0, gt.cam_hz, gt.panel_hz, gt.phase_ms,
-                        gt.target_ms, gt.err_ms, static_cast<unsigned>(gt.cmd_mfps), gt.n);
+                        gt.target_ms, gt.err_ms, static_cast<unsigned>(gt.cmd_mfps), gt.n,
+                        gt.fps, gt.pstep_us, gt.pts_back);
           std::fprintf(stderr, "%s\n", gl_buf);
           lat_log.write(mono_us(), gl_buf);
         }

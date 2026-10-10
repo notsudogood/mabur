@@ -41,8 +41,10 @@ struct SimResult {
 
 // Panel 60.000 Hz; drone clock 10 ppm off the GS's; uplink delay `delay`
 // ticks; every `lose_every`-th setpoint lost (0 = none).
+// order: 0 = frames reach the player in capture order; 1 = each pair swapped
+// (t+1 before t); 2 = every second frame repeats the previous frame's pts.
 SimResult simulate(bool steer, int seconds, int settle_s, int delay, int lose_every,
-                   Genlock::Params params = {}) {
+                   Genlock::Params params = {}, int order = 0) {
   Genlock g(params);
   Sensor sensor;
   Lcg rng;
@@ -59,6 +61,9 @@ SimResult simulate(bool steer, int seconds, int settle_s, int delay, int lose_ev
   double lat_sum = 0;
   int lat_n = 0, ready_ok = 0;
   double target_ms = 0;
+  uint64_t frame_no = 0;
+  struct Pending { uint64_t pts, c, ready, flip; bool have = false; } held;
+  double prev_t_drone = 0, prev_c = 0;
   while (t_drone < 1e6 * (seconds + 1)) {
     t_drone += sensor.period_us(applied);
     const double cap_gs = t_drone * skew;
@@ -69,9 +74,28 @@ SimResult simulate(bool steer, int seconds, int settle_s, int delay, int lose_ev
     const double ready = c + x;
     const double k = std::floor((ready - grid0) / P);
     const double flip_phase = grid0 + k * P;
-    g.on_frame(static_cast<uint64_t>(t_drone), static_cast<uint64_t>(c),
-               static_cast<uint64_t>(ready), static_cast<uint64_t>(flip_phase), P,
-               static_cast<uint64_t>(lead));
+    double pts_d = t_drone, c_d = c;
+    if (order == 2 && (frame_no % 2) == 1) {  // repeated timestamp
+      pts_d = prev_t_drone;
+      c_d = prev_c;
+    }
+    prev_t_drone = t_drone;
+    prev_c = c;
+    const Pending cur{static_cast<uint64_t>(pts_d), static_cast<uint64_t>(c_d),
+                      static_cast<uint64_t>(ready), static_cast<uint64_t>(flip_phase), true};
+    auto feed = [&](const Pending& f) { g.on_frame(f.pts, f.c, f.ready, f.flip, P, static_cast<uint64_t>(lead)); };
+    if (order == 1) {
+      if (!held.have) {
+        held = cur;
+      } else {
+        feed(cur);   // the later frame first
+        feed(held);
+        held.have = false;
+      }
+    } else {
+      feed(cur);
+    }
+    ++frame_no;
     if (tick_no >= settle_s) {
       // Shown at the first deadline (refresh - lead) at or after ready.
       const double n = std::ceil((ready - (grid0 - lead)) / P);
@@ -83,7 +107,7 @@ SimResult simulate(bool steer, int seconds, int settle_s, int delay, int lose_ev
     if (cap_gs >= next_tick) {
       next_tick += 1e6;
       ++tick_no;
-      const auto t = g.tick(steer);
+      const auto t = g.tick(steer, static_cast<uint64_t>(cap_gs));
       r.ticks.push_back(t);
       target_ms = t.target_ms;
       if (t.steering) {
@@ -150,17 +174,37 @@ TEST(locked_is_faster_on_average_than_free_running) {
 }
 
 TEST(does_not_steer_a_camera_off_the_screen_rate) {
-  // Low power delivers every other frame: steps are two periods, not one.
+  // Low power delivers every other frame: 30 a second against a 60 Hz
+  // screen. The sensor itself still runs at 60, and the phase slope says so.
   Genlock g;
   const double P = 1e6 / 60.0;
-  for (int i = 0; i < 60; ++i) {
-    const uint64_t pts = 1'000'000 + static_cast<uint64_t>(i * 2 * P);
-    g.on_frame(pts, pts + 3000, pts + 13000, pts, P, 6000);
+  g.tick(true, 1'000'000);
+  for (int s = 0; s < 3; ++s) {
+    for (int i = 0; i < 30; ++i) {
+      const uint64_t pts = 1'000'000 + static_cast<uint64_t>((s * 30 + i) * 2 * P);
+      g.on_frame(pts, pts + 3000, pts + 13000, pts, P, 6000);
+    }
+    auto t = g.tick(true, 1'000'000 + static_cast<uint64_t>((s + 1) * 1e6));
+    CHECK(t.valid);
+    CHECK(std::fabs(t.fps - 30.0) < 1.0);
+    CHECK(!t.steering);
   }
-  auto t = g.tick(true);
-  CHECK(t.valid);
-  CHECK(t.cam_hz == 0);
-  CHECK(!t.steering);
+}
+
+TEST(camera_rate_survives_reordered_and_repeated_timestamps) {
+  // Bench 2026-10-10: the player's per-frame pts steps did not give the
+  // camera's period. The phase slope must not care about frame order or a
+  // repeated timestamp.
+  for (int order = 1; order <= 2; ++order) {
+    auto r = simulate(false, 20, 5, 2, 0, Genlock::Params{}, order);
+    REQUIRE(r.ticks.size() > 10);
+    const auto& t = r.ticks.back();
+    CHECK(t.valid);
+    CHECK(std::fabs(t.cam_hz - 60.078) < 0.005);
+    CHECK(std::fabs(t.fps - 60.0) < 2.0);
+  }
+  auto locked = simulate(true, 240, 60, 2, 5, Genlock::Params{}, 1);
+  CHECK(max_abs(locked.errs_ms) < 3.0);
 }
 
 TEST(too_few_frames_is_not_a_measurement) {
@@ -170,7 +214,7 @@ TEST(too_few_frames_is_not_a_measurement) {
     const uint64_t pts = 1'000'000 + static_cast<uint64_t>(i * P);
     g.on_frame(pts, pts, pts + 10000, pts, P, 6000);
   }
-  auto t = g.tick(true);
+  auto t = g.tick(true, 2'000'000);
   CHECK(!t.valid);
   CHECK(!t.steering);
 }

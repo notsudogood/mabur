@@ -2501,6 +2501,7 @@ if __name__ == "__main__":
     test_camera_clock_from_pts_ignores_lost_frames()
     test_display_clock_section_free_running_beat()
     test_display_clock_section_reports_steering()
+    test_display_clock_section_separates_calibration()
     test_display_clock_section_silent_without_logs()
     test_smoothness_section_differences_counters_across_a_restart()
     test_smoothness_section_counts_full_rate_holes_not_low_power()

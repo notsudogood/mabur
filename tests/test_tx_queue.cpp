@@ -35,6 +35,47 @@ TEST(overflow_drops_oldest) {
   CHECK(out[2].body[0] == 4);
 }
 
+// fec-nack: retransmits parked at the head by push_front are the bodies the
+// GS is waiting on. Overflow must drop the oldest VIDEO behind them, not them.
+TEST(overflow_keeps_retransmits_at_the_head) {
+  TxQueue q(3);
+  q.push(body(1));
+  q.push(body(2));
+  q.push(body(3));          // full
+  q.push_front(body(0xB));  // may exceed cap: 4 queued
+  q.push_front(body(0xA));  // stacks ahead: A, B, 1, 2, 3
+  q.push(body(4));          // full: drops video 1, not A or B
+  CHECK(q.dropped() == 1);
+  std::vector<UepBody> out;
+  CHECK(q.pop_batch(out, 2, 0) == 2);
+  CHECK(out[0].body[0] == 0xA && out[0].retx);
+  CHECK(out[1].body[0] == 0xB && out[1].retx);
+  q.push(body(5));          // retransmits gone: plain drop-oldest again (2)
+  out.clear();
+  CHECK(q.pop_batch(out, 8, 0) == 3);
+  CHECK(out[0].body[0] == 3 && !out[0].retx);
+  CHECK(out[2].body[0] == 5);
+  CHECK(q.dropped() == 2);
+}
+
+TEST(a_queue_of_only_retransmits_still_bounds_video) {
+  TxQueue q(2);
+  q.push_front(body(0xA));
+  q.push_front(body(0xB));
+  q.push(body(1));          // full of retransmits: the oldest of them goes
+  CHECK(q.dropped() == 1);
+  std::vector<UepBody> out;
+  CHECK(q.pop_batch(out, 8, 0) == 2);
+  CHECK(out[0].body[0] == 0xB && out[1].body[0] == 1);
+  q.drain();
+  q.push(body(2));
+  q.push(body(3));
+  q.push(body(4));          // counter reset by drain: plain drop-oldest
+  out.clear();
+  CHECK(q.pop_batch(out, 8, 0) == 2);
+  CHECK(out[0].body[0] == 3);
+}
+
 // feed_batch: with set_batch(G), a blocked pop_batch is not woken until G
 // un-notified bodies accumulate — the designed feed grouping that lets URBs
 // fill (3 descriptors) and A-MPDU aggregates form, instead of the per-body

@@ -7,6 +7,7 @@
 #include <optional>
 #include <vector>
 
+#include "TxMode.h"
 #include "mabur/profile.h"
 #include "mabur/uep_encoder.h"
 
@@ -62,10 +63,16 @@ class FrameSink {
 // A future task can add it once the radio's per-packet power path exists.
 class RadioTx {
  public:
-  explicit RadioTx(FrameSink& sink);
+  // retx_queue: the hardware queue retransmit bodies (UepBody::retx, the
+  // fec-nack re-sends) ride. A higher-priority queue airs ahead of video
+  // already waiting inside the chip -- which push_front cannot overtake --
+  // where Default shares video's queue (upstream's behaviour). Jaguar3 only;
+  // other chips ignore it (devourer TxMode::hw_queue).
+  explicit RadioTx(FrameSink& sink, devourer::HwQueue retx_queue = devourer::HwQueue::Default);
 
   // Rebuilds the radiotap cache: slot 0/1 = the video ladder, slot 2 = the
-  // probe stream's MCS (spec 2026-09-04) or empty when probe is nullopt.
+  // probe stream's MCS (spec 2026-09-04) or empty when probe is nullopt,
+  // slot 3 = the base layer's mode on retx_queue (retransmits).
   void set_ladder(const std::array<rc::LayerTxSpec, 2>& ladder,
                   const std::optional<rc::LayerTxSpec>& probe);
 
@@ -99,16 +106,17 @@ class RadioTx {
     std::vector<uint8_t> radiotap;
   };
   struct Cache {
-    std::array<LayerCache, 3> layers;
+    std::array<LayerCache, 4> layers;  // video 0/1, probe, retransmit
   };
 
   // Builds `radiotap | dot11(seq_) | body` into out, consuming seq_. False
   // (drop counted) when the radiotap cache has no entry for the effective
   // bw (send before set_ladder).
   bool build_frame(const Cache& cache, uint8_t stream_id, const uint8_t* body,
-                   size_t len, std::vector<uint8_t>& out);
+                   size_t len, std::vector<uint8_t>& out, bool retx = false);
 
   FrameSink& sink_;
+  devourer::HwQueue retx_queue_;
   std::atomic<std::shared_ptr<Cache>> cache_;
   uint16_t seq_ = 0;
   uint64_t sent_ = 0;

@@ -38,6 +38,10 @@ struct UepBody {
   // whose q_ms the GS latches as the frame's dq. Lets the tx thread report
   // a queue-wait figure directly comparable to the GS dq segment.
   bool au_first = false;
+  // fec-nack: a retransmit body (TxQueue::push_front). Drone-local, never
+  // serialized (the SBI header carries the wire mark): TxQueue keeps it out
+  // of drop-oldest, RadioTx sends it on the retransmit hardware queue.
+  bool retx = false;
 };
 
 // Receives each body the instant its SBI group seals, while later FEC blocks

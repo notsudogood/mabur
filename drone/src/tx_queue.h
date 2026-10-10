@@ -40,7 +40,14 @@ class TxQueue {
       std::lock_guard<std::mutex> l(m_);
       if (closed_) return;
       if (q_.size() >= cap_) {
-        q_.pop_front();
+        // Drop the oldest VIDEO body: the retransmits push_front parked at
+        // the head are the ones the GS is waiting on, and dropping them
+        // first (plain pop_front) wasted the request exactly when the queue
+        // was backed up. Only a queue of nothing but retransmits drops one:
+        // the oldest, deepest in the stack push_front builds.
+        const size_t victim = front_retx_ < q_.size() ? front_retx_ : front_retx_ - 1;
+        if (victim < front_retx_) --front_retx_;
+        q_.erase(q_.begin() + static_cast<std::ptrdiff_t>(victim));
         ++dropped_;
       }
       q_.push_back(std::move(b));
@@ -52,12 +59,15 @@ class TxQueue {
 
   // fec-nack (spec 2026-10-05 §4.2): a retransmit body jumps the line -- it is
   // the one the GS is waiting on -- and wakes the consumer at once. May
-  // exceed cap_ by the retransmit count (never drops video for it).
+  // exceed cap_ by the retransmit count (never drops video for it). Marks
+  // the body retx; push() overflow skips the retransmits at the head.
   void push_front(UepBody&& b) {
     {
       std::lock_guard<std::mutex> l(m_);
       if (closed_) return;
+      b.retx = true;
       q_.push_front(std::move(b));
+      ++front_retx_;
       pending_ = 0;
     }
     cv_.notify_one();
@@ -84,6 +94,7 @@ class TxQueue {
     }
     size_t n = 0;
     while (n < max_n && !q_.empty()) {
+      if (q_.front().retx && front_retx_ > 0) --front_retx_;
       out.push_back(std::move(q_.front()));
       q_.pop_front();
       ++n;
@@ -102,6 +113,7 @@ class TxQueue {
     std::lock_guard<std::mutex> l(m_);
     q_.clear();
     pending_ = 0;
+    front_retx_ = 0;
   }
 
   void close() {
@@ -130,6 +142,7 @@ class TxQueue {
   uint64_t dropped_ = 0;
   size_t batch_ = 1;    // wakeup group size; 1 = signal every push
   size_t pending_ = 0;  // pushes since the last signal
+  size_t front_retx_ = 0;  // retransmits parked at the head (push_front), contiguous
 };
 
 }  // namespace mabur

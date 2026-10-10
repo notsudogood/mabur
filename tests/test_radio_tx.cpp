@@ -315,6 +315,48 @@ TEST(probe_frames_are_no_agg_and_video_frames_are_not) {
   CHECK(radiotap_no_agg(sink.frames_[2]));
 }
 
+// fec-nack re-sends (UepBody::retx) fly at the base layer's mode on their
+// own hardware queue, so they air ahead of video already inside the chip;
+// video and the probe never carry the queue code.
+TEST(retransmits_ride_the_retx_queue_at_the_base_mode) {
+  CaptureSink sink;
+  RadioTx tx(sink, devourer::HwQueue::VO);
+  auto ladder = ladder_from(PhyMode::HT, 4, 20);
+  tx.set_ladder(ladder, std::nullopt);
+  std::vector<UepBody> bodies(3);
+  bodies[0].stream_id = 0; bodies[0].body = {0x01};
+  bodies[1].stream_id = 0; bodies[1].body = {0x02}; bodies[1].retx = true;
+  bodies[2].stream_id = 1; bodies[2].body = {0x03};
+  CHECK(tx.send_bodies(bodies) == 3);
+  REQUIRE(sink.frames_.size() == 3);
+  auto queue = [](const std::vector<uint8_t>& f) {
+    return devourer::radiotap_tx_queue_code(read_le16(f.data() + 8));
+  };
+  CHECK(queue(sink.frames_[0]) == 0);
+  CHECK(queue(sink.frames_[1]) == static_cast<uint8_t>(devourer::HwQueue::VO));
+  CHECK(queue(sink.frames_[2]) == 0);
+  devourer::TxMode want_mode = to_tx_mode(ladder[0], ladder[0].bw);
+  want_mode.hw_queue = devourer::HwQueue::VO;
+  const auto want = devourer::build_stream_radiotap(want_mode);
+  CHECK(std::equal(want.begin(), want.end(), sink.frames_[1].begin()));
+}
+
+TEST(default_retx_queue_keeps_retransmits_on_videos_queue) {
+  CaptureSink sink;
+  RadioTx tx(sink);
+  auto ladder = ladder_from(PhyMode::HT, 4, 20);
+  tx.set_ladder(ladder, std::nullopt);
+  std::vector<UepBody> bodies(2);
+  bodies[0].stream_id = 0; bodies[0].body = {0x01};
+  bodies[1].stream_id = 0; bodies[1].body = {0x01}; bodies[1].retx = true;
+  CHECK(tx.send_bodies(bodies) == 2);
+  REQUIRE(sink.frames_.size() == 2);
+  // Byte-identical radiotap: upstream's behaviour.
+  const uint16_t rl = read_le16(&sink.frames_[0][2]);
+  CHECK(std::equal(sink.frames_[0].begin(), sink.frames_[0].begin() + rl,
+                   sink.frames_[1].begin()));
+}
+
 TEST(control_tx_mode_is_mcs0_20mhz_coded_and_no_agg) {
   const devourer::TxMode m = control_tx_mode();
   CHECK(m.mode == devourer::TxMode::Mode::HT);

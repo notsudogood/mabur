@@ -1378,7 +1378,8 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
       static_cast<size_t>(cfg.radio.tx_threads) * 6);
   if (cfg.radio.tx_threads > 1) dev_sink.pool = &tx_pool;
 
-  RadioTx tx(dev_sink);
+  // fec-nack re-sends ride their own hardware queue ([nack] queue).
+  RadioTx tx(dev_sink, cfg.nack.queue == "vo" ? devourer::HwQueue::VO : devourer::HwQueue::Default);
 
   std::atomic<std::shared_ptr<const AppliedOp>> shared_op{nullptr};
 

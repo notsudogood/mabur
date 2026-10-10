@@ -1475,6 +1475,7 @@ TEST(nack_section_defaults_and_bounds) {
     auto cfg = load_config(path.string());
     CHECK(cfg.nack.ring_ms == 150 && cfg.nack.air_pct == 5);
     CHECK(cfg.nack.burst_ms == 20);
+    CHECK(cfg.nack.queue == "vo");
     std::filesystem::remove(path);
   }
   {
@@ -1499,6 +1500,17 @@ TEST(nack_section_defaults_and_bounds) {
     try { load_config(path.string()); } catch (const std::exception&) { threw = true; }
     CHECK(threw);
     std::filesystem::remove(path);
+  }
+  {
+    // Re-send hardware queue: voice (default) or video's own.
+    auto path = write_temp_toml("[nack]\nqueue = \"video\"\n");
+    CHECK(load_config(path.string()).nack.queue == "video");
+    std::filesystem::remove(path);
+    auto bad = write_temp_toml("[nack]\nqueue = \"mgmt\"\n");
+    bool threw = false;
+    try { load_config(bad.string()); } catch (const std::exception&) { threw = true; }
+    CHECK(threw);
+    std::filesystem::remove(bad);
   }
 }
 

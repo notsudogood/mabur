@@ -59,7 +59,8 @@ void write_dot11_header(uint8_t* out, uint16_t seq) {
 
 }  // namespace
 
-RadioTx::RadioTx(FrameSink& sink) : sink_(sink) {
+RadioTx::RadioTx(FrameSink& sink, devourer::HwQueue retx_queue)
+    : sink_(sink), retx_queue_(retx_queue) {
   cache_.store(std::make_shared<Cache>());
 }
 
@@ -69,6 +70,11 @@ void RadioTx::set_ladder(const std::array<rc::LayerTxSpec, 2>& ladder,
   for (size_t i = 0; i < ladder.size(); ++i)
     next->layers[i].radiotap =
         devourer::build_stream_radiotap(to_tx_mode(ladder[i], ladder[i].bw));
+  // Retransmits: the base layer's rate and width (they are base symbols),
+  // on their own hardware queue.
+  devourer::TxMode rm = to_tx_mode(ladder[0], ladder[0].bw);
+  rm.hw_queue = retx_queue_;
+  next->layers[3].radiotap = devourer::build_stream_radiotap(rm);
   if (probe) {
     // The probe airs alone (no_agg): folded into the current rung's
     // aggregate it would fly at the current rung's rate/width and its
@@ -85,8 +91,8 @@ void RadioTx::set_ladder(const std::array<rc::LayerTxSpec, 2>& ladder,
 
 bool RadioTx::build_frame(const Cache& cache, uint8_t stream_id,
                           const uint8_t* body, size_t len,
-                          std::vector<uint8_t>& out) {
-  size_t idx = stream_id == kProbeStreamId ? 2 : (stream_id >= 2 ? 0 : stream_id);
+                          std::vector<uint8_t>& out, bool retx) {
+  size_t idx = retx ? 3 : stream_id == kProbeStreamId ? 2 : (stream_id >= 2 ? 0 : stream_id);
   const LayerCache& lc = cache.layers[idx];
 
   // Missing radiotap cache entry (e.g. called before set_ladder). Sequence
@@ -137,7 +143,7 @@ size_t RadioTx::send_bodies(const std::vector<UepBody>& bodies) {
   size_t built = 0;
   for (const auto& b : bodies) {
     if (!build_frame(*cache, b.stream_id, b.body.data(), b.body.size(),
-                     pool_[built]))
+                     pool_[built], b.retx))
       continue;  // drop already counted; seq consumed
     views.push_back(FrameSink::View{pool_[built].data(), pool_[built].size()});
     ++built;

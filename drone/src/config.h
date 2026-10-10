@@ -248,6 +248,11 @@ struct NackDroneCfg {
   int ring_ms = 150;
   int air_pct = 5;
   int burst_ms = 20;  // bucket depth: this much air of re-sends at the current op
+  // Hardware queue the re-sends ride: "vo" (voice, airs ahead of video
+  // already inside the chip; turnaround bench 2026-10-06: p99 6.0 ms vs
+  // 11.8 on video's queue, close range) or "video" (video's own queue,
+  // upstream's behaviour).
+  std::string queue = "vo";
 };
 
 struct Config {

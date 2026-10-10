@@ -789,6 +789,46 @@ TEST(deficit_zero_on_clean_stream_at_every_step) {
   }
 }
 
+// source_covered (NACK shortfall-only requests): with a hole of 3 and one
+// repair spanning it, exactly one unknown is a row pivot ("covered") and the
+// other two are free; delivering just the free two solves the covered one.
+TEST(free_unknowns_are_exactly_what_solves_the_rest) {
+  SwConfig cfg{64, 8, 1.0};
+  auto envs = encode_stream(cfg, 30, nullptr);
+  SwDecoder d(cfg);
+  std::map<uint32_t, size_t> held;  // dropped source seq -> envelope index
+  bool covered_seen = false;
+  for (size_t i = 0; i < envs.size() && !covered_seen; ++i) {
+    sw::SwHeader h;
+    REQUIRE(sw::parse_header(envs[i].data(), envs[i].size(), &h));
+    if (!h.repair && h.seq >= 4 && h.seq <= 6) { held[h.seq] = i; continue; }
+    if (h.repair) {
+      const uint32_t last = h.seq + h.window_len - 1;
+      if (last >= 4 && last <= 6) continue;
+    }
+    d.add_symbol(envs[i].data(), envs[i].size(), 1000);
+    if (!h.repair && h.seq == 7) {
+      CHECK(d.deficit() == 3);
+      for (uint32_t s = 4; s <= 6; ++s) CHECK(!d.source_covered(s));
+    }
+    if (h.repair && h.seq <= 4 && h.seq + h.window_len - 1 >= 6) covered_seen = true;
+  }
+  REQUIRE(covered_seen);
+  CHECK(d.deficit() == 2);
+  // The row's pivot is its smallest unknown seq.
+  CHECK(d.source_covered(4));
+  CHECK(!d.source_covered(5));
+  CHECK(!d.source_covered(6));
+  CHECK(!d.source_covered(7));  // known
+  // Deliver only the free unknowns: the covered one is solved by the row.
+  REQUIRE(held.size() == 3);
+  d.add_symbol(envs[held[5]].data(), envs[held[5]].size(), 1010);
+  d.add_symbol(envs[held[6]].data(), envs[held[6]].size(), 1010);
+  CHECK(d.deficit() == 0);
+  CHECK(d.source_state(4) == SwDecoder::SourceState::kRecovered);
+  CHECK(!d.source_covered(4));
+}
+
 TEST(deficit_counts_hole_and_each_independent_repair_pays_one) {
   // Drop sources 4..6 AND the repairs sealed right after them (windows
   // ending at 4..6), so after source 7 nothing covers the hole: deficit 3.

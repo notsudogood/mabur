@@ -29,6 +29,17 @@
 // Stop rule: while util >= down_util, a poll with due entries counts one
 // `suppressed` and marks those entries dead -- no catch-up burst later.
 //
+// Shortfall only (2026-10-10, after the bench's 35-37 % wasted requests): a
+// gap seq is not requested while it is the pivot of a repair row that has
+// already arrived (`covered`): knowing every free unknown solves the pivots,
+// so the free ones are exactly what is short -- deficit() of them. And a gap
+// seq's FIRST request waits until the base burst it went missing in has
+// ended (`burst_open`), so the repairs still on their way get their chance
+// first -- unless its deadline is within min_lead_ms + urgent_slack_ms, when
+// it goes out anyway (`urgent`). Tail seqs bypass both: they lie past the
+// newest seq the decoder has heard, so no row covers them, and the tail
+// trigger itself waits for the frame to stall.
+//
 // Core-thread-only, like the decoder it reads.
 #include <cstdint>
 #include <deque>
@@ -50,6 +61,10 @@ struct NackCfg {
   int min_lead_ms = 12;      // a request whose answer cannot land this long before the deadline is not sent
   int settle_min_ms = 4, settle_max_ms = 24, settle_seed_ms = 12;
   int settle_window_ms = 10000, settle_min_samples = 50;
+  bool shortfall_only = true;   // never request a seq an arrived repair covers
+  bool wait_burst_end = true;   // first request of a gap seq waits for the base burst to end
+  int urgent_slack_ms = 10;     // ...unless the deadline is within min_lead_ms + this
+  int ab_s = 0;                 // maburgs only: alternate on/off every ab_s seconds (0 = always on)
 };
 
 struct NackTailView { uint16_t count; uint16_t max_idx; uint32_t seq_at_max; uint64_t last_progress_ms; };
@@ -61,12 +76,18 @@ struct NackInputs {           // all sid 0
   std::function<double()> util;                                 // ladder util input, sid 0
   double down_util = 0.35;
   uint64_t gap_timeout_ms = 50;
+  // Shortfall only (both optional; null = nothing covered / burst ended):
+  std::function<bool(uint32_t)> covered;  // pivot of a pending repair row (SwDecoder::source_covered)
+  std::function<bool()> burst_open;       // base bodies still arriving: its repairs may still come
 };
 
 struct NackStats {            // cumulative
   uint64_t requests = 0, repeats = 0, syms_requested = 0, tail_requests = 0;
   uint64_t filled = 0, late_fill = 0, wasted = 0, dropped_deadline = 0, suppressed = 0;
   uint64_t lead_skipped = 0;  // requests (first or repeat) withheld by min_lead_ms, per seq
+  uint64_t held_covered = 0;  // seqs a request skipped (at least once) because a repair covers them
+  uint64_t held_burst = 0;    // seqs whose first request waited for the base burst to end
+  uint64_t urgent = 0;        // first requests sent inside a burst because the deadline was near
 };
 
 struct NackWindow {           // since the last take_window()
@@ -97,6 +118,9 @@ class NackTracker {
     bool from_tail = false;
     bool dead = false;               // deadline or stop rule: never requested again
     bool deadline_counted = false;   // dropped_deadline already booked for this entry
+    bool burst_ended = false;        // a poll saw the base burst closed since admission
+    bool held_covered = false;       // counted in held_covered
+    bool held_burst = false;         // counted in held_burst
   };
   void resolve(uint64_t now_ms, const NackInputs& in);
   void admit(uint64_t now_ms, const NackInputs& in);

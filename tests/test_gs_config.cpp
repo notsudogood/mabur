@@ -340,6 +340,25 @@ TEST(link_nack_section_parses_and_defaults_off) {
   CHECK(wide.link.nack.lookback == 600);
 }
 
+// Shortfall-only requests and the in-flight A/B (2026-10-10): on by
+// default, each switchable, bounded.
+TEST(link_nack_shortfall_and_ab_keys) {
+  auto d = maburgs::load_config(write_tmp(""));
+  CHECK(d.link.nack.shortfall_only && d.link.nack.wait_burst_end);
+  CHECK(d.link.nack.urgent_slack_ms == 10 && d.link.nack.ab_s == 0);
+  auto c = maburgs::load_config(write_tmp(
+      "[link.nack]\nshortfall_only = false\nwait_burst_end = false\n"
+      "urgent_slack_ms = 0\nab_s = 30\n"));
+  CHECK(!c.link.nack.shortfall_only && !c.link.nack.wait_burst_end);
+  CHECK(c.link.nack.urgent_slack_ms == 0 && c.link.nack.ab_s == 30);
+  for (const char* bad : {"[link.nack]\nurgent_slack_ms = 101\n", "[link.nack]\nab_s = -1\n",
+                          "[link.nack]\nab_s = 3601\n"}) {
+    bool threw = false;
+    try { maburgs::load_config(write_tmp(bad)); } catch (const std::exception&) { threw = true; }
+    CHECK(threw);
+  }
+}
+
 TEST(nack_disabled_sends_nothing) {
   // Config off => the exporter never sees a block and the tracker is never
   // constructed enabled; pinned here at the config/exporter seam, and in

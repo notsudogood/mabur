@@ -175,6 +175,10 @@ lookback  = 256    # symbols behind the newest heard that are checked; keep belo
 repeat_ms = 16     # second request after this if still missing
 max_tries = 2      # requests per symbol; 0 = measure only, never ask
 min_lead_ms = 12   # do not ask when the answer could not arrive this long before the frame gives up
+shortfall_only = true   # only ask for what error correction cannot rebuild from repairs already here
+wait_burst_end = true   # first ask after the frame's burst has finished sending its repairs...
+urgent_slack_ms = 10    # ...unless the frame would give up within min_lead_ms + this
+ab_s = 0                # switch re-sending on and off every N seconds to compare both in one flight; 0 = always on
 
 # Per-rung link history shown in the stats (it does not steer the link).
 [link.rung_stats]

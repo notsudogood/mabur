@@ -1,4 +1,5 @@
 #include <map>
+#include <set>
 #include <optional>
 #include <vector>
 #include "mabur/nack_tracker.h"
@@ -12,6 +13,9 @@ struct World {
   std::map<uint32_t, S> st;
   std::optional<NackTailView> tail;
   double util = 0.0;
+  std::set<uint32_t> covered;   // pivots of arrived repair rows
+  bool burst_open = false;      // base bodies still arriving
+  bool hooks = false;           // false: leave covered/burst_open null (upstream behaviour)
   NackInputs in() {
     NackInputs i;
     i.missing = [this] { return missing; };
@@ -20,6 +24,10 @@ struct World {
     i.util = [this] { return util; };
     i.down_util = 0.35;
     i.gap_timeout_ms = 50;
+    if (hooks) {
+      i.covered = [this](uint32_t s) { return covered.count(s) != 0; };
+      i.burst_open = [this] { return burst_open; };
+    }
     return i;
   }
   void lose(std::initializer_list<uint32_t> seqs) {
@@ -259,6 +267,96 @@ TEST(fill_ms_window_is_capped_when_never_drained) {
   auto win = t.take_window();
   CHECK(win.filled == fills);
   CHECK(win.fill_ms.size() == NackWindow::kMaxFillSamples);
+}
+
+// ---- shortfall only (2026-10-10) ----
+
+TEST(covered_seqs_are_not_requested_free_ones_are) {
+  // Three lost, one repair arrived: its pivot (100) is covered, 101/102 are
+  // free. Only the free ones are asked for: deficit() of them.
+  World w; w.hooks = true; w.lose({100, 101, 102}); w.covered = {100};
+  NackTracker t(cfg_on());
+  CHECK(!t.poll(1000, w.in()).has_value());
+  auto n = t.poll(1012, w.in());
+  REQUIRE(n.has_value());
+  CHECK(n->n == 1 && n->e[0].first_seq == 101 && n->e[0].bitmap == 0x3u);
+  CHECK(t.stats().syms_requested == 2);
+  CHECK(t.stats().held_covered == 1);
+  // Still covered at the repeat: the repeat names only the free ones too,
+  // and held_covered counts the seq once.
+  auto r = t.poll(1028, w.in());
+  REQUIRE(r.has_value());
+  CHECK(r->e[0].first_seq == 101 && r->e[0].bitmap == 0x3u);
+  CHECK(t.stats().held_covered == 1);
+}
+
+TEST(covered_seq_is_requested_once_its_row_is_gone) {
+  // The row that covered 100 expires (or is reduced away): 100 is free now
+  // and is asked for like any other gap seq -- it was never marked dead.
+  World w; w.hooks = true; w.lose({100}); w.covered = {100};
+  NackTracker t(cfg_on());
+  CHECK(!t.poll(1000, w.in()).has_value());
+  CHECK(!t.poll(1012, w.in()).has_value());
+  w.covered.clear();
+  auto n = t.poll(1014, w.in());
+  REQUIRE(n.has_value());
+  CHECK(n->e[0].first_seq == 100);
+}
+
+TEST(first_request_waits_for_the_burst_to_end) {
+  World w; w.hooks = true; w.lose({100}); w.burst_open = true;
+  NackTracker t(cfg_on());                    // settle 12, min_lead 12, slack 10, gap 50
+  CHECK(!t.poll(1000, w.in()).has_value());
+  CHECK(!t.poll(1012, w.in()).has_value());   // settled, but the burst is still sending
+  CHECK(t.stats().held_burst == 1);
+  w.burst_open = false;
+  auto n = t.poll(1015, w.in());
+  REQUIRE(n.has_value());
+  CHECK(n->e[0].first_seq == 100);
+  CHECK(t.stats().urgent == 0);
+}
+
+TEST(a_burst_end_seen_once_counts_even_if_the_next_burst_started) {
+  // The burst closed at a poll before settle ran out; by the time the seq
+  // is due the next burst is sending. It still goes: its own burst ended.
+  World w; w.hooks = true; w.lose({100}); w.burst_open = true;
+  NackTracker t(cfg_on());
+  CHECK(!t.poll(1000, w.in()).has_value());
+  w.burst_open = false;
+  CHECK(!t.poll(1005, w.in()).has_value());   // settle not yet
+  w.burst_open = true;
+  REQUIRE(t.poll(1012, w.in()).has_value());
+}
+
+TEST(near_deadline_request_goes_out_inside_the_burst) {
+  World w; w.hooks = true; w.lose({100}); w.burst_open = true;
+  NackTracker t(cfg_on());
+  CHECK(!t.poll(1000, w.in()).has_value());
+  CHECK(!t.poll(1027, w.in()).has_value());   // 1027 + 22 < 1050: can still wait
+  auto n = t.poll(1028, w.in());              // 1028 + 22 >= 1050: last chance
+  REQUIRE(n.has_value());
+  CHECK(t.stats().urgent == 1);
+}
+
+TEST(tail_seqs_bypass_the_shortfall_rules) {
+  World w; w.hooks = true; w.burst_open = true; w.covered = {202};
+  w.tail = NackTailView{8, 3, 200, 1000};     // seqs 201..204 after max_idx
+  for (uint32_t s = 201; s <= 204; ++s) w.st[s] = S::kUnknown;
+  NackTracker t(cfg_on());
+  auto n = t.poll(1012, w.in());
+  REQUIRE(n.has_value());
+  CHECK(n->e[0].first_seq == 201 && n->e[0].bitmap == 0xFu);
+  CHECK(t.stats().held_burst == 0 && t.stats().held_covered == 0);
+}
+
+TEST(shortfall_rules_off_is_the_old_behaviour) {
+  World w; w.hooks = true; w.lose({100, 101}); w.covered = {100}; w.burst_open = true;
+  NackCfg c = cfg_on(); c.shortfall_only = false; c.wait_burst_end = false;
+  NackTracker t(c);
+  CHECK(!t.poll(1000, w.in()).has_value());
+  auto n = t.poll(1012, w.in());
+  REQUIRE(n.has_value());
+  CHECK(n->e[0].first_seq == 100 && n->e[0].bitmap == 0x3u);
 }
 
 MTEST_MAIN

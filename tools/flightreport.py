@@ -1902,6 +1902,105 @@ def print_nack_report(rows):
     if p50:
         print(f"  fill_ms p50/p90/max={_pct(p50, 0.5)}/{_pct(p90, 0.5)}/{max(mx) if mx else 0}"
               f"  settle_ms last={last.get('settle_ms')} late_ms_max={max(r['link']['nack'].get('late_ms_max') or 0 for r in nrows)}")
+    syms = d("syms_requested")
+    if syms:
+        print(f"  wasted share {d('wasted') / syms * 100:.0f}% of {syms} requested "
+              "(FEC rebuilt the symbol before the re-send landed)")
+    if "held_covered" in last:
+        print(f"  shortfall only: held_covered={last.get('held_covered', 0)} (a repair already here covers them)"
+              f" held_burst={last.get('held_burst', 0)} (first ask waited for the burst's end)"
+              f" urgent={last.get('urgent', 0)} (asked inside the burst, deadline near)")
+    print_nack_ab(rows)
+
+
+NACK_GUARD_MS = 1000  # rows this soon after an A/B switch belong to neither arm
+
+
+def nack_arms(rows, exclude_low_power=False):
+    """flight.jsonl rows -> {"on": arm, "off": arm} for a recording whose GS
+    ran [link.nack] ab_s > 0, else None. Each arm sums, over consecutive
+    in-session rows both in the arm and clear of a switch, the time, the
+    truncated + dropped AUs (link.video, all layers), the base layer's
+    abandoned symbols (link.streams sid 0: loss FEC and the re-send did not
+    fix) and the re-sends filled -- in total and per ladder rung (the rung at
+    the interval's end)."""
+    rows = [r for r in rows if (r.get("link") or {}).get("nack") and r.get("drone")]
+    if not rows or not any((r["link"]["nack"].get("ab_s") or 0) > 0 for r in rows):
+        return None
+
+    def video(r, k):
+        return ((r.get("link") or {}).get("video") or {}).get(k) or 0
+
+    def base_aband(r):
+        for st in ((r.get("link") or {}).get("streams") or []):
+            if (st or {}).get("stream") == 0:
+                return st.get("abandoned") or 0
+        return 0
+
+    def rung(r):
+        return ((((r.get("link") or {}).get("ctl") or {}).get("rung") or {}).get("idx"))
+
+    def grow(b, a):
+        return b if b < a else b - a
+
+    last_switch = prev_on = None
+    tagged = []
+    for r in rows:
+        on = bool(r["link"]["nack"].get("on", True))
+        t = r.get("t_ms") or 0
+        if prev_on is not None and on != prev_on:
+            last_switch = t
+        prev_on = on
+        tagged.append((r, on, last_switch is None or t - last_switch >= NACK_GUARD_MS))
+
+    def new_acc():
+        return {"dt_s": 0.0, "lost_aus": 0, "base_aband": 0, "filled": 0}
+    arms = {"on": {"all": new_acc(), "rungs": {}}, "off": {"all": new_acc(), "rungs": {}}}
+    for (a, a_on, a_ok), (b, b_on, b_ok) in zip(tagged, tagged[1:]):
+        if a_on != b_on or not a_ok or not b_ok:
+            continue
+        if exclude_low_power and (_low_power(a) or _low_power(b)):
+            continue
+        if a.get("session") != b.get("session"):
+            continue
+        arm = arms["on" if b_on else "off"]
+        inc = {"dt_s": max(0.0, ((b.get("t_ms") or 0) - (a.get("t_ms") or 0)) / 1000.0),
+               "lost_aus": grow(video(b, "truncated"), video(a, "truncated")) +
+                           grow(video(b, "dropped"), video(a, "dropped")),
+               "base_aband": grow(base_aband(b), base_aband(a)),
+               "filled": grow(b["link"]["nack"].get("filled") or 0, a["link"]["nack"].get("filled") or 0)}
+        for acc in (arm["all"], arm["rungs"].setdefault(rung(b), new_acc())):
+            for k, v in inc.items():
+                acc[k] += v
+    return arms
+
+
+def print_nack_ab(rows):
+    """NACK A/B ([link.nack] ab_s > 0): the same flight split into its
+    re-send-on and re-send-off arms, overall and per rung. Armed time only
+    when the recording also has disarmed (low-power) time."""
+    armed_only = listen_mixes_low_power(rows)
+    arms = nack_arms(rows, exclude_low_power=armed_only)
+    if arms is None:
+        return
+
+    def line(label, acc):
+        mins = acc["dt_s"] / 60.0
+        if mins <= 0:
+            return f"  {label:>8}  {'-':>6}"
+        return (f"  {label:>8}  {acc['dt_s']:6.0f} s  lost AUs {acc['lost_aus'] / mins:6.1f}/min"
+                f"  base abandoned {acc['base_aband'] / mins:7.1f} syms/min"
+                f"  re-sends filled {acc['filled'] / mins:6.1f}/min")
+    print("  A/B (re-send on vs off, same flight" + (", armed time only)" if armed_only else ")"))
+    for name in ("on", "off"):
+        print(line(name, arms[name]["all"]))
+    rungs = sorted({k for a in arms.values() for k in a["rungs"] if k is not None})
+    for k in rungs:
+        for name in ("on", "off"):
+            acc = arms[name]["rungs"].get(k)
+            if acc:
+                print(line(f"r{k} {name}", acc))
+    print("  read it with the arms' time per rung: a rung one arm barely visited is not a comparison")
 
 
 def print_slice_salvage_report(rows):

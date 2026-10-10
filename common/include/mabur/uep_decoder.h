@@ -92,6 +92,7 @@ class UepDecoder {
   // SPIKE 2026-10-05 (fec-nack): per-layer erasure view (SwDecoder).
   std::vector<uint32_t> missing_sources(int sid, uint32_t lookback) const;
   SwDecoder::SourceState source_state(int sid, uint32_t wire_seq) const;
+  bool source_covered(int sid, uint32_t wire_seq) const;  // SwDecoder::source_covered
 
   // Drops per-layer decode state — call on a session change, where the peer's
   // seqs restart from an unrelated value.

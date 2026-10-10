@@ -87,6 +87,13 @@ SwDecoder::SourceState SwDecoder::source_state(uint32_t wire_seq) const {
   return recovered_await_src_.count(v) ? SourceState::kRecovered : SourceState::kDirect;
 }
 
+bool SwDecoder::source_covered(uint32_t wire_seq) const {
+  if (!have_seq_) return false;
+  const uint64_t v = unwrap(wire_seq);
+  if (v < live_floor() || v < base_ || known_.count(v)) return false;
+  return rows_.count(v) != 0;
+}
+
 void SwDecoder::advance(uint64_t newest_candidate) {
   if (newest_candidate <= newest_v_) return;
   newest_v_ = newest_candidate;

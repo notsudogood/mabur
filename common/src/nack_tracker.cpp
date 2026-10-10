@@ -89,7 +89,7 @@ void NackTracker::resolve(uint64_t now_ms, const NackInputs& in) {
 
 void NackTracker::admit(uint64_t now_ms, const NackInputs& in) {
   for (uint32_t s : in.missing())
-    if (!entries_.count(s)) entries_[s] = Entry{now_ms, 0, 0, 0, false, false, false};
+    if (!entries_.count(s)) entries_[s] = Entry{now_ms, 0, 0, 0, false, false, false, false, false, false};
   if (auto tv = in.tail()) {
     if (now_ms >= tv->last_progress_ms + static_cast<uint64_t>(settle_ms_) &&
         tv->max_idx + 1 < tv->count) {
@@ -99,7 +99,7 @@ void NackTracker::admit(uint64_t now_ms, const NackInputs& in) {
         // Only still-unknown seqs: a stale tail view (slot not advanced past
         // a seq that already resolved) must not re-admit it every poll.
         if (!entries_.count(s) && in.state(s) == S::kUnknown)
-          entries_[s] = Entry{tv->last_progress_ms, 0, 0, 0, true, false, false};
+          entries_[s] = Entry{tv->last_progress_ms, 0, 0, 0, true, false, false, false, false, false};
       }
     }
   }
@@ -109,8 +109,11 @@ std::optional<rc::Nack> NackTracker::poll(uint64_t now_ms, const NackInputs& in)
   if (!cfg_.enable) return std::nullopt;
   resolve(now_ms, in);
   admit(now_ms, in);  // admitted even while stopped: entries age and resolve normally
+  const bool burst_closed = !in.burst_open || !in.burst_open();
   std::vector<uint32_t> due;
+  std::vector<uint32_t> urgent;  // due seqs sent ahead of their burst's end (ascending)
   for (auto& [s, e] : entries_) {
+    if (burst_closed) e.burst_ended = true;
     if (e.dead || e.tries >= cfg_.max_tries) continue;
     const uint64_t since = e.tries == 0 ? e.first_missing_ms : e.last_sent_ms;
     const uint64_t wait = e.tries == 0 ? static_cast<uint64_t>(settle_ms_)
@@ -121,6 +124,25 @@ std::optional<rc::Nack> NackTracker::poll(uint64_t now_ms, const NackInputs& in)
       e.dead = true;  // the answer could not land in time: never asked (again)
       ++stats_.lead_skipped;
       continue;
+    }
+    if (!e.from_tail && cfg_.shortfall_only && in.covered && in.covered(s)) {
+      // A repair that already arrived pays for this one once the free
+      // unknowns are known. Not dead: it is asked for if the row expires.
+      if (!e.held_covered) {
+        e.held_covered = true;
+        ++stats_.held_covered;
+      }
+      continue;
+    }
+    if (!e.from_tail && e.tries == 0 && cfg_.wait_burst_end && !e.burst_ended) {
+      if (now_ms + static_cast<uint64_t>(cfg_.min_lead_ms + cfg_.urgent_slack_ms) < deadline) {
+        if (!e.held_burst) {
+          e.held_burst = true;
+          ++stats_.held_burst;
+        }
+        continue;
+      }
+      urgent.push_back(s);  // the deadline will not wait for the burst to end
     }
     due.push_back(s);
   }
@@ -151,6 +173,7 @@ std::optional<rc::Nack> NackTracker::poll(uint64_t now_ms, const NackInputs& in)
       ++e.tries;
       e.last_sent_ms = now_ms;
       ++stats_.syms_requested;
+      if (std::binary_search(urgent.begin(), urgent.end(), due[i])) ++stats_.urgent;
       if (e.from_tail && e.tries == 1) ++stats_.tail_requests;
       ++i;
     }

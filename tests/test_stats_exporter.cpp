@@ -1281,20 +1281,33 @@ TEST(link_nack_block_and_drone_nack_counters) {
   CHECK(j["link"]["nack"]["fill_ms"]["p50"] == 20 && j["link"]["nack"]["fill_ms"]["p90"] == 40 &&
         j["link"]["nack"]["fill_ms"]["max"] == 40);
   CHECK(j["link"]["nack"]["settle_ms"] == 11 && j["link"]["nack"]["late_ms_max"] == 9);
+  // Shortfall-only counters and the A/B arm (2026-10-10).
+  CHECK(j["link"]["nack"]["held_covered"] == 0 && j["link"]["nack"]["held_burst"] == 0 &&
+        j["link"]["nack"]["urgent"] == 0);
+  CHECK(j["link"]["nack"]["on"] == true && j["link"]["nack"]["ab_s"] == 0);
   CHECK(j["drone"]["nack"]["rx"] == 3 && j["drone"]["nack"]["retx_syms"] == 44 &&
         j["drone"]["nack"]["retx_refused"] == 1);
+
+  in.nack.cum.held_covered = 6; in.nack.cum.held_burst = 4; in.nack.cum.urgent = 2;
+  in.nack.on = false; in.nack.ab_s = 30;
+  ex.poll(1500, in);
+  j = cap.last();
+  CHECK(j["link"]["nack"]["held_covered"] == 6 && j["link"]["nack"]["held_burst"] == 4 &&
+        j["link"]["nack"]["urgent"] == 2);
+  CHECK(j["link"]["nack"]["on"] == false && j["link"]["nack"]["ab_s"] == 30);
+  in.nack.on = true; in.nack.ab_s = 0;
 
   // Empty window / first export: null percentiles and rate, not zeros.
   in.nack.win = {};
   in.nack.interval_s = 0.0;
-  ex.poll(1600, in);
+  ex.poll(2000, in);
   j = cap.last();
   CHECK(j["link"]["nack"]["fill_pps"].is_null());
   CHECK(j["link"]["nack"]["fill_ms"]["p50"].is_null() && j["link"]["nack"]["fill_ms"]["p90"].is_null() &&
         j["link"]["nack"]["fill_ms"]["max"].is_null());
 
   in.nack.enabled = false;
-  ex.poll(2200, in);
+  ex.poll(2500, in);
   CHECK(!cap.last()["link"].contains("nack"));
 }
 

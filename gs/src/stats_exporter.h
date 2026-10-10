@@ -194,6 +194,8 @@ struct StatsRcfSlotIn {
 // lateness), exported as link.nack only while [link.nack] is enabled.
 struct StatsNackIn {
   bool enabled = false;
+  bool on = true;                // the A/B's current arm ([link.nack] ab_s); always on without it
+  int ab_s = 0;
   mabur::NackStats cum;          // cumulative
   mabur::NackWindow win;         // since last export
   int settle_ms = 0;

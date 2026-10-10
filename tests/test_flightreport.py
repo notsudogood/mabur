@@ -1887,6 +1887,59 @@ def test_fec_section_feclog3_reads_rtx_and_keeps_old_versions():
     assert all(r["rtx"] == 0 for r in rows2 + rows1)
 
 
+def test_nack_section_shortfall_counters_and_waste_share():
+    rows = []
+    for i, (syms, wasted) in enumerate([(0, 0), (40, 4), (100, 10)]):
+        rows.append({"t_ms": 1000 + 1000 * i, "drone": {},
+                     "link": {"nack": {"requests": syms // 4, "syms_requested": syms, "wasted": wasted,
+                                       "held_covered": 7, "held_burst": 5, "urgent": 1,
+                                       "on": True, "ab_s": 0}}})
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        flightreport.print_nack_report(rows)
+    text = out.getvalue()
+    assert re.search(r"wasted share 10% of 100 requested", text), text
+    assert re.search(r"held_covered=7 .*held_burst=5 .*urgent=1", text), text
+    assert "A/B" not in text, text   # ab_s 0: no split
+
+
+def test_nack_ab_splits_arms_and_rungs_clear_of_switches():
+    # ab_s 10: 10 s on, 10 s off, one row a second. Each arm loses AUs at its
+    # own rate; the first second after a switch belongs to neither arm.
+    rows = []
+    trunc = aband = filled = 0
+    for i in range(41):
+        on = (i // 10) % 2 == 0
+        if i > 0:
+            if on:
+                trunc += 1; aband += 2; filled += 3
+            else:
+                trunc += 4; aband += 6
+        rung = 1 if i < 20 else 2
+        rows.append({"t_ms": i * 1000, "session": 1, "drone": {"low_power": False},
+                     "link": {"nack": {"on": on, "ab_s": 10, "filled": filled},
+                              "video": {"truncated": trunc, "dropped": 0},
+                              "streams": [{"stream": 0, "abandoned": aband}],
+                              "ctl": {"rung": {"idx": rung}}}})
+    arms = flightreport.nack_arms(rows)
+    assert arms is not None
+    on, off = arms["on"]["all"], arms["off"]["all"]
+    # The first phase has no switch before it (9 pairs); every later phase
+    # loses its first pair to the guard (8 pairs each).
+    assert on["dt_s"] == 17.0 and off["dt_s"] == 16.0, (on, off)
+    assert on["lost_aus"] == 17 and off["lost_aus"] == 64, (on, off)
+    assert on["base_aband"] == 34 and off["base_aband"] == 96, (on, off)
+    assert on["filled"] == 51 and off["filled"] == 0, (on, off)
+    assert set(arms["on"]["rungs"]) == {1, 2}
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        flightreport.print_nack_ab(rows)
+    text = out.getvalue()
+    assert re.search(r"on\s+17 s\s+lost AUs\s+60\.0/min", text), text
+    assert re.search(r"off\s+16 s\s+lost AUs\s+240\.0/min", text), text
+    assert re.search(r"r1 on", text) and re.search(r"r2 off", text), text
+
+
 def test_nack_section_from_sideport_rows():
     rows = []
     for i, (req, filled, refused) in enumerate([(0, 0, 0), (10, 8, 0), (25, 20, 3)]):
@@ -2432,6 +2485,8 @@ if __name__ == "__main__":
     test_smoothness_section_notes_missing_regulator_lines()
     test_fec_section_feclog3_reads_rtx_and_keeps_old_versions()
     test_nack_section_from_sideport_rows()
+    test_nack_section_shortfall_counters_and_waste_share()
+    test_nack_ab_splits_arms_and_rungs_clear_of_switches()
     test_slice_salvage_section()
     test_flightreport_structure()
     test_old_scale_snr_warns_on_stderr()

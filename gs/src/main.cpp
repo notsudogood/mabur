@@ -549,6 +549,7 @@ static int run_radio(const maburgs::Config& cfg) {
   // last under one vtx nonce and starts over only on a new one, so the GS
   // restarts its counter exactly there -- not on a frame_wire edge.
   uint32_t nack_vtx_seen = 0;
+  bool nack_on = false;  // [link.nack] enable, and the A/B's on arm when ab_s > 0
   uint64_t nack_interval_t0 = 0;
   // Tail-trigger geometry (spec §3.1): the tail trigger maps fragment k of
   // the newest frame to wire seq seq_at_max + (k - max_idx), which holds
@@ -1046,8 +1047,17 @@ static int run_radio(const maburgs::Config& cfg) {
     s.bpb = arq_layers[static_cast<size_t>(sid)].blocks_per_body;
     return s;
   });
+  // Base-layer burst state for the NACK's wait-for-burst-end rule: the base
+  // burst is over once an enh body lands after the newest base body (the
+  // drone sends an AU's bodies, repairs included, before the next AU's), or
+  // after kNackBaseQuietUs without a base body (enh shed). Same RX stamps as
+  // the shadow.
+  uint64_t nack_base_last_us = 0, nack_enh_last_us = 0;
+  constexpr uint64_t kNackBaseQuietUs = 8000;
   agg.set_video_hook([&](int sid, uint64_t us) {
     arq_shadow.on_video_body(sid, static_cast<double>(us) / 1000.0);
+    uint64_t& last = sid == 0 ? nack_base_last_us : nack_enh_last_us;
+    last = std::max(last, us);
   });
   agg.set_probe_sink([&](uint8_t card, const mabur::node::RxBody& m) {
     // The probe is the last PPDU of its ENH burst: seeing it (any card,
@@ -1262,7 +1272,13 @@ static int run_radio(const maburgs::Config& cfg) {
     // repeat. Direct send, mid-burst -- never the RcfSlotter (bench: slotted
     // fill p50 44 ms, past the gap timeout). Option A: the retransmit fixes
     // the video only; every ladder input still books the loss.
-    if (cfg.link.nack.enable) {
+    // [link.nack] ab_s: on for ab_s seconds, off for ab_s, so one flight
+    // carries both arms. Off clears the tracked seqs (the counter is kept).
+    nack_on = cfg.link.nack.enable &&
+              (cfg.link.nack.ab_s <= 0 ||
+               (drained_ms / (static_cast<uint64_t>(cfg.link.nack.ab_s) * 1000u)) % 2 == 0);
+    if (cfg.link.nack.enable && !nack_on) nack.clear();
+    if (nack_on) {
       const auto sctx = vrx.session_ctx();
       // != 0: session_ctx() keeps reporting the held nonce in BEACONING.
       if (sctx.vtx_nonce != 0 && sctx.vtx_nonce != nack_vtx_seen) {
@@ -1291,6 +1307,14 @@ static int run_radio(const maburgs::Config& cfg) {
         ni.util = [&] { return vrx.ctl().util(); };
         ni.down_util = cfg.link.ladder_cfg.down_util;
         ni.gap_timeout_ms = fstream.gap_ms(0);
+        // Shortfall only: a seq whose repair already arrived is not asked
+        // for, and a first request waits for its base burst to end.
+        ni.covered = [&](uint32_t s) { return agg.decoder().source_covered(0, s); };
+        ni.burst_open = [&] {
+          const uint64_t now_us = drained_ms * 1000u;
+          return nack_base_last_us > nack_enh_last_us &&
+                 (now_us <= nack_base_last_us || now_us - nack_base_last_us < kNackBaseQuietUs);
+        };
         if (auto n = nack.poll(drained_ms, ni)) {
           mabur::rc::TagCtx ctx = sctx;
           ctx.seq32 = n->counter;
@@ -1809,6 +1833,8 @@ static int run_radio(const maburgs::Config& cfg) {
       // will emit (same reasoning as lat_win.flush() below).
       if (cfg.link.nack.enable && stats->due(drained_ms)) {
         sin.nack.enabled = true;
+        sin.nack.on = nack_on;
+        sin.nack.ab_s = cfg.link.nack.ab_s;
         sin.nack.cum = nack.stats();
         sin.nack.win = nack.take_window();
         sin.nack.settle_ms = nack.settle_ms();

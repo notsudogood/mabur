@@ -345,6 +345,9 @@ void WebGs::poll_nack_(uint64_t now_ms) {
   ni.util = [&] { return vrx_->ctl().util(); };
   ni.down_util = nack_down_util_;
   ni.gap_timeout_ms = fs_.gap_ms(0);
+  // Shortfall only: never ask for a seq a repair that already arrived pays
+  // for. No burst_open hook here, so first requests keep upstream's timing.
+  ni.covered = [&](uint32_t s) { return agg_.decoder().source_covered(0, s); };
   if (auto n = nack_->poll(now_ms, ni)) {
     mabur::rc::TagCtx ctx = sctx;
     ctx.seq32 = n->counter;

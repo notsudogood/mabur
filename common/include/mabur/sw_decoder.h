@@ -161,6 +161,14 @@ class SwDecoder {
   // repair-recovered) -- the decoder's current erasure set, ascending.
   std::vector<uint32_t> missing_sources(uint32_t lookback) const;
   enum class SourceState : uint8_t { kUnknown, kDirect, kRecovered, kRetx, kBelowFloor };
+  // True iff this unknown source is the pivot of a pending repair row: rows_
+  // is in echelon form keyed by each row's smallest seq, so once every
+  // unknown that is NOT a pivot (a "free" unknown) is known, back-substitution
+  // solves all the pivots. The free unknowns are exactly what a retransmit
+  // request needs to name -- deficit() of them -- and a covered one is
+  // already paid for by a repair that arrived. False for a known or
+  // out-of-span seq.
+  bool source_covered(uint32_t wire_seq) const;
   // kDirect = a source copy was heard; kRecovered = known via repair only;
   // kRetx = known via a retransmit only.
   SourceState source_state(uint32_t wire_seq) const;

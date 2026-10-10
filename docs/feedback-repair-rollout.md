@@ -1,5 +1,12 @@
 # Feedback repair — rollout
 
+**Status 2026-10-10: the turnaround bench and listen window are removed**
+(merged upstream's slice-salvage, whose NACK replaces them; see
+`docs/efficient-link-plan.md` "Merged 2026-10-10"). The results below stand;
+`flightreport.py` still reads sessions recorded with them. The arq.log shadow
+log and `deficit()` stay, and `deficit()`'s echelon form is what the NACK's
+shortfall-only rule is built on.
+
 **Status 2026-10-09: parked.** Phase 3b (the listen window placed where
 statuses land) flew to the garage and landed 64% of statuses inside the
 window — but uplink delivery was the same with and without it: at range the

@@ -1,9 +1,13 @@
 # Efficient link — plan
 
-**Status 2026-10-09: step 1 (the ladder) is a config change ready to fly;
-step 2 is built, off by default, waiting on a bench probe of the camera
-(genlock, below); step 5 is now FEC shaped per rung, its first half a config
-change.** This replaces the feedback-repair rollout
+**Status 2026-10-10: upstream's slice-salvage branch (row slices + GS-side
+skip-slice fills, the software NACK, link pairing, the channel set) is
+merged, with three NACK fixes on top — section "Merged 2026-10-10" below.
+Step 4 (slices) is therefore built and on (`[venc] slices = 4`); NACK is
+built, off by default, with an in-flight on/off A/B. Step 1 (the ladder) is
+a config change ready to fly; step 2 (genlock) is built, off by default,
+waiting on a bench probe of the camera; step 5 is FEC shaped per rung, its
+first half a config change.** This replaces the feedback-repair rollout
 (`docs/feedback-repair-rollout.md`, parked the same day — its results and why
 are recorded there) as the line of work on the link.
 
@@ -108,10 +112,13 @@ late frames by making every frame later.
   — the camera's frame rate steered onto the screen's refresh grid; each
   frame's source bodies sent before its repair bodies; the encoder's GDR and
   I:P cap as today; the ~0.65 airtime budget kept as the headroom it is.
-- **Uplink for control only:** RCF, telemetry and MSP stay on the robust
-  MCS0/20 LDPC+STBC path. Video integrity never waits on the uplink — the
-  feedback-repair flights showed it is least reliable exactly when loss
-  happens.
+- **Uplink for control, plus best-effort re-send requests:** RCF, telemetry
+  and MSP stay on the robust MCS0/20 LDPC+STBC path. Video integrity still
+  never *depends* on the uplink — the feedback-repair flights showed it is
+  least reliable exactly when loss happens — but since 2026-10-10 the GS may
+  also ask for base-layer re-sends (upstream's NACK, "Merged 2026-10-10"
+  below) on top of unchanged FEC: a lost request costs nothing the link had
+  before, and the ladder still books every loss.
 
 ## Steps, each gated on a measurement
 
@@ -235,6 +242,73 @@ late frames by making every frame later.
      without a rung to fall to.
 6. **Optional range work:** a 10 MHz floor rung; GS antenna spacing / a
    third card; per-rung TX power at the calibrated walls (`docs/calibration.md`).
+
+## Merged 2026-10-10: upstream NACK + slices, and three fixes
+
+`gilankpam/mabur` slice-salvage (4c66e11, which contains master b627b9a)
+is merged into this branch. What it brings, all upstream-measured
+(`docs/fec-nack.md`, `docs/fec-nack-bench-findings-2026-10-06.md`,
+`docs/slices.md`, `docs/venc-slice-findings-2026-10-09.md`):
+
+- **Slices + salvage (step 4 above):** the drone encodes 4 row slices; the
+  GS keeps the complete slices of a truncated frame and fills the lost ones
+  with a skip slice (the previous frame's pixels). Upstream loss-sim: 94-96 %
+  of truncated AUs salvaged. Against it: on upstream's flight logs a
+  truncated base frame keeps a median ~1/3 of its picture and 4 slices
+  would show ~25 % of it; a frame where nothing arrived gets nothing; a
+  filled band in a base frame smears with motion until the next refresh
+  (≤ 0.5 s); ~1 % bitrate at 4 slices, ~2 % at the floor.
+- **Software NACK (base layer):** the GS lists base symbols FEC could not
+  rebuild; the drone re-sends them from a 150 ms ring within a 5 % air
+  budget. Upstream bench under a jammer at mcs2: base truncated + dropped
+  12 → 0, fill p90 10-16 ms. Against it: 35-37 % of requested symbols
+  wasted (FEC got there first), and at rung 0 nothing was ever filled — the
+  drone heard the requests and re-sent, but every one landed wasted (62 %)
+  or past the deadline. In the slices bench, NACK turned drops into
+  truncations more than it cut damaged frames.
+- **Link pairing, channel set, web GS, relay:** control frames are SipHash-
+  tagged under a shared key (missing key file = built-in default on both
+  ends); the drone and GS share a channel set (`[radio] channels`) and the
+  GS picks among it (`channel = "auto"`), replacing home channel 136 and
+  the old scan.
+
+Our three NACK fixes (`docs/fec-nack.md` "Changes on notsudogood/mabur"):
+ask only for the shortfall (the decoder's free unknowns — a seq an arrived
+repair covers is never requested), send a first request only after its base
+burst has ended unless the deadline is near, and put re-sends on the drone's
+voice hardware queue, never shed first on overflow.
+
+Genlock is ported to the tagged wire (`T_GENLOCK` = 8, `CAP_GENLOCK` =
+0x0008). The parked turnaround bench and listen window are removed.
+
+**Deploy (both ends, configs first).** The new parser rejects keys it does
+not know, and both saved configs carry old ones: the drone's
+`/etc/mabur.toml` (if it was ever edited it lives in the overlay and
+survives a reflash) has `vtx_id`, `channel` and `follow_gs`; the GS's
+`/config/maburgs.toml` has `vtx_id`, `[turnaround]`, `[listen]` and the old
+`[radio.scan]`/`[hop]` keys. Restore both to the new defaults after
+flashing (drone: `cp /rom/etc/mabur.toml /etc/mabur.toml`; GS: delete
+`/config/maburgs.toml` and reboot, the image copies the default back), then
+re-apply your own edits. `maburplay.toml` is unchanged.
+
+**Flying the NACK A/B.** GS `/config/maburgs.toml`:
+`[link.nack] enable = true`, `ab_s = 30` (30 s on, 30 s off). Fly the
+garage route of 2026-10-09. Read `flightreport.py`'s NACK section:
+
+- *the A/B lines:* lost AUs/min, base abandoned symbols/min and fills/min
+  per arm, overall and per rung — compare a rung only where both arms spent
+  real time on it;
+- *wasted share* against upstream's 35-37 %, and `held_covered` /
+  `held_burst` / `urgent` (how often each fix acted);
+- *fills at rung 0* — upstream's was zero;
+- *drone refused* (air budget) and `dropped_deadline`.
+
+*Kill:* if the on arm loses no fewer base frames than the off arm across
+two flights, NACK costs air and buys nothing on this route; turn it off.
+If waste stays near 35 %, the shortfall rule is not what drove it (late
+repairs from the next base AU would be the next suspect). Caveats: one
+route, 30 s arms that cover different places (`ab_s = 10` interleaves them
+more finely), and a single delivery probe is worth ±3 points.
 
 ## Kept from feedback repair
 

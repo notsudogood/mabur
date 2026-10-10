@@ -338,6 +338,42 @@ wasted 19 % (settle 12) and 34 % (settle 6); `air_pct` 52.6–53.0 in every
 arm. Under loss-sim the direct NACK took truncated AUs 314 → 8 and dropped
 50 → 0 for ~86 kb/s of retransmit air.
 
+## Changes on notsudogood/mabur (2026-10-10)
+
+Merged into `claude/wifi-fpv-link-architecture-1bms9l` with three changes,
+each switchable, none on the wire (RC_VERSION stays 15; an upstream drone or
+GS pairs with these builds):
+
+- **Ask only for the shortfall** (GS, `[link.nack] shortfall_only`,
+  default on). `SwDecoder` keeps pending repair rows in echelon form keyed
+  by each row's smallest unknown seq. Once every unknown that is *not* a
+  row pivot is known, back-substitution solves the pivots — so the non-pivot
+  ("free") unknowns are exactly what is short, `deficit()` of them, and a
+  pivot is already paid for by a repair that arrived.
+  `SwDecoder/UepDecoder::source_covered()` says which; the tracker skips a
+  covered seq (first try and repeat) and asks for it if its row expires.
+  Counter: `held_covered`.
+- **First request after the burst's end** (GS, `wait_burst_end`, default
+  on). A gap seq's first request waits until its base burst has ended (an
+  enh body after the newest base body, or 8 ms with no base body), so the
+  repairs still on their way land first — unless the deadline is within
+  `min_lead_ms + urgent_slack_ms` (default 10), when it goes out anyway.
+  Tail seqs bypass both rules. Counters: `held_burst`, `urgent`. The web GS
+  gets the covered rule only (no burst hook).
+- **Re-sends on the voice queue, never shed first** (drone,
+  `[nack] queue = "vo"`, default; `"video"` = this page's behaviour).
+  `push_front` only overtakes video still in the host queue; the voice
+  hardware queue also overtakes video already inside the chip (turnaround
+  bench 2026-10-06, close range, lightly loaded: p99 6.0 ms vs 11.8 ms on
+  video's queue; 5-7 samples at mcs0, a loaded queue at range unmeasured).
+  `TxQueue` overflow now drops the oldest video behind the re-sends.
+
+Aimed at the bench's 35-37 % wasted symbols (62 % at rung 0, where every
+request ended wasted or late): unmeasured until flown. `[link.nack] ab_s`
+alternates re-sending on and off every N seconds so one flight carries both
+arms; flightreport's NACK section splits them (lost AUs/min, base abandoned
+symbols/min, fills/min, overall and per rung) and prints the waste share.
+
 ## Known limitations
 
 - The tail-trigger geometry guard in `gs/src/main.cpp` is a tautology:
@@ -352,9 +388,10 @@ arm. Under loss-sim the direct NACK took truncated AUs 314 → 8 and dropped
   `[link.nack]` section (default 256: a `seq_horizon` ≤ 256 fails boot).
 - The stop rule reads the ladder controller's util, which static-pin mode
   never ticks: the stop rule is inert on a pinned link (all bench arms).
-- `TxQueue::push` sheds from the front when over cap, so under a heavy
-  backlog the retx bodies at the head are the first dropped; they count in
-  `txq_drops`.
+- ~~`TxQueue::push` sheds from the front when over cap, so under a heavy
+  backlog the retx bodies at the head are the first dropped.~~ Fixed on
+  notsudogood/mabur 2026-10-10 (below): overflow drops the oldest video
+  behind the re-sends.
 - The bucket starts full (64) and neither refills nor re-sizes until the
   first op is published (refill rate 0 without one).
 - `nack_bad` and `retx_miss` are counted on the drone but reported nowhere

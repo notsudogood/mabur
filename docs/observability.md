@@ -129,8 +129,8 @@ Consume the same numbers programmatically with:
   directly — nothing else holds the port any more.
 - Debug logs: maburgs writes a per-session directory when `debug_log.enable`
   is set — `<debug_log.dir>/NNNN/` holding `ctl.log`, `probe.log`, `au.log`,
-  `scan.log`, `fec.log`, `arq.log`, `ta.log` (only while the turnaround bench
-  runs) and `flight.jsonl`; maburplay writes `lat.log` into the same directory by
+  `scan.log`, `fec.log`, `arq.log` and `flight.jsonl` (sessions before
+  2026-10-10 may also hold `ta.log`, from the removed turnaround bench); maburplay writes `lat.log` into the same directory by
   following the `/tmp/mabur-session` marker and holds no logging config of
   its own. The loader default is **off**, but the shipped bundle
   (`gs/bundle/maburgs.default.toml`) turns it **on** since the
@@ -396,7 +396,8 @@ over a replay and prints `arq_shadow <sid>:` totals on stderr (order-only:
 the replay clock is synthetic). First flight data: two indoor flights,
 2026-10-03 (`docs/feedback-repair-rollout.md` "Phase 1 results").
 
-**link.listen (2026-10-07).** The listen window, phase 3 of
+**link.listen (2026-10-07; removed 2026-10-10 with the feature, recordings
+before then only).** The listen window, phase 3 of
 `docs/feedback-repair-rollout.md`. GS side, cumulative: `on` (statuses going
 out now: `[listen] ms` > 0, the A/B phase, in session, the drone advertises
 `CAP_LISTEN`, no calibration sweep), `ms`, `ab_s`, `sent` and its split by
@@ -419,7 +420,8 @@ body raw — `ms` with bit 7 set (132 = v2, 4 ms), `nofid` = inside,
 `direct_holds` = delay_100us << 8 | fit_skips. `flightreport.py` decodes
 both.
 
-**ta.log (talog 1, 2026-10-04).** The turnaround bench, phase 2 of
+**ta.log (talog 1, 2026-10-04; removed 2026-10-10 with the bench, sessions
+before then only).** The turnaround bench, phase 2 of
 `docs/feedback-repair-rollout.md`: how long a status frame takes to turn into
 a reply on air while the drone's video queue is loaded, per drone hardware TX
 queue. Written by maburgs (`gs/src/ta_log.h`) into the session directory,
@@ -1074,7 +1076,7 @@ crcfail = 0) and its encoder-fps / sent→inj cross-check row is gone.
 USB fails, CPU, shed periods, once per `tlm_seq`).
 
 **2026-10-06 (software NACK, RC_VERSION 15; `docs/fec-nack.md`).**
-`link.nack{requests, repeats, syms_requested, tail_requests, filled, late_fill, wasted, dropped_deadline, suppressed, lead_skipped, fill_pps, fill_ms{p50,p90,max}, settle_ms, late_ms_max}`: the GS NackTracker, counters cumulative, `fill_*`/`late_ms_max` per export window; present only while `[link.nack] enable`. `lead_skipped` (2026-10-06 post-flight-0026): seqs whose request was withheld by `link.nack.min_lead_ms` because the answer could not land before the deadline.
+`link.nack{requests, repeats, syms_requested, tail_requests, filled, late_fill, wasted, dropped_deadline, suppressed, lead_skipped, fill_pps, fill_ms{p50,p90,max}, settle_ms, late_ms_max}`: the GS NackTracker, counters cumulative, `fill_*`/`late_ms_max` per export window; present only while `[link.nack] enable`. `lead_skipped` (2026-10-06 post-flight-0026): seqs whose request was withheld by `link.nack.min_lead_ms` because the answer could not land before the deadline. Added 2026-10-10 (`docs/fec-nack.md` "Changes on notsudogood/mabur"): `held_covered` (seqs skipped at least once because a repair that already arrived covers them), `held_burst` (seqs whose first request waited for the base burst to end), `urgent` (first requests sent inside a burst because the deadline was near), `on` (the current arm of the `[link.nack] ab_s` A/B; always true without it) and `ab_s`.
 `drone.nack{rx, retx_syms, retx_refused}`: the drone's T_NACK answers from Telem, per Telem period (repeated until the next Telem; count once per `drone.tlm_seq`).
 
 **2026-10-10 (H.265 row slices, slice salvage; `docs/slices.md`).**

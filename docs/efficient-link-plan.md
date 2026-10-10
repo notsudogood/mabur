@@ -165,7 +165,8 @@ late frames by making every frame later.
      section, which also reads the camera rate straight from `au.log`.
    - *Expect (simulated, not measured):* on the 2026-10-09 readiness spread,
      with whole-line rate steps (~27 mfps), a 2 s command delay and 1 in 5
-     setpoints lost: lock in ~20 s, phase held within ±1 ms, mean shown
+     setpoints lost: lock in ~20 s (after ~18 s of calibration, below),
+     phase held within ±1 ms, mean shown
      latency 18.9 → 15.5 ms, the 17 ms swing and the beat's thrown-away
      frames gone. Against it: the 10% of frames slower than the target pay a
      full refresh, so the mean gains less than the p50 (~7 ms from the
@@ -173,19 +174,42 @@ late frames by making every frame later.
      rides the uplink, which is least reliable when the link is bad — losing
      it leaves the drone holding its last rate, which at a good lock drifts
      a refresh in minutes, not seconds.
-   - *The unknown that gates it:* whether the IMX415 driver on the SSC338Q
-     honours a milli-fps `MI_SNR_SetFps` at all, and in what steps. Bench
-     probe, both new images flashed, genlock still off: on the drone,
-     `wget -qO- --post-data= 'http://127.0.0.1:8301/venc/set?sensor_mfps=59900'`
-     (then 59920, 59940, 59960, finally `0` to restore) while watching the
-     GS's `genlock:` lines (`/tmp/maburplay.log`, or the session's
-     `lat.log`): `cam=` should follow within ~4 s. Leave it at 59.900 for a
-     minute and check the session's DISPLAY SMOOTHNESS line: if the
-     10.15 s full-rate holes stop, they were the camera's surplus. `{"ok":false}` and a
-     `> genlock: MI_SNR_SetFps ... failed` drone line = no milli-fps path;
-     `cam=` not moving = the driver accepted and ignored it. Either kills
-     this route (fallbacks: a sensor-register VMAX write, or a 120 Hz screen
-     mode, which halves the swing).
+   - *Bench 2026-10-10 (IMX415 on the SSC338Q, GS loop off, rates held
+     from the drone's debug port, camera period from the GS `genlock:`
+     lines):* the driver takes a milli-fps request, but not at face value.
+     59.400 → 16758 µs (59.67 fps), 59.725 → 16669.5 µs (59.990), 59.650 →
+     16689.5 µs (59.916), each steady for the whole hold and back within
+     ~2 s on `0`; 59.800, 60.000, 60.600 and the configured 60 all → 16645
+     µs (60.078, the flights' camera). So a request sets a frame length
+     (60.000 would mean ~60.27 fps), but a settled frame never runs shorter
+     than 16645 µs, and right after a change into that region the shorter
+     length shows for about a second (60.17–60.20). The first loop seeded
+     itself assuming the request was the rate and steered between 59.89 and
+     60.02, on that boundary: the camera never went slower than 60.078 and
+     each write bought a burst, so it averaged 60.10–60.20 and the beat got
+     *faster* (a slip every 6–9 s against 12.8 s free). The simulated
+     camera in `test_genlock.cpp` is now fitted to these holds; the old loop
+     reproduces the bench failure on it (setpoints 59.887–59.997, camera
+     60.20), which is the best evidence the model is the right shape.
+   - *Fix (2026-10-10):* the player measures before it steers. On its first
+     steering tick it sends `0` (configured rate) and measures the camera,
+     then a probe 0.7% below nominal and measures that, and takes the
+     camera's rate per requested mfps from the pair (`genlock-cal:` line in
+     `lat.log`; `cal=` 1/2 on the per-tick lines, ~18 s). The loop starts at
+     the request for the screen's rate (~59.72 here) and never asks for
+     faster than the screen + 0.05% or native − 0.1%, so it stays where the
+     request is in control; the whole-line steps (~7 µs, ~27 mfps) leave a
+     ~0.2 ms/s residual at any one request, which the loop removes by moving
+     between neighbouring lines. A camera that does not slow for the probe
+     is put back to its configured rate and not steered again until the
+     drone restarts (`genlock-cal: refused`). Simulated on the fitted
+     camera with a 2 s command delay and 1 in 5 setpoints lost: phase within
+     1.2 ms, setpoints 59.727–59.741. *Against it:* three holds on one
+     bench, one still scene; the floor is probably the exposure (the drone
+     caps it at a full 1/60 s), so a darker scene could move it and that is
+     unmeasured; the loop's top end sits 0.05% above the screen, which
+     limits how fast it can pull the phase forward (~0.5 ms/s); and none of
+     this has flown.
    - *Gate:* bench first (`[genlock] enable = true` on the drone,
      `display.genlock = true` on the GS): the `genlock:` lines settle to
      |err| under ~2 ms, the CAMERA vs SCREEN section shows the camera at the

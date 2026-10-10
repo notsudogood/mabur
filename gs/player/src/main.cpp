@@ -1870,15 +1870,35 @@ int main(int argc, char** argv) {
         const auto gt = genlock.tick(cfg.display.genlock, mono_us());
         if (gt.steering) genlock_cli.send(gt.cmd_mfps);
         if (gt.valid) {
-          char gl_buf[224];
+          char gl_buf[240];
           std::snprintf(gl_buf, sizeof(gl_buf),
                         "genlock: on=%d cam=%.3f panel=%.3f phase=%.1f target=%.1f "
-                        "err=%.1f cmd=%u n=%d fps=%.1f pstep=%.0f pback=%d",
+                        "err=%.1f cmd=%u n=%d fps=%.1f pstep=%.0f pback=%d cal=%d",
                         gt.steering ? 1 : 0, gt.cam_hz, gt.panel_hz, gt.phase_ms,
                         gt.target_ms, gt.err_ms, static_cast<unsigned>(gt.cmd_mfps), gt.n,
-                        gt.fps, gt.pstep_us, gt.pts_back);
+                        gt.fps, gt.pstep_us, gt.pts_back, gt.stage);
           std::fprintf(stderr, "%s\n", gl_buf);
           lat_log.write(mono_us(), gl_buf);
+        }
+        // Calibration's outcome, once: its own `genlock-cal:` tag so the
+        // per-tick parsers (which match `genlock:`) skip it.
+        if (gt.calibrated || gt.refused) {
+          const auto& c = genlock.cal();
+          char cal_buf[240];
+          if (gt.calibrated)
+            std::snprintf(cal_buf, sizeof(cal_buf),
+                          "genlock-cal: ok native=%.3f probe=%u probe_cam=%.3f seed=%u "
+                          "range=%u..%u",
+                          c.native_hz, static_cast<unsigned>(c.probe_mfps), c.probe_hz,
+                          static_cast<unsigned>(c.seed_mfps), static_cast<unsigned>(c.lo_mfps),
+                          static_cast<unsigned>(c.hi_mfps));
+          else
+            std::snprintf(cal_buf, sizeof(cal_buf),
+                          "genlock-cal: refused native=%.3f probe=%u probe_cam=%.3f -- the "
+                          "camera did not slow down; back to its configured rate, not steering",
+                          c.native_hz, static_cast<unsigned>(c.probe_mfps), c.probe_hz);
+          std::fprintf(stderr, "maburplay: %s\n", cal_buf);
+          lat_log.write(mono_us(), cal_buf);
         }
       }
     }

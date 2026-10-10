@@ -2400,6 +2400,28 @@ def test_display_clock_section_reports_steering():
     assert "beat:" not in text, text
 
 
+def test_display_clock_section_separates_calibration():
+    with tempfile.TemporaryDirectory() as d:
+        lat = ["# latlog 2"]
+        for t in range(12):
+            cal = 1 if t < 3 else (2 if t < 6 else 0)
+            cmd = 0 if cal == 1 else (59580 if cal == 2 else 59722 + t)
+            lat.append(f"{(t + 1) * 1_000_000} genlock: on=1 cam=60.000 panel=60.000 "
+                       f"phase=13.0 target=13.2 err=0.2 cmd={cmd} n=60 cal={cal}")
+            if t == 5:
+                lat.append(f"{(t + 1) * 1_000_000 + 1} genlock-cal: ok native=60.078 "
+                           f"probe=59580 probe_cam=59.857 seed=59722 range=59400..59751")
+        (Path(d) / "lat.log").write_text("\n".join(lat) + "\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            flightreport.print_display_clock_report(None, str(Path(d) / "lat.log"))
+    text = out.getvalue()
+    assert "genlock: steering 6 of 12 s, calibrating 6 s" in text, text
+    assert "calibration: ok native=60.078 probe=59580" in text, text
+    # Calibration's setpoints (0, the probe) are not the steering range.
+    assert "setpoint 59728..59733 mfps" in text, text
+
+
 def test_display_clock_section_silent_without_logs():
     out = io.StringIO()
     with contextlib.redirect_stdout(out):

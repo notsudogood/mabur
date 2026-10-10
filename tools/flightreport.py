@@ -708,9 +708,24 @@ def camera_clock(pts):
     return {"fps": 1e6 / step, "step_us": step, "n": len(one)}
 
 
+def load_genlock_cal(lat_path):
+    """lat.log's `genlock-cal:` lines (one per calibration, since
+    2026-10-10): the text after the tag, as written."""
+    out = []
+    if not lat_path or not os.path.exists(lat_path):
+        return out
+    with open(lat_path) as f:
+        for line in f:
+            p = line.split(None, 2)
+            if len(p) == 3 and p[1] == "genlock-cal:":
+                out.append(p[2].strip())
+    return out
+
+
 def load_genlock_lines(lat_path):
     """lat.log's 1 Hz `genlock:` lines (maburplay, efficient-link plan step
-    2): `<t_us> genlock: on=0|1 cam= panel= phase= target= err= cmd= n=`."""
+    2): `<t_us> genlock: on=0|1 cam= panel= phase= target= err= cmd= n=`,
+    plus `cal=` (0 steering, 1/2 calibrating, 3 refused) since 2026-10-10."""
     rows = []
     if not lat_path or not os.path.exists(lat_path):
         return rows
@@ -765,7 +780,9 @@ def print_display_clock_report(au_path, lat_path):
     else:
         panel = 60.0
         print("  screen 60.000 Hz assumed (no genlock lines in lat.log)")
-    steered = [r for r in gl if r.get("on") == 1.0]
+    # Calibration seconds send setpoints too (on=1) but are not steering.
+    steered = [r for r in gl if r.get("on") == 1.0 and r.get("cal", 0.0) == 0.0]
+    calibrating = [r for r in gl if r.get("cal", 0.0) in (1.0, 2.0)]
     if cam and not steered:
         diff = cam["fps"] - panel
         if abs(diff) > 1e-3:
@@ -780,7 +797,10 @@ def print_display_clock_report(au_path, lat_path):
         iv = sorted(b - a for a, b in zip(w, w[1:]))
         print(f"  lat.log e2e p50 sawtooth: {len(w)} wraps, median {iv[len(iv) // 2]:.0f} s apart")
     if gl:
-        print(f"  genlock: steering {len(steered)} of {len(gl)} s")
+        extra = f", calibrating {len(calibrating)} s" if calibrating else ""
+        print(f"  genlock: steering {len(steered)} of {len(gl)} s{extra}")
+    for c in load_genlock_cal(lat_path):
+        print(f"    calibration: {c}")
     if steered:
         errs = sorted(abs(r.get("err", 0.0)) for r in steered)
         q = lambda f: errs[min(len(errs) - 1, int(f * (len(errs) - 1)))]

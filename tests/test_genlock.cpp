@@ -19,16 +19,24 @@ struct Lcg {
   }
 };
 
-// A sensor that, like a SigmaStar driver, turns a milli-fps request into a
-// whole number of lines per frame: rate = lines_per_s / floor(K / mfps).
-// K and lines_per_s are set so the nominal 60000 request runs at 60.078 fps
-// (the 2026-10-09 flights) and one line is ~27 mfps.
+// The bench camera (IMX415 on the SSC338Q, open-loop holds 2026-10-10): a
+// milli-fps request becomes a whole number of lines per frame,
+// floor(K / mfps), one line ~7.4 us / ~27 mfps, fitted to 59.400 -> 16758 us,
+// 59.725 -> 16669.5, 59.650 -> 16689.5. But a settled frame is never
+// shorter than 16645 us, so 0 (the configured 60) and everything from
+// ~59.80 up run at 60.078 fps (the flights' camera); for about a second
+// after a change the bare, shorter length shows through (60.17-60.20 on the
+// bench). `ignores` is a driver that accepts a request and does nothing.
 struct Sensor {
-  double K = 2247.0 * 60000.0;
-  double lines_per_s = 60.078 * 2247.0;
-  double period_us(uint32_t mfps) const {
-    const double vts = std::floor(K / static_cast<double>(mfps));
-    return 1e6 * vts / lines_per_s;
+  double line_us = 16669.5 / 2247.0;
+  double K = 2247.5 * 59725.0;
+  double floor_us = 16645.0;
+  bool ignores = false;
+  double period_us(uint32_t mfps, uint64_t frames_since_change) const {
+    if (ignores) return floor_us;
+    const double m = mfps ? static_cast<double>(mfps) : 60000.0;
+    const double bare = std::floor(K / m) * line_us;
+    return frames_since_change < 60 ? bare : std::max(bare, floor_us);
   }
 };
 
@@ -44,16 +52,17 @@ struct SimResult {
 // order: 0 = frames reach the player in capture order; 1 = each pair swapped
 // (t+1 before t); 2 = every second frame repeats the previous frame's pts.
 SimResult simulate(bool steer, int seconds, int settle_s, int delay, int lose_every,
-                   Genlock::Params params = {}, int order = 0) {
+                   Genlock::Params params = {}, int order = 0, Sensor sensor = {}) {
   Genlock g(params);
-  Sensor sensor;
   Lcg rng;
   const double P = 1e6 / 60.0;
   const double grid0 = 1234.0;
   const double lead = 6000.0;
   const double skew = 1.0 + 10e-6;
-  uint32_t applied = 60000;
-  std::deque<uint32_t> in_flight;
+  uint32_t applied = 0;  // the drone's configured rate
+  uint64_t since_change = 1000;
+  struct Send { bool sent; uint32_t mfps; };
+  std::deque<Send> in_flight;
   double t_drone = 1'000'000.0;
   double next_tick = 2'000'000.0;
   int tick_no = 0;
@@ -65,7 +74,7 @@ SimResult simulate(bool steer, int seconds, int settle_s, int delay, int lose_ev
   struct Pending { uint64_t pts, c, ready, flip; bool have = false; } held;
   double prev_t_drone = 0, prev_c = 0;
   while (t_drone < 1e6 * (seconds + 1)) {
-    t_drone += sensor.period_us(applied);
+    t_drone += sensor.period_us(applied, since_change++);
     const double cap_gs = t_drone * skew;
     const double c = cap_gs + 3000.0;
     // Transit + FEC + decode above the floor: mostly 6-14 ms, 10% tail.
@@ -110,16 +119,15 @@ SimResult simulate(bool steer, int seconds, int settle_s, int delay, int lose_ev
       const auto t = g.tick(steer, static_cast<uint64_t>(cap_gs));
       r.ticks.push_back(t);
       target_ms = t.target_ms;
-      if (t.steering) {
-        const bool lost = lose_every > 0 && tick_no % lose_every == 0;
-        in_flight.push_back(lost ? 0u : t.cmd_mfps);
-      } else {
-        in_flight.push_back(0u);
-      }
+      const bool lost = lose_every > 0 && tick_no % lose_every == 0;
+      in_flight.push_back(Send{t.steering && !lost, t.cmd_mfps});
       if (static_cast<int>(in_flight.size()) > delay) {
-        const uint32_t v = in_flight.front();
+        const Send v = in_flight.front();
         in_flight.pop_front();
-        if (v != 0) applied = v;
+        if (v.sent && v.mfps != applied) {
+          applied = v.mfps;
+          since_change = 0;
+        }
       }
       if (tick_no > settle_s && t.valid) r.errs_ms.push_back(t.err_ms);
     }
@@ -154,12 +162,80 @@ TEST(locks_through_whole_line_steps_delay_and_loss) {
   auto r = simulate(true, 240, 60, 2, 5);
   REQUIRE(r.errs_ms.size() > 100);
   CHECK(max_abs(r.errs_ms) < 3.0);
-  // Setpoints stay inside the +-1% band around 60 fps.
   for (const auto& t : r.ticks)
-    if (t.steering) {
+    if (t.steering && t.cmd_mfps != 0) {
+      // Inside the drone's +-1% band...
       CHECK(t.cmd_mfps >= 59400u);
-      CHECK(t.cmd_mfps <= 60600u);
+      // ...and never up where this camera sits on its floor (~59.80+):
+      // the region the first loop hunted in.
+      CHECK(t.cmd_mfps < 59790u);
     }
+}
+
+TEST(calibrates_before_steering) {
+  auto r = simulate(true, 60, 30, 2, 0);
+  int first_steer = -1, calibrated = -1;
+  for (size_t i = 0; i < r.ticks.size(); ++i) {
+    const auto& t = r.ticks[i];
+    if (t.steering && first_steer < 0) {
+      first_steer = static_cast<int>(i);
+      // The first thing sent puts the camera at its configured rate.
+      CHECK(t.cmd_mfps == 0u);
+      CHECK(t.stage == Genlock::kCalNative);
+    }
+    if (t.calibrated) calibrated = static_cast<int>(i);
+  }
+  REQUIRE(first_steer >= 0);
+  REQUIRE(calibrated > first_steer);
+  // Two steps of settle + measure: about 18 s.
+  CHECK(calibrated - first_steer <= 20);
+  const auto& t = r.ticks[static_cast<size_t>(calibrated)];
+  CHECK(t.stage == Genlock::kRun);
+  // The bench's numbers: native 60.078, the 59.580 probe ~59.86, and the
+  // request that gives 60.000 is ~59.72 (59.725 ran at 59.990 on the bench).
+  CHECK(t.cmd_mfps >= 59700u && t.cmd_mfps <= 59740u);
+}
+
+TEST(refuses_a_camera_that_ignores_the_request) {
+  Sensor deaf;
+  deaf.ignores = true;
+  auto r = simulate(true, 90, 30, 2, 0, Genlock::Params{}, 0, deaf);
+  int refused = -1;
+  for (size_t i = 0; i < r.ticks.size(); ++i)
+    if (r.ticks[i].refused) refused = static_cast<int>(i);
+  REQUIRE(refused >= 0);
+  // Its last word restores the configured rate; then nothing more is sent.
+  CHECK(r.ticks[static_cast<size_t>(refused)].steering);
+  CHECK(r.ticks[static_cast<size_t>(refused)].cmd_mfps == 0u);
+  for (size_t i = static_cast<size_t>(refused) + 1; i < r.ticks.size(); ++i) {
+    CHECK(!r.ticks[i].steering);
+    CHECK(r.ticks[i].stage == Genlock::kRefused);
+  }
+}
+
+TEST(recalibrates_after_a_drone_restart) {
+  Genlock g;
+  const double P = 1e6 / 60.0;
+  const double T = 1e6 / 59.990;  // camera a little slower than the screen
+  uint64_t frame = 0;
+  auto second = [&](int s) {
+    for (int i = 0; i < 60; ++i, ++frame) {
+      const uint64_t pts = 1'000'000 + static_cast<uint64_t>(frame * T);
+      g.on_frame(pts, pts + 3000, pts + 13000, 1'000'000 + static_cast<uint64_t>(frame * P), P, 6000);
+    }
+    return g.tick(true, 1'000'000 + static_cast<uint64_t>((s + 1) * 1e6));
+  };
+  int s = 0;
+  auto t = second(s++);
+  for (; s < 6 && !t.steering; ++s) t = second(s);
+  REQUIRE(t.steering);
+  CHECK(t.stage == Genlock::kCalNative);
+  g.reset_steering();
+  t = second(s++);
+  for (; s < 12 && !t.steering; ++s) t = second(s);
+  REQUIRE(t.steering);
+  CHECK(t.stage == Genlock::kCalNative);
+  CHECK(t.cmd_mfps == 0u);
 }
 
 TEST(locked_is_faster_on_average_than_free_running) {

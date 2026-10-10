@@ -42,9 +42,27 @@ namespace maburplay {
 //
 // What it does: once a tick (~1 s), a PI loop on the wrapped phase error
 // turns into a camera-rate setpoint in milli-fps, sent to the drone, which
-// trims its sensor's frame length. The first setpoint is a feed-forward from
-// the measured camera and screen rates (assuming the drone is at its
-// nominal rate), so lock takes seconds rather than the integrator's minute.
+// trims its sensor's frame length.
+//
+// The camera is measured before it is steered (bench 2026-10-10, IMX415 on
+// the SSC338Q, open-loop holds): the rate a request gives is not the rate
+// it names. A request becomes a frame length -- 59.400 ran at 59.673 fps,
+// 59.725 at 59.990, 59.650 at 59.916, i.e. 60.000 would mean ~60.27 -- but
+// the frame never settles shorter than 16645 us (60.078 fps, the configured
+// 60 as it runs), so everything from ~59.80 up, 60.600 included, runs at
+// 60.078. Right after a change into that region it runs at the bare,
+// faster length for about a second before the floor returns. The first loop
+// steered between 59.89 and 60.02, on that boundary: the camera never went
+// slower, and every write bought a burst of the faster rate, so it ran
+// 60.10-60.20 -- worse than not steering. So, on first steering: restore
+// the configured rate and measure it (native), ask for a probe 0.7% below
+// nominal and measure that, and from the pair take the camera's rate per
+// requested mfps. The loop then starts at the request that gives the
+// screen's rate and never asks for a rate faster than the screen + 0.05%,
+// or than 0.1% under native, so it stays where the request is in control.
+// A camera that does not slow for the probe (driver ignores the request) is
+// put back to its configured rate and not steered again until the drone
+// restarts.
 //
 // Pure arithmetic: no clocks, no I/O, no threads.
 class Genlock {
@@ -56,6 +74,25 @@ class Genlock {
     double max_step_mfps = 40.0;  // slew limit per tick
     double band = 0.01;           // setpoints stay within +-1% of nominal
     double target_alpha = 0.2;    // smoothing of the target phase per tick
+    double probe_frac = 0.007;    // calibration probe: this far below nominal
+    int cal_settle_ticks = 6;     // per calibration step: ticks to let the rate settle
+    int cal_measure_ticks = 3;    // ... then ticks of camera rate to take the median of
+    double min_response = 0.25;   // the probe must move the camera this share of what it asked
+    double screen_margin = 0.0005;  // never ask for faster than screen * (1 + this)
+    double knee_margin = 0.001;     // ... nor than native * (1 - this)
+  };
+
+  // Calibration state, reported per tick as `cal=`.
+  enum Stage : int { kRun = 0, kCalNative = 1, kCalProbe = 2, kRefused = 3 };
+
+  // What calibration found (valid once a tick reported calibrated/refused).
+  struct Cal {
+    double native_hz = 0;    // the camera at its configured rate
+    uint32_t probe_mfps = 0;
+    double probe_hz = 0;     // the camera at the probe
+    double hz_per_mfps = 0;  // camera rate per requested mfps
+    uint32_t seed_mfps = 0;  // the request that gives the screen's rate
+    uint32_t lo_mfps = 0, hi_mfps = 0;  // the loop's range
   };
 
   static constexpr int kMinFrames = 20;       // per tick, to say anything
@@ -109,8 +146,12 @@ class Genlock {
     double target_ms = 0;   // where the phase is being held (mod one period)
     double err_ms = 0;      // phase - target, wrapped to +-half a period
     bool steering = false;  // a setpoint is being produced
-    uint32_t cmd_mfps = 0;  // the setpoint to send (valid when steering)
+    uint32_t cmd_mfps = 0;  // the setpoint to send (valid when steering; 0 =
+                            // the drone's configured rate)
     int n = 0;              // frames this tick
+    int stage = kRun;       // calibration stage (Stage)
+    bool calibrated = false;  // calibration finished this tick (see cal())
+    bool refused = false;     // calibration gave up this tick (see cal())
   };
 
   // ~1 Hz, now_us on the same clock as on_frame's times. steer=false
@@ -158,37 +199,102 @@ class Genlock {
     const bool one_to_one = t.fps >= 0.8 * t.panel_hz && t.fps <= 1.2 * t.panel_hz;
     const bool steerable = one_to_one && t.cam_hz > 0 &&
                            std::fabs(t.cam_hz - t.panel_hz) <= 0.01 * t.panel_hz;
-    if (!steer || !steerable) return t;
-
-    const double nominal = std::round(t.cam_hz) * 1000.0;
-    if (nominal <= 0) return t;
-    const double lo = nominal * (1.0 - p_.band), hi = nominal * (1.0 + p_.band);
-    if (!have_cmd_) {
-      // Feed-forward: assume the drone runs at its nominal setpoint and the
-      // sensor's real rate is that times a fixed scale.
-      const double scale = t.cam_hz * 1000.0 / nominal;
-      integ_ = std::clamp(t.panel_hz * 1000.0 / scale, lo, hi);
-      cmd_ = integ_;
-      have_cmd_ = true;
+    t.stage = stage_;
+    if (!steer || stage_ == kRefused) return t;
+    if (!steerable) {
+      // Hold whatever the drone has; a calibration step starts its settling
+      // over once the camera is measurable again.
+      stage_ticks_ = 0;
+      cal_samples_.clear();
+      return t;
     }
-    integ_ = std::clamp(integ_ - p_.ki_mfps_per_ms * t.err_ms, lo, hi);
+    if (!have_cmd_) {
+      if (stage_ == kRun) {  // first steering tick: calibrate first
+        nominal_ = std::round(t.cam_hz) * 1000.0;
+        stage_ = kCalNative;
+        stage_ticks_ = 0;
+        cal_samples_.clear();
+      }
+      return calibrate(t);
+    }
+    integ_ = std::clamp(integ_ - p_.ki_mfps_per_ms * t.err_ms, lo_, hi_);
     double u = integ_ - p_.kp_mfps_per_ms * t.err_ms;
     u = std::clamp(u, cmd_ - p_.max_step_mfps, cmd_ + p_.max_step_mfps);
-    cmd_ = std::clamp(u, lo, hi);
+    cmd_ = std::clamp(u, lo_, hi_);
     t.steering = true;
     t.cmd_mfps = static_cast<uint32_t>(std::lround(cmd_));
     return t;
   }
 
-  // Forget the setpoint history (the next steering tick re-seeds from the
-  // feed-forward) and the old pts space's phase points. For a drone restart.
+  const Cal& cal() const { return cal_; }
+
+  // Forget the setpoint history and calibration (the next steering tick
+  // calibrates again) and the old pts space's phase points. For a drone
+  // restart.
   void reset_steering() {
     have_cmd_ = false;
+    stage_ = kRun;
+    stage_ticks_ = 0;
+    cal_samples_.clear();
     slope_.clear();
     slope_pos_ = 0;
   }
 
  private:
+  // One calibration tick (stage_ is kCalNative or kCalProbe): keep sending
+  // that step's request (the next tick is the retry), let the rate settle,
+  // take the median camera rate over a few ticks, move on.
+  Tick calibrate(Tick t) {
+    const uint32_t probe = static_cast<uint32_t>(std::lround(nominal_ * (1.0 - p_.probe_frac)));
+    t.steering = true;
+    t.cmd_mfps = stage_ == kCalNative ? 0u : probe;
+    t.stage = stage_;
+    if (++stage_ticks_ <= p_.cal_settle_ticks) return t;
+    cal_samples_.push_back(t.cam_hz);
+    if (static_cast<int>(cal_samples_.size()) < p_.cal_measure_ticks) return t;
+    const double hz = median(cal_samples_);
+    cal_samples_.clear();
+    stage_ticks_ = 0;
+    if (stage_ == kCalNative) {
+      cal_ = Cal{};
+      cal_.native_hz = hz;
+      cal_.probe_mfps = probe;
+      stage_ = kCalProbe;
+      t.cmd_mfps = probe;  // start the probe now rather than next tick
+      t.stage = stage_;
+      return t;
+    }
+    cal_.probe_hz = hz;
+    const double asked = probe / nominal_ - 1.0;          // e.g. -0.007
+    const double got = cal_.probe_hz / cal_.native_hz - 1.0;
+    if (!(got <= asked * p_.min_response)) {
+      // The camera did not slow down: put it back and leave it alone.
+      stage_ = kRefused;
+      t.stage = stage_;
+      t.cmd_mfps = 0;
+      t.refused = true;
+      return t;
+    }
+    cal_.hz_per_mfps = cal_.probe_hz / probe;
+    const double lo = nominal_ * (1.0 - p_.band);
+    const double fast = std::min(t.panel_hz * (1.0 + p_.screen_margin),
+                                 cal_.native_hz * (1.0 - p_.knee_margin));
+    const double hi = std::max(lo, fast / cal_.hz_per_mfps);
+    lo_ = lo;
+    hi_ = hi;
+    integ_ = std::clamp(t.panel_hz / cal_.hz_per_mfps, lo_, hi_);
+    cmd_ = integ_;
+    have_cmd_ = true;
+    stage_ = kRun;
+    cal_.seed_mfps = static_cast<uint32_t>(std::lround(cmd_));
+    cal_.lo_mfps = static_cast<uint32_t>(std::lround(lo_));
+    cal_.hi_mfps = static_cast<uint32_t>(std::lround(hi_));
+    t.stage = stage_;
+    t.cmd_mfps = cal_.seed_mfps;
+    t.calibrated = true;
+    return t;
+  }
+
   // d(phase)/d(capture) by least squares over the ring, sorted by capture
   // time and unwrapped point to point; one pass drops points more than 3x
   // the median residual (an anchor snap, a stray frame) and refits.
@@ -274,6 +380,12 @@ class Genlock {
   bool have_cmd_ = false;
   double integ_ = 0;
   double cmd_ = 0;
+  double lo_ = 0, hi_ = 0;
+  double nominal_ = 0;
+  int stage_ = kRun;
+  int stage_ticks_ = 0;
+  std::vector<double> cal_samples_;
+  Cal cal_;
 };
 
 }  // namespace maburplay

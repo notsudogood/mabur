@@ -102,12 +102,6 @@ class RcfSlotter {
   // Airtime of the probe body trailing every ENH burst, ms; 0 = none
   // commanded. Runtime: the probe MCS follows the rung.
   void set_probe_tail_ms(int ms) { cfg_.probe_tail_ms = ms < 0 ? 0 : ms; }
-  // Listen window (rollout phase 3, listen_burst.h): the drone keeps the air
-  // quiet for window_ms after every burst, so there is nothing to predict --
-  // every burst end releases, and a frame offered up to window_ms - 2 ms
-  // after one (send-to-air latency ~1.5 ms) still lands in the gap. 0 = off
-  // (the predicted-idle behaviour above).
-  void set_window_ms(int ms) { window_ms_ = ms < 0 ? 0 : ms; }
   // Learned upper bound on completion->probe-arrival, ms: the deadline a
   // lost probe's release falls back to. ceil(decaying max of observed
   // offsets, floored at probe_tail_ms) + 1.
@@ -128,8 +122,6 @@ class RcfSlotter {
 
  private:
   RcfSlotCfg cfg_;
-  int window_ms_ = 0;  // listen window; 0 = predict the idle instead
-  int grace_ms() const { return window_ms_ > 2 && window_ms_ - 2 > cfg_.grace_ms ? window_ms_ - 2 : cfg_.grace_ms; }
   std::deque<SlotFrame> pending_;
   uint64_t hold_start_ms_ = 0;   // oldest pending's offer time
   uint64_t last_au_ms_ = 0;      // last completion

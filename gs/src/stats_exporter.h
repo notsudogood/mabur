@@ -8,9 +8,12 @@
 #include <string>
 #include <vector>
 
+#include "au_ring.h"
 #include "lat_window.h"
+#include "mabur/nack_tracker.h"
 #include "mabur/rc_proto.h"
 #include "op_point.h"
+#include "relay_stats.h"
 
 namespace maburgs {
 
@@ -64,6 +67,9 @@ struct StatsCardIn {
   std::array<StatsClassIn, kNumStatsClasses> classes{};
   std::optional<StatsEnergyIn> energy;  // nullopt -> JSON null
   std::optional<StatsDwellIn> dwell;    // nullopt -> JSON null (never scouted)
+  bool snr_ok = true;                    // CardCaps::snr_ok; false -> snr*/evm* keys null
+  const char* kind = "usb";              // "usb" | "relay"
+  std::optional<RelayStatsIn> relay;     // relay cards only -> cards[i].relay
 };
 
 struct StatsStreamIn {  // copied from mabur::UepDecoder::LayerStats
@@ -183,17 +189,15 @@ struct StatsRcfSlotIn {
   int tail_ub_ms = 0;   // learned completion->probe deadline, ms
 };
 
-// Listen window (feedback-repair rollout phase 3, listen_burst.h). GS side
-// cumulative: statuses sent, split by what marked the burst end, and the
-// worst core-loop delay from that mark to the send. `drone` is the latest
-// T_LWSTAT, per period on the drone -- count it once per seq.
-struct StatsListenIn {
-  bool on = false;   // statuses going out right now (config, A/B phase, session, caps)
-  int ms = 0, ab_s = 0;
-  uint64_t sent = 0, probe = 0, deadline = 0, completion = 0;
-  uint64_t late_max_ms = 0;
-  std::optional<mabur::rc::LwStat> drone;
-  uint64_t drone_rx_ms = 0;
+// Software NACK (spec 2026-10-05 fec-nack §8): the GS NackTracker's
+// cumulative counters plus the per-export window (fill latencies, natural
+// lateness), exported as link.nack only while [link.nack] is enabled.
+struct StatsNackIn {
+  bool enabled = false;
+  mabur::NackStats cum;          // cumulative
+  mabur::NackWindow win;         // since last export
+  int settle_ms = 0;
+  double interval_s = 0.0;       // for fill_pps; 0 = no window yet -> null
 };
 
 // Continuous probe gate snapshot (probe-stream, 2026-09-04), straight from
@@ -225,11 +229,10 @@ struct StatsProbeIn {
 // straight from HopController's own accessors (state()/epoch()/hop_ch()/
 // hops()/holds()) plus the latest HopVerdict::window() output -- plain
 // values only, no controller reference, matching StatsCtlIn's pattern.
-// Unconditional (like StatsProbeIn): a disabled feature still exports
-// enable=false and the verdict/counters at their idle defaults, so a
+// Unconditional (like StatsProbeIn): a pinned GS, whose reactive hop never
+// runs, still exports the verdict/counters at their idle defaults, so a
 // consumer never has to special-case a missing block.
 struct StatsHopIn {
-  bool enable = false;
   const char* verdict = "unknown";  // to_string(Verdict)
   int evidence = 0;
   std::optional<int> ref_rung;      // HopVerdict::ref_rung(), -1 -> null
@@ -250,24 +253,27 @@ struct StatsHopIn {
   // nullopt until the first event of any kind (order/confirm/withdraw/
   // hold) has fired this session.
   std::optional<uint64_t> last_ms;
+  // Relay sweeps (SCANs) that got no SCAN_RESULT before their timeout,
+  // cumulative this process (ChannelCore::sweep_timeouts()).
+  uint64_t sweep_timeouts = 0;
 };
 
 struct StatsInput {
-  uint32_t vtx_id = 0;
   // radio.channel, straight from the GS config. Exported because the
   // player's compact OSD names the channel the rest of the line describes,
   // and reading it out of maburplay's own config instead would say what
   // the PLAYER believes rather than what the receiver is tuned to.
   int channel = 0;
-  // Home (rendezvous) channel and the boot-time scan's state
-  // (spec 2026-09-13-auto-channel-select): "scouting" | "frozen" | "off".
-  int home = 0;
+  // Boot-time scan's state (spec 2026-09-13-auto-channel-select):
+  // "off" | "scouting" | "moving" | "frozen".
   std::string scan_state = "off";
   uint64_t scan_rounds = 0;
   std::optional<int> scan_pick;
   StatsRcfSlotIn rcf_slot;
-  StatsListenIn listen;
+  StatsNackIn nack;
   bool in_session = false;  // VrxState::SESSION
+  bool key_mismatch = false;   // VrxState::KEY_MISMATCH (spec 2026-10-01 §8)
+  std::string key_fp;          // mabur::key_fingerprint(cfg.link.key)
   int tx_card = 0;
   OpPoint op;
   int gap_timeout_ms[2] = {0, 0};  // FrameStream's live per-sid gap timeout
@@ -304,6 +310,9 @@ struct StatsInput {
   StatsHopIn hop;
   uint64_t frames_clean = 0, frames_truncated = 0, frames_dropped = 0;
   uint64_t stall_resets = 0;
+  // Slice salvage (spec 2026-10-10-h265-slices §5.6): FrameStream counters.
+  uint64_t slice_salvaged = 0, slices_kept = 0, slices_filled = 0, slices_after_hole = 0;
+  uint64_t slice_fallback[kSliceFbCount] = {};  // indexed by SliceFallback
   // AU ring publish health (PR C: replaced the rtp/udp blocks -- video
   // leaves maburgs via the shm ring now; schema note in stats_exporter.cpp).
   uint64_t ring_published = 0, ring_dropped_oversize = 0, ring_bytes = 0;
@@ -380,8 +389,7 @@ class StatsExporter {
   mabur::rc::Telem prev_telem_{};
   uint64_t prev_telem_rx_ms_ = 0;
   bool have_telem_rates_ = false;
-  double telem_enc_fps_ = 0, telem_enc_mbps_ = 0, telem_rcf_rx_pps_ = 0,
-         telem_txq_drop_pps_ = 0, telem_radio_sent_pps_ = 0;
+  double telem_rcf_rx_pps_ = 0, telem_txq_drop_pps_ = 0;
 };
 
 }  // namespace maburgs

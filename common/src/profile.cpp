@@ -47,16 +47,6 @@ void decode_profile(uint8_t p, PhyMode& mode, uint8_t& mcs, uint8_t& bw) {
   mcs = std::min(raw_mcs, top);
 }
 
-std::string ladder_spec_str(PhyMode mode, uint8_t mcs, uint8_t bw) {
-  int top = (mode == PhyMode::VHT) ? 8 : 7;
-  const char* name = (mode == PhyMode::VHT) ? "VHT1SS_MCS" : "MCS";
-  int m = std::clamp(static_cast<int>(mcs), 0, top);
-  int base_m = std::max(m - 1, 0);
-  std::string base_tok = std::string(name) + std::to_string(base_m) + "/" + std::to_string(bw);
-  std::string enh_tok = std::string(name) + std::to_string(m) + "/" + std::to_string(bw);
-  return "BASE=" + base_tok + ";ENH=" + enh_tok;
-}
-
 // hw 2026-07-26: the inherited devourer default (T1 = m+1, T2 = m+2) put
 // SVC-T enhance traffic past this link's wall — 20-42% RF loss concentrated
 // on the enhance frames, FEC (0.25x overhead) hopeless against it, lost
@@ -78,7 +68,7 @@ std::string ladder_spec_str(PhyMode mode, uint8_t mcs, uint8_t bw) {
 // ride the scored mcs. UEP is per-rung FEC overhead pairs carried in the
 // v5 RCF — no rate split, no runtime redistribution. Measurement basis:
 // docs/same-rate-uep-findings-2026-08-30.md (static/motion/loss sweeps).
-std::array<LayerTxSpec, 2> ladder_from(PhyMode mode, uint8_t mcs, uint8_t bw) {
+std::array<LayerTxSpec, 2> ladder_from(PhyMode mode, uint8_t mcs, uint8_t bw, bool ldpc) {
   int top = (mode == PhyMode::VHT) ? 8 : 7;
   int m = std::clamp(static_cast<int>(mcs), 0, top);
 
@@ -87,13 +77,13 @@ std::array<LayerTxSpec, 2> ladder_from(PhyMode mode, uint8_t mcs, uint8_t bw) {
   ladder[0].mode = mode;
   ladder[0].mcs = static_cast<uint8_t>(m);
   ladder[0].bw = bw;
-  ladder[0].ldpc = true;
+  ladder[0].ldpc = ldpc;
   ladder[0].stbc = true;
   // ENH
   ladder[1].mode = mode;
   ladder[1].mcs = static_cast<uint8_t>(m);
   ladder[1].bw = bw;
-  ladder[1].ldpc = true;
+  ladder[1].ldpc = ldpc;
   ladder[1].stbc = true;
   return ladder;
 }

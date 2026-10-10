@@ -1056,7 +1056,7 @@ def sniff_feclog(path):
 
 
 FEC_COLS = ("t_ms", "sid", "mcs", "bw", "ov", "first_seq", "span", "m", "rec",
-            "aband", "stale", "r", "w")
+            "rtx", "aband", "stale", "r", "w")
 FEC_CANDIDATE_OV = (0.25, 0.35, 0.50, 0.75, 1.00)
 
 
@@ -1065,7 +1065,9 @@ def load_feclog(path):
     decoder closed. A rejoined session re-states the marker partway
     through; `# dropped N` is the LogWriter's gap marker. Both skipped,
     everything else is a row. feclog 2 (2026-09-24, 40 MHz rungs) inserts
-    `bw` after mcs; feclog 1 rows carry no bw and are 20 MHz."""
+    `bw` after mcs; feclog 1 rows carry no bw and are 20 MHz. feclog 3
+    (2026-10-05, software NACK) inserts `rtx` (symbols the episode
+    received via retransmit) after `rec`; feclog 1/2 rows read rtx=0."""
     rows = []
     version = 1
     with open(path) as f:
@@ -1080,6 +1082,8 @@ def load_feclog(path):
             tok = line.split()
             if version < 2:
                 tok = tok[:3] + ["20"] + tok[3:]
+            if version < 3:
+                tok = tok[:9] + ["0"] + tok[9:]
             if len(tok) != len(FEC_COLS):
                 continue
             r = {}
@@ -1123,10 +1127,11 @@ def print_fec_report(rows):
         live = [r for r in g if r["stale"] == 0]
         stale = len(g) - len(live)
         failed = sum(1 for r in g if r["aband"] > 0)
+        retx = sum(1 for r in g if r["rtx"] > 0)
         ms = [r["m"] for r in live]
         reqs = [fec_ov_req(r["m"], r["r"], ov) for r in live]
         print(f"  sid {sid} mcs {mcs}/{bw} ov {ov:.2f}: n={len(g)} stale={stale} "
-              f"failed={failed}")
+              f"failed={failed} retx={retx}")
         if not live:
             continue
         print(f"    m p50/p90/max={_pct(ms, 0.5)}/{_pct(ms, 0.9)}/{max(ms)}  "
@@ -1279,7 +1284,8 @@ _TA_MAX_TURN_US = 1_000_000  # a larger tsfl difference is a seq collision, not 
 
 
 def load_talog(path):
-    """ta.log (gs/src/ta_log.h) -> list of segments, one per `talog` header
+    """ta.log (the turnaround bench's gs/src/ta_log.h, removed 2026-10-10;
+    sessions recorded before then still carry it) -> list of segments, one per `talog` header
     (a maburgs respawn inside the session appends a new header and restarts
     ping seqs at 0, so pairing must never cross one). Each segment:
     {"hdr": {k: v}, "S": {seq: row}, "H": {seq: {card: row}},
@@ -1519,7 +1525,8 @@ def print_drone_rx_report(rows):
 
 
 # Listen window (feedback-repair rollout phase 3, gs/src/listen_burst.h +
-# drone/src/listen_window.h). A row this soon after an on/off switch belongs to
+# drone/src/listen_window.h; the feature was removed 2026-10-10, this reads
+# sessions recorded before then). A row this soon after an on/off switch belongs to
 # neither arm: the drone keeps its gap up to 0.5 s after the last status, and
 # the cumulative counters straddle the switch.
 LW_GUARD_MS = 1000
@@ -1777,6 +1784,143 @@ def print_listen_report(rows, lat_path=None):
             print(cost)
     print("  note: arrival times are the drone's RX stamp against its MODELLED burst end "
           "(AirClock), so they include its own USB RX latency and the model's error.")
+def drone_tx_samples(rows):
+    """One dict per distinct drone.tlm_seq (the exporter repeats a Telem
+    on every record until the next one arrives) carrying the drone-side
+    TX-path fields the 2026-09-30 telem diet kept for exactly this report:
+    txq_wait_ms (per-period max), cumulative txq.drops / radio.usb_fail,
+    sys.cpu_pct, and the congestion/failsafe shed flags. Empty when the
+    recording has no drone section."""
+    out = []
+    last_seq = None
+    for r in rows:
+        d = r.get("drone")
+        if not isinstance(d, dict):
+            continue
+        seq = d.get("tlm_seq")
+        if seq is not None and seq == last_seq:
+            continue
+        last_seq = seq
+        out.append({
+            "wait": d.get("txq_wait_ms"),
+            "drops": (d.get("txq") or {}).get("drops"),
+            "usb": (d.get("radio") or {}).get("usb_fail"),
+            "cpu": (d.get("sys") or {}).get("cpu_pct"),
+            "cong": d.get("congestion_shed"),
+            "fs": d.get("failsafe_shed"),
+            "auth": d.get("auth_reject"),
+        })
+    return out
+
+
+def _counter_growth(vals):
+    """Sum of per-period increases of a cumulative drone counter, and how
+    many periods it grew in. A maburd restart (value going backwards)
+    contributes its post-restart value, never a negative delta."""
+    total = periods = 0
+    prev = None
+    for v in vals:
+        if v is None:
+            continue
+        if prev is not None:
+            inc = v if v < prev else v - prev
+            if inc > 0:
+                total += inc
+                periods += 1
+        prev = v
+    return total, periods
+
+
+def print_drone_tx_report(rows):
+    """DRONE TX PATH: the drone-side reasons video can go missing that look
+    exactly like RF loss from the ground -- TxQueue wait and drop-oldest,
+    USB bulk-OUT failures, SoC CPU, and the congestion shed that silences
+    the enh layer. Kept on the wire for this section (telem diet
+    2026-09-30); the queue counters there used to be maburtop-only."""
+    s = drone_tx_samples(rows)
+    if not any(v is not None for x in s for v in x.values()):
+        return
+    waits = [x["wait"] for x in s if x["wait"] is not None]
+    cpus = [x["cpu"] for x in s if x["cpu"] is not None]
+    drops, drop_n = _counter_growth([x["drops"] for x in s])
+    usb, usb_n = _counter_growth([x["usb"] for x in s])
+    cong = sum(1 for x in s if x["cong"])
+    fs = sum(1 for x in s if x["fs"])
+    auth = sum(1 for x in s if x["auth"])
+    print()
+    print(f"DRONE TX PATH (per telemetry period, once per tlm_seq): n={len(s)}")
+    wait_s = (f"p50={_pct(waits, .5):.0f} p90={_pct(waits, .9):.0f} max={max(waits)}"
+              if waits else "n/a")
+    print(f"  txq wait ms: {wait_s}"
+          f"   txq drops: +{drops} in {drop_n} periods"
+          f"   usb fail: +{usb} in {usb_n} periods")
+    cpu_s = (f"p50={_pct(cpus, .5):.1f} p90={_pct(cpus, .9):.1f} max={max(cpus):.1f}"
+             if cpus else "n/a")
+    print(f"  cpu %: {cpu_s}")
+    print(f"  congestion shed: {cong} periods   failsafe shed: {fs} periods"
+          f"   auth reject: {auth} periods")
+
+
+def print_nack_report(rows):
+    """NACK (spec 2026-10-05 fec-nack): the software selective-repeat on the
+    base layer. link.nack counters are cumulative (a maburgs rejoin
+    restarts them: the rate counts the post-reset value, never a negative
+    delta); drone.nack are per Telem period from the drone, repeated on
+    every record until the next Telem, so they are summed once per
+    drone.tlm_seq (the drone_tx_samples idiom). Silent on recordings
+    without the block."""
+    nrows = [r for r in rows if (r.get("link") or {}).get("nack")]
+    if not nrows:
+        return
+    last = nrows[-1]["link"]["nack"]
+    span_s = max(1e-9, (nrows[-1]["t_ms"] - nrows[0]["t_ms"]) / 1000.0)
+    def d(k):
+        return _counter_growth([r["link"]["nack"].get(k) for r in nrows])[0]
+    dn = {"rx": 0, "retx_syms": 0, "retx_refused": 0}
+    last_tseq = None
+    for r in nrows:
+        dr = r.get("drone")
+        if not isinstance(dr, dict):
+            continue
+        tseq = dr.get("tlm_seq")
+        if tseq is not None and tseq == last_tseq:
+            continue
+        last_tseq = tseq
+        for k in dn:
+            dn[k] += (dr.get("nack") or {}).get(k) or 0
+    p50 = [r["link"]["nack"].get("fill_ms", {}).get("p50") for r in nrows]
+    p90 = [r["link"]["nack"].get("fill_ms", {}).get("p90") for r in nrows]
+    mx = [r["link"]["nack"].get("fill_ms", {}).get("max") for r in nrows]
+    p50 = [x for x in p50 if x is not None]; p90 = [x for x in p90 if x is not None]; mx = [x for x in mx if x is not None]
+    print("NACK (base-layer selective repeat, link.nack / drone.nack)")
+    print(f"  requests={last.get('requests', 0)} ({d('requests') / span_s * 60:.1f}/min) repeats={last.get('repeats', 0)}"
+          f" syms={last.get('syms_requested', 0)} tail={last.get('tail_requests', 0)}")
+    print(f"  filled={last.get('filled', 0)} late_fill={last.get('late_fill', 0)} wasted={last.get('wasted', 0)}"
+          f" dropped_deadline={last.get('dropped_deadline', 0)} suppressed={last.get('suppressed', 0)}"
+          f" lead_skipped={last.get('lead_skipped', 0)}")
+    print(f"  drone (once per tlm_seq): rx={dn['rx']} retx_syms={dn['retx_syms']} refused={dn['retx_refused']}")
+    if p50:
+        print(f"  fill_ms p50/p90/max={_pct(p50, 0.5)}/{_pct(p90, 0.5)}/{max(mx) if mx else 0}"
+              f"  settle_ms last={last.get('settle_ms')} late_ms_max={max(r['link']['nack'].get('late_ms_max') or 0 for r in nrows)}")
+
+
+def print_slice_salvage_report(rows):
+    """SLICE SALVAGE (spec 2026-10-10-h265-slices): truncated AUs maburgs
+    rebuilt from their complete slices plus skip-slice fills. Cumulative
+    link.video counters (a maburgs restart restarts them; _counter_growth
+    sums the post-reset value). Silent on recordings without the keys."""
+    vrows = [r for r in rows if "slice_salvaged" in ((r.get("link") or {}).get("video") or {})]
+    if not vrows:
+        return
+    def d(k):
+        return _counter_growth([r["link"]["video"].get(k) for r in vrows])[0]
+    fb = {}
+    for k in ("no_params", "unsupported", "islice", "no_template", "geometry"):
+        fb[k] = _counter_growth([(r["link"]["video"].get("slice_fallback") or {}).get(k) for r in vrows])[0]
+    print("\nSLICE SALVAGE")
+    print(f"  truncated={d('truncated')} salvaged={d('slice_salvaged')}  "
+          f"slices kept={d('slices_kept')} filled={d('slices_filled')} after_hole={d('slices_after_hole')}")
+    print("  fallback " + " ".join(f"{k}={v}" for k, v in fb.items()))
 
 
 def print_salvage_report(rows):
@@ -1865,7 +2009,16 @@ def load_scanlog(path):
     cca crc rssi snr drssi nhm_busy|- own_air]...' (scanlog 4, 10-field
     blocks) -- the stride is picked from the marker version seen so far,
     since a rejoined session's later section can be v4 while its header
-    line is still the old marker.
+    line is still the old marker. scanlog 5 (2026-10-03 auto-channel-set)
+    keeps the v4 10-field stride unchanged.
+
+    scanlog 5: M loses the "split_home"/"reunite" reasons (older files
+    still carry them and are read as-is -- M's `reason` field is tokenised
+    generically, with no reason-specific parsing to update -- and gains
+    "link_found" (2026-10-04) the same way), and H gains "relocate" (the
+    order that moves the link from where the drone was found to where it
+    should live -- the boot pick's move included -- placed through the hop
+    controller like a live retune; see _HOP_ORDER_KINDS).
 
     H's kind field is single-token snake_case today ("hold_cap" /
     "hold_exhausted" included, fixed at the emitter -- they used to be the
@@ -1876,6 +2029,9 @@ def load_scanlog(path):
     four always-single-token fields): harmless now that kind is always one
     word, and it costs nothing to keep it robust against a future kind that
     isn't.
+
+    scanlog 6 (2026-10-05 cpe-relay-hop): D gains a trailing rx % (relay
+    sweep entries; '-' for USB dwells); older D lines read rx None.
 
     Returns {"version": int, "V": [...], "H": [...], "D": [...], "M": [...]}.
     Silent on lines that don't parse (older/newer record shapes) rather
@@ -1949,6 +2105,7 @@ def load_scanlog(path):
                         "back_us": int(toks[16]),
                         "bw": int(toks[17]) if len(toks) >= 18 else 20,
                         "busy": (None if toks[18] == "-" else float(toks[18])) if len(toks) >= 19 else None,
+                        "rx": (None if toks[19] == "-" else float(toks[19])) if len(toks) >= 20 else None,
                     })
                 elif tag == "M" and len(toks) >= 6:
                     card = None if toks[2] == "all" else int(toks[2])
@@ -1978,7 +2135,12 @@ def sniff_scanlog(path):
 # on a BLOCKED channel -- from idle (a fresh row) or in place of the
 # verify-fail hold (then, like a verify_fail retry, it also closes the
 # failed attempt).
-_HOP_ORDER_KINDS = {"order", "verify_fail", "escape"}
+# "relocate" (scanlog 5, 2026-10-04 auto-channel-set final review): moves
+# the link from where the drone was found to where it should live (the pin
+# or the boot pick), placed through the SAME hop controller as a live
+# retune -- a fresh row, exactly like "order". "boot_order" is its name in
+# the pre-merge 2026-10-03 bench builds, read the same way.
+_HOP_ORDER_KINDS = {"order", "relocate", "boot_order", "verify_fail", "escape"}
 # A hold is a STATE, and HopController logs only its EDGES: hold_cap /
 # hold_exhausted / verify_fail on the way in, "hold_end" on the way out,
 # whose elapsed_ms is how long the episode lasted (holds used to re-log
@@ -2168,8 +2330,13 @@ def evidence_card_medians(V):
             d = by_card.setdefault(c["card"], {"foreign": [], "fa": [], "rssi_dbm": [], "snr_db": []})
             d["foreign"].append(c["foreign"]); d["fa"].append(c["fa"])
             d["rssi_dbm"].append(c["rssi_dbm"]); d["snr_db"].append(c["snr_db"])
+    # snr_db is nan on a card with no SNR (the CPE510 relay, snr_ok 0):
+    # skip nan samples; a card with none left medians to nan.
+    def med(vals):
+        vals = [x for x in vals if not math.isnan(x)]
+        return statistics.median(vals) if vals else math.nan
     return {card: {"n": len(d["foreign"]),
-                   **{k: statistics.median(vals) for k, vals in d.items()}}
+                   **{k: med(vals) for k, vals in d.items()}}
             for card, d in by_card.items() if d["foreign"]}
 
 
@@ -2487,8 +2654,11 @@ def main(path, aulog=None, probelog_path=None, scanlog_path=None):
         print(f"  t={t} residual={rl:.4f} u[-5s..]={flat_traj} drone_state={drone_state}{rssi_str}{snr_str}")
 
     print_salvage_report(rows)
+    print_nack_report(rows)
+    print_slice_salvage_report(rows)
     print_drone_rx_report(rows)
     print_listen_report(rows)
+    print_drone_tx_report(rows)
 
     # link.attrib.suppressed was removed from the sideport 2026-09-02 with
     # the packet-level delivery window it was defined against. Old
@@ -2526,9 +2696,13 @@ if __name__ == "__main__":
         # section too -- it is a flight's post-flight command, not a ctl
         # viewer. Silent when the recording predates the counters.
         if primary != s.flight and s.flight:
-            print_salvage_report(load(s.flight))
-            print_drone_rx_report(load(s.flight))
-            print_listen_report(load(s.flight), s.lat)
+            flight_rows = load(s.flight)
+            print_salvage_report(flight_rows)
+            print_nack_report(flight_rows)
+            print_slice_salvage_report(flight_rows)
+            print_drone_rx_report(flight_rows)
+            print_drone_tx_report(flight_rows)
+            print_listen_report(flight_rows, s.lat)
         # CAMERA vs SCREEN rides on au.log and lat.log, whatever the primary.
         print_display_clock_report(s.au, s.lat)
         print_display_smoothness_report(s.au, s.lat)

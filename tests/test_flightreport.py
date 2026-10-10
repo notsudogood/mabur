@@ -354,6 +354,74 @@ def test_drone_rx_section_absent_on_old_recordings():
     assert "DRONE RX" not in result.stdout
 
 
+def _mk_drone_tx_row(t_ms, tlm_seq, wait, drops, usb, cpu, cong, fs=False, auth=False):
+    r = _mk_stream_row(t_ms, 2)
+    r["drone"] = {"state": "linked", "tlm_seq": tlm_seq, "txq_wait_ms": wait,
+                  "failsafe_shed": fs, "congestion_shed": cong,
+                  "auth_reject": auth,
+                  "txq": {"drops": drops, "drop_pps": None},
+                  "radio": {"usb_fail": usb},
+                  "sys": {"soc_temp_c": 50, "cpu_pct": cpu}}
+    return r
+
+
+def test_drone_tx_path_section():
+    """DRONE TX PATH (telem diet 2026-09-30): the fields kept on the wire
+    for post-flight attribution -- txq wait, txq drops, usb fail, cpu,
+    congestion/failsafe shed -- sampled once per tlm_seq. Cumulative
+    counters are summed as per-period deltas, and a maburd restart (counter
+    going backwards) contributes its post-restart value, never a negative.
+    auth_reject (link pairing, 2026-10-01): a control-frame verification
+    failure, also counted per period."""
+    rows = [
+        _mk_drone_tx_row(0,    1, wait=3,  drops=10, usb=0, cpu=20.0, cong=False),
+        _mk_drone_tx_row(200,  1, wait=3,  drops=10, usb=0, cpu=20.0, cong=False),  # repeat
+        _mk_drone_tx_row(1000, 2, wait=12, drops=10, usb=0, cpu=40.0, cong=True, auth=True),
+        _mk_drone_tx_row(2000, 3, wait=40, drops=15, usb=1, cpu=71.0, cong=True),
+        _mk_drone_tx_row(3000, 1, wait=2,  drops=2,  usb=0, cpu=30.0, cong=False),  # restart
+    ]
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "flight.jsonl"
+        p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        result = subprocess.run([sys.executable, "tools/flightreport.py", str(p)],
+                                capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    assert "DRONE TX PATH" in out, out
+    sec = out[out.find("DRONE TX PATH"):]
+    assert re.search(r"n=4\b", sec), sec
+    assert re.search(r"txq wait ms:\s*p50=12\b.*p90=40\b.*max=40\b", sec), sec
+    assert re.search(r"txq drops:\s*\+7 in 2 periods", sec), sec
+    assert re.search(r"usb fail:\s*\+1 in 1 periods", sec), sec
+    assert re.search(r"cpu %:\s*p50=40\.0\b.*max=71\.0\b", sec), sec
+    assert re.search(r"congestion shed:\s*2 periods", sec), sec
+    assert re.search(r"failsafe shed:\s*0 periods", sec), sec
+    assert re.search(r"auth reject:\s*1 periods", sec), sec
+
+
+def test_drone_tx_path_section_absent_without_drone_telemetry():
+    rows = [_mk_stream_row(0, 2), _mk_stream_row(500, 2)]
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "flight.jsonl"
+        p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        result = subprocess.run([sys.executable, "tools/flightreport.py", str(p)],
+                                capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "DRONE TX PATH" not in result.stdout
+    # A drone block without any TX-path key (RX split only) stays silent too.
+    r = _mk_stream_row(0, 2)
+    r["drone"] = {"state": "linked", "tlm_seq": 1,
+                  "radio": {"rx": {"own": 1, "foreign": 0, "crcfail": 0}}}
+    rows = [r]
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "flight.jsonl"
+        p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        result = subprocess.run([sys.executable, "tools/flightreport.py", str(p)],
+                                capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "DRONE TX PATH" not in result.stdout
+
+
 def test_salvage_section_absent_on_old_recordings():
     """A recording that predates the counters prints no SALVAGE section
     (data-provenance: old jsonl on the DVR must still report cleanly)."""
@@ -1306,6 +1374,22 @@ class HopReportTest(unittest.TestCase):
         self.assertEqual(len(scanlog["H"]), len(ref["H"]))
         self.assertEqual(len(scanlog["V"]), len(ref["V"]))
 
+    def test_v6_scanlog_d_carries_rx(self):
+        """scanlog 6 (spec 2026-10-05-cpe-relay-hop): D gains a trailing rx %
+        (relay sweeps; '-' for USB dwells). Older D lines have no rx field."""
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "scan.log")
+        with open(p, "w") as f:
+            f.write("scanlog 5 channels=40,64 mode=auto dwell_ms=250\n")
+            f.write("D 100 0 64 1 5 3 0 0 0 - nan 0 1 0 0 0 20 12.0\n")
+            f.write("scanlog 6 channels=40,64 mode=auto dwell_ms=250\n")
+            f.write("D 200 1 165 0 20 0 9 0 3 - nan 0 1 0 0 0 20 70.0 10.0\n")
+            f.write("D 300 0 64 1 5 3 0 0 0 - nan 0 1 0 0 0 20 12.0 -\n")
+        s = flightreport.load_scanlog(p)
+        self.assertEqual(s["version"], 6)
+        self.assertEqual([x["rx"] for x in s["D"]], [None, 10.0, None])
+        self.assertEqual(s["D"][1]["busy"], 70.0)
+
     def test_v4_scanlog_carries_busy_and_own_air(self):
         """scanlog 4 (spec 2026-09-25-nhm-airtime §6): the V card block
         grows two fields, nhm_busy (%, '-' when the window wasn't ours) and
@@ -1675,6 +1759,35 @@ class HopReportTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("HOP REPORT", result.stdout)
 
+    def test_scanlog5_relocate_is_a_hop_row(self):
+        """scanlog 5 (auto-channel-set): H gains `relocate`, the order that
+        moves the link to where it should live (the boot pick's move
+        included) -- it must open a HOP row like `order`/`verify_fail`/
+        `escape`, not fall through as an unrecognised kind."""
+        scanlog = flightreport.load_scanlog("tests/fixtures/scan-boot.log")
+        self.assertEqual(scanlog["version"], 5)
+        kinds = [h["kind"] for h in scanlog["H"]]
+        self.assertIn("relocate", kinds)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            flightreport.print_hop_report(scanlog, {"E": []})
+        out = buf.getvalue()
+        self.assertIn("HOP REPORT (1 hop(s))", out)
+        self.assertIn("144", out)
+
+    def test_scanlog4_split_home_still_parses(self):
+        """CLAUDE.md: recordings outlive the code that wrote them -- an
+        older scanlog 4 file whose M lines still carry the deleted
+        split_home reason must keep parsing as-is."""
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "old.log")
+        with open(p, "w") as f:
+            f.write("scanlog 4 home=136 candidates=144,112 dwell_ms=250\n")
+            f.write("M 9000 0 144 136 split_home\n")
+        scanlog = flightreport.load_scanlog(p)
+        self.assertEqual(len(scanlog["M"]), 1)
+        self.assertEqual(scanlog["M"][0]["reason"], "split_home")
+
 
 FEC_LOG_ROWS = """feclog 1
 1000 0 5 1.00 100 12 12 12 0 0 32 32
@@ -1744,6 +1857,107 @@ def test_fec_section_feclog1_rows_default_bw_20():
         rows = flightreport.load_feclog(str(p))
     assert len(rows) == 5 and all(r["bw"] == 20 for r in rows), rows
     assert rows[0]["first_seq"] == 100 and rows[0]["m"] == 12, rows[0]
+
+
+FEC_LOG3_ROWS = """feclog 3
+1000 0 3 40 0.50 100 12 12 8 4 0 0 32 32
+1100 0 3 40 0.50 300 4 4 4 0 0 0 32 32
+1200 1 3 40 0.25 500 6 6 2 0 4 0 16 32
+"""
+
+
+def test_fec_section_feclog3_reads_rtx_and_keeps_old_versions():
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "fec.log"
+        p.write_text(FEC_LOG3_ROWS)
+        rows = flightreport.load_feclog(str(p))
+        assert [r["rtx"] for r in rows] == [4, 0, 0], rows
+        assert rows[0]["rec"] == 8 and rows[0]["aband"] == 0, rows[0]
+        result = subprocess.run([sys.executable, "tools/flightreport.py", str(p)],
+                                capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert re.search(r"sid 0 mcs 3/40 ov 0\.50: n=2 stale=0 failed=0 retx=1", result.stdout), result.stdout
+    # feclog 2 and 1 still parse with rtx == 0
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "fec.log"
+        p.write_text(FEC_LOG2_ROWS)
+        rows2 = flightreport.load_feclog(str(p))
+        p.write_text(FEC_LOG_ROWS)
+        rows1 = flightreport.load_feclog(str(p))
+    assert all(r["rtx"] == 0 for r in rows2 + rows1)
+
+
+def test_nack_section_from_sideport_rows():
+    rows = []
+    for i, (req, filled, refused) in enumerate([(0, 0, 0), (10, 8, 0), (25, 20, 3)]):
+        rows.append({"t_ms": 1000 + 200 * i, "seq": i, "v": 1,
+                     "link": {"nack": {"requests": req, "repeats": 1, "syms_requested": req * 10,
+                                       "tail_requests": 2, "filled": filled, "late_fill": 1,
+                                       "wasted": 2, "dropped_deadline": 0, "suppressed": 0,
+                                       "fill_pps": 4.0, "fill_ms": {"p50": 12, "p90": 20, "max": 30},
+                                       "settle_ms": 12, "late_ms_max": 9}},
+                     "drone": {"nack": {"rx": req, "retx_syms": req * 10, "retx_refused": refused}}})
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        flightreport.print_nack_report(rows)
+    text = out.getvalue()
+    assert "NACK" in text
+    assert re.search(r"requests=25", text), text
+    assert re.search(r"filled=20", text), text
+    assert re.search(r"refused=3", text), text
+    assert re.search(r"fill_ms p50/p90/max=12/20/30", text), text
+    # drone.nack is a per-Telem-period delta the exporter repeats on every
+    # record until the next Telem: count it once per drone.tlm_seq.
+    rows2 = []
+    for i, (req, tseq, rx, syms, refused) in enumerate(
+            [(0, 1, 2, 20, 3), (10, 1, 2, 20, 3), (25, 2, 1, 10, 4)]):
+        rows2.append({"t_ms": 1000 + 30000 * i, "seq": i, "v": 1,
+                      "link": {"nack": {"requests": req}},
+                      "drone": {"tlm_seq": tseq,
+                                "nack": {"rx": rx, "retx_syms": syms, "retx_refused": refused}}})
+    out3 = io.StringIO()
+    with contextlib.redirect_stdout(out3):
+        flightreport.print_nack_report(rows2)
+    t3 = out3.getvalue()
+    assert re.search(r"refused=7\b", t3), t3          # 3 + 4, not 3 + 3 + 4
+    assert re.search(r"rx=3\b", t3), t3
+    assert re.search(r"retx_syms=30\b", t3), t3
+    assert re.search(r"\(25\.0/min\)", t3), t3      # 25 requests over 60 s
+    # A maburgs rejoin restarts link.nack's counters: the rate counts the
+    # post-reset value, never a negative delta.
+    rows3 = [{"t_ms": 0, "link": {"nack": {"requests": 40}}},
+             {"t_ms": 30000, "link": {"nack": {"requests": 50}}},
+             {"t_ms": 60000, "link": {"nack": {"requests": 5}}}]
+    out4 = io.StringIO()
+    with contextlib.redirect_stdout(out4):
+        flightreport.print_nack_report(rows3)
+    assert re.search(r"\(15\.0/min\)", out4.getvalue()), out4.getvalue()
+    # rows without the block (old recordings) print nothing
+    out2 = io.StringIO()
+    with contextlib.redirect_stdout(out2):
+        flightreport.print_nack_report([{"t_ms": 1, "link": {}}])
+    assert out2.getvalue() == ""
+
+
+def test_slice_salvage_section():
+    rows = []
+    for i, (salv, kept, filled, after) in enumerate([(0, 0, 0, 0), (3, 9, 3, 2), (5, 14, 6, 3)]):
+        rows.append({"t_ms": 1000 + 500 * i, "seq": i, "v": 1,
+                     "link": {"video": {"truncated": salv + 1, "slice_salvaged": salv, "slices_kept": kept,
+                                        "slices_filled": filled, "slices_after_hole": after,
+                                        "slice_fallback": {"no_params": 1, "unsupported": 0, "islice": 0,
+                                                           "no_template": 0, "geometry": 0}}}})
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        flightreport.print_slice_salvage_report(rows)
+    text = out.getvalue()
+    assert "SLICE SALVAGE" in text, text
+    assert re.search(r"salvaged=5", text), text
+    assert re.search(r"kept=14 filled=6 after_hole=3", text), text
+    out2 = io.StringIO()
+    with contextlib.redirect_stdout(out2):
+        flightreport.print_slice_salvage_report([{"t_ms": 0, "link": {"video": {"truncated": 1}}}])
+    assert out2.getvalue() == ""   # silent on recordings without the keys
 
 
 def test_session_dir_mode_prints_fec_section():
@@ -2216,6 +2430,9 @@ if __name__ == "__main__":
     test_smoothness_section_differences_counters_across_a_restart()
     test_smoothness_section_counts_full_rate_holes_not_low_power()
     test_smoothness_section_notes_missing_regulator_lines()
+    test_fec_section_feclog3_reads_rtx_and_keeps_old_versions()
+    test_nack_section_from_sideport_rows()
+    test_slice_salvage_section()
     test_flightreport_structure()
     test_old_scale_snr_warns_on_stderr()
     test_overhead_scale_break_warns_on_stderr()

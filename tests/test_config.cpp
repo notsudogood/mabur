@@ -9,6 +9,7 @@
 
 #include "mtest.h"
 #include "config.h"
+#include "mabur/link_key.h"
 using namespace mabur;
 
 namespace {
@@ -998,6 +999,38 @@ TEST(link_rc_drain_ms_must_not_exceed_tick_ms) {
   }
 }
 
+// ---- Task 4: link.key_file (spec 2026-10-01-link-pairing §2) ------------
+
+TEST(link_key_file_missing_uses_default_and_says_so) {
+  auto path = write_temp_toml("[link]\nkey_file = \"" + std::string(MABUR_TEST_SCRATCH_DIR) +
+                              "/absent.key\"\n");
+  auto cfg = load_config(path.string());
+  CHECK(cfg.link.key_is_default);
+  CHECK(cfg.link.key == mabur::kDefaultLinkKey);
+  CHECK(cfg.link.key_source == "default");
+}
+
+TEST(link_key_file_present_is_loaded_and_bad_fails_boot) {
+  const std::string kf = std::string(MABUR_TEST_SCRATCH_DIR) + "/cfg.key";
+  { std::ofstream o(kf); o << "# key\n3f9a1c77e04b5d2290ab6ef1c8d34e5a\n"; }
+  auto path = write_temp_toml("[link]\nkey_file = \"" + kf + "\"\n");
+  auto cfg = load_config(path.string());
+  CHECK(!cfg.link.key_is_default);
+  CHECK(mabur::key_to_hex(cfg.link.key) == "3f9a1c77e04b5d2290ab6ef1c8d34e5a");
+  CHECK(cfg.link.key_source == kf);
+  { std::ofstream o(kf); o << "garbage\n"; }
+  const std::string msg = what_of([&] { (void)load_config(path.string()); });
+  CHECK(msg.find("link.key_file") != std::string::npos);
+  CHECK(msg.find(kf) != std::string::npos);
+}
+
+TEST(link_vtx_id_is_an_unknown_key_now) {
+  auto path = write_temp_toml("[link]\nvtx_id = 1\n");
+  const std::string msg = what_of([&] { (void)load_config(path.string()); });
+  CHECK(msg.find("link.vtx_id") != std::string::npos);
+  CHECK(msg.find("unknown key") != std::string::npos);
+}
+
 // ---- Task 3: ampdu block (spec 2026-09-01-ampdu-design.md) --------------
 
 TEST(ampdu_defaults_when_absent) {
@@ -1229,7 +1262,7 @@ TEST(load_config_reports_defaulted_keys) {
 }
 
 TEST(load_config_errors_carry_file_and_line) {
-  auto path = write_temp_toml("[radio]\nchannel = 149\nwidth = 20\n"
+  auto path = write_temp_toml("[radio]\nchannels = [149]\nwidth = 20\n"
                               "power_mode = \"bogus\"\n");
   const std::string msg = what_of([&] { load_config(path.string()); });
   CHECK(msg.find("radio.power_mode") != std::string::npos);
@@ -1289,21 +1322,52 @@ TEST(load_config_reports_real_venc_defaults_not_zero) {
   std::filesystem::remove(path);
 }
 
-TEST(follow_gs_and_move_confirm_parse_with_defaults) {
+TEST(radio_ldpc_defaults_on_and_parses_off) {
   auto e = write_temp_toml("");
   Config def = load_config(e.string());
   std::filesystem::remove(e);
-  CHECK(def.radio.follow_gs == true);
-  CHECK(def.link.move_confirm_ms == 2000);
-  auto p = write_temp_toml("[radio]\nchannel = 136\nfollow_gs = false\n[link]\nmove_confirm_ms = 500\n");
+  CHECK(def.radio.ldpc == true);
+  auto p = write_temp_toml("[radio]\nldpc = false\n");
   Config c = load_config(p.string());
-  CHECK(c.radio.follow_gs == false);
-  CHECK(c.link.move_confirm_ms == 500);
   std::filesystem::remove(p);
-  auto bad = write_temp_toml("[link]\nmove_confirm_ms = 10\n");
-  std::string msg = what_of([&] { (void)load_config(bad.string()); });
-  CHECK(msg.find("link.move_confirm_ms") != std::string::npos);
-  std::filesystem::remove(bad);
+  CHECK(c.radio.ldpc == false);
+}
+
+TEST(radio_channels_default_and_parse) {
+  Config def = load_config(write_temp_toml("[venc]\nsensor_bin = \"x\"\n").string());
+  REQUIRE(def.radio.channels.size() == 4);
+  CHECK(def.radio.channels[0] == 40 && def.radio.channels[3] == 144);
+  auto p = write_temp_toml("[radio]\nchannels = [136, 144]\nwidth = 40\n[link]\nmove_confirm_ms = 500\n");
+  Config c = load_config(p.string());
+  REQUIRE(c.radio.channels.size() == 2);
+  CHECK(c.radio.channels[0] == 136 && c.radio.channels[1] == 144);
+  CHECK(c.link.move_confirm_ms == 500);
+}
+
+TEST(radio_channels_validated_and_removed_keys_fail) {
+  for (const char* body : {"[radio]\nchannel = 136\n", "[radio]\nfollow_gs = true\n",
+                           "[radio]\nchannels = [40, 36]\nwidth = 40\n", "[radio]\nchannels = []\n",
+                           "[radio]\nchannels = [165]\nwidth = 40\n"}) {
+    bool threw = false;
+    try { load_config(write_temp_toml(body).string()); } catch (const std::exception&) { threw = true; }
+    CHECK(threw);
+  }
+}
+
+// Fix round 1 (reviewer): the replaced follow_gs_and_move_confirm_parse_with_
+// defaults test used to pin link.move_confirm_ms's [200,30000] bounds check
+// (parse_link, config.cpp) via a "= 10" throw case; that coverage was lost
+// when it was swapped for the two radio_channels_* tests above. Restored
+// here, plus the high end and both boundary values loading cleanly.
+TEST(move_confirm_ms_out_of_range_throws) {
+  for (const char* body : {"[link]\nmove_confirm_ms = 10\n", "[link]\nmove_confirm_ms = 40000\n"}) {
+    std::string msg = what_of([&] { (void)load_config(write_temp_toml(body).string()); });
+    CHECK(msg.find("link.move_confirm_ms") != std::string::npos);
+  }
+  CHECK(load_config(write_temp_toml("[link]\nmove_confirm_ms = 200\n").string())
+            .link.move_confirm_ms == 200);
+  CHECK(load_config(write_temp_toml("[link]\nmove_confirm_ms = 30000\n").string())
+            .link.move_confirm_ms == 30000);
 }
 
 TEST(low_power_defaults_are_disabled_and_parse) {
@@ -1405,16 +1469,49 @@ TEST(low_power_disabled_skips_cross_section_checks) {
   std::filesystem::remove(path);
 }
 
+TEST(nack_section_defaults_and_bounds) {
+  {
+    auto path = write_temp_toml("");
+    auto cfg = load_config(path.string());
+    CHECK(cfg.nack.ring_ms == 150 && cfg.nack.air_pct == 5);
+    CHECK(cfg.nack.burst_ms == 20);
+    std::filesystem::remove(path);
+  }
+  {
+    auto path = write_temp_toml("[nack]\nring_ms = 300\nair_pct = 10\nburst_ms = 40\n");
+    auto cfg = load_config(path.string());
+    CHECK(cfg.nack.ring_ms == 300 && cfg.nack.air_pct == 10);
+    CHECK(cfg.nack.burst_ms == 40);
+    std::filesystem::remove(path);
+  }
+  {
+    // burst_ms is the first-answer air a NACK may take at the TxQueue head;
+    // 0 would refuse everything, past 200 ms it is past any gap timeout.
+    auto path = write_temp_toml("[nack]\nburst_ms = 0\n");
+    bool threw = false;
+    try { load_config(path.string()); } catch (const std::exception&) { threw = true; }
+    CHECK(threw);
+    std::filesystem::remove(path);
+  }
+  {
+    auto path = write_temp_toml("[nack]\nair_pct = 80\n");
+    bool threw = false;
+    try { load_config(path.string()); } catch (const std::exception&) { threw = true; }
+    CHECK(threw);
+    std::filesystem::remove(path);
+  }
+}
+
 // ---- radio.width is real (2026-09-24, 40 MHz rungs) ----------------------
 
 TEST(radio_width_accepts_20_and_40_only) {
-  auto p20 = write_temp_toml("[radio]\nchannel = 136\nwidth = 20\n");
+  auto p20 = write_temp_toml("[radio]\nchannels = [136]\nwidth = 20\n");
   CHECK(load_config(p20.string()).radio.width == 20);
   std::filesystem::remove(p20);
-  auto p40 = write_temp_toml("[radio]\nchannel = 136\nwidth = 40\n");
+  auto p40 = write_temp_toml("[radio]\nchannels = [136]\nwidth = 40\n");
   CHECK(load_config(p40.string()).radio.width == 40);
   std::filesystem::remove(p40);
-  auto p80 = write_temp_toml("[radio]\nchannel = 136\nwidth = 80\n");
+  auto p80 = write_temp_toml("[radio]\nchannels = [136]\nwidth = 80\n");
   std::string msg = what_of([&] { (void)load_config(p80.string()); });
   CHECK(msg.find("radio.width") != std::string::npos);
   std::filesystem::remove(p80);
@@ -1423,9 +1520,9 @@ TEST(radio_width_accepts_20_and_40_only) {
 TEST(radio_width_40_needs_a_standard_pair) {
   // 165 is the top of UNII-3 with nothing above it on the 40 MHz grid
   // (common/include/mabur/ht40.h): a 40 MHz tune there has no secondary.
-  auto path = write_temp_toml("[radio]\nchannel = 165\nwidth = 40\n");
+  auto path = write_temp_toml("[radio]\nchannels = [165]\nwidth = 40\n");
   std::string msg = what_of([&] { (void)load_config(path.string()); });
-  CHECK(msg.find("radio.width") != std::string::npos);
+  CHECK(msg.find("radio.channels") != std::string::npos);
   CHECK(msg.find("165") != std::string::npos);
   std::filesystem::remove(path);
 }
@@ -1519,6 +1616,28 @@ TEST(record_size_parses) {
   auto cfg = load_config(path.string());
   std::filesystem::remove(path);
   CHECK(cfg.record.width == 3840 && cfg.record.height == 2160);
+}
+
+TEST(venc_slices_parses_and_rejects_unachievable_counts) {
+  auto good = write_temp_toml(
+      "[venc]\nsensor_bin = \"/etc/sensors/x.bin\"\nsize = \"1920x1080\"\nslices = 4\n");
+  Config c = load_config(good.string());
+  CHECK(c.venc.core.slices == 4);
+  std::filesystem::remove(good);
+
+  auto bad = [](const char* v) {
+    auto path = write_temp_toml(
+        std::string("[venc]\nsensor_bin = \"/etc/sensors/x.bin\"\nsize = \"1920x1080\"\nslices = ") + v + "\n");
+    std::string msg = what_of([&] { (void)load_config(path.string()); });
+    std::filesystem::remove(path);
+    return msg;
+  };
+  const std::string seven = bad("7");
+  CHECK(seven.find("venc.slices") != std::string::npos);
+  CHECK(seven.find("1, 2, 3, 4, 5, 6, 9, 17") != std::string::npos);  // the achievable list
+  CHECK(bad("0").find("venc.slices") != std::string::npos);
+  CHECK(bad("18").find("venc.slices") != std::string::npos);
+  CHECK(bad("17").empty());
 }
 
 MTEST_MAIN

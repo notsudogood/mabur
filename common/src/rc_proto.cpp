@@ -3,6 +3,7 @@
 #include <cmath>
 #include <limits>
 #include "mabur/crc16.h"
+#include "mabur/siphash.h"
 
 namespace mabur::rc {
 namespace {
@@ -52,245 +53,50 @@ void put_crc(std::vector<uint8_t>& body) {
   put16(body, crc);
 }
 
-constexpr size_t RCF_HEAD_LEN = 18;  // 2026-09-26: +rec
-constexpr size_t DISC_LEN = 21;
-constexpr size_t DISC_ACK_LEN = 19;
-constexpr size_t TELEM_LEN = 96;  // 2026-09-26: +rec_status (was 95: +rx_own/rx_foreign/rx_crcfail)
+// Writes the 8-byte SipHash tag for a tagged frame (DISC/RCF/CAL_CMD/
+// CAL_RESULT): keyed MAC over `body` so far (the frame's bytes up to but
+// not including the tag) concatenated with ctx's three u32s, which are
+// hashed in but never sent (TagCtx doc comment).
+void put_tag(std::vector<uint8_t>& body, const LinkKey& key, const TagCtx& ctx) {
+  std::vector<uint8_t> m(body);
+  put32(m, ctx.vrx_nonce);
+  put32(m, ctx.vtx_nonce);
+  put32(m, ctx.seq32);
+  put64(body, siphash24(key, m.data(), m.size()));
+}
 
-// magic(2) | ver | type | flags | vtx(4) | nonce(4) | phase | fpc(2) |
+constexpr size_t RCF_HEAD_LEN = 15;  // 2026-10-01: vtx_id deleted (19)
+constexpr size_t DISC_LEN = 17;
+constexpr size_t DISC_ACK_LEN = 20;  // 2026-10-01: vtx_nonce(4) + flags(1) added (15)
+constexpr size_t TELEM_LEN = 54;  // 2026-10-06: +nack_rx/retx_syms/retx_refused (48)
+
+// magic(2) | ver | type | flags | nonce(4) | phase | fpc(2) |
 // settle(2) | gap(2) | n_windows(1) | n * 4 bytes
 //
-// Offsets: hdr 0..4, vtx 5..8, nonce 9..12, phase 13, fpc 14..15,
-// settle 16..17, gap 18..19, n_windows 20. The constant INCLUDES the
+// Offsets: hdr 0..4, nonce 5..8, phase 9, fpc 10..11,
+// settle 12..13, gap 14..15, n_windows 16. The constant INCLUDES the
 // n_windows byte, so buf[kCalCmdFixedLen - 1] IS n_windows and the windows
-// array starts at kCalCmdFixedLen. tests/test_rc.cpp hard-codes 20 for the
+// array starts at kCalCmdFixedLen. tests/test_rc.cpp hard-codes 16 for the
 // same byte -- the two must agree.
-constexpr size_t kCalCmdFixedLen = 5 + 4 + 4 + 1 + 2 + 2 + 2 + 1;  // 21
-// magic(2) | ver | type | flags | vtx(4) | nonce(4) | walls(8*2) |
+constexpr size_t kCalCmdFixedLen = 5 + 4 + 1 + 2 + 2 + 2 + 1;  // 17
+// magic(2) | ver | type | flags | nonce(4) | walls(8*2) |
 // legacy(2)
-constexpr size_t kCalResultLen = 5 + 4 + 4 + 16 + 2;
-// magic(2) | ver | type | flags | vtx(4) | seq(2) | lane | n | bytes(2)
-constexpr size_t kTaPingLen = 5 + 4 + 2 + 1 + 1 + 2;  // 15
-// magic(2) | ver | type | flags | vtx(4) | seq(2) | lane | idx | n |
-// hold_us(4) | txq(2) | pool(2) | backlog(2), then zero padding, then CRC
-constexpr size_t kTaPongHeadLen = 5 + 4 + 2 + 1 + 1 + 1 + 4 + 2 + 2 + 2;  // 24
-static_assert(kTaPongHeadLen + 2 == kTaPongMinBytes, "pong head + CRC");
-// magic(2) | ver | type | flags | vtx(4) | seq(2) | trig | fid(2) |
-// listen_ms | deficit0(2) | deficit1(2)
-constexpr size_t kStatusLen = 5 + 4 + 2 + 1 + 2 + 1 + 2 + 2;  // 19
-// magic(2) | ver | type | flags | vtx(4) | seq(2) | listen_ms | status_rx(2) |
-// hist(8) | nofid | gate_holds(2) | gate_hold_sum_ms(2) | gate_hold_max_ms |
-// direct_holds(2)
-constexpr size_t kLwStatLen = 5 + 4 + 2 + 1 + 2 + kLwHistBins + 1 + 2 + 2 + 1 + 2;  // 30
-// magic(2) | ver | type | flags | vtx(4) | seq(2) | mfps(4)
-constexpr size_t kGenlockLen = 5 + 4 + 2 + 4;  // 15
+constexpr size_t kCalResultLen = 5 + 4 + 16 + 2;
+// magic(2) | ver | type | flags | counter(4) | sid | n | n * (first_seq(4) bitmap(4))
+constexpr size_t kNackFixedLen = 5 + 4 + 1 + 1;  // 11, INCLUDES the n byte at [10]
+constexpr size_t kNackEntryLen = 8;
+// magic(2) | ver | type | flags | counter(4) | mfps(4)
+constexpr size_t kGenlockLen = 5 + 4 + 4;  // 13
 
 }  // namespace
 
-std::vector<uint8_t> pack_ta_ping(const TaPing& p) {
+std::vector<uint8_t> pack_rcf(const Rcf& r, const LinkKey& key, const TagCtx& ctx) {
   std::vector<uint8_t> body;
-  body.reserve(kTaPingLen + 2);
-  put16(body, RC_MAGIC);
-  body.push_back(RC_VERSION);
-  body.push_back(T_TA_PING);
-  body.push_back(0);
-  put32(body, p.vtx_id);
-  put16(body, p.seq);
-  body.push_back(p.lane);
-  body.push_back(p.n_frames);
-  put16(body, p.frame_bytes);
-  put_crc(body);
-  return body;
-}
-
-std::optional<TaPing> parse_ta_ping(const uint8_t* buf, size_t len) {
-  if (len < kTaPingLen + 2) return std::nullopt;
-  if (get16(buf, 0) != RC_MAGIC || buf[2] != RC_VERSION || buf[3] != T_TA_PING)
-    return std::nullopt;
-  if (get16(buf, kTaPingLen) != crc16_ccitt(buf, kTaPingLen)) return std::nullopt;
-  TaPing p;
-  p.vtx_id = get32(buf, 5);
-  p.seq = get16(buf, 9);
-  p.lane = buf[11];
-  p.n_frames = buf[12];
-  p.frame_bytes = get16(buf, 13);
-  if (p.lane > kTaMaxLane || p.n_frames < 1 || p.n_frames > kTaMaxFrames ||
-      p.frame_bytes < kTaPongMinBytes || p.frame_bytes > kTaPongMaxBytes)
-    return std::nullopt;
-  return p;
-}
-
-std::vector<uint8_t> pack_ta_pong(const TaPong& p) {
-  const size_t total = std::clamp<size_t>(p.frame_bytes, kTaPongMinBytes, kTaPongMaxBytes);
-  std::vector<uint8_t> body;
-  body.reserve(total);
-  put16(body, RC_MAGIC);
-  body.push_back(RC_VERSION);
-  body.push_back(T_TA_PONG);
-  body.push_back(0);
-  put32(body, p.vtx_id);
-  put16(body, p.seq);
-  body.push_back(p.lane);
-  body.push_back(p.idx);
-  body.push_back(p.n_frames);
-  put32(body, p.hold_us);
-  put16(body, p.txq_depth);
-  put16(body, p.pool_depth);
-  put16(body, p.air_backlog_100us);
-  body.resize(total - 2, 0);
-  put_crc(body);
-  return body;
-}
-
-std::optional<TaPong> parse_ta_pong(const uint8_t* buf, size_t len) {
-  if (len < kTaPongMinBytes || len > kTaPongMaxBytes + 4) return std::nullopt;
-  if (get16(buf, 0) != RC_MAGIC || buf[2] != RC_VERSION || buf[3] != T_TA_PONG)
-    return std::nullopt;
-  // The pong is variable-length, so its CRC sits at the END of the body --
-  // and devourer hands up the frame WITH its trailing 4-byte FCS (radio_frontend
-  // strips only the dot11 header). Accept the body as packed or as received.
-  const auto crc_at_end = [buf](size_t n) {
-    return n >= kTaPongMinBytes && n <= kTaPongMaxBytes &&
-           get16(buf, n - 2) == crc16_ccitt(buf, n - 2);
-  };
-  if (!crc_at_end(len)) {
-    if (len < 4 || !crc_at_end(len - 4)) return std::nullopt;
-    len -= 4;
-  }
-  TaPong p;
-  p.vtx_id = get32(buf, 5);
-  p.seq = get16(buf, 9);
-  p.lane = buf[11];
-  p.idx = buf[12];
-  p.n_frames = buf[13];
-  p.hold_us = get32(buf, 14);
-  p.txq_depth = get16(buf, 18);
-  p.pool_depth = get16(buf, 20);
-  p.air_backlog_100us = get16(buf, 22);
-  p.frame_bytes = static_cast<uint16_t>(len);
-  return p;
-}
-
-std::vector<uint8_t> pack_status(const Status& s) {
-  std::vector<uint8_t> body;
-  body.reserve(kStatusLen + 2);
-  put16(body, RC_MAGIC);
-  body.push_back(RC_VERSION);
-  body.push_back(T_STATUS);
-  body.push_back(0);
-  put32(body, s.vtx_id);
-  put16(body, s.seq);
-  body.push_back(static_cast<uint8_t>(s.trig));
-  put16(body, s.fid);
-  body.push_back(s.listen_ms);
-  put16(body, s.deficit[0]);
-  put16(body, s.deficit[1]);
-  put_crc(body);
-  return body;
-}
-
-std::optional<Status> parse_status(const uint8_t* buf, size_t len) {
-  if (len < kStatusLen + 2) return std::nullopt;
-  if (get16(buf, 0) != RC_MAGIC || buf[2] != RC_VERSION || buf[3] != T_STATUS)
-    return std::nullopt;
-  if (get16(buf, kStatusLen) != crc16_ccitt(buf, kStatusLen)) return std::nullopt;
-  if (buf[11] > static_cast<uint8_t>(StatusTrig::Completion)) return std::nullopt;
-  if (buf[14] > kStatusMaxListenMs) return std::nullopt;
-  Status s;
-  s.vtx_id = get32(buf, 5);
-  s.seq = get16(buf, 9);
-  s.trig = static_cast<StatusTrig>(buf[11]);
-  s.fid = get16(buf, 12);
-  s.listen_ms = buf[14];
-  s.deficit[0] = get16(buf, 15);
-  s.deficit[1] = get16(buf, 17);
-  return s;
-}
-
-std::vector<uint8_t> pack_lwstat(const LwStat& s) {
-  std::vector<uint8_t> body;
-  body.reserve(kLwStatLen + 2);
-  put16(body, RC_MAGIC);
-  body.push_back(RC_VERSION);
-  body.push_back(T_LWSTAT);
-  body.push_back(0);
-  put32(body, s.vtx_id);
-  put16(body, s.seq);
-  const bool v2 = s.version >= 2;
-  body.push_back(static_cast<uint8_t>((s.listen_ms & 0x7F) | (v2 ? kLwV2Flag : 0)));
-  put16(body, s.status_rx);
-  for (int i = 0; i < kLwHistBins; ++i) body.push_back(s.hist[i]);
-  body.push_back(v2 ? s.inside : s.nofid);
-  put16(body, s.gate_holds);
-  put16(body, s.gate_hold_sum_ms);
-  body.push_back(s.gate_hold_max_ms);
-  put16(body, v2 ? static_cast<uint16_t>(s.delay_100us << 8 | s.fit_skips) : s.direct_holds);
-  put_crc(body);
-  return body;
-}
-
-std::optional<LwStat> parse_lwstat(const uint8_t* buf, size_t len) {
-  if (len < kLwStatLen + 2) return std::nullopt;
-  if (get16(buf, 0) != RC_MAGIC || buf[2] != RC_VERSION || buf[3] != T_LWSTAT)
-    return std::nullopt;
-  if (get16(buf, kLwStatLen) != crc16_ccitt(buf, kLwStatLen)) return std::nullopt;
-  LwStat s;
-  s.vtx_id = get32(buf, 5);
-  s.seq = get16(buf, 9);
-  s.version = (buf[11] & kLwV2Flag) ? 2 : 1;
-  s.listen_ms = buf[11] & 0x7F;
-  s.status_rx = get16(buf, 12);
-  for (int i = 0; i < kLwHistBins; ++i) s.hist[i] = buf[14 + i];
-  s.gate_holds = get16(buf, 23);
-  s.gate_hold_sum_ms = get16(buf, 25);
-  s.gate_hold_max_ms = buf[27];
-  if (s.version == 2) {
-    s.inside = buf[22];
-    const uint16_t packed = get16(buf, 28);  // delay_100us << 8 | fit_skips
-    s.delay_100us = static_cast<uint8_t>(packed >> 8);
-    s.fit_skips = static_cast<uint8_t>(packed & 0xFF);
-  } else {
-    s.nofid = buf[22];
-    s.direct_holds = get16(buf, 28);
-  }
-  return s;
-}
-
-std::vector<uint8_t> pack_genlock(const Genlock& g) {
-  std::vector<uint8_t> body;
-  body.reserve(kGenlockLen + 2);
-  put16(body, RC_MAGIC);
-  body.push_back(RC_VERSION);
-  body.push_back(T_GENLOCK);
-  body.push_back(0);
-  put32(body, g.vtx_id);
-  put16(body, g.seq);
-  put32(body, g.mfps);
-  put_crc(body);
-  return body;
-}
-
-std::optional<Genlock> parse_genlock(const uint8_t* buf, size_t len) {
-  if (len < kGenlockLen + 2) return std::nullopt;
-  if (get16(buf, 0) != RC_MAGIC || buf[2] != RC_VERSION || buf[3] != T_GENLOCK)
-    return std::nullopt;
-  if (get16(buf, kGenlockLen) != crc16_ccitt(buf, kGenlockLen)) return std::nullopt;
-  Genlock g;
-  g.vtx_id = get32(buf, 5);
-  g.seq = get16(buf, 9);
-  g.mfps = get32(buf, 11);
-  if (g.mfps > kGenlockMaxMfps) return std::nullopt;
-  return g;
-}
-
-std::vector<uint8_t> pack_rcf(const Rcf& r) {
-  std::vector<uint8_t> body;
-  body.reserve(RCF_HEAD_LEN + 2);
+  body.reserve(RCF_HEAD_LEN + kTagLen + 2);
   put16(body, RC_MAGIC);
   body.push_back(RC_VERSION);
   body.push_back(T_RCF);
   body.push_back(0);  // flags: nothing
-  put32(body, r.vtx_id);
   put16(body, r.seq);
   body.push_back(r.profile);
   body.push_back(overhead_to_x100(r.fec_overhead_base));
@@ -299,38 +105,40 @@ std::vector<uint8_t> pack_rcf(const Rcf& r) {
   body.push_back(r.hop_ch);
   body.push_back(r.hop_epoch);
   body.push_back(r.rec);
+  body.push_back(r.idr_epoch);
+  put_tag(body, key, ctx);
   put_crc(body);
   return body;
 }
 
 std::optional<Rcf> parse_rcf(const uint8_t* buf, size_t len) {
-  if (len < RCF_HEAD_LEN + 2) return std::nullopt;
+  if (len < RCF_HEAD_LEN + kTagLen + 2) return std::nullopt;
   if (get16(buf, 0) != RC_MAGIC || buf[2] != RC_VERSION || buf[3] != T_RCF)
     return std::nullopt;
-  if (get16(buf, RCF_HEAD_LEN) != crc16_ccitt(buf, RCF_HEAD_LEN)) return std::nullopt;
+  if (get16(buf, RCF_HEAD_LEN + kTagLen) != crc16_ccitt(buf, RCF_HEAD_LEN + kTagLen))
+    return std::nullopt;
   Rcf r;
-  r.vtx_id = get32(buf, 5);
-  r.seq = get16(buf, 9);
-  r.profile = buf[11];
-  r.fec_overhead_base = buf[12] / 100.0;
-  r.fec_overhead_enh = buf[13] / 100.0;
-  r.probe_profile = buf[14];
-  r.hop_ch = buf[15];
-  r.hop_epoch = buf[16];
-  r.rec = buf[17];
+  r.seq = get16(buf, 5);
+  r.profile = buf[7];
+  r.fec_overhead_base = buf[8] / 100.0;
+  r.fec_overhead_enh = buf[9] / 100.0;
+  r.probe_profile = buf[10];
+  r.hop_ch = buf[11];
+  r.hop_epoch = buf[12];
+  r.rec = buf[13];
+  r.idr_epoch = buf[14];
   return r;
 }
 
-std::vector<uint8_t> pack_cal_cmd(const CalCmd& c) {
+std::vector<uint8_t> pack_cal_cmd(const CalCmd& c, const LinkKey& key, const TagCtx& ctx) {
   std::vector<uint8_t> body;
   const size_t n = c.windows.size() > kMaxCalWindows ? kMaxCalWindows
                                                      : c.windows.size();
-  body.reserve(kCalCmdFixedLen + n * 4 + 2);
+  body.reserve(kCalCmdFixedLen + n * 4 + kTagLen + 2);
   put16(body, RC_MAGIC);
   body.push_back(RC_VERSION);
   body.push_back(T_CAL_CMD);
   body.push_back(0);  // flags: nothing
-  put32(body, c.vtx_id);
   put32(body, c.nonce);
   body.push_back(c.phase);
   put16(body, c.frames_per_cell);
@@ -343,6 +151,7 @@ std::vector<uint8_t> pack_cal_cmd(const CalCmd& c) {
     body.push_back(static_cast<uint8_t>(c.windows[i].idx_hi));
     body.push_back(c.windows[i].idx_step);
   }
+  put_tag(body, key, ctx);
   put_crc(body);
   return body;
 }
@@ -353,16 +162,15 @@ std::optional<CalCmd> parse_cal_cmd(const uint8_t* buf, size_t len) {
     return std::nullopt;
   const uint8_t n = buf[kCalCmdFixedLen - 1];
   if (n == 0 || n > kMaxCalWindows) return std::nullopt;
-  const size_t plen = kCalCmdFixedLen + static_cast<size_t>(n) * 4;
+  const size_t plen = kCalCmdFixedLen + static_cast<size_t>(n) * 4 + kTagLen;
   if (len < plen + 2) return std::nullopt;
   if (get16(buf, plen) != crc16_ccitt(buf, plen)) return std::nullopt;
   CalCmd c;
-  c.vtx_id = get32(buf, 5);
-  c.nonce = get32(buf, 9);
-  c.phase = buf[13];
-  c.frames_per_cell = get16(buf, 14);
-  c.settle_ms = get16(buf, 16);
-  c.gap_us = get16(buf, 18);
+  c.nonce = get32(buf, 5);
+  c.phase = buf[9];
+  c.frames_per_cell = get16(buf, 10);
+  c.settle_ms = get16(buf, 12);
+  c.gap_us = get16(buf, 14);
   for (uint8_t i = 0; i < n; ++i) {
     const size_t o = kCalCmdFixedLen + static_cast<size_t>(i) * 4;
     CalWindow w;
@@ -378,47 +186,45 @@ std::optional<CalCmd> parse_cal_cmd(const uint8_t* buf, size_t len) {
   return c;
 }
 
-std::vector<uint8_t> pack_cal_result(const CalResult& r) {
+std::vector<uint8_t> pack_cal_result(const CalResult& r, const LinkKey& key, const TagCtx& ctx) {
   std::vector<uint8_t> body;
-  body.reserve(kCalResultLen + 2);
+  body.reserve(kCalResultLen + kTagLen + 2);
   put16(body, RC_MAGIC);
   body.push_back(RC_VERSION);
   body.push_back(T_CAL_RESULT);
   body.push_back(0);
-  put32(body, r.vtx_id);
   put32(body, r.nonce);
   for (int i = 0; i < 8; ++i)
     put16(body, static_cast<uint16_t>(r.walls[static_cast<size_t>(i)]));
   put16(body, static_cast<uint16_t>(r.legacy_wall));
+  put_tag(body, key, ctx);
   put_crc(body);
   return body;
 }
 
 std::optional<CalResult> parse_cal_result(const uint8_t* buf, size_t len) {
-  if (len < kCalResultLen + 2) return std::nullopt;
+  if (len < kCalResultLen + kTagLen + 2) return std::nullopt;
   if (get16(buf, 0) != RC_MAGIC || buf[2] != RC_VERSION ||
       buf[3] != T_CAL_RESULT)
     return std::nullopt;
-  if (get16(buf, kCalResultLen) != crc16_ccitt(buf, kCalResultLen))
+  if (get16(buf, kCalResultLen + kTagLen) != crc16_ccitt(buf, kCalResultLen + kTagLen))
     return std::nullopt;
   CalResult r;
-  r.vtx_id = get32(buf, 5);
-  r.nonce = get32(buf, 9);
+  r.nonce = get32(buf, 5);
   for (int i = 0; i < 8; ++i)
     r.walls[static_cast<size_t>(i)] =
-        static_cast<int16_t>(get16(buf, 13 + static_cast<size_t>(i) * 2));
-  r.legacy_wall = static_cast<int16_t>(get16(buf, 29));
+        static_cast<int16_t>(get16(buf, 9 + static_cast<size_t>(i) * 2));
+  r.legacy_wall = static_cast<int16_t>(get16(buf, 25));
   return r;
 }
 
-std::vector<uint8_t> pack_disc(const Disc& d) {
+std::vector<uint8_t> pack_disc(const Disc& d, const LinkKey& key) {
   std::vector<uint8_t> body;
-  body.reserve(DISC_LEN + 2);
+  body.reserve(DISC_LEN + kTagLen + 2);
   put16(body, RC_MAGIC);
   body.push_back(RC_VERSION);
   body.push_back(T_DISC);
   body.push_back(F_DISCOVERY);
-  put32(body, d.vtx_id);
   put32(body, d.vrx_nonce);
   body.push_back(d.op_channel);
   body.push_back(d.op_width);
@@ -427,29 +233,29 @@ std::vector<uint8_t> pack_disc(const Disc& d) {
   put16(body, d.cap_bits);
   put16(body, d.seq);
 
+  put_tag(body, key, TagCtx{});  // ctx all-zero: pre-rendezvous, no nonces/seq yet
   put_crc(body);
   return body;
 }
 
 std::optional<Disc> parse_disc(const uint8_t* buf, size_t len) {
-  if (len < DISC_LEN + 2) return std::nullopt;
+  if (len < DISC_LEN + kTagLen + 2) return std::nullopt;
   uint16_t magic = get16(buf, 0);
   uint8_t ver = buf[2];
   uint8_t type = buf[3];
   if (magic != RC_MAGIC || ver != RC_VERSION || type != T_DISC) return std::nullopt;
 
-  uint16_t crc = get16(buf, DISC_LEN);
-  if (crc != crc16_ccitt(buf, DISC_LEN)) return std::nullopt;
+  uint16_t crc = get16(buf, DISC_LEN + kTagLen);
+  if (crc != crc16_ccitt(buf, DISC_LEN + kTagLen)) return std::nullopt;
 
   Disc d;
-  d.vtx_id = get32(buf, 5);
-  d.vrx_nonce = get32(buf, 9);
-  d.op_channel = buf[13];
-  d.op_width = buf[14];
-  d.table_ver = buf[15];
-  d.init_profile = buf[16];
-  d.cap_bits = get16(buf, 17);
-  d.seq = get16(buf, 19);
+  d.vrx_nonce = get32(buf, 5);
+  d.op_channel = buf[9];
+  d.op_width = buf[10];
+  d.table_ver = buf[11];
+  d.init_profile = buf[12];
+  d.cap_bits = get16(buf, 13);
+  d.seq = get16(buf, 15);
   return d;
 }
 
@@ -460,11 +266,12 @@ std::vector<uint8_t> pack_disc_ack(const DiscAck& a) {
   body.push_back(RC_VERSION);
   body.push_back(T_DISC_ACK);
   body.push_back(F_DISCOVERY);
-  put32(body, a.vtx_id);
   put32(body, a.vrx_nonce);
+  put32(body, a.vtx_nonce);
   put16(body, a.chip_caps);
   body.push_back(a.agreed_channel);
   body.push_back(a.agreed_width);
+  body.push_back(a.flags);
   put16(body, a.seq);
 
   put_crc(body);
@@ -482,12 +289,13 @@ std::optional<DiscAck> parse_disc_ack(const uint8_t* buf, size_t len) {
   if (crc != crc16_ccitt(buf, DISC_ACK_LEN)) return std::nullopt;
 
   DiscAck a;
-  a.vtx_id = get32(buf, 5);
-  a.vrx_nonce = get32(buf, 9);
+  a.vrx_nonce = get32(buf, 5);
+  a.vtx_nonce = get32(buf, 9);
   a.chip_caps = get16(buf, 13);
   a.agreed_channel = buf[15];
   a.agreed_width = buf[16];
-  a.seq = get16(buf, 17);
+  a.flags = buf[17];
+  a.seq = get16(buf, 18);
   return a;
 }
 
@@ -500,48 +308,27 @@ std::vector<uint8_t> pack_telem(const Telem& t) {
   body.push_back(t.flags);
   put16(body, t.tlm_seq);
   body.push_back(t.state);
-  put32(body, t.generation);
-  body.push_back(t.applied_profile);
-  body.push_back(saturate<uint8_t>(std::lround(t.applied_ov_base * 100.0)));
-  body.push_back(saturate<uint8_t>(std::lround(t.applied_ov_enh * 100.0)));
   put16(body, t.rcf_age_ms);
   put16(body, t.rcf_seq_echo);
   put64(body, t.pts_at_build);
   put32(body, t.rcf_rx);
-  put32(body, t.enc_frames);
-  put32(body, t.enc_kbytes);
   put16(body, t.cmd_kbps);
-  body.push_back(static_cast<uint8_t>(t.roi_qp));
-  put16(body, t.ring_drops);
-  body.push_back(t.txq_depth);
-  body.push_back(t.txq_cap);
   put32(body, t.txq_drops);
   put16(body, t.txq_wait_max_ms);
-  put32(body, t.radio_sent);
-  put32(body, t.radio_drops);
   put16(body, t.usb_fail);
   body.push_back(t.up_rssi[0]);
   body.push_back(t.up_rssi[1]);
   body.push_back(static_cast<uint8_t>(t.up_snr[0]));
   body.push_back(static_cast<uint8_t>(t.up_snr[1]));
   body.push_back(static_cast<uint8_t>(t.soc_temp_c));
-  body.push_back(static_cast<uint8_t>(t.thermal_delta));
   put16(body, t.cpu_busy_x100);
-  put16(body, t.idr_disagree);
-  put16(body, t.enhance_disagree);
-  put16(body, t.vanished_base);
-  put16(body, t.vanished_enh);
-  put16(body, t.self_idr_refused);
-  put16(body, t.venc_full_drops);
-  body.push_back(t.venc_ring_fill_pct);
-  put16(body, t.air_backlog_max_ms);
-  put16(body, t.air_shed_drops);
-  body.push_back(t.channel);
-  body.push_back(t.hop_epoch);
   put16(body, t.rx_own);
   put16(body, t.rx_foreign);
   put16(body, t.rx_crcfail);
   body.push_back(t.rec_status);
+  put16(body, t.nack_rx);
+  put16(body, t.retx_syms);
+  put16(body, t.retx_refused);
 
   put_crc(body);
   return body;
@@ -561,48 +348,28 @@ std::optional<Telem> parse_telem(const uint8_t* buf, size_t len) {
   t.flags = buf[4];
   t.tlm_seq = get16(buf, 5);
   t.state = buf[7];
-  t.generation = get32(buf, 8);
-  t.applied_profile = buf[12];
-  t.applied_ov_base = buf[13] / 100.0;
-  t.applied_ov_enh = buf[14] / 100.0;
-  t.rcf_age_ms = get16(buf, 15);
-  t.rcf_seq_echo = get16(buf, 17);
-  t.pts_at_build = get64(buf, 19);
-  t.rcf_rx = get32(buf, 27);
-  t.enc_frames = get32(buf, 31);
-  t.enc_kbytes = get32(buf, 35);
-  t.cmd_kbps = get16(buf, 39);
-  t.roi_qp = static_cast<int8_t>(buf[41]);
-  t.ring_drops = get16(buf, 42);
-  t.txq_depth = buf[44];
-  t.txq_cap = buf[45];
-  t.txq_drops = get32(buf, 46);
-  t.txq_wait_max_ms = get16(buf, 50);
-  t.radio_sent = get32(buf, 52);
-  t.radio_drops = get32(buf, 56);
-  t.usb_fail = get16(buf, 60);
-  t.up_rssi[0] = buf[62];
-  t.up_rssi[1] = buf[63];
-  t.up_snr[0] = static_cast<int8_t>(buf[64]);
-  t.up_snr[1] = static_cast<int8_t>(buf[65]);
-  t.soc_temp_c = static_cast<int8_t>(buf[66]);
-  t.thermal_delta = static_cast<int8_t>(buf[67]);
-  t.cpu_busy_x100 = get16(buf, 68);
-  t.idr_disagree = get16(buf, 70);
-  t.enhance_disagree = get16(buf, 72);
-  t.vanished_base = get16(buf, 74);
-  t.vanished_enh = get16(buf, 76);
-  t.self_idr_refused = get16(buf, 78);
-  t.venc_full_drops = get16(buf, 80);
-  t.venc_ring_fill_pct = buf[82];
-  t.air_backlog_max_ms = get16(buf, 83);
-  t.air_shed_drops = get16(buf, 85);
-  t.channel = buf[87];
-  t.hop_epoch = buf[88];
-  t.rx_own = get16(buf, 89);
-  t.rx_foreign = get16(buf, 91);
-  t.rx_crcfail = get16(buf, 93);
-  t.rec_status = buf[95];
+  t.rcf_age_ms = get16(buf, 8);
+  t.rcf_seq_echo = get16(buf, 10);
+  t.pts_at_build = get64(buf, 12);
+  t.rcf_rx = get32(buf, 20);
+  t.cmd_kbps = get16(buf, 24);
+  t.txq_drops = get32(buf, 26);
+  t.txq_wait_max_ms = get16(buf, 30);
+  t.usb_fail = get16(buf, 32);
+  t.up_rssi[0] = buf[34];
+  t.up_rssi[1] = buf[35];
+  t.up_snr[0] = static_cast<int8_t>(buf[36]);
+  t.up_snr[1] = static_cast<int8_t>(buf[37]);
+  t.soc_temp_c = static_cast<int8_t>(buf[38]);
+  t.cpu_busy_x100 = get16(buf, 39);
+  t.rx_own = get16(buf, 41);
+  t.rx_foreign = get16(buf, 43);
+  t.rx_crcfail = get16(buf, 45);
+  t.rec_status = buf[47];
+  const size_t o = TELEM_LEN - 6;
+  t.nack_rx = get16(buf, o);
+  t.retx_syms = get16(buf, o + 2);
+  t.retx_refused = get16(buf, o + 4);
   return t;
 }
 
@@ -619,6 +386,111 @@ bool is_foreign_rc_version(const uint8_t* buf, size_t len) {
   // about, so a truncated body is never reported as a version mismatch.
   if (len < 4) return false;
   return get16(buf, 0) == RC_MAGIC && buf[2] != RC_VERSION;
+}
+
+std::vector<uint8_t> pack_nack(const Nack& n, const LinkKey& key, const TagCtx& ctx) {
+  std::vector<uint8_t> body;
+  const uint8_t cnt = static_cast<uint8_t>(std::min<int>(n.n, kMaxNackEntries));
+  body.reserve(kNackFixedLen + cnt * kNackEntryLen + kTagLen + 2);
+  put16(body, RC_MAGIC);
+  body.push_back(RC_VERSION);
+  body.push_back(T_NACK);
+  body.push_back(n.flags);
+  put32(body, n.counter);
+  body.push_back(n.sid);
+  body.push_back(cnt);
+  for (uint8_t i = 0; i < cnt; ++i) {
+    put32(body, n.e[i].first_seq);
+    put32(body, n.e[i].bitmap | 1u);
+  }
+  put_tag(body, key, ctx);
+  put_crc(body);
+  return body;
+}
+
+std::optional<Nack> parse_nack(const uint8_t* buf, size_t len) {
+  if (len < kNackFixedLen) return std::nullopt;
+  if (get16(buf, 0) != RC_MAGIC || buf[2] != RC_VERSION || buf[3] != T_NACK) return std::nullopt;
+  const uint8_t cnt = buf[kNackFixedLen - 1];
+  if (cnt == 0 || cnt > kMaxNackEntries) return std::nullopt;
+  const size_t plen = kNackFixedLen + cnt * kNackEntryLen + kTagLen;
+  if (len < plen + 2) return std::nullopt;
+  if (get16(buf, plen) != crc16_ccitt(buf, plen)) return std::nullopt;
+  Nack n;
+  n.flags = buf[4];
+  n.counter = get32(buf, 5);
+  n.sid = buf[9];
+  n.n = cnt;
+  for (uint8_t i = 0; i < cnt; ++i) {
+    const size_t o = kNackFixedLen + i * kNackEntryLen;
+    n.e[i].first_seq = get32(buf, o);
+    n.e[i].bitmap = get32(buf, o + 4);
+  }
+  return n;
+}
+
+std::vector<uint8_t> pack_genlock(const Genlock& g, const LinkKey& key, const TagCtx& ctx) {
+  std::vector<uint8_t> body;
+  body.reserve(kGenlockLen + kTagLen + 2);
+  put16(body, RC_MAGIC);
+  body.push_back(RC_VERSION);
+  body.push_back(T_GENLOCK);
+  body.push_back(0);  // flags: nothing
+  put32(body, g.counter);
+  put32(body, g.mfps);
+  put_tag(body, key, ctx);
+  put_crc(body);
+  return body;
+}
+
+std::optional<Genlock> parse_genlock(const uint8_t* buf, size_t len) {
+  if (len < kGenlockLen + kTagLen + 2) return std::nullopt;
+  if (get16(buf, 0) != RC_MAGIC || buf[2] != RC_VERSION || buf[3] != T_GENLOCK)
+    return std::nullopt;
+  if (get16(buf, kGenlockLen + kTagLen) != crc16_ccitt(buf, kGenlockLen + kTagLen))
+    return std::nullopt;
+  Genlock g;
+  g.counter = get32(buf, 5);
+  g.mfps = get32(buf, 9);
+  if (g.mfps > kGenlockMaxMfps) return std::nullopt;
+  return g;
+}
+
+bool verify_control(const uint8_t* buf, size_t len, const LinkKey& key, const TagCtx& ctx) {
+  // The tag sits at the frame's STRUCTURAL end, never at len - 10: on
+  // hardware the drone's body still carries devourer's trailing 4-byte
+  // 802.11 FCS (Packet.Data, fcs_present), so anything past the CRC is
+  // ignored -- exactly as parse_* already ignore it.
+  size_t tag_at = 0;
+  switch (frame_type(buf, len)) {
+    case T_DISC: tag_at = DISC_LEN; break;
+    case T_RCF: tag_at = RCF_HEAD_LEN; break;
+    case T_CAL_RESULT: tag_at = kCalResultLen; break;
+    case T_GENLOCK: tag_at = kGenlockLen; break;
+    case T_NACK: {
+      if (len < kNackFixedLen) return false;
+      const uint8_t n = buf[kNackFixedLen - 1];
+      if (n == 0 || n > kMaxNackEntries) return false;
+      tag_at = kNackFixedLen + static_cast<size_t>(n) * kNackEntryLen;
+      break;
+    }
+    case T_CAL_CMD: {
+      if (len < kCalCmdFixedLen) return false;
+      const uint8_t n = buf[kCalCmdFixedLen - 1];
+      if (n == 0 || n > kMaxCalWindows) return false;   // as parse_cal_cmd
+      tag_at = kCalCmdFixedLen + static_cast<size_t>(n) * 4;
+      break;
+    }
+    default: return false;
+  }
+  if (len < tag_at + kTagLen + 2) return false;
+  std::vector<uint8_t> m(buf, buf + tag_at);
+  put32(m, ctx.vrx_nonce);
+  put32(m, ctx.vtx_nonce);
+  put32(m, ctx.seq32);
+  const uint64_t want = siphash24(key, m.data(), m.size());
+  const uint64_t got = get64(buf, tag_at);
+  return ((want ^ got) == 0);   // single 64-bit compare: no early-out on partial match
 }
 
 uint8_t overhead_to_x100(double ov) {

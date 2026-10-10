@@ -1,6 +1,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 
 namespace mabur {
 
@@ -23,14 +24,21 @@ namespace mabur {
 // half-duplex RCF/telemetry slots, aggregation and USB pacing.
 //
 // No clock of its own: every call takes the caller's steady-clock µs, like
-// RcAgent's now_ms contract, so tests drive it synthetically. Hot-thread
-// only; not thread-safe.
+// RcAgent's now_ms contract, so tests drive it synthetically.
+//
+// Thread-safe (fec-nack, spec 2026-10-05 §4.3): the hot thread prices it
+// (set_rates on an op change), books every video/probe body and reads the
+// backlog per frame; the RX thread's T_NACK handler books every retransmit
+// body. All three members take m_. The lock is per BODY (book) or per frame
+// (backlog_us, set_rates), never per symbol, and the RX side holds it for a
+// few arithmetic ops, so the hot thread's contention is negligible.
 class AirClock {
  public:
   static constexpr int kProbeSid = 2;   // sid 0 = base, 1 = enh, 2 = probe body
 
   void set_rates(double base_mbps, double enh_mbps, double probe_mbps,
                  uint32_t body_us) {
+    std::lock_guard<std::mutex> l(m_);
     us_per_byte_[0] = per_byte(base_mbps);
     us_per_byte_[1] = per_byte(enh_mbps);
     us_per_byte_[2] = per_byte(probe_mbps);
@@ -41,6 +49,7 @@ class AirClock {
   // out-of-range sid) books nothing: better an unbooked body than a body
   // priced at a rate the op never commanded.
   void book(uint64_t now_us, size_t bytes, int sid) {
+    std::lock_guard<std::mutex> l(m_);
     if (sid < 0 || sid > kProbeSid) return;
     const double upb = us_per_byte_[sid];
     if (upb <= 0.0) return;
@@ -50,28 +59,8 @@ class AirClock {
     free_at_us_ = start + static_cast<uint64_t>(cost + 0.5);
   }
 
-  // What book() would charge for one body, µs (0 for an unpriced sid): the
-  // listen window asks whether a body's air would overlap it.
-  uint64_t cost_us(size_t bytes, int sid) const {
-    if (sid < 0 || sid > kProbeSid) return 0;
-    const double upb = us_per_byte_[sid];
-    if (upb <= 0.0) return 0;
-    return static_cast<uint64_t>(static_cast<double>(bytes) * upb +
-                                 static_cast<double>(body_us_) + 0.5);
-  }
-
-  // When the air is modelled free of everything booked so far (0 = never
-  // booked). The listen window is placed from here (listen_window.h).
-  uint64_t free_at_us() const { return free_at_us_; }
-
-  // Reserves the air up to t_us (the end of a listen window a held body
-  // waits out): the next booking starts no earlier, so the model and the
-  // backlog it reports include the wait.
-  void reserve_until(uint64_t t_us) {
-    if (t_us > free_at_us_) free_at_us_ = t_us;
-  }
-
   uint32_t backlog_us(uint64_t now_us) const {
+    std::lock_guard<std::mutex> l(m_);
     if (free_at_us_ <= now_us) return 0;
     const uint64_t d = free_at_us_ - now_us;
     return d > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(d);
@@ -82,6 +71,7 @@ class AirClock {
   double us_per_byte_[3] = {0.0, 0.0, 0.0};
   uint32_t body_us_ = 0;
   uint64_t free_at_us_ = 0;
+  mutable std::mutex m_;   // guards every member above
 };
 
 }  // namespace mabur

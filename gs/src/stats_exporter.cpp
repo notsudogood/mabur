@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 
+#include "au_ring.h"
 #include "json.hpp"
 #include "mabur/profile.h"
 #include "snr_units.h"
@@ -96,6 +97,15 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     json cj;
     cj["id"] = i;
     cj["up"] = c.up;
+    cj["kind"] = c.kind;
+    if (c.relay) {
+      const RelayStatsIn& r = *c.relay;
+      cj["relay"] = {{"state", r.state}, {"owned", r.owned}, {"ch", r.ch}, {"sec", r.sec},
+                     {"frames", r.frames}, {"gaps", r.gaps}, {"your_drops", r.your_drops},
+                     {"tx", r.tx}, {"tx_fail", r.tx_fail}, {"tx_refused", r.tx_refused},
+                     {"reconnects", r.reconnects}, {"tx_scan_drop", r.tx_scan_drop},
+                     {"sweeps", r.sweeps}};
+    }
     cj["frames"] = c.frames;
     cj["crc_fail"] = c.crc_fail;
     if (c.energy) {
@@ -173,16 +183,20 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
         kj["rssi"] = cls.rssi_ema - 110.0;
         kj["rssi_a"] = cls.rssi_a_ema - 110.0;
         kj["rssi_b"] = cls.rssi_b_ema - 110.0;
-        kj["snr"] = cls.snr_ema * kSnrRawToDb;
-        kj["snr_a"] = cls.snr_a_ema * kSnrRawToDb;
-        kj["snr_b"] = cls.snr_b_ema * kSnrRawToDb;
+        if (c.snr_ok) {
+          kj["snr"] = cls.snr_ema * kSnrRawToDb;
+          kj["snr_a"] = cls.snr_a_ema * kSnrRawToDb;
+          kj["snr_b"] = cls.snr_b_ema * kSnrRawToDb;
+        } else {  // card reports no SNR (relay): null, not a fake 0 dB
+          kj["snr"] = nullptr; kj["snr_a"] = nullptr; kj["snr_b"] = nullptr;
+        }
       } else {
         kj["rssi"] = nullptr; kj["rssi_a"] = nullptr; kj["rssi_b"] = nullptr;
         kj["snr"] = nullptr;  kj["snr_a"] = nullptr;  kj["snr_b"] = nullptr;
       }
-      kj["evm"] = cls.evm_has ? json(cls.evm_ema * kEvmRawToDb) : json(nullptr);
-      kj["evm_a"] = cls.evm_a_has ? json(cls.evm_a_ema * kEvmRawToDb) : json(nullptr);
-      kj["evm_b"] = cls.evm_b_has ? json(cls.evm_b_ema * kEvmRawToDb) : json(nullptr);
+      kj["evm"] = (c.snr_ok && cls.evm_has) ? json(cls.evm_ema * kEvmRawToDb) : json(nullptr);
+      kj["evm_a"] = (c.snr_ok && cls.evm_a_has) ? json(cls.evm_a_ema * kEvmRawToDb) : json(nullptr);
+      kj["evm_b"] = (c.snr_ok && cls.evm_b_has) ? json(cls.evm_b_ema * kEvmRawToDb) : json(nullptr);
       classes[kClassKeys[k]] = std::move(kj);
     }
     cj["classes"] = std::move(classes);
@@ -191,10 +205,9 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
   }
 
   json& link = j["link"];
-  link["vtx_id"] = in.vtx_id;
   link["channel"] = in.channel;
-  link["home"] = in.home;
-  link["state"] = in.in_session ? "session" : "beaconing";
+  link["state"] = in.key_mismatch ? "key_mismatch" : in.in_session ? "session" : "beaconing";
+  link["key_fp"] = in.key_fp;
   link["tx_card"] = in.tx_card;
   // OpPoint.overhead is a base/enh pair (Task 4, same-rate-fixed-pairs):
   // export both GS-commanded values under their own keys -- the single
@@ -241,40 +254,38 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     rs["passthru"] = in.rcf_slot.passthru;
     rs["probe"] = in.rcf_slot.probe;
     rs["tail_ub_ms"] = in.rcf_slot.tail_ub_ms;
-    json& lw = link["listen"];
-    lw["on"] = in.listen.on;
-    lw["ms"] = in.listen.ms;
-    lw["ab_s"] = in.listen.ab_s;
-    lw["sent"] = in.listen.sent;
-    lw["probe"] = in.listen.probe;
-    lw["deadline"] = in.listen.deadline;
-    lw["completion"] = in.listen.completion;
-    lw["late_max_ms"] = in.listen.late_max_ms;
-    if (in.listen.drone) {
-      const mabur::rc::LwStat& d = *in.listen.drone;
-      json& dj = lw["drone"];
-      dj["v"] = d.version;
-      dj["seq"] = d.seq;
-      dj["rx_ms"] = in.listen.drone_rx_ms;
-      dj["ms"] = d.listen_ms;
-      dj["status_rx"] = d.status_rx;
-      json hist = json::array();
-      for (int i = 0; i < mabur::rc::kLwHistBins; ++i) hist.push_back(d.hist[i]);
-      dj["hist"] = hist;  // bin edges by version: rc_proto.h T_LWSTAT
-      dj["gate_holds"] = d.gate_holds;
-      dj["gate_hold_sum_ms"] = d.gate_hold_sum_ms;
-      dj["gate_hold_max_ms"] = d.gate_hold_max_ms;
-      if (d.version >= 2) {
-        dj["inside"] = d.inside;
-        dj["delay_ms"] = d.delay_100us / 10.0;
-        dj["fit_skips"] = d.fit_skips;
-      } else {
-        dj["nofid"] = d.nofid;
-        dj["direct_holds"] = d.direct_holds;
-      }
-    } else {
-      lw["drone"] = nullptr;
-    }
+  }
+  // Software NACK (spec 2026-10-05 fec-nack §8). Counters are cumulative;
+  // fill_pps / fill_ms / late_ms_max cover the window since the last export.
+  // fill_ms percentiles are nearest-rank (index ceil(p*n)-1).
+  if (in.nack.enabled) {
+    json& nk = link["nack"];
+    const auto& c = in.nack.cum;
+    nk["requests"] = c.requests;
+    nk["repeats"] = c.repeats;
+    nk["syms_requested"] = c.syms_requested;
+    nk["tail_requests"] = c.tail_requests;
+    nk["filled"] = c.filled;
+    nk["late_fill"] = c.late_fill;
+    nk["wasted"] = c.wasted;
+    nk["dropped_deadline"] = c.dropped_deadline;
+    nk["suppressed"] = c.suppressed;
+    nk["lead_skipped"] = c.lead_skipped;
+    nk["fill_pps"] = in.nack.interval_s > 0
+                         ? json(static_cast<double>(in.nack.win.filled) / in.nack.interval_s)
+                         : json(nullptr);
+    std::vector<uint32_t> f = in.nack.win.fill_ms;
+    std::sort(f.begin(), f.end());
+    auto pct = [&f](double p) -> json {
+      if (f.empty()) return nullptr;
+      const double rank = std::ceil(p * static_cast<double>(f.size()));
+      const size_t i = rank < 1.0 ? 0 : static_cast<size_t>(rank) - 1;
+      return f[std::min(f.size() - 1, i)];
+    };
+    nk["fill_ms"] = {{"p50", pct(0.5)}, {"p90", pct(0.9)},
+                     {"max", f.empty() ? json(nullptr) : json(f.back())}};
+    nk["settle_ms"] = in.nack.settle_ms;
+    nk["late_ms_max"] = in.nack.win.late_ms_max;
   }
 
   // Measured-loss ladder controller snapshot; static-pin mode never ticks
@@ -406,13 +417,10 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     const double phy = mabur::rc::phy_rate_mbps(rung);
     json fj;
     fj["stream"] = s;
-    // The actually-applied overhead from telemetry when available (s==0 ->
-    // base, s==1 -> enh); falls back to that sid's op pair value (base for
-    // sid0, enh for sid1 -- Task 5) before the first telemetry snapshot
-    // arrives.
-    if (in.telem) fj["ov"] = s == 0 ? in.telem->applied_ov_base
-                                    : in.telem->applied_ov_enh;
-    else fj["ov"] = s == 0 ? in.op.overhead_base : in.op.overhead_enh;
+    // The commanded op pair's overhead (base for sid0, enh for sid1). The
+    // drone's applied-overhead echo left Telem 2026-09-30; the two only
+    // ever differed under the bench :8301 override.
+    fj["ov"] = s == 0 ? in.op.overhead_base : in.op.overhead_enh;
     fj["rung_mcs"] = rung.mcs;
     fj["rung_bw"] = rung.bw;
     fj["rung_ldpc"] = rung.ldpc;
@@ -489,6 +497,15 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
   v["truncated"] = in.frames_truncated;
   v["dropped"] = in.frames_dropped;
   v["stall_resets"] = in.stall_resets;
+  v["slice_salvaged"] = in.slice_salvaged;
+  v["slices_kept"] = in.slices_kept;
+  v["slices_filled"] = in.slices_filled;
+  v["slices_after_hole"] = in.slices_after_hole;
+  v["slice_fallback"] = {{"no_params", in.slice_fallback[kSliceFbNoParams]},
+                         {"unsupported", in.slice_fallback[kSliceFbUnsupported]},
+                         {"islice", in.slice_fallback[kSliceFbISlice]},
+                         {"no_template", in.slice_fallback[kSliceFbNoTemplate]},
+                         {"geometry", in.slice_fallback[kSliceFbGeometry]}};
   // PR C schema note: the "rtp" and "udp" blocks are GONE (the subsystem
   // they measured was deleted); "ring" replaces them. v stays 1 --
   // consumers must tolerate missing keys the same way they must ignore
@@ -524,7 +541,6 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
   // top-level like `scan`: it describes the hop feature's own state
   // machine, not a per-window link measurement.
   json& hop = j["hop"];
-  hop["enable"] = in.hop.enable;
   hop["verdict"] = in.hop.verdict;
   hop["evidence"] = in.hop.evidence;
   if (in.hop.ref_rung) hop["ref_rung"] = *in.hop.ref_rung; else hop["ref_rung"] = nullptr;
@@ -534,6 +550,7 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
   hop["hops"] = in.hop.hops;
   hop["holds"] = in.hop.holds;
   if (in.hop.last_ms) hop["last_ms"] = *in.hop.last_ms; else hop["last_ms"] = nullptr;
+  hop["sweep_timeouts"] = in.hop.sweep_timeouts;
 
   if (in.telem) {
     const mabur::rc::Telem& t = *in.telem;
@@ -543,21 +560,24 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     // window was last computed (age still advances every poll).
     const bool is_new_snapshot =
         !prev_telem_valid_ || t.tlm_seq != prev_telem_.tlm_seq;
-    // A maburd restart resets tlm_seq/generation/every cumulative counter
-    // back to ~0. Naively wrap-safe-subtracting the u16/u32 counters against
+    // A maburd restart resets tlm_seq and every cumulative counter back to
+    // ~0. Naively wrap-safe-subtracting the u16/u32 counters against
     // the pre-restart baseline then yields a ~4e9-scale (or huge tlm_seq
     // delta) garbage rate for exactly one window. Detect the restart instead
     // of computing a rate across it: an (unsigned) tlm_seq delta outside
     // [1, 32767] is either a huge forward jump (impossible at ~1 Hz) or a
-    // seq that went backwards (delta wraps to something huge); generation
-    // regressing (cur < prev) is the same signal from the op-state side.
+    // seq that went backwards (delta wraps to something huge); a cumulative
+    // u32 counter regressing (cur < prev -- they never wrap at these rates)
+    // catches the restart whose new tlm_seq lands a small step past the
+    // old one.
     // is_new_snapshot already guarantees tlm_seq changed, so the delta is
     // never 0 here.
     bool is_restart = false;
     if (is_new_snapshot && prev_telem_valid_) {
       const uint16_t seq_delta =
           static_cast<uint16_t>(t.tlm_seq - prev_telem_.tlm_seq);
-      is_restart = seq_delta > 32767 || t.generation < prev_telem_.generation;
+      is_restart = seq_delta > 32767 || t.rcf_rx < prev_telem_.rcf_rx ||
+                   t.txq_drops < prev_telem_.txq_drops;
     }
     if (is_new_snapshot && prev_telem_valid_ && !is_restart &&
         in.telem_rx_ms > prev_telem_rx_ms_) {
@@ -566,17 +586,10 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
       // Wrap-safe: subtract in the counter's own (unsigned) width before
       // widening to double, so a wrapped counter yields the correct small
       // delta instead of a huge one.
-      const uint32_t d_frames = t.enc_frames - prev_telem_.enc_frames;
-      const uint32_t d_kbytes = t.enc_kbytes - prev_telem_.enc_kbytes;
       const uint32_t d_rcf = t.rcf_rx - prev_telem_.rcf_rx;
       const uint32_t d_txq_drops = t.txq_drops - prev_telem_.txq_drops;
-      const uint32_t d_radio_sent = t.radio_sent - prev_telem_.radio_sent;
-      telem_enc_fps_ = static_cast<double>(d_frames) / dt_s;
-      telem_enc_mbps_ =
-          static_cast<double>(d_kbytes) * 1024.0 * 8.0 / 1e6 / dt_s;
       telem_rcf_rx_pps_ = static_cast<double>(d_rcf) / dt_s;
       telem_txq_drop_pps_ = static_cast<double>(d_txq_drops) / dt_s;
-      telem_radio_sent_pps_ = static_cast<double>(d_radio_sent) / dt_s;
       have_telem_rates_ = true;
     }
     if (is_restart) {
@@ -591,10 +604,6 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
       prev_telem_valid_ = true;
     }
 
-    mabur::rc::PhyMode mode;
-    uint8_t mcs = 0, bw = 0;
-    mabur::rc::decode_profile(t.applied_profile, mode, mcs, bw);
-
     json& d = j["drone"];
     d["tlm_age_ms"] = now_ms > in.telem_rx_ms ? now_ms - in.telem_rx_ms : 0;
     // Task 4/5 latency accounting: per-telemetry-window max TxQueue wait,
@@ -602,65 +611,36 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     d["txq_wait_ms"] = t.txq_wait_max_ms;
     d["tlm_seq"] = t.tlm_seq;
     d["state"] = t.state < 4 ? kTelemStateNames[t.state] : "unknown";
-    d["gen"] = t.generation;
     d["failsafe_shed"] = (t.flags & 0x01) != 0;
-    d["radio_rx_ok"] = (t.flags & 0x02) != 0;
-    d["probing"] = (t.flags & 0x04) != 0;
     // TxQueue-pressure / USB-failure shed (drone-local, flags bit4). A
     // shed enh layer is silence to the ladder, so this bit is the only way
     // to tell a congestion-caused enh gap from an RF one.
     d["congestion_shed"] = (t.flags & 0x10) != 0;
-    // Air clock (spec 2026-09-06): per-window max of the drone's modelled
-    // air backlog, enh AUs its admission gate dropped, and whether it
-    // dropped any this window (flags bit5). Third shed tier for maburtop.
-    d["air_shed"] = (t.flags & 0x20) != 0;
-    d["air_backlog_max_ms"] = t.air_backlog_max_ms;
-    d["air_shed_drops"] = t.air_shed_drops;
     // Low-power (pre-arm) operating point, flags bit7 (spec 2026-09-20):
     // the drone is deliberately at low_power.bitrate_kbps / fps because
     // the FC reports DISARMED. maburtop shows LP; the compact OSD tints fps.
     d["low_power"] = (t.flags & 0x80) != 0;
+    // Control-frame auth rejections this telemetry period, flags bit1 (spec
+    // 2026-10-01 link-pairing). One period around a drone restart is the
+    // expected transient; sustained = a bug or two controllers at once.
+    d["auth_reject"] = (t.flags & 0x02) != 0;
     // VTX onboard recorder (spec 2026-09-26): Telem::rec_status split into
     // state (0 off, 1 recording, 2 error) and error code (0..6, RecErr in
     // drone/src/vtx_recorder.h). maburtop and the player OSD read it.
     d["rec"] = {{"state", t.rec_status & 0x03}, {"err", t.rec_status >> 2}};
-    d["applied"] = {{"mcs", mcs},
-                    {"bw", bw},
-                    {"vht", mode == mabur::rc::PhyMode::VHT},
-                    {"overhead_base", t.applied_ov_base},
-                    {"overhead_enh", t.applied_ov_enh}};
+    // Software NACK, drone side (spec 2026-10-05 fec-nack §8): NACKs
+    // verified, source symbols re-sent and symbols refused by the air
+    // bucket -- per Telem period (not cumulative), straight from Telem.
+    d["nack"] = {{"rx", t.nack_rx}, {"retx_syms", t.retx_syms}, {"retx_refused", t.retx_refused}};
     json& rcf = d["rcf"];
     rcf["age_ms"] = t.rcf_age_ms;
     rcf["rx_pps"] = have_telem_rates_ ? json(telem_rcf_rx_pps_) : json(nullptr);
     json& enc = d["enc"];
-    enc["fps"] = have_telem_rates_ ? json(telem_enc_fps_) : json(nullptr);
-    enc["mbps"] = have_telem_rates_ ? json(telem_enc_mbps_) : json(nullptr);
     enc["cmd_kbps"] = t.cmd_kbps;
-    // roi_qp = RcAgent's ROI override (signed delta). Before 2026-09-03 the
-    // same value was exported as `enc.qp`; that key is gone — this SDK has
-    // no encoder-QP readback (docs/data-provenance.md).
-    enc["roi_qp"] = t.roi_qp;
-    enc["ring_drops"] = t.ring_drops;
-    enc["idr_disagree"] = t.idr_disagree;
-    enc["enhance_disagree"] = t.enhance_disagree;
-    // venc-ring vanish counters (docs/venc-ring-vanish-findings-2026-08-12.md):
-    // frames lost inside the drone before frame_id assignment — invisible to
-    // every FEC/wire counter by construction, so this is their ONLY export.
-    enc["vanished_base"] = t.vanished_base;
-    enc["vanished_enh"] = t.vanished_enh;
-    enc["self_idr_refused"] = t.self_idr_refused;
-    // Producer-side venc ring (spec 2026-08-28 venc-foldin): full_drops are
-    // AUs the encoder discarded because maburd fell behind draining the shm
-    // ring — distinct from enc.ring_drops, which is the consumer side.
-    enc["venc_full_drops"] = t.venc_full_drops;
-    enc["venc_ring_fill_pct"] = t.venc_ring_fill_pct;
     json& txq = d["txq"];
-    txq["depth"] = t.txq_depth;
-    txq["cap"] = t.txq_cap;  // wire value as-is (256 saturates to 255 on the wire)
     txq["drop_pps"] = have_telem_rates_ ? json(telem_txq_drop_pps_) : json(nullptr);
     txq["drops"] = t.txq_drops;
     json& radio = d["radio"];
-    radio["sent_pps"] = have_telem_rates_ ? json(telem_radio_sent_pps_) : json(nullptr);
     // The drone's own RX-side view of the channel for the last telemetry
     // period (cca-on 2026-09-23): frames that were ours (RC from this GS),
     // CRC-clean frames that were not (foreign 802.11 on our channel) and
@@ -671,7 +651,6 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     // it once per tlm_seq.
     radio["rx"] = {{"own", t.rx_own}, {"foreign", t.rx_foreign},
                    {"crcfail", t.rx_crcfail}};
-    radio["drops"] = t.radio_drops;
     radio["usb_fail"] = t.usb_fail;
     // Raw rssi 0 on both chains is never a legitimate live reading — it is
     // the wire's all-zero default for "no RC frame ever heard" (deaf radio /
@@ -694,17 +673,9 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
                      {"snr_b", t.up_snr[1] * kSnrRawToDb}};
     }
     d["sys"] = {{"soc_temp_c", t.soc_temp_c},
-                {"thermal_delta", t.thermal_delta},
                 // 65535 = unavailable (first tick after a maburd start).
                 {"cpu_pct", t.cpu_busy_x100 == 65535 ? json(nullptr)
                                                      : json(t.cpu_busy_x100 / 100.0)}};
-    // In-flight channel hop readback (spec 2026-09-14-inflight-channel-hop
-    // §1): the channel RcAgent believes it is actually on, and the epoch of
-    // the last hop order it applied -- the drone's own confirmation,
-    // independent of the GS-side hop.* block above (which is what the GS
-    // ordered; this is what the drone landed on).
-    d["channel"] = t.channel;
-    d["hop_epoch"] = t.hop_epoch;
   } else {
     j["drone"] = nullptr;
   }

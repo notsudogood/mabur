@@ -85,10 +85,8 @@ void Aggregator::on_rx_body(const mabur::node::RxBody& m) {
   // T_RCF/T_DISC must NOT be diverted here — it still owes frames/crc_fail/
   // rx_bytes accounting like any other received frame.
   const int rc_t = mabur::rc::frame_type(m.body.data(), m.body.size());
-  // T_STATUS (listen window, phase 3) is GS-originated too.
   const bool is_self =
-      m.crc_ok && (rc_t == mabur::rc::T_RCF || rc_t == mabur::rc::T_DISC ||
-                   rc_t == mabur::rc::T_STATUS);
+      m.crc_ok && (rc_t == mabur::rc::T_RCF || rc_t == mabur::rc::T_DISC);
   if (is_self) {
     ++c.self_frames;
     static const bool gaplog_self = std::getenv("MABUR_GAPLOG") != nullptr;
@@ -107,19 +105,6 @@ void Aggregator::on_rx_body(const mabur::node::RxBody& m) {
                    static_cast<unsigned>(c.gap_prev_agg_pos));
     ++c.rc_frames;
     if (rc_sink_) rc_sink_(m.card_id, m.body, m.mono_us);
-    return;
-  }
-
-  // Turnaround bench (rollout phase 2): the GS's own ping heard back on a
-  // witness card, and the drone's pong. Diverted whole, before any video
-  // accounting, under the same crc_ok gate as the self frames above (a
-  // corrupt body that happens to parse must still be booked as a frame).
-  if (m.crc_ok && (rc_t == mabur::rc::T_TA_PING || rc_t == mabur::rc::T_TA_PONG)) {
-    if (rc_t == mabur::rc::T_TA_PING)
-      ++c.self_frames;
-    else
-      ++c.rc_frames;
-    if (ta_sink_) ta_sink_(m);
     return;
   }
 

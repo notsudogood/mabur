@@ -30,12 +30,22 @@ namespace maburgs {
 // every candidate in turn and exhausted before the boot pick had even
 // committed, and the freshness burst retuned the boot scout's card out
 // from under it mid-dwell (that boot scan took 17 rounds instead of 6).
-// `scout_joined` is the same "boot scout owns no card" predicate the
-// periodic in-flight scout thread starts on; `in_session` is
-// VrxState::SESSION. The caller resets HopVerdict on the falling edge so
-// nothing measured while inactive can latch a trigger.
-inline bool hop_active(bool in_session, bool scout_joined) {
-  return in_session && scout_joined;
+// `in_session` is VrxState::SESSION. The caller resets HopVerdict on the
+// falling edge so nothing measured while inactive can latch a trigger.
+// (The 2026-09-15 fix above gated this on a `scout_joined` boot-scout
+// predicate too; superseded 2026-10-03 -- see below.)
+//
+// `cal_running` (CalSession::running()) also deactivates it: a calibration
+// run stops video on purpose, which the verdict engine reads as a dead
+// channel -- bench 2026-10-03 ordered a hop_lead seconds into a sweep and
+// took card 1 off the channel the walls were being measured on.
+//
+// The boot scout owning a card no longer deactivates it: the pick stays
+// open after link-up (spec 2026-10-03 §5) and the boot hop needs the
+// verdict engine; the scout card is excluded per-card by
+// verdict_card_usable's mid_dwell instead.
+inline bool hop_active(bool in_session, bool cal_running) {
+  return in_session && !cal_running;
 }
 
 // Pure: whether the core loop must keep its current TX card this tick
@@ -71,6 +81,41 @@ inline bool hop_burst_due(HopState state, bool trigger, double now_ms,
                           double last_burst_ms, int dwell_period_ms) {
   const bool hop_free = state == HopState::Idle || state == HopState::Hold;
   return hop_free && trigger && (now_ms - last_burst_ms >= dwell_period_ms);
+}
+
+// Holds the link-pairing move edge (VrxController::take_move_edge()) for
+// the length of a calibration run. The GS still beacons DISC between sweep
+// phases, so a re-pair -- and its move edge -- can land mid-run, and acting
+// on it would retune both cards off the channel being measured. The drone
+// defers its own retunes while cal_active and replays them when the run
+// ends; this replays the GS side at the same point. `hold` is the caller's
+// hold condition: cal running OR `plan.hopping()`, so an edge landing mid-hop
+// replays after the hop resolves instead of being dropped (2026-10-04).
+class CalMoveEdgeHold {
+ public:
+  bool take(bool edge, bool hold) {
+    held_ = held_ || edge;
+    if (hold) return false;
+    const bool out = held_;
+    held_ = false;
+    return out;
+  }
+
+ private:
+  bool held_ = false;
+};
+
+// Pure: whether a due T_CAL_CMD may go out this tick. `radio_silent` is
+// CalSession::radio_silent() (a sweep phase is airing). `dwell_busy` is the
+// in-flight scout's flag: the scout idles while CalSession::running(), but
+// it only checks that once per dwell_period_ms, so a dwell begun just
+// before `maburcal start` is still off-channel for up to dwell_ms (250 ms)
+// after it -- against a settle of 30 ms and 20-frame coarse cells, that
+// card misses the first row's opening cells. Holding the command until the
+// card is back costs at most one dwell out of the 3 s ack timeout. Once the
+// run is going no new dwell starts, so the hold only ever bites at start.
+inline bool cal_cmd_clear(bool radio_silent, bool dwell_busy) {
+  return !radio_silent && !dwell_busy;
 }
 
 }  // namespace maburgs

@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -11,9 +12,12 @@
 
 #include "body_queue.h"
 #include "card_scan.h"
+#include "dot11.h"
+#include "link_card.h"
 #include "logger.h"
 #include "own_air.h"
 #include "scout_radio.h"
+#include "usb_late.h"
 
 // Forward declarations for devourer types
 class WiFiDriver;
@@ -26,26 +30,15 @@ class UsbDeviceLock;
 
 namespace maburgs {
 
-// Pure: MAX_RANGE radiotap + 24-byte dot11 probe-req header (canonical SA
-// 57:42:75:05:d6:00, broadcast DA, seq<<4) + body. Builds the GS's own
-// uplink 0x40 control frame. The drone's video downlink switched to QoS-Data
-// (A-MPDU), but the uplink RCF remains probe-req (unchanged by the wire change).
-std::vector<uint8_t> build_control_frame(uint16_t seq, const uint8_t* body, size_t len);
+// Default VID:PID scan list for an unqualified Cfg (usb_pid == 0): the
+// Realtek chips this project has ever shipped with. Lives here, not in the
+// .cpp, so usb_id_matches() below (and the web page's device chooser) can
+// see it.
+inline constexpr uint16_t kScanPids[] = {0xa81a, 0x881a, 0x8812};
 
-// Pure: true when the dot11 header's SA (bytes 10..15) is the canonical
-// mabur SA. Frames too short to carry an SA are not canonical.
-bool sa_canonical(const uint8_t* dot11, size_t len);
-
-// Pure: byte offset of the mabur body inside a dot11 frame, keyed on the
-// frame-control type. QoS-Data (0x88, the post-A-MPDU drone wire) carries a
-// 26-byte header; everything else (the legacy probe-req 0x40 wire, and any
-// frame the SA filter passes) parses at the legacy 24-byte offset. Returns
-// 0 when len cannot hold the header plus at least one body byte. seq_ctl
-// sits at bytes 22-23 in BOTH layouts, so mac_seq extraction is unchanged.
-size_t dot11_body_offset(const uint8_t* dot11, size_t len);
-
-class RadioFrontend : public ScoutRadio {
+class RadioFrontend : public LinkCard {
  public:
+  struct UsbId { uint16_t vid, pid; };
   struct Cfg {
     uint16_t usb_vid = 0x0bda;
     uint16_t usb_pid = 0;      // 0 = scan {0xa81a,0x881a,0x8812}
@@ -61,19 +54,33 @@ class RadioFrontend : public ScoutRadio {
     // card re-enumerating at a new bus address, which the ordinal does not.
     bool by_port = false;
     ScannedCard port;
+    // Non-empty: the device is the index-th whose VID:PID is in this list
+    // (the web page's chooser list). usb_vid/usb_pid/by_port are then
+    // ignored.
+    std::vector<UsbId> ids;
+    // Collect the USB lateness gauge (take_usb_late). Off on maburgs: a
+    // mutexed push per CRC-good frame on the RX thread the GS has no
+    // consumer for.
+    bool usb_late_gauge = false;
   };
 
   RadioFrontend(Cfg cfg, BodyQueue& out);
   ~RadioFrontend();                               // stop() if running
-  bool open_and_start();                          // full bring-up; false on any failure
-  void stop();                                    // StopRxLoop + join + release usb
-  bool ready() const;                             // InitWrite completed
-  bool alive() const;                             // RX loop thread still running
-  uint64_t rx_frames() const;
-  uint64_t tx_frames() const;  // control frames handed to the radio OK
-  uint64_t tx_fail() const;    // send_control calls that returned false
-  uint64_t foreign() const;   // CRC-clean frames dropped by the SA filter
-  bool send_control(const std::vector<uint8_t>& body);  // false pre-ready/on error
+  bool open_and_start() override;                 // full bring-up; false on any failure
+  void stop() override;                           // StopRxLoop + join + release usb
+  // Why the last open_and_start() returned false: "libusb_init", "no
+  // device", "claim failed rc=<n>", "unsupported chip". Empty after a
+  // success.
+  const std::string& open_error() const { return open_error_; }
+  void take_usb_late(int64_t& p99_us, int64_t& max_us);   // zeros unless usb_late_gauge
+  bool ready() const override;                    // InitWrite completed
+  bool alive() const override;                    // RX loop thread still running
+  uint64_t rx_frames() const override;
+  uint64_t tx_frames() const override;  // control frames handed to the radio OK
+  uint64_t tx_fail() const override;    // send_control calls that returned false
+  uint64_t foreign() const override;   // CRC-clean frames dropped by the SA filter
+  bool send_control(const std::vector<uint8_t>& body) override;  // false pre-ready/on error
+  bool can_scout() const override { return true; }
 
   // ScoutRadio interface: the scout thread's control plane on this card.
   bool retune(uint8_t ch) override;                 // FastRetune; false pre-ready
@@ -82,8 +89,8 @@ class RadioFrontend : public ScoutRadio {
   // Tens of ms, once per process. False when 40 has no pair (nothing
   // recorded) or pre-ready -- the width is then still recorded as desired,
   // so the next open_and_start() comes up at it (width_resync.h).
-  bool set_width(uint8_t ch, uint8_t width_mhz);
-  uint8_t width() const { return width_.load(std::memory_order_acquire); }  // current/desired RX width
+  bool set_width(uint8_t ch, uint8_t width_mhz) override;
+  uint8_t width() const override { return width_.load(std::memory_order_acquire); }  // current/desired RX width
   bool retune_width(uint8_t ch, uint8_t width_mhz) override { return set_width(ch, width_mhz); }
   ScoutEnergy read_energy(bool with_nhm) override;  // GetRxEnergy -> ScoutEnergy
   ScoutEnergy read_energy_scout() override;         // GetRxEnergyScout -> ScoutEnergy
@@ -94,9 +101,9 @@ class RadioFrontend : public ScoutRadio {
   bool arm_nhm_busy(uint16_t period_4us) override;  // arms the card's NHM window
   NhmBusyRead read_nhm_busy() override;
   // Debug: the chip's programmed central channel (RF18 readback), -1 if unknown.
-  int tuned_central();              // reads it back
-  CardCaps caps() const { return caps_; }            // filled in open_and_start() after InitWrite
-  uint8_t channel() const { return channel_.load(std::memory_order_acquire); }  // last channel handed to InitWrite/retune
+  int tuned_central() override;              // reads it back
+  CardCaps caps() const override { return caps_; }            // filled in open_and_start() after InitWrite
+  uint8_t channel() const override { return channel_.load(std::memory_order_acquire); }  // last channel handed to InitWrite/retune
 
  private:
   void on_packet(const Packet& pkt);
@@ -151,6 +158,20 @@ class RadioFrontend : public ScoutRadio {
   // channel()'s existing readers are unaffected.
   std::atomic<uint8_t> rx_channel_{0};
   CardCaps caps_;
+  std::string open_error_;
+  UsbLate late_;
 };
+
+// pure, testable without libusb
+inline bool usb_id_matches(const RadioFrontend::Cfg& c, uint16_t vid, uint16_t pid) {
+  if (!c.ids.empty()) {
+    for (const auto& id : c.ids) if (id.vid == vid && id.pid == pid) return true;
+    return false;
+  }
+  if (vid != c.usb_vid) return false;
+  if (c.usb_pid != 0) return pid == c.usb_pid;
+  for (uint16_t p : kScanPids) if (pid == p) return true;
+  return false;
+}
 
 }  // namespace maburgs

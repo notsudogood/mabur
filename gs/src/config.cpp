@@ -1,10 +1,10 @@
 #include "config.h"
+#include <arpa/inet.h>
 
 #include <fstream>
 #include <stdexcept>
 
 #include "mabur/ht40.h"
-#include "mabur/rc_proto.h"
 #include "mabur/toml.h"
 #include "nhm_busy.h"
 
@@ -56,12 +56,13 @@ void check_keys(const Value& o, const std::string& where,
   }
 }
 
-long get_int(const Value& o, const char* key, long dflt, long lo, long hi,
-             const std::string& where) {
+// int64_t, not long: long is 32-bit on wasm32 (the web GS build).
+int64_t get_int(const Value& o, const char* key, int64_t dflt, int64_t lo, int64_t hi,
+                const std::string& where) {
   if (!o.contains(key)) { note_default(where, key, to_text(dflt)); return dflt; }
   g_line = o[key].line();
   if (!o[key].is_number_integer()) fail(where + "." + key, "not an integer");
-  const long v = o[key].get<long>();
+  const int64_t v = o[key].get<int64_t>();
   if (v < lo || v > hi) fail(where + "." + key, "out of range");
   return v;
 }
@@ -93,6 +94,17 @@ bool get_bool(const Value& o, const char* key, bool dflt,
   if (!o[key].is_boolean()) fail(where + "." + key, "not a boolean");
   return o[key].get<bool>();
 }
+
+// Overlay merge (spec 2026-09-27-web-ui §3.2): tables recurse, anything else
+// replaces -- so an overlay [[link.ladder]] replaces the file's ladder whole.
+void merge_overlay(Value& base, const Value& ov) {
+  for (const auto& [k, v] : ov.items()) {
+    Value* b = base.find(k);
+    if (b && b->is_object() && v.is_object()) merge_overlay(*b, v);
+    else if (b) *b = v;
+    else base.set(k, v);
+  }
+}
 }  // namespace
 
 std::array<mabur::UepLayerCfg, 2> Config::uep_layers() const {
@@ -111,10 +123,32 @@ std::array<mabur::UepLayerCfg, 2> Config::uep_layers() const {
   return out;
 }
 
-Config load_config(const std::string& path, std::vector<std::string>* defaulted) {
+std::optional<ConfigIssue> radio_width_issue(uint8_t channel, int width) {
+  if (width != 20 && width != 40)
+    return ConfigIssue{"radio.width", "must be 20 or 40 (HT20 / HT40)"};
+  if (width == 40 && mabur::ht40_offset(channel) == 0)
+    return ConfigIssue{"radio.width", "40 MHz needs a standard 5 GHz pair and channel " +
+                                          std::to_string(static_cast<int>(channel)) +
+                                          " has none (common/include/mabur/ht40.h)"};
+  return std::nullopt;
+}
+
+std::optional<ConfigIssue> link_width_issue(const LinkCfg& link, int width) {
+  for (std::size_t i = 0; i < link.ladder_cfg.ladder.size(); ++i)
+    if (link.ladder_cfg.ladder[i].bw == 40 && width != 40)
+      return ConfigIssue{"link.ladder[" + std::to_string(i) + "].bw",
+                         "40 MHz rung but radio.width is 20: the GS could not receive it"};
+  if (link.static_bw == 40 && width != 40)
+    return ConfigIssue{"link.static_bw", "40 MHz pin but radio.width is 20"};
+  return std::nullopt;
+}
+
+Config load_config(const std::string& path, std::vector<std::string>* defaulted,
+                   const std::string& overlay_path) {
   Value j;
   try {
     j = toml::parse_toml_file(path);
+    if (!overlay_path.empty()) merge_overlay(j, toml::parse_toml_file(overlay_path));
   } catch (const toml::Error& e) {
     throw std::runtime_error(std::string("config: ") + e.what());
   }
@@ -125,7 +159,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
   } clear_on_exit;
 
   check_keys(j, "", {"radio", "fec", "link", "video", "msp", "stats", "au_ring",
-                     "debug_log", "hop", "turnaround", "listen"});
+                     "debug_log", "hop"});
   // Same reason as the drone's: a missing section visits none of its keys.
   // Kept in the exact order of the check_keys list above -- if they drift a
   // section goes silently unreported.
@@ -139,16 +173,76 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
   bool radio_cards_absent = false;
   if (j.contains("radio")) {
     const Value& r = j["radio"];
-    check_keys(r, "radio", {"channel", "width", "cards", "tx_card", "scan"});
-    c.radio.channel = static_cast<uint8_t>(get_int(r, "channel", 149, 1, 200, "radio"));
+    check_keys(r, "radio", {"channel", "channels", "width", "cards", "tx_card", "scan", "relays"});
     c.radio.width = static_cast<uint8_t>(get_int(r, "width", 20, 20, 40, "radio"));
-    if (c.radio.width != 20 && c.radio.width != 40)
-      fail("radio.width", "must be 20 or 40 (HT20 / HT40)");
-    if (c.radio.width == 40 && mabur::ht40_offset(c.radio.channel) == 0)
-      fail("radio.width", "40 MHz needs a standard 5 GHz pair and channel " +
-                              std::to_string(static_cast<int>(c.radio.channel)) +
-                              " has none (common/include/mabur/ht40.h)");
+    if (r.contains("channels")) {
+      g_line = r["channels"].line();
+      if (!r["channels"].is_array()) fail("radio.channels", "not an array");
+      c.radio.channels.clear();
+      for (const Value& v : r["channels"]) {
+        if (!v.is_number_integer()) fail("radio.channels", "not an integer");
+        const long ch = v.get<int64_t>();
+        if (ch < 1 || ch > 177) fail("radio.channels", "must be in [1,177]");
+        c.radio.channels.push_back(static_cast<uint8_t>(ch));
+      }
+    } else {
+      note_default("radio", "channels", "[40, 64, 112, 144]");
+    }
+    if (auto e = mabur::channel_set_issue(c.radio.channels, c.radio.width, "radio.channels"))
+      fail(e->field, e->why);
+    for (uint8_t ch : c.radio.channels)
+      if (auto e = radio_width_issue(ch, c.radio.width)) fail(e->field, e->why);
+    if (r.contains("channel")) {
+      g_line = r["channel"].line();
+      const Value& cv = r["channel"];
+      if (cv.is_string()) {
+        if (cv.get<std::string>() != "auto") fail("radio.channel", "must be \"auto\" or a member of radio.channels");
+        c.radio.pin.reset();
+      } else if (cv.is_number_integer()) {
+        const int64_t ch = cv.get<int64_t>();
+        // Range first: the uint8_t cast wraps (296 -> 40, a member).
+        if (ch < 1 || ch > 177) fail("radio.channel", std::to_string(ch) + " is not a channel in [1,177]");
+        if (!mabur::channel_set_member(c.radio.channels, static_cast<uint8_t>(ch)))
+          fail("radio.channel", std::to_string(ch) + " is not a member of radio.channels");
+        c.radio.pin = static_cast<uint8_t>(ch);
+      } else {
+        fail("radio.channel", "must be \"auto\" or a member of radio.channels");
+      }
+    } else {
+      note_default("radio", "channel", "auto");
+    }
     c.radio.tx_card = static_cast<int>(get_int(r, "tx_card", -1, -1, 15, "radio"));
+    if (r.contains("relays")) {
+      g_line = r["relays"].line();
+      if (!r["relays"].is_array()) fail("radio.relays", "not an array");
+      int i = 0;
+      for (const Value& v : r["relays"]) {
+        const std::string where = "radio.relays[" + std::to_string(i++) + "]";
+        if (v.line() > 0) g_line = v.line();
+        if (!v.is_string()) fail(where, "not a string");
+        const std::string s = v.get<std::string>();
+        const auto colon = s.rfind(':');
+        if (colon == std::string::npos || colon == 0 || colon + 1 >= s.size())
+          fail(where, "must be ipv4:port");
+        // Numeric only: open_udp_transport() runs on the core thread on
+        // every 2 s reopen, and a hostname there would block video on a
+        // dead resolver.
+        in_addr a4{};
+        if (inet_pton(AF_INET, s.substr(0, colon).c_str(), &a4) != 1)
+          fail(where, "host must be a dotted IPv4 address (the UDP transport resolves nothing)");
+        const std::string port = s.substr(colon + 1);
+        if (port.find_first_not_of("0123456789") != std::string::npos ||
+            port.size() > 5)
+          fail(where, "port is not a number");
+        const long p = std::stol(port);
+        if (p < 1 || p > 65535) fail(where, "port must be in [1,65535]");
+        for (const auto& prev : c.radio.relays)
+          if (prev == s) fail(where, "duplicate relay address");
+        c.radio.relays.push_back(s);
+      }
+    } else {
+      note_default("radio", "relays", "(none)");
+    }
     if (r.contains("cards")) {
       if (!r["cards"].is_array() || r["cards"].empty())
         fail("radio.cards", "must be a non-empty array");
@@ -169,30 +263,23 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
     if (r.contains("scan")) {
       const Value& s = r["scan"];
       check_keys(s, "radio.scan",
-                 {"enable", "candidates", "dwell_ms", "settle_ms", "min_rounds",
-                  "home_window_ms", "split_after_ms", "home_margin"});
+                 {"dwell_ms", "settle_ms", "min_rounds", "search_ms", "op_window_ms",
+                  "search_after_ms", "pick_margin", "one_card_ms", "max_ms", "busy_dbm", "blocked_pct"});
       ScanCfg& sc = c.radio.scan;
-      sc.enable = get_bool(s, "enable", sc.enable, "radio.scan");
-      if (s.contains("candidates")) {
-        g_line = s["candidates"].line();
-        if (!s["candidates"].is_array()) fail("radio.scan.candidates", "not an array");
-        sc.candidates.clear();
-        for (const Value& v : s["candidates"]) {
-          if (!v.is_number_integer()) fail("radio.scan.candidates", "not an integer");
-          const long ch = v.get<int64_t>();
-          if (ch < 1 || ch > 177) fail("radio.scan.candidates", "must be in [1,177]");
-          sc.candidates.push_back(static_cast<uint8_t>(ch));
-        }
-      } else {
-        note_default("radio.scan", "candidates", "(home only)");
-      }
       sc.dwell_ms = static_cast<int>(get_int(s, "dwell_ms", 250, 50, 10000, "radio.scan"));
       sc.settle_ms = static_cast<int>(get_int(s, "settle_ms", 30, 0, 1000, "radio.scan"));
       sc.min_rounds = static_cast<int>(get_int(s, "min_rounds", 3, 1, 100, "radio.scan"));
-      // >= 2 beacon periods (20 ms): one to beacon, one quiet before leaving.
-      sc.home_window_ms = static_cast<int>(get_int(s, "home_window_ms", 300, 40, 10000, "radio.scan"));
-      sc.split_after_ms = static_cast<int>(get_int(s, "split_after_ms", 5000, 0, 600000, "radio.scan"));
-      sc.home_margin = static_cast<int>(get_int(s, "home_margin", 20, 0, 100000, "radio.scan"));
+      sc.search_ms = static_cast<int>(get_int(s, "search_ms", 100, 40, 2000, "radio.scan"));
+      sc.op_window_ms = static_cast<int>(get_int(s, "op_window_ms", 300, 40, 10000, "radio.scan"));
+      sc.search_after_ms = static_cast<int>(get_int(s, "search_after_ms", 5000, 0, 600000, "radio.scan"));
+      sc.pick_margin = static_cast<int>(get_int(s, "pick_margin", 20, 0, 100000, "radio.scan"));
+      sc.one_card_ms = static_cast<int>(get_int(s, "one_card_ms", 5000, 0, 60000, "radio.scan"));
+      sc.max_ms = static_cast<int>(get_int(s, "max_ms", 30000, 1000, 600000, "radio.scan"));
+      sc.busy.busy_dbm = static_cast<int>(get_int(s, "busy_dbm", -83, -104, -70, "radio.scan"));
+      if (!maburgs::busy_dbm_is_edge(sc.busy.busy_dbm))
+        fail("radio.scan.busy_dbm",
+             "must be an NHM bucket edge: -104 -101 -98 -95 -92 -89 -86 -83 -80 -75 -70");
+      sc.busy.blocked_pct = get_num(s, "blocked_pct", 50.0, 1.0, 100.0, "radio.scan");
     } else {
       note_default("radio", "scan", "(section absent)");
     }
@@ -206,18 +293,17 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
   // Only an explicit list is a fact at load time. Under auto-scan the count
   // is hardware, discovered after this returns; main.cpp warns and falls
   // back to auto-select when the scan finds fewer cards than the pin.
+  // Relays count: they follow the explicit cards (card k+n = relays[n]).
   if (!c.radio.auto_scan &&
-      c.radio.tx_card >= static_cast<int>(c.radio.cards.size()))
+      c.radio.tx_card >= static_cast<int>(c.radio.cards.size() + c.radio.relays.size()))
     fail("radio.tx_card", "no such card");
 
   if (j.contains("hop")) {
     const Value& h = j["hop"];
-    check_keys(h, "hop", {"enable", "scout_when_disabled", "window_ms", "persist", "dwell_observe_ms",
+    check_keys(h, "hop", {"window_ms", "persist", "dwell_observe_ms",
                           "dwell_period_ms", "rank_visits", "rank_max_age_ms", "confirm_ms", "confirm_extend_ms", "verify_ms",
-                          "cooldown_ms", "max_hops_per_min", "backoff_ms", "one_card_repeats", "verdict"});
+                          "cooldown_ms", "max_hops_per_min", "backoff_ms", "one_card_repeats", "relay_burst_period_ms", "verdict"});
     HopCfg& hc = c.hop;
-    hc.enable = get_bool(h, "enable", hc.enable, "hop");
-    hc.scout_when_disabled = get_bool(h, "scout_when_disabled", hc.scout_when_disabled, "hop");
     hc.window_ms = (int)get_int(h, "window_ms", 150, 50, 2000, "hop");
     hc.persist = (int)get_int(h, "persist", 2, 1, 3, "hop");
     hc.dwell_observe_ms = (int)get_int(h, "dwell_observe_ms", 5, 1, 250, "hop");
@@ -231,11 +317,12 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
     hc.max_hops_per_min = (int)get_int(h, "max_hops_per_min", 4, 1, 60, "hop");
     hc.backoff_ms = (int)get_int(h, "backoff_ms", 30000, 1000, 600000, "hop");
     hc.one_card_repeats = (int)get_int(h, "one_card_repeats", 5, 1, 50, "hop");
+    hc.relay_burst_period_ms = (int)get_int(h, "relay_burst_period_ms", 1000, 500, 60000, "hop");
     if (h.contains("verdict")) {
       const Value& v = h["verdict"];
       check_keys(v, "hop.verdict", {"loss_pct", "recovered_x", "weak_rssi_dbm", "weak_snr_db",
-                                    "fading_drop_db", "foreign_pps", "fa_pps", "busy_dbm",
-                                    "blocked_pct", "recovered_min", "starved_frac"});
+                                    "fading_drop_db", "foreign_pps", "fa_pps",
+                                    "recovered_min", "starved_frac"});
       HopVerdictCfg& vc = hc.verdict;
       vc.loss_pct = get_num(v, "loss_pct", 3.0, 0.1, 100.0, "hop.verdict");
       vc.recovered_x = get_num(v, "recovered_x", 3.0, 1.0, 100.0, "hop.verdict");
@@ -245,11 +332,6 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
       vc.fading_drop_db = (int)get_int(v, "fading_drop_db", 6, 1, 40, "hop.verdict");
       vc.foreign_pps = (int)get_int(v, "foreign_pps", 50, 1, 100000, "hop.verdict");
       vc.fa_pps = (int)get_int(v, "fa_pps", 100, 1, 100000, "hop.verdict");
-      vc.busy_dbm = (int)get_int(v, "busy_dbm", -83, -104, -70, "hop.verdict");
-      if (!maburgs::busy_dbm_is_edge(vc.busy_dbm))
-        fail("hop.verdict.busy_dbm",
-             "must be an NHM bucket edge: -104 -101 -98 -95 -92 -89 -86 -83 -80 -75 -70");
-      vc.blocked_pct = get_num(v, "blocked_pct", 50.0, 1.0, 100.0, "hop.verdict");
       vc.starved_frac = get_num(v, "starved_frac", 0.25, 0.0, 1.0, "hop.verdict");
     } else {
       note_default("hop", "verdict", "(section absent)");
@@ -284,10 +366,16 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
     c.fec.seq_horizon = static_cast<int>(get_int(r, "seq_horizon", 512, 16, 65536, "fec"));
   }
 
+  // Raw [link] key overlay (spec 2026-10-01 link-pairing §2); empty when
+  // absent or when only key_file was given. Resolved, with key_file, in the
+  // unconditional block below (same reasoning as the sentinel resolution
+  // further down: a config with no [link] table at all must still resolve
+  // to the compiled-in default).
+  std::string link_inline_key;
   if (j.contains("link")) {
     const Value& r = j["link"];
     check_keys(r, "link",
-               {"vtx_id", "feedback_ms", "beacon_keepalive_ms",
+               {"feedback_ms", "beacon_keepalive_ms",
                 "static_mcs", "static_overhead_base", "static_overhead_enh",
                 "static_bw",
                 "ladder", "max_mcs", "down_util", "up_util", "confirm_ms",
@@ -296,8 +384,17 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
                 "starved_confirm_ms", "s3_demote", "s3_down_util",
                 "s3_settle_ms", "s3_min_syms",
                 "rung_stats", "fade", "probe",
-                "rcf_slot_hold_ms", "arrival_guard_syms"});
-    c.link.vtx_id = static_cast<uint32_t>(get_int(r, "vtx_id", 1, 0, 0xFFFFFFFFL, "link"));
+                "rcf_slot_hold_ms", "arrival_guard_syms",
+                "nack",
+                "key_file", "key"});
+    c.link.key_file = get_str(r, "key_file", "/etc/mabur.key", "link");
+    // Read by presence: link.key is an optional web-overlay key (spec §2),
+    // not a tunable with a meaningful default, so its absence (the normal
+    // case -- key_file is the real config surface) must not register as a
+    // defaulted key (fix round 1, Task 4 review) -- that would print
+    // "link.key=" under every plain boot's "config: N key(s) defaulted"
+    // list, right next to the real DEFAULT-key warning, diluting it.
+    if (r.contains("key")) link_inline_key = get_str(r, "key", "", "link");
     c.link.feedback_ms = static_cast<int>(get_int(r, "feedback_ms", 100, 20, 5000, "link"));
     c.link.rcf_slot_hold_ms = static_cast<int>(get_int(r, "rcf_slot_hold_ms", 30, 0, 1000, "link"));
     c.link.arrival_guard_syms = static_cast<int>(get_int(r, "arrival_guard_syms", 192, 16, 512, "link"));
@@ -446,6 +543,23 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
     } else {
       note_default("link", "fade", "(section absent)");
     }
+    // Software NACK (spec 2026-10-05 fec-nack §7). settle is adaptive (no key).
+    if (r.contains("nack")) {
+      const Value& nj = r["nack"];
+      check_keys(nj, "link.nack", {"enable", "lookback", "repeat_ms", "max_tries", "min_lead_ms"});
+      auto& nc = c.link.nack;
+      nc.enable = get_bool(nj, "enable", nc.enable, "link.nack");
+      nc.lookback = static_cast<int>(get_int(nj, "lookback", 256, 8, 4096, "link.nack"));
+      nc.repeat_ms = static_cast<int>(get_int(nj, "repeat_ms", 16, 1, 1000, "link.nack"));
+      nc.max_tries = static_cast<int>(get_int(nj, "max_tries", 2, 0, 16, "link.nack"));  // 0 = observe only
+      nc.min_lead_ms = static_cast<int>(get_int(nj, "min_lead_ms", 12, 1, 100, "link.nack"));
+    }  // absent = off; not a defaulted key (bench knob)
+    // Cross-section: [fec] is parsed above. A lookback at or past the
+    // decoder's seq horizon would ask about seqs the decoder has already
+    // forgotten (source_state reads them as unknown forever).
+    if (c.link.nack.lookback >= c.fec.seq_horizon)
+      fail("link.nack.lookback", "must be < fec.seq_horizon (" +
+                                     std::to_string(c.fec.seq_horizon) + ")");
 
     if (r.contains("rung_stats")) {
       const Value& rs = r["rung_stats"];
@@ -465,33 +579,34 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
   if (c.link.ladder_cfg.s3_down_util < 0)
     c.link.ladder_cfg.s3_down_util = c.link.ladder_cfg.down_util;
 
+  // Pairing key resolution (spec 2026-10-01 link-pairing §2): an inline
+  // [link] key overrides key_file; otherwise the key file is read (missing
+  // -> compiled-in default). Runs unconditionally so a config with no
+  // [link] table at all still resolves to the default.
+  if (!link_inline_key.empty()) {
+    auto k = mabur::parse_key_hex(link_inline_key);
+    if (!k) fail("link.key", "not 32 hex characters");
+    c.link.key = *k;
+    c.link.key_is_default = false;
+    c.link.key_source = "link.key";
+  } else {
+    try {
+      const auto kl = mabur::load_key_file(c.link.key_file);
+      c.link.key = kl.key;
+      c.link.key_is_default = kl.is_default;
+      c.link.key_source = kl.source;
+    } catch (const std::runtime_error& e) {
+      fail("link.key_file", e.what());
+    }
+  }
+
   // ---- Width cross-checks (2026-09-24, 40 MHz top rungs) -------------------
   // A 40 MHz rung or pin needs the GS tuned 40 -- a 20-tuned receiver cannot
   // hear HT40 at all (docs/bw40.md). Runs unconditionally, after both radio
   // and link sections are settled, and after the max_mcs filter above: a
   // rung filtered out by max_mcs is not checked here, which matches "what
-  // will fly". Task 6 appends the scan-candidate checks to this same block.
-  for (std::size_t i = 0; i < c.link.ladder_cfg.ladder.size(); ++i)
-    if (c.link.ladder_cfg.ladder[i].bw == 40 && c.radio.width != 40)
-      fail("link.ladder[" + std::to_string(i) + "].bw",
-           "40 MHz rung but radio.width is 20: the GS could not receive it");
-  if (c.link.static_bw == 40 && c.radio.width != 40)
-    fail("link.static_bw", "40 MHz pin but radio.width is 20");
-  if (c.radio.width == 40) {
-    const uint8_t home_off = mabur::ht40_offset(c.radio.channel);
-    for (uint8_t ch : c.radio.scan.candidates) {
-      const uint8_t off = mabur::ht40_offset(ch);
-      if (off == 0)
-        fail("radio.scan.candidates", "channel " + std::to_string(static_cast<int>(ch)) +
-                                          " has no 40 MHz pair (docs/bw40.md)");
-      if (off != home_off)
-        fail("radio.scan.candidates",
-             "channel " + std::to_string(static_cast<int>(ch)) +
-                 " is on the other side of the pair grid from home " +
-                 std::to_string(static_cast<int>(c.radio.channel)) +
-                 "; FastRetune keeps the offset, list the pair's primary on home's side (docs/bw40.md)");
-    }
-  }
+  // will fly".
+  if (auto e = link_width_issue(c.link, c.radio.width)) fail(e->field, e->why);
   // ---------------------------------------------------------------------
 
   if (j.contains("video")) {
@@ -583,37 +698,6 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
         get_int(r, "ctl_period_ms", 1000, 50, 60000, "debug_log"));
     c.debug_log.rung_period_s = static_cast<int>(
         get_int(r, "rung_period_s", 10, 1, 600, "debug_log"));
-  }
-
-  if (j.contains("turnaround")) {
-    const Value& r = j["turnaround"];
-    check_keys(r, "turnaround", {"rate_hz", "lanes", "frames", "bytes"});
-    c.turnaround.rate_hz = get_num(r, "rate_hz", 0.0, 0.0, 50.0, "turnaround");
-    if (r.contains("lanes")) {
-      g_line = r["lanes"].line();
-      if (!r["lanes"].is_array() || r["lanes"].empty())
-        fail("turnaround.lanes", "must be a non-empty array");
-      c.turnaround.lanes.clear();
-      for (const Value& v : r["lanes"]) {
-        if (!v.is_number_integer()) fail("turnaround.lanes", "not an integer");
-        const long lane = v.get<int64_t>();
-        if (lane < 0 || lane > mabur::rc::kTaMaxLane)
-          fail("turnaround.lanes", "must be in [0,6]");
-        c.turnaround.lanes.push_back(static_cast<int>(lane));
-      }
-    } else {
-      note_default("turnaround", "lanes", "0,4");
-    }
-    c.turnaround.frames = static_cast<int>(
-        get_int(r, "frames", 1, 1, mabur::rc::kTaMaxFrames, "turnaround"));
-    c.turnaround.bytes = static_cast<int>(get_int(
-        r, "bytes", 64, mabur::rc::kTaPongMinBytes, mabur::rc::kTaPongMaxBytes, "turnaround"));
-  }
-  if (j.contains("listen")) {
-    const Value& r = j["listen"];
-    check_keys(r, "listen", {"ms", "ab_s"});
-    c.listen.ms = static_cast<int>(get_int(r, "ms", 0, 0, 10, "listen"));
-    c.listen.ab_s = static_cast<int>(get_int(r, "ab_s", 0, 0, 3600, "listen"));
   }
   return c;
 }

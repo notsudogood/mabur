@@ -13,7 +13,7 @@ PRECODER = os.path.abspath(os.path.join(ROOT, "..", "devourer", "tools", "precod
 sys.path.insert(0, PRECODER)
 
 import fec_subblock, rc_proto, svc_uep_fec  # noqa: E402
-import adaptive_link, energy_model  # noqa: E402
+import energy_model  # noqa: E402
 
 VEC = os.path.join(ROOT, "tests", "vectors")
 FIX = os.path.join(ROOT, "tests", "fixtures")
@@ -184,19 +184,26 @@ dump("uep.json", {"symbol_size": 64, "blocks_per_body": 4,
 # RC_VERSION 6: fixed probe byte; cases 1-2 leave it at the 0xFF default.
 # RC_VERSION 9: hop_ch/hop_epoch, all three cases at the 0/0 no-hop-order default.
 # RC_VERSION 11: rec byte (bit1 known, bit0 on) -- case 1 unknown, 2 known-on, 3 known-off.
-rcfs = [{"vtx_id": 0xDEADBEEF, "seq": 7, "profile": 0x24,
+# RC_VERSION 12: idr_epoch byte -- cases 1-2 at 0, case 3 at 0x5A.
+rcfs = [{"seq": 7, "profile": 0x24,
          "fec_overhead_base": 0.5, "fec_overhead_enh": 0.5,
-         "hop_ch": 0, "hop_epoch": 0, "rec": 0},
-        {"vtx_id": 1, "seq": 65535, "profile": 0x00,
+         "hop_ch": 0, "hop_epoch": 0, "rec": 0, "idr_epoch": 0},
+        {"seq": 65535, "profile": 0x00,
          "fec_overhead_base": 1.0, "fec_overhead_enh": 1.0,
-         "hop_ch": 0, "hop_epoch": 0, "rec": 3},
-        {"vtx_id": 0x11223344, "seq": 42, "profile": 0x08,
+         "hop_ch": 0, "hop_epoch": 0, "rec": 3, "idr_epoch": 0},
+        {"seq": 42, "profile": 0x08,
          "fec_overhead_base": 1.0, "fec_overhead_enh": 0.5,
-         "probe_profile": 0x06, "hop_ch": 0, "hop_epoch": 0, "rec": 2}]
+         "probe_profile": 0x06, "hop_ch": 0, "hop_epoch": 0, "rec": 2,
+         "idr_epoch": 0x5A}]
 discs = [rc_proto.Disc(vtx_id=1, vrx_nonce=0xCAFE0001, op_channel=149,
                        op_width=20, init_profile=0, seq=2)]
 acks = [rc_proto.DiscAck(vtx_id=1, vrx_nonce=0xCAFE0001, chip_caps=0x0003,
                          agreed_channel=149, agreed_width=20, seq=1)]
+# RC_VERSION 14 (2026-10-01 link-pairing): vtx_nonce + flags added to
+# DISC_ACK (Task 3). The frozen devourer DiscAck dataclass has neither, so
+# these are supplied here rather than read off the Python object.
+ACK_VTX_NONCE = 0xBEEF0002
+ACK_FLAGS = 0
 # mabur owns its RC wire bytes as of 2026-08-12. devourer's frozen
 # tools/precoder/rc_proto.py is pinned at RC_VERSION 1 and still packs a
 # pwr_idx byte, so it can no longer serve as a wire oracle across mabur's
@@ -205,14 +212,16 @@ acks = [rc_proto.DiscAck(vtx_id=1, vrx_nonce=0xCAFE0001, chip_caps=0x0003,
 # in tests/test_rc.cpp.
 dump("rc.json", {
   "rcf": [{"fields": r} for r in rcfs],
-  "disc": [{"fields": {"vtx_id": d.vtx_id, "vrx_nonce": d.vrx_nonce,
+  "disc": [{"fields": {"vrx_nonce": d.vrx_nonce,
                        "op_channel": d.op_channel, "op_width": d.op_width,
                        "table_ver": d.table_ver, "init_profile": d.init_profile,
                        "cap_bits": d.cap_bits, "seq": d.seq}} for d in discs],
-  "disc_ack": [{"fields": {"vtx_id": a.vtx_id, "vrx_nonce": a.vrx_nonce,
+  "disc_ack": [{"fields": {"vrx_nonce": a.vrx_nonce,
+                           "vtx_nonce": ACK_VTX_NONCE,
                            "chip_caps": a.chip_caps,
                            "agreed_channel": a.agreed_channel,
-                           "agreed_width": a.agreed_width, "seq": a.seq}} for a in acks]})
+                           "agreed_width": a.agreed_width,
+                           "flags": ACK_FLAGS, "seq": a.seq}} for a in acks]})
 
 # --- profile / ladder / phy rate -----------------------------------------
 # The per-seq bandwidth-probe-schedule vectors were removed 2026-07-27 (SDD
@@ -221,8 +230,7 @@ dump("rc.json", {
 # its golden vectors are dead. devourer's own reference is untouched — this
 # just stops mirroring it into mabur's vectors.
 prof_cases = [{"mode": m, "mcs": mc, "bw": bw,
-               "byte": rc_proto.encode_profile(m, mc, bw),
-               "ladder": adaptive_link.ladder_spec(m, mc, bw)}
+               "byte": rc_proto.encode_profile(m, mc, bw)}
               for m in ("ht", "vht") for mc in range(0, 9)
               for bw in (20, 40, 80) if not (m == "ht" and (bw == 80 or mc > 7))]
 rate_cases = [{"mode": m, "mcs": mc, "bw": bw, "sgi": sgi,
@@ -230,14 +238,10 @@ rate_cases = [{"mode": m, "mcs": mc, "bw": bw, "sgi": sgi,
               for m, mc, bw, sgi in [("ht", 0, 20, False), ("ht", 4, 20, False),
                                      ("ht", 7, 40, True), ("vht", 8, 80, False),
                                      ("vht", 4, 40, True)]]
-# NOTE: committed profile.json's profiles[].ladder values are mabur's own
-# flat ladder (common/src/profile.cpp ladder_spec_str(), flat by the
-# 2026-07-26 hw ruling documented there), NOT a fresh mirror of devourer's
-# adaptive_link.ladder_spec() below, which now emits escalating T1/T2 MCS.
-# Re-running this generator therefore reproduces a profiles[].ladder diff
-# that is PRE-EXISTING drift, not a regression you introduced — devourer is
-# frozen/off-limits, so reconciling it is a separate decision, not a side
-# effect of regenerating vectors.
+# profiles[].ladder (a DEVOURER_SVC_LADDER-style string mirrored by
+# mabur's ladder_spec_str()) was dropped 2026-10-01 with that function:
+# nothing in mabur used it, and it still encoded the retired base = mcs-1
+# rule.
 dump("profile.json", {"profiles": prof_cases,
                       "rates": rate_cases,
                       "table": [{"ladder": p.svc_ladder,

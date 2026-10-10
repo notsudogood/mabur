@@ -50,6 +50,19 @@ class TxQueue {
     if (signal) cv_.notify_one();
   }
 
+  // fec-nack (spec 2026-10-05 §4.2): a retransmit body jumps the line -- it is
+  // the one the GS is waiting on -- and wakes the consumer at once. May
+  // exceed cap_ by the retransmit count (never drops video for it).
+  void push_front(UepBody&& b) {
+    {
+      std::lock_guard<std::mutex> l(m_);
+      if (closed_) return;
+      q_.push_front(std::move(b));
+      pending_ = 0;
+    }
+    cv_.notify_one();
+  }
+
   // Release a partial group now — called at AU end so a frame's tail bodies
   // never wait on the next frame's production. No-op when nothing pends.
   void flush() {
@@ -63,9 +76,6 @@ class TxQueue {
 
   // Pops up to max_n bodies into out (appended), blocking up to timeout_ms
   // for the first one. Returns the number popped (0 on timeout/closed-empty).
-  // A body the listen window holds (not_before_us != 0) always starts a new
-  // batch, so the writer can wait for it without holding back the bodies
-  // ahead of it.
   size_t pop_batch(std::vector<UepBody>& out, size_t max_n, int timeout_ms) {
     std::unique_lock<std::mutex> l(m_);
     if (q_.empty()) {
@@ -74,7 +84,6 @@ class TxQueue {
     }
     size_t n = 0;
     while (n < max_n && !q_.empty()) {
-      if (n > 0 && q_.front().not_before_us != 0) break;
       out.push_back(std::move(q_.front()));
       q_.pop_front();
       ++n;

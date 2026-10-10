@@ -22,7 +22,9 @@ no waybeam, since the 2026-08-29 venc fold-in (`drone/venc/`, ported from
 `maburgs` (ground station, aarch64) receives,
 FEC-decodes, and publishes whole access units to a shm AU ring; `maburplay`
 (gs/player/, same GS binary family) consumes the ring — MPP hardware decode
-straight to DRM/KMS, plus the fMP4 DVR on /media/dvr. `common/` holds the
+straight to DRM/KMS, plus the fMP4 DVR on /media/dvr. `web/` is the same
+receive + control core in the browser (WebUSB + WASM): a single-card GS or
+a passive spotter. `common/` holds the
 shared wire formats and FEC; `third_party/devourer` (plus the sibling
 checkout `../devourer`) is the userspace radio driver. PixelPilot and the
 RTP output were deleted in PR C.
@@ -38,8 +40,9 @@ page the task needs rather than carrying all of it.
 | the disarmed low-power mode, arm state over MSP, the live fps verb | `docs/link-adaptation.md` ("Low-power (disarmed) mode") |
 | the stats sideport, maburtop, the debug-log session directory (ctl/probe/au/flight/lat), ausniff, capture tools, player OSD/DVR/record button | `docs/observability.md` |
 | colortrans (CRTC 3D LUT, OSD inverse, burned-DVR GPU stage), the Buildroot glibc build of maburplay | `docs/colortrans.md` |
-| auto channel selection, the boot-time scan, scan.log, home/op channels, split/reunite | `docs/channel-select.md` |
+| auto channel selection over a shared channel set, remembered channel, boot hop, pinned mode (static: never hops), which knob drives which piece (search/measure/relocate/verdict/hop), scan.log | `docs/channel-select.md` |
 | in-flight channel hop, verdict, dwells, hop_restore | `docs/inflight-channel-hop.md` |
+| the shared channel/hop wiring (`ChannelCore`), its seams into maburgs (maburgs and the web GS both drive it), the test fakes | `gs/src/channel_core.h` (header comment) + `docs/channel-select.md` "Where the code lives" |
 | comparing recordings, metric scales, removed sideport keys, "why do these two flights disagree" | `docs/data-provenance.md` |
 | shipping a binary or config to a device | `docs/deploy.md` |
 | calibrating a VTX's TX-power walls, maburcal, cal.log | `docs/calibration.md` |
@@ -51,7 +54,12 @@ page the task needs rather than carrying all of it.
 | 40 MHz (HT40): which rungs fly 40, per-width tables, pair candidates, the boot scan's pair pick, no_agg, scanlog 3 / ctllog 12 | `docs/bw40.md` (as built: per-rung width, pairs, scan, no_agg) + `docs/bw40-sweep-findings-2026-09-23.md` ("Start here") |
 | the VTX onboard SD recorder ([record], dvr.target, the RCF rec byte, OSD REC field), VENC bind-peer order, the MI /proc/mi_modules/mi_venc per-stage delay instrument, the startup vanish-counter ratchet | docs/vtx-recorder.md (as built) + docs/sd-record-findings-2026-09-26.md (spike) |
 | the efficient-link plan (current line of work): 20 MHz bottom / 40 MHz top ladder, per-rung FEC (thick floor, thin top after slice concealment), genlock (camera rate steered onto the screen's refresh: `genlock.h`, `T_GENLOCK`/`CAP_GENLOCK`, `[genlock]` / `display.genlock`, the `genlock:` lat.log line, CAMERA vs SCREEN report section), source-first FEC ordering | `docs/efficient-link-plan.md` |
-| feedback-repair (software ACK / coded repair, parked 2026-10-09): the phased rollout, arq.log shadow mode, `SwDecoder::deficit()`, the ta.log turnaround bench (`T_TA_PING`/`T_TA_PONG`, `[turnaround]`), the listen window (`T_STATUS`/`T_LWSTAT` v1/v2, `[listen]`, `listen_window.h`/`listen_burst.h`, the 3b learned delay + fit rule) | `docs/feedback-repair-rollout.md` |
+| feedback-repair (software ACK / coded repair, parked 2026-10-09): the phased rollout, arq.log shadow mode, `SwDecoder::deficit()` (the turnaround bench and listen window were removed at the 2026-10-10 merge of upstream's slice-salvage; their results stay in the doc) | `docs/feedback-repair-rollout.md` |
+| the browser GS / spotter (web/), WebUSB+WASM build, LinkHealthAssembler sharing, channel set form, CHANNEL line, spotter follower | docs/web-gs.md |
+| the CPE510 relay card (mabur-relay protocol v4, maburgs RemoteCard + radio.relays, web GS relay mode, relay TX, interference sweep/hop on a relay) | docs/cpe510-relay.md |
+| pairing / the link key file, SipHash tag, session nonces, KEY MISMATCH, auth_reject | docs/link-pairing.md |
+| the software NACK (base-layer selective repeat): T_NACK, the retx ring, the air bucket, the retx accounting class, feclog 3 | docs/fec-nack.md (as built) + docs/fec-nack-spike-findings-2026-10-05.md (spike) |
+| H.265 row slices, slice salvage (SliceAssembler, skip-slice fills, `[venc] slices`, FrameHdr `slice_rows`, `kRecFlagSliceSalvaged`, aulog 5) | docs/slices.md (as built) + docs/venc-slice-findings-2026-10-09.md |
 | radio/PHY below mabur | `third_party/devourer/CLAUDE.md` |
 
 Design specs live in `docs/superpowers/specs/` — **gitignored**, so they

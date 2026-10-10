@@ -74,10 +74,11 @@ struct CardTrack {
   std::array<ClassTrack, kNumRfClasses> cls{};
   // base+enh pooled RF track (spec 2026-08-15, re-scoped for the airtime-
   // balance-uep split-rate ladder). The RF label source and the predictive
-  // fade trigger read THIS, not cls[S0]/cls[S1] alone. base and enh no
-  // longer share a PHY rate (base mirrors mcs-1, enh runs the profile mcs),
-  // but RSSI/SNR/EVM are channel properties, not rate-dependent ones, and TX
-  // power is constant across MCS (spec 2026-08-12-constant-txpower) — so the
+  // fade trigger read THIS, not cls[S0]/cls[S1] alone. base and enh share
+  // one PHY rate (the rung mcs, same-rate-fixed-pairs 2026-08-30; they were
+  // split mcs-1/mcs for a day before that), and RSSI/SNR/EVM are channel
+  // properties anyway, with TX power constant across MCS (spec
+  // 2026-08-12-constant-txpower) — so the
   // two streams stay statistically homogeneous and pooling both still beats
   // a single stream's sample count; msp/ctrl are excluded because their mix
   // ratio drifts with rung and shed state. Folded at frame time, NOT
@@ -111,11 +112,6 @@ class Aggregator {
   // decoded -- the arrival-order view ArqShadow finds burst ends in. Corrupt
   // bodies are skipped: their peeked stream id is untrustworthy.
   using VideoHook = std::function<void(int stream_id, uint64_t mono_us)>;
-  // Turnaround bench (rollout phase 2): every CRC-clean T_TA_PING (the GS's
-  // own, heard back on a witness card) and T_TA_PONG, with the full RX
-  // record -- the turnaround is timed off its tsfl. Neither touches video or
-  // RC accounting beyond the self/rc frame counters.
-  using TaSink = std::function<void(const mabur::node::RxBody& m)>;
 
   Aggregator(const std::array<mabur::UepLayerCfg, 2>& layers,
              uint32_t seq_horizon, int n_cards, uint32_t arrival_guard = 0);
@@ -125,13 +121,13 @@ class Aggregator {
   void set_msp_sink(MspSink s) { msp_sink_ = std::move(s); }
   void set_probe_sink(ProbeSink s) { probe_sink_ = std::move(s); }
   void set_video_hook(VideoHook h) { video_hook_ = std::move(h); }
-  void set_ta_sink(TaSink s) { ta_sink_ = std::move(s); }
 
   void on_rx_body(const mabur::node::RxBody& m);
 
   const CardTrack& card(int id) const { return cards_[static_cast<size_t>(id)]; }
   int n_cards() const { return static_cast<int>(cards_.size()); }
   mabur::UepDecoder& decoder() { return dec_; }
+  const mabur::UepDecoder& decoder() const { return dec_; }
   uint16_t last_video_seq() const { return last_video_seq_; }
   uint64_t last_video_us() const { return last_video_us_; }
   uint64_t bad_card_msgs() const { return bad_card_msgs_; }
@@ -153,7 +149,6 @@ class Aggregator {
   MspSink msp_sink_;
   ProbeSink probe_sink_;
   VideoHook video_hook_;
-  TaSink ta_sink_;
   uint16_t last_video_seq_ = 0;
   uint64_t last_video_us_ = 0;
   uint64_t bad_card_msgs_ = 0;

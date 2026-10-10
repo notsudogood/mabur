@@ -10,7 +10,7 @@ from maburtop import (
 DGRAM = {
     "v": 1, "session": 0xDEADBEEF, "seq": 7, "t_ms": 567890,
     "link": {
-        "vtx_id": 1, "channel": 149, "state": "session", "tx_card": 0,
+        "channel": 149, "state": "session", "tx_card": 0, "key_fp": "a1b2",
         "op": {"mcs": 5, "bw": 20, "sgi": False, "vht": False,
                "overhead_base": 0.25, "overhead_enh": 0.25, "snr_req": 18.5},
         "deadline_ms": 60, "residual_loss": 0.012,
@@ -30,23 +30,21 @@ DGRAM = {
         "air_pct": 31.3,
         "video": {"fps": 59.9, "mbps": 9.31, "jitter_ms": 1.8,
                   "clean": 21500, "truncated": 3, "dropped": 0, "stall_resets": 0,
+                  "slice_salvaged": 2,
                   "ring": {"published": 812345, "dropped_oversize": 0,
                            "bytes": 123456789},
                   "q_drop": 0},
     },
     "drone": {
         "tlm_age_ms": 800, "tlm_seq": 4211, "state": "linked",
-        "gen": 7, "failsafe_shed": False, "radio_rx_ok": True,
-        "congestion_shed": True,
-        "applied": {"mcs": 5, "bw": 20, "vht": False,
-                    "overhead_base": 0.25, "overhead_enh": 0.25},
+        "failsafe_shed": False,
+        "congestion_shed": True, "txq_wait_ms": 3,
         "rcf": {"age_ms": 45, "rx_pps": 19.4},
-        "enc": {"fps": 59.9, "mbps": 9.21, "cmd_kbps": 9000,
-                "roi_qp": -24, "ring_drops": 0},
-        "txq": {"depth": 3, "cap": 64, "drop_pps": 0.0, "drops": 0},
-        "radio": {"sent_pps": 1461.0, "drops": 0, "usb_fail": 0},
+        "enc": {"cmd_kbps": 9000},
+        "txq": {"drop_pps": 0.0, "drops": 0},
+        "radio": {"usb_fail": 0, "rx": {"own": 18, "foreign": 2, "crcfail": 1}},
         "uplink": {"rssi_a": -58.9, "rssi_b": -58.0, "snr_a": 21.0, "snr_b": 22.0},
-        "sys": {"soc_temp_c": 61, "thermal_delta": 3, "cpu_pct": 14.3},
+        "sys": {"soc_temp_c": 61, "cpu_pct": 14.3},
     },
     "cards": [
         {"id": 0, "up": True, "frames": 123456, "crc_fail": 0,
@@ -91,13 +89,23 @@ class TopBarTest(unittest.TestCase):
     def test_content(self):
         text, spans = panel_topbar(_fresh(), 100.2)[0]
         self.assertIn("SESSION", text)
-        self.assertIn("vtx 1", text)
         # link.channel: the operating channel, also what the player's
         # compact OSD reads for its ch: field.
         self.assertIn("ch 149", text)
         self.assertIn("MCS 5/20", text)
         self.assertIn("restarts 0", text)
         self.assertTrue(any(style == "good" for _, _, style in spans))
+        # link.key_fp (link pairing, 2026-10-01): the sideport's key
+        # fingerprint, so a config mismatch shows up without reading logs.
+        self.assertIn("key a1b2", text)
+
+    def test_key_mismatch_state_bad_span(self):
+        d = dict(DGRAM, link=dict(DGRAM["link"], state="key_mismatch"))
+        text, spans = panel_topbar(_fresh(d), 100.2)[0]
+        self.assertIn("KEY MISMATCH", text)
+        self.assertTrue(any(style == "bad" for _, _, style in spans))
+        self.assertFalse(any(style == "good" for _, _, style in spans))
+        self.assertFalse(any(style == "warn" for _, _, style in spans))
 
     def test_stale_takeover(self):
         m = _fresh(wall=100.0)
@@ -135,11 +143,15 @@ class DronePanelTest(unittest.TestCase):
         rows = panel_drone(_fresh(), 100.2)
         self.assertTrue(rows[0][0].startswith("──"))
         joined = "\n".join(texts(rows))
-        for cell in ("LINKED", "gen", "7", "mcs5/20", "ov b0.25/e0.25", "800ms",
-                     "59.9 fps", "9.21 Mbps", "9000k", "roi -24",
-                     "shed CONG", "1461",
+        for cell in ("LINKED", "800ms",
+                     "9000k", "txw     3 ms",
+                     "shed CONG",
                      "-58.9", "-58.0", "19.4", " 61", "14.3%"):
             self.assertIn(cell, joined)
+        # Keys that left the sideport 2026-09-30 must not be rendered.
+        for gone in ("gen", "roi", "ring", "vring", "van ", "rf Δ", "sent",
+                     "air ", "applied", "idr"):
+            self.assertNotIn(gone, joined)
 
     def test_shed_cell_states(self):
         # failsafe wins the label (rung-0 forced shed), then congestion,
@@ -153,6 +165,24 @@ class DronePanelTest(unittest.TestCase):
         d["drone"] = dict(DGRAM["drone"])
         del d["drone"]["congestion_shed"]
         self.assertIn("shed --", "\n".join(texts(panel_drone(_fresh(d), 100.2))))
+
+    def test_auth_reject_bad_span(self):
+        # drone.auth_reject (Telem flags bit1, link pairing 2026-10-01):
+        # >=1 control frame failed verification this telemetry period.
+        d = dict(DGRAM)
+        d["drone"] = dict(DGRAM["drone"], auth_reject=True)
+        rows = panel_drone(_fresh(d), 100.2)
+        joined = "\n".join(texts(rows))
+        self.assertIn("AUTH!", joined)
+        line8_text, line8_spans = rows[-1]
+        idx = line8_text.rindex("AUTH!")
+        self.assertTrue(any(s == idx and ln == len("AUTH!") and style == "bad"
+                             for s, ln, style in line8_spans))
+        d["drone"] = dict(DGRAM["drone"], auth_reject=False)
+        self.assertNotIn("AUTH!", "\n".join(texts(panel_drone(_fresh(d), 100.2))))
+        d["drone"] = dict(DGRAM["drone"])
+        d["drone"].pop("auth_reject", None)
+        self.assertNotIn("AUTH!", "\n".join(texts(panel_drone(_fresh(d), 100.2))))
 
     def test_vtx_rec_cell(self):
         # drone.rec (spec 2026-09-26): state 1 = recording, 2 = error + code;
@@ -168,27 +198,15 @@ class DronePanelTest(unittest.TestCase):
         d["drone"].pop("rec", None)
         self.assertNotIn("VREC", "\n".join(texts(panel_drone(_fresh(d), 100.2))))
 
-    def test_shed_cell_air_tier(self):
-        # Air-clock admission gate (2026-09-06): AIR ranks below FS and
-        # CONG, above off; None (recording predates congestion_shed) is
-        # unaffected by air_shed.
+    def test_shed_cell_ignores_old_air_key(self):
+        # The AIR tier left with drone.air_shed (2026-09-30): an old
+        # recording that still carries air_shed=True reads "off", not AIR.
         self.assertEqual(_shed_cell({"failsafe_shed": True,
-                                      "congestion_shed": True,
-                                      "air_shed": True}), "FS")
-        self.assertEqual(_shed_cell({"congestion_shed": True,
-                                      "air_shed": True}), "CONG")
+                                      "congestion_shed": True}), "FS")
+        self.assertEqual(_shed_cell({"congestion_shed": True}), "CONG")
         self.assertEqual(_shed_cell({"congestion_shed": False,
-                                      "air_shed": True}), "AIR")
-        self.assertEqual(_shed_cell({"congestion_shed": False,
-                                      "air_shed": False}), "off")
+                                      "air_shed": True}), "off")
         self.assertIsNone(_shed_cell({}))
-
-    def test_queue_row_shows_air_backlog(self):
-        d = dict(DGRAM)
-        d["drone"] = dict(DGRAM["drone"], air_backlog_max_ms=37)
-        line = next(t for t in texts(panel_drone(_fresh(d), 100.2))
-                    if t.strip().startswith("queue"))
-        self.assertRegex(line, r"air\s+37 ms")
 
     def test_radio_row_shows_drone_rx_energy(self):
         d = dict(DGRAM)
@@ -208,57 +226,40 @@ class DronePanelTest(unittest.TestCase):
         self.assertIn("no telemetry", text)
         self.assertEqual(spans, [(0, len(text), "dim")])
 
-    def test_applied_mismatch_bad_span(self):
-        d = dict(DGRAM)
-        d["drone"] = dict(DGRAM["drone"],
-                           applied=dict(DGRAM["drone"]["applied"], mcs=6))
-        rows = panel_drone(_fresh(d), 100.2)
-        text, spans = next((t, s) for t, s in rows if t.startswith("applied"))
-        bad = [sp for sp in spans if sp[2] == "bad"]
-        self.assertTrue(bad)
-        st, ln, _ = bad[0]
-        self.assertIn("mcs6/20", text[st:st + ln])
-
-    def test_ov_split_renders_base_and_enh_no_mismatch_span(self):
-        # applied.overhead_{base,enh} is not diffed against op's pair the
-        # way mcs/bw are: the runtime balancer that used to explain a split
-        # is deleted (2026-08-30 same-rate-fixed-pairs), so applied ≡
-        # commanded except under an armed :8301 override — no bad span
-        # here either way, this panel just doesn't render that comparison.
-        d = dict(DGRAM)
-        d["drone"] = dict(DGRAM["drone"],
-                           applied=dict(DGRAM["drone"]["applied"],
-                                        overhead_base=0.5, overhead_enh=1.0))
-        rows = panel_drone(_fresh(d), 100.2)
-        text, spans = next((t, s) for t, s in rows if t.startswith("applied"))
-        self.assertIn("ov b0.50/e1.00", text)
-        self.assertFalse(any(style == "bad" for _, _, style in spans))
-
     def test_deaf_cell_bad_span(self):
         d = dict(DGRAM)
-        d["drone"] = dict(DGRAM["drone"], radio_rx_ok=False)
+        # DEAF is derived from drone.radio.rx since the radio_rx_ok flag
+        # left the wire (2026-09-30): nothing at all heard last period.
+        d["drone"] = dict(DGRAM["drone"],
+                          radio=dict(DGRAM["drone"]["radio"],
+                                     rx={"own": 0, "foreign": 0, "crcfail": 0}))
         rows = panel_drone(_fresh(d), 100.2)
         text, spans = next((t, s) for t, s in rows if t.startswith("system"))
         self.assertIn("DEAF", text)
         self.assertTrue(any(text[st:st + ln] == "DEAF" and style == "bad"
                              for st, ln, style in spans))
 
-    def test_radio_drops_increased_bad_span(self):
+    def test_deaf_absent_when_anything_heard(self):
+        rows = panel_drone(_fresh(), 100.2)
+        text = next(t for t, _ in rows if t.startswith("system"))
+        self.assertNotIn("DEAF", text)
+
+    def test_usb_fail_increased_bad_span(self):
         m = _fresh()
         d2 = dict(DGRAM)
         d2["drone"] = dict(DGRAM["drone"],
-                            radio=dict(DGRAM["drone"]["radio"], drops=1))
+                            radio=dict(DGRAM["drone"]["radio"], usb_fail=1))
         m.update(d2, 101.0)
         rows = panel_drone(m, 101.1)
         text, spans = next((t, s) for t, s in rows if t.startswith("radio"))
         self.assertTrue(any(style == "bad" for _, _, style in spans))
 
-    def test_radio_drops_not_flagged_on_first_sample(self):
+    def test_usb_fail_not_flagged_on_first_sample(self):
         # No previous datagram yet: an increase can't be judged, so no bad
-        # span even though drops is nonzero.
+        # span even though usb_fail is nonzero.
         d = dict(DGRAM)
         d["drone"] = dict(DGRAM["drone"],
-                           radio=dict(DGRAM["drone"]["radio"], drops=5))
+                           radio=dict(DGRAM["drone"]["radio"], usb_fail=5))
         rows = panel_drone(_fresh(d), 100.2)
         text, spans = next((t, s) for t, s in rows if t.startswith("radio"))
         self.assertFalse(any(style == "bad" for _, _, style in spans))
@@ -270,36 +271,8 @@ class VideoPanelTest(unittest.TestCase):
         joined = "\n".join(texts(rows))
         for cell in ("59.9 fps", "9.31 Mbps", "jitter", "1.8 ms", "clean",
                      "21500", "trunc", "drop", "812345", "ring",
-                     "pub", "q_drop", "residual"):
+                     "pub", "q_drop", "residual", "salv"):
             self.assertIn(cell, joined)
-
-    def test_cross_check_present_with_telemetry(self):
-        rows = panel_video(_fresh(), 100.2)
-        joined = "\n".join(texts(rows))
-        self.assertIn("──►", joined)
-        self.assertIn("encoder", joined)
-        self.assertIn("out", joined)
-        self.assertIn("sent", joined)
-        self.assertIn("inj", joined)
-
-    def test_cross_check_absent_without_telemetry(self):
-        d = dict(DGRAM, drone=None)
-        rows = panel_video(_fresh(d), 100.2)
-        joined = "\n".join(texts(rows))
-        self.assertNotIn("──►", joined)
-
-    def test_cross_check_bad_span_on_fps_mismatch(self):
-        d = dict(DGRAM)
-        d["drone"] = dict(DGRAM["drone"],
-                           enc=dict(DGRAM["drone"]["enc"], fps=10.0))
-        rows = panel_video(_fresh(d), 100.2)
-        text, spans = next((t, s) for t, s in rows if "──►" in t)
-        self.assertTrue(any(style == "bad" for _, _, style in spans))
-
-    def test_cross_check_good_span_within_tolerance(self):
-        rows = panel_video(_fresh(), 100.2)
-        text, spans = next((t, s) for t, s in rows if "──►" in t)
-        self.assertTrue(any(style == "good" for _, _, style in spans))
 
     def test_increased_truncated_bad_span(self):
         m = _fresh()
@@ -519,6 +492,33 @@ class LinksPanelTest(unittest.TestCase):
         self.assertNotIn("--", joined.split("\n")[1])  # current rung row
         self.assertIn("probe: r1 mcs3 clean 54b u0.12 n60 | c0 0.00 c1 0.05", joined)
 
+    def test_ladder_panel_shows_nack_line_when_present(self):
+        # spec 2026-10-05 fec-nack: link.nack / drone.nack render as one
+        # extra LADDER row right after the probe line.
+        d = dict(DGRAM)
+        d["link"] = dict(DGRAM["link"], ctl={
+            "rung": {"idx": 1, "mcs": 3, "ov_base": 0.5, "ov_enh": 0.25},
+            "util": 0.1, "down_util": 0.05, "up_util": 0.5,
+            "pre_fec_loss": 0.01, "budget": 0.4,
+            "probation_ms_left": 0, "penalized": [],
+            "ladder": [
+                {"mcs": 1, "bw": 20, "ov_base": 1.0, "ov_enh": 1.0},
+                {"mcs": 3, "bw": 40, "ov_base": 0.5, "ov_enh": 0.25},
+            ],
+            "counters": {"demotes_residual": 0, "demotes_util": 0, "promotes": 0,
+                         "probation_fails": 0, "starved_drops": 0, "timeout_drops": 0},
+            "last_event": {"t_ms": 0, "from": 0, "to": 0, "reason": "none", "u": 0.0},
+        }, nack={"requests": 12, "filled": 9, "wasted": 2, "suppressed": 0,
+                 "fill_pps": 3.0, "fill_ms": {"p50": 11, "p90": 18, "max": 40},
+                 "settle_ms": 12, "late_ms_max": 8})
+        d["drone"] = dict(DGRAM["drone"], nack={"rx": 12, "retx_syms": 120, "retx_refused": 0})
+        rows = panel_ladder(_fresh(d), 100.2)
+        joined = "\n".join(t for t, _ in rows)
+        self.assertIn("nack:", joined)
+        self.assertIn("req12", joined)
+        self.assertIn("fill9", joined)
+        self.assertIn("11/18/40", joined)
+
 
 class GsRadiosPanelTest(unittest.TestCase):
     def test_content(self):
@@ -705,16 +705,14 @@ class FixedWidthTest(unittest.TestCase):
         extreme = dict(DGRAM)
         extreme["drone"] = dict(
             DGRAM["drone"],
-            gen=4294967295,
             tlm_age_ms=987654321,
-            applied=dict(DGRAM["drone"]["applied"], mcs=999999999, bw=888888888),
-            enc=dict(DGRAM["drone"]["enc"], fps=999999999.99, mbps=999999999.99),
-            txq=dict(DGRAM["drone"]["txq"], depth=999999999, cap=888888888,
-                     drops=999999999),
-            radio=dict(DGRAM["drone"]["radio"], sent_pps=999999999.0,
-                       drops=999999999, usb_fail=99999),
+            txq_wait_ms=999999999,
+            enc=dict(DGRAM["drone"]["enc"], cmd_kbps=999999999),
+            txq=dict(DGRAM["drone"]["txq"], drops=999999999),
+            radio=dict(DGRAM["drone"]["radio"], usb_fail=99999,
+                       rx={"own": 99999, "foreign": 99999, "crcfail": 99999}),
             rcf={"age_ms": 123456789, "rx_pps": 99999.9},
-            sys={"soc_temp_c": -128, "thermal_delta": 99, "cpu_pct": 9999.99},
+            sys={"soc_temp_c": -128, "cpu_pct": 9999.99},
         )
         extreme["cards"] = [
             dict(DGRAM["cards"][0], frames=999999999, pps=99999, rx_mbps=999.9,
@@ -775,58 +773,6 @@ class ModelInvariantsTest(unittest.TestCase):
         self.assertNotIn(None, [cid for cid, _cls in m.sig_rows])
         rows = render_screen(m, 100.2, 160, 60)
         self.assertTrue(len(rows) > 0)
-
-
-
-class VanishDisplayTest(unittest.TestCase):
-    # venc-ring vanish counters (docs/venc-ring-vanish-findings-2026-08-12.md):
-    # drone.enc.{vanished_base,vanished_enh,self_idr_refused}, zeroed at first
-    # link-establish — nonzero base = silent decoder corruption, must be visible.
-    def test_panel_drone_shows_vanish_counters(self):
-        import copy
-        d = copy.deepcopy(DGRAM)
-        d["drone"]["enc"]["vanished_base"] = 2
-        d["drone"]["enc"]["vanished_enh"] = 5
-        d["drone"]["enc"]["self_idr_refused"] = 1
-        m = _fresh(d)
-        text = "\n".join(r[0] if isinstance(r, tuple) else r
-                          for r in panel_drone(m, 100.2))
-        self.assertRegex(text, r"van\s+2/\s*5")
-        self.assertRegex(text, r"ref\s+1")
-
-    def test_compact_enc_row_shows_vanish_counters(self):
-        import copy
-        d = copy.deepcopy(DGRAM)
-        d["drone"]["enc"]["vanished_base"] = 3
-        d["drone"]["enc"]["vanished_enh"] = 7
-        m = _fresh(d)
-        text = "\n".join(r[0] if isinstance(r, tuple) else r
-                          for r in render_rows_compact(m, 100.2, 200))
-        self.assertRegex(text, r"van\s+3/\s*7")
-
-    def test_panel_and_compact_show_venc_ring_stats(self):
-        # Producer-side venc ring (spec 2026-08-28 venc-foldin): fill % and
-        # lifetime full-drops, the only view of an encoder outrunning maburd.
-        import copy
-        d = copy.deepcopy(DGRAM)
-        d["drone"]["enc"]["venc_ring_fill_pct"] = 62
-        d["drone"]["enc"]["venc_full_drops"] = 4
-        m = _fresh(d)
-        panel = "\n".join(r[0] if isinstance(r, tuple) else r
-                           for r in panel_drone(m, 100.2))
-        self.assertRegex(panel, r"vring\s+62%")
-        self.assertRegex(panel, r"drop\s+4")
-        compact = "\n".join(r[0] if isinstance(r, tuple) else r
-                             for r in render_rows_compact(m, 100.2, 240))
-        self.assertRegex(compact, r"vring\s+62%")
-
-    def test_vanish_keys_absent_renders_dashes(self):
-        # Old-daemon datagram (pre-detection): keys missing entirely — panel
-        # must render placeholders, never crash.
-        m = _fresh(DGRAM)  # fixture has no vanished_* keys
-        text = "\n".join(r[0] if isinstance(r, tuple) else r
-                          for r in panel_drone(m, 100.2))
-        self.assertRegex(text, r"van\s+--/\s*--")
 
 
 

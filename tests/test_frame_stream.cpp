@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -5,6 +6,7 @@
 #include "frame_stream.h"
 #include "mabur/frag.h"
 #include "mabur/frame_wire.h"
+#include "slice_fixture.h"
 using namespace maburgs;
 using mabur::framewire::FrameHdr;
 
@@ -362,6 +364,201 @@ TEST(lat_headerless_slot_drop_never_reaches_end_frame) {
   CHECK(fs.frames_clean() == 0);
   CHECK(fs.frames_truncated() == 0);
   CHECK(fs.frames_dropped() >= 1);
+}
+
+TEST(tail_view_reports_count_and_seq_of_highest_fragment) {
+  Capture cap;
+  FrameStream fs({50, 8}, cap.cbs());
+  CHECK(!fs.tail_view(0).has_value());
+  mabur::Fragmenter frag;
+  std::vector<uint8_t> pay(6 * 300, 0x11);
+  auto frags = frag_frame(frag, /*frame_id=*/5, pay);
+  REQUIRE(frags.size() >= 6);
+  for (uint16_t idx = 0; idx < 3; ++idx) {
+    FragArrival a;
+    a.body_mono_us = 1000;
+    a.sw_seq = 900 + idx;
+    a.have_sw_seq = true;
+    fs.push_fragment(0, frags[idx].data(), frags[idx].size(), 10 + idx, a);
+  }
+  auto tv = fs.tail_view(0);
+  REQUIRE(tv.has_value());
+  CHECK(tv->count == frags.size());
+  CHECK(tv->max_idx == 2 && tv->seq_at_max == 902);
+  CHECK(tv->last_progress_ms == 12);
+  CHECK(!fs.tail_view(1).has_value());  // different sid -> nullopt
+
+  // header-less slot (fragment 0 missing) exposes nothing, even with a
+  // known sw_seq on the fragment that did arrive.
+  Capture cap2;
+  FrameStream fs2({50, 8}, cap2.cbs());
+  FragArrival a2;
+  a2.sw_seq = 950;
+  a2.have_sw_seq = true;
+  fs2.push_fragment(0, frags[1].data(), frags[1].size(), 10, a2);
+  CHECK(!fs2.tail_view(0).has_value());
+}
+
+TEST(tail_view_hdr_retx_latches_through_end_frame) {
+  // Fragment 0 arriving retx-marked latches AuLatMeta::hdr_retx, surfaced to
+  // the ring writer via end_frame -- Task 7's latency-anchor guard consumes
+  // this to refuse an anchor sample built from a NACK-filled header.
+  Capture cap;
+  FrameStream fs({50, 8}, cap.cbs());
+  mabur::Fragmenter frag;
+  std::vector<uint8_t> pay(2000, 0x22);
+  auto frags = frag_frame(frag, /*frame_id=*/7, pay);
+  REQUIRE(!frags.empty());
+  for (size_t i = 0; i < frags.size(); ++i) {
+    FragArrival a;
+    if (i == 0) a.retx = true;
+    fs.push_fragment(0, frags[i].data(), frags[i].size(), 10, a);
+  }
+  REQUIRE(!cap.evs.empty());
+  CHECK(cap.evs.back().kind == 'E');
+  CHECK(cap.evs.back().complete);
+  CHECK(cap.evs.back().lat.hdr_retx == true);
+}
+
+// --- Task 9: FrameStream slice-salvage integration ---
+
+namespace {
+// FrameHdr + AU, split into fragments of 324-byte payload like production.
+std::vector<std::vector<uint8_t>> frag_au(uint16_t frame_id, const std::vector<uint8_t>& au,
+                                          uint8_t slice_rows, uint16_t fseq, uint8_t flags = 0) {
+  std::vector<uint8_t> unit(mabur::framewire::kFrameHdrLen + au.size());
+  FrameHdr h; h.frame_id = frame_id; h.slice_rows = slice_rows; h.pts_us = 16667u * frame_id;
+  h.flags = flags;
+  mabur::framewire::pack_frame_hdr(h, unit.data());
+  std::memcpy(unit.data() + 8, au.data(), au.size());
+  std::vector<std::vector<uint8_t>> out;
+  const size_t F = 324;
+  const uint16_t count = static_cast<uint16_t>((unit.size() + F - 1) / F);
+  for (uint16_t i = 0; i < count; ++i) {
+    std::vector<uint8_t> p = {static_cast<uint8_t>(fseq), static_cast<uint8_t>(fseq >> 8),
+                              static_cast<uint8_t>(i), static_cast<uint8_t>(i >> 8),
+                              static_cast<uint8_t>(count), static_cast<uint8_t>(count >> 8)};
+    p.insert(p.end(), unit.begin() + i * F, unit.begin() + std::min(unit.size(), size_t(i + 1) * F));
+    out.push_back(std::move(p));
+  }
+  return out;
+}
+}  // namespace
+
+TEST(salvage_rebuilds_a_holed_split_au) {
+  const auto aus = mtest::load_slice_fixture();
+  Capture cap;
+  FrameStream fs({50, 8}, cap.cbs());
+  for (auto& p : frag_au(0, aus[3], 0, 0)) fs.push_fragment(0, p.data(), p.size(), 1);  // params
+  auto frags = frag_au(1, aus[5], 5, 1);
+  frags.erase(frags.begin() + 20);   // a hole in slice 1
+  for (auto& p : frags) fs.push_fragment(0, p.data(), p.size(), 2);
+  fs.poll(100);                      // past gap_timeout: finish
+  REQUIRE(cap.evs.size() == 4);
+  CHECK(cap.evs[1].complete);
+  CHECK(!cap.evs[3].complete);
+  CHECK(cap.evs[3].lat.slice.salvaged);
+  CHECK(mtest::slice_nals(cap.evs[3].bytes).size() == 4);
+  CHECK(fs.slice_salvaged() == 1);
+  CHECK(fs.slices_filled() == 1);
+  CHECK(fs.frames_truncated() == 1);   // still a truncation; salvaged is a subset
+}
+
+TEST(late_fill_before_finish_yields_identical_complete_au) {   // Review Focus 4
+  const auto aus = mtest::load_slice_fixture();
+  Capture cap;
+  FrameStream fs({50, 8}, cap.cbs());
+  for (auto& p : frag_au(0, aus[3], 0, 0)) fs.push_fragment(0, p.data(), p.size(), 1);
+  auto frags = frag_au(1, aus[5], 5, 1);
+  auto late = frags[20];
+  frags.erase(frags.begin() + 20);
+  for (auto& p : frags) fs.push_fragment(0, p.data(), p.size(), 2);   // slices 0.. drained
+  REQUIRE(cap.evs.size() == 3);       // begin_frame(0) end_frame(0) begin_frame(1): frame 1 still open
+  REQUIRE(!cap.cur.empty());          // slice 0 (and maybe more) already drained via the hole
+  const std::vector<uint8_t> drained_before_fill = cap.cur;
+  fs.push_fragment(0, late.data(), late.size(), 10);                   // FEC/NACK fill
+  REQUIRE(cap.evs.size() == 4);
+  // The late fill must only ever APPEND past what drain() already emitted,
+  // never re-emit or rewrite it -- the pinned "no duplicated bytes" claim.
+  REQUIRE(cap.evs[3].bytes.size() >= drained_before_fill.size());
+  CHECK(std::equal(drained_before_fill.begin(), drained_before_fill.end(), cap.evs[3].bytes.begin()));
+  CHECK(cap.evs[3].complete);
+  CHECK(!cap.evs[3].lat.slice.salvaged);
+  CHECK(cap.evs[3].bytes == aus[5]);
+}
+
+TEST(split_au_without_params_passes_through_counted) {
+  const auto aus = mtest::load_slice_fixture();
+  Capture cap;
+  FrameStream fs({50, 8}, cap.cbs());
+  auto frags = frag_au(0, aus[5], 5, 0);     // no parameter-set AU seen yet
+  frags.erase(frags.begin() + 20);
+  for (auto& p : frags) fs.push_fragment(0, p.data(), p.size(), 2);
+  fs.poll(100);
+  REQUIRE(cap.evs.size() == 2);
+  CHECK(!cap.evs[1].lat.slice.salvaged);
+  CHECK(cap.evs[1].lat.slice.fallback == kSliceFbNoParams);
+  CHECK(fs.slice_fallback(kSliceFbNoParams) == 1);
+  CHECK(cap.evs[1].bytes == std::vector<uint8_t>(aus[5].begin(), aus[5].begin() + 20 * 324 - 8));
+}
+
+TEST(split_au_fallback_with_assembler_is_the_raw_prefix) {   // spec 5.7
+  // Params usable and slice_rows 5: the assembler is engaged and drains
+  // fragment by fragment. The picture is the IDR (I slices) with a hole in
+  // slice 1 -> kSliceFbISlice. Passthrough must be byte-identical to the
+  // raw path: exactly the contiguous fragment prefix.
+  const auto aus = mtest::load_slice_fixture();
+  const auto sl = mtest::slice_nals(aus[0]);
+  const size_t off1 = static_cast<size_t>(
+      std::search(aus[0].begin(), aus[0].end(), sl[1].begin(), sl[1].end()) - aus[0].begin());
+  const size_t hole = (off1 + 8) / 324 + 1;   // inside slice 1: slice 0 drained whole
+  Capture cap;
+  FrameStream fs({50, 8}, cap.cbs());
+  for (auto& p : frag_au(0, aus[3], 0, 0)) fs.push_fragment(0, p.data(), p.size(), 1);
+  auto frags = frag_au(1, aus[0], 5, 1);
+  REQUIRE(hole + 1 < frags.size());
+  frags.erase(frags.begin() + static_cast<long>(hole));
+  for (auto& p : frags) fs.push_fragment(0, p.data(), p.size(), 2);
+  REQUIRE(!cap.cur.empty());          // drain() already streamed a NAL-aligned part
+  fs.poll(100);
+  REQUIRE(cap.evs.size() == 4);
+  CHECK(!cap.evs[3].complete);
+  CHECK(!cap.evs[3].lat.slice.salvaged);
+  CHECK(cap.evs[3].lat.slice.fallback == kSliceFbISlice);
+  CHECK(fs.slice_fallback(kSliceFbISlice) == 1);
+  CHECK(fs.slice_salvaged() == 0);
+  CHECK(cap.evs[3].bytes == std::vector<uint8_t>(aus[0].begin(), aus[0].begin() + static_cast<long>(hole * 324 - 8)));
+}
+
+TEST(reset_forgets_params) {                       // Review Focus 5
+  const auto aus = mtest::load_slice_fixture();
+  Capture cap;
+  FrameStream fs({50, 8}, cap.cbs());
+  for (auto& p : frag_au(0, aus[3], 0, 0)) fs.push_fragment(0, p.data(), p.size(), 1);
+  fs.reset();                                      // session change
+  auto frags = frag_au(1, aus[5], 5, 1);
+  frags.erase(frags.begin() + 20);                 // a hole in slice 1
+  for (auto& p : frags) fs.push_fragment(0, p.data(), p.size(), 2);
+  fs.poll(100);
+  REQUIRE(cap.evs.size() == 4);
+  CHECK(cap.evs[3].lat.slice.fallback == kSliceFbNoParams);
+  CHECK(fs.slice_salvaged() == 0);
+}
+
+TEST(producer_rebase_forgets_params) {             // Review Focus 5
+  const auto aus = mtest::load_slice_fixture();
+  Capture cap;
+  FrameStream fs({50, 8}, cap.cbs());
+  for (auto& p : frag_au(0, aus[3], 0, 0)) fs.push_fragment(0, p.data(), p.size(), 1);
+  // Producer restart: the next AU carries kFlagDiscont -> id rebase, which
+  // may come with a new resolution: the old SPS/PPS must not be used.
+  auto frags = frag_au(1, aus[5], 5, 1, mabur::framewire::kFlagDiscont);
+  frags.erase(frags.begin() + 20);
+  for (auto& p : frags) fs.push_fragment(0, p.data(), p.size(), 2);
+  fs.poll(100);
+  REQUIRE(cap.evs.size() == 4);
+  CHECK(cap.evs[3].lat.slice.fallback == kSliceFbNoParams);
+  CHECK(fs.slice_salvaged() == 0);
 }
 
 MTEST_MAIN

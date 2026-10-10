@@ -66,9 +66,15 @@ bool parse_gs_snapshot(const char* data, size_t n, GsSnapshot* out) {
   }
   if (!j.is_object()) return false;
 
+  // scan.pick (the boot pick, or the pin in pinned mode) is captured here,
+  // top-level like `hop`, and consumed once the `link` block below has
+  // parsed out->channel -- it is the reference the hop marker keys on
+  // instead of the deleted link.home.
+  std::optional<int> scan_pick;
   if (const json* scan = obj(j, "scan")) {
     auto it = scan->find("state");
     out->scan_auto = it != scan->end() && it->is_string() && it->get<std::string>() != "off";
+    scan_pick = integer(*scan, "pick");
   }
   if (const json* drone = obj(j, "drone")) {
     auto it = drone->find("low_power");
@@ -84,8 +90,8 @@ bool parse_gs_snapshot(const char* data, size_t n, GsSnapshot* out) {
     }
   }
   // Captured here (top-level, like `scan`) and consumed once the `link`
-  // block below has parsed out->channel and link.home -- hop.target alone
-  // says nothing about whether the LIVE channel is that target right now.
+  // block below has parsed out->channel -- hop.target alone says nothing
+  // about whether the LIVE channel is that target right now.
   const json* hop = obj(j, "hop");
   if (const json* link = obj(j, "link")) {
     // The GS's operating wifi channel (radio.channel). Exported from the GS
@@ -95,11 +101,15 @@ bool parse_gs_snapshot(const char* data, size_t n, GsSnapshot* out) {
     // player's own config is what keeps it honest when the two configs
     // disagree.
     out->channel = integer(*link, "channel");
+    {
+      auto st = link->find("state");
+      out->key_mismatch = st != link->end() && st->is_string() &&
+                          st->get<std::string>() == "key_mismatch";
+    }
     if (hop) {
       const std::optional<int> target = integer(*hop, "target");
-      const std::optional<int> home = integer(*link, "home");
-      out->hopped = target && home && out->channel &&
-                    *target == *out->channel && *target != *home;
+      out->hopped = target && scan_pick && out->channel &&
+                    *target == *out->channel && *target != *scan_pick;
     }
     out->air_pct = num(*link, "air_pct");
     if (const std::optional<double> r = num(*link, "residual_loss"))
@@ -169,6 +179,10 @@ bool parse_gs_snapshot(const char* data, size_t n, GsSnapshot* out) {
       if (!c.is_object()) continue;
       GsCard card;
       if (const std::optional<int> id = integer(c, "id")) card.id = *id;
+      {
+        auto k = c.find("kind");
+        card.relay = k != c.end() && k->is_string() && k->get<std::string>() == "relay";
+      }
       if (const json* classes = obj(c, "classes")) {
         if (const json* s0 = obj(*classes, "s0")) {
           card.rssi_dbm = num(*s0, "rssi");
@@ -176,10 +190,10 @@ bool parse_gs_snapshot(const char* data, size_t n, GsSnapshot* out) {
           card.evm_db = num(*s0, "evm");
         }
       }
-      // "Heard" needs both figures: the status colour is worst-of(rssi,snr)
-      // and a half-populated row would colour itself off one of them. EVM is
-      // NOT one of them -- see GsCard::evm_db.
-      card.heard = card.rssi_dbm.has_value() && card.snr_db.has_value();
+      // "Heard" needs only RSSI: a relay card never has a real SNR (its
+      // `snr` is nulled at the source) but is still a live, receiving card.
+      // EVM is NOT part of this either -- see GsCard::evm_db.
+      card.heard = card.rssi_dbm.has_value();
       out->cards.push_back(card);
     }
   }

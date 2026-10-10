@@ -39,13 +39,12 @@ int median(std::vector<int> v) {
 
 }  // namespace
 
-bool CalSession::start(uint32_t vtx_id, uint32_t nonce, uint64_t now_ms,
+bool CalSession::start(uint32_t nonce, uint64_t now_ms,
                        std::string* err) {
   // A session already running -- AwaitAck through Verify -- blocks a new
   // start(); Idle, Done and Failed do not, so a finished or failed run can
   // be retried without a separate reset call.
-  if (state_ != State::Idle && state_ != State::Done &&
-      state_ != State::Failed) {
+  if (running()) {
     if (err) *err = "a calibration session is already running";
     return false;
   }
@@ -58,8 +57,8 @@ bool CalSession::start(uint32_t vtx_id, uint32_t nonce, uint64_t now_ms,
     return false;
   }
 
-  vtx_id_ = vtx_id;
   nonce_ = nonce;
+  tag_ctx_ = peer_ctx_;
   fail_reason_ = "";
   result_ready_ = false;
   result_repeats_left_ = 0;
@@ -68,7 +67,7 @@ bool CalSession::start(uint32_t vtx_id, uint32_t nonce, uint64_t now_ms,
   final_walls_ = {};
   pending_park_ = {};
 
-  begin_await(make_coarse_plan(vtx_id, nonce), now_ms);
+  begin_await(make_coarse_plan(nonce), now_ms);
   return true;
 }
 
@@ -213,9 +212,10 @@ void CalSession::abort(const char* why) {
   clear_cells();
 }
 
-void CalSession::set_peer(bool linked, bool cal_capable) {
+void CalSession::set_peer(bool linked, bool cal_capable, mabur::rc::TagCtx ctx) {
   linked_ = linked;
   cal_capable_ = cal_capable;
+  peer_ctx_ = ctx;
 }
 
 uint16_t CalSession::cell_received(uint8_t rate, int idx, int card) const {
@@ -357,7 +357,7 @@ void CalSession::begin_await(const mabur::rc::CalCmd& cmd, uint64_t now_ms) {
 void CalSession::begin_verify(uint64_t now_ms) {
   running_phase_ = mabur::cal::kPhaseVerify;
   clear_cells();
-  const auto verify_cmd = make_verify_plan(vtx_id_, nonce_, pending_park_);
+  const auto verify_cmd = make_verify_plan(nonce_, pending_park_);
   seed_cells(verify_cmd);
   phase_start_ms_ = now_ms;
   phase_end_ms_ = now_ms + plan_duration_ms(verify_cmd);
@@ -420,7 +420,7 @@ void CalSession::finish_phase(uint64_t now_ms) {
       for (int r = 0; r < 8; ++r)
         log_->wall(static_cast<uint8_t>(r), coarse_walls_[static_cast<size_t>(r)]);
 
-    const auto fine_cmd = make_fine_plan(vtx_id_, nonce_, coarse_walls_);
+    const auto fine_cmd = make_fine_plan(nonce_, coarse_walls_);
     if (fine_cmd.windows.empty()) {
       // No row showed a real dip (or none was determinable): no fine window
       // has anything to sharpen, so the coarse pass IS the final answer.
@@ -481,7 +481,6 @@ void CalSession::finalize_result() {
   const int m = static_cast<int>(std::lround(cfg_.margin_db * 4.0));
 
   mabur::rc::CalResult res;
-  res.vtx_id = vtx_id_;
   res.nonce = nonce_;
   for (int r = 0; r < 8; ++r) {
     const auto& w = final_walls_[static_cast<size_t>(r)];

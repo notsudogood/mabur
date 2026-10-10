@@ -267,11 +267,12 @@ The caps-reteach pair retires this dance for same-version pairs:
 - the drone acks a keep-alive DISC while already LINKED, instead of
   ignoring it, so a GS that forgot its caps gets them re-taught without
   needing to re-enter rendezvous;
-- the GS sends its keep-alive DISC on a fast cadence
-  (`unacked_keepalive_ms`, default-only, no config key) whenever its
-  peer's caps are unknown, instead of the slow steady-state
-  `beacon_keepalive_ms`, so the re-teach happens in seconds rather than
-  however long the next slow beacon would take.
+- a GS whose peer's caps are unknown holds no session either (since link
+  pairing, 2026-10-01, SESSION requires an accepted DiscAck, which
+  carries the caps), so it is still beaconing a DISC every 20 ms, not the
+  slow steady-state `beacon_keepalive_ms`, and the re-teach happens on
+  the first ack that gets through. (The 2026-08-28 build used a separate
+  fast 250 ms keep-alive for this, since deleted.)
 
 Gate-verified on hardware 2026-08-28: 5x drone `maburd` restart and 5x GS
 `maburgs` restart, each under a live peer, all 10 recovered unaided
@@ -721,3 +722,185 @@ drone log shows `rec: recording -> /mnt/mmcblk0p1/record-NNNN.mp4`. GS
 per device: `maburd.pre-vtxrec` + `mabur.toml.pre-vtxrec`,
 `maburgs.pre-vtxrec` + `maburplay.pre-vtxrec` +
 `maburplay.toml.pre-vtxrec`, on both ends together.
+
+## 2026-10-01 RC_VERSION 14 (link pairing)
+
+`RC_VERSION` goes 13 → 14: every GS→drone control frame (DISC, RCF,
+CAL_CMD, CAL_RESULT) gains an 8-byte SipHash-2-4 tag before its CRC;
+`link.vtx_id` is gone from every frame and both configs; `DISC_ACK`
+gains `vtx_nonce` + a flags byte; `Telem` flags bit1 is `auth_reject`.
+A version-mismatch flag day like every `RC_VERSION` bump above: between
+the two swaps there is no control link and no video (`DISC_ACK` carries
+`CAP_FRAME_WIRE`) — finish the deploy, do not restart either daemon
+hoping to fix it. `docs/link-pairing.md` is the as-built page.
+
+**Config moves on both ends.** `link.vtx_id` is replaced by
+`link.key_file` — an old config fails boot (strict keys), so this is
+config-before-binary on both the drone and the GS, same as every config
+move in this doc:
+
+```toml
+[link]
+key_file = "/etc/mabur.key"
+```
+
+### Pairing
+
+Generate one key and put the same file on both ends:
+
+```sh
+(echo "# mabur link key, generated $(date -I)"; openssl rand -hex 16) > mabur.key
+chmod 600 mabur.key
+scp -O mabur.key root@192.168.10.152:/etc/mabur.key   # drone
+scp    mabur.key root@10.18.0.1:/etc/mabur.key        # GS
+```
+
+(`scp -O` for the drone, same reason as everywhere else in this doc —
+the drone's `dropbear` needs the legacy SCP protocol; the GS's `openssh`
+does not.) Then **Load** the same `mabur.key` file in the web page (the
+Link key row's Load button) — the page keeps it in its own browser
+storage (`webgs.key`), separate from the rest of its config, and passes
+it to the core as a `link.key` overlay. Spotter mode has no key row and
+needs nothing here.
+
+**Verify by comparing three fingerprints**, never the key itself: the
+drone's boot log (`link: key <fp> (<source>)`), the GS's boot log (same
+line, `maburgs:` prefixed), and the page's Load/Clear row. All three
+must read the same 4 hex characters (or all three `default`, pre-key, on
+a stock install). A daemon or page showing `default` while the others
+show a real fingerprint did not get the file — re-check the `scp`/Load
+step on that one end, it is not a drone/GS mismatch.
+
+Keep `mabur.key` with the flight configs on the host; it is the backup,
+and there is no way to recover a lost key from either device (neither
+prints it, only the fingerprint).
+
+**Rollback:** restore the old config (`link.vtx_id` back,
+`link.key_file` gone) beside the old binary on each device, the usual
+paired rule. The key file itself may stay — an old (pre-pairing) binary
+never reads it and is not bothered by its presence.
+
+**The hosted web page must be redeployed** with the RC_VERSION 14 core,
+same as every RC_VERSION bump — an old page's wire frames are rejected
+by both new daemons.
+
+`ausniff` is the standing gate once both ends are up:
+`tools/bench/ausniff.py`.
+
+Bench gate 2026-10-01 (branch `link-pairing` at 08a7b60, both ends
+deployed with `key_file`, rollbacks `maburd.pre-pairing` /
+`maburgs.pre-pairing` beside `mabur.toml.pre-pairing` /
+`maburgs.toml.pre-pairing`): ausniff 30 s at mcs4/40 — 1815 AUs,
+60.5 fps, 0 incomplete, 0 gaps, 0 resyncs (identical to the telem-diet
+run); sideport `link.state = session`, `key_fp = default`,
+`drone.auth_reject = false`. Wrong key on the drone only → GS
+`KEY MISMATCH` within 1.2 s of the first rejected RCF; same key on the
+GS + `restart maburgs` → `session`, both fingerprints `2263`, drone not
+restarted. Timed recoveries in `docs/link-pairing.md` "Bench results".
+
+## 2026-09-30 telem diet (RC_VERSION 13)
+
+`T_TELEM` shrinks 98 → 48 bytes and `RC_VERSION` goes 12 → 13 — a
+version-mismatch flag day (no control link, no video between the two
+swaps; finish the deploy, do not restart). **No config change on either
+device**: swap `maburd` and `maburgs` only. `maburplay` is unaffected
+(it reads only sideport keys that stayed). The web GS speaks the same RC
+wire, so the hosted page must be rebuilt and redeployed with it.
+`tools/maburtop.py` and `tools/flightreport.py` must be the same commit
+to render the new `drone.*` block. Rollback is binary-only and paired:
+`maburd.pre-telemdiet` on the drone with `maburgs.pre-telemdiet` on the
+GS. Bench gate 2026-10-01, both the 53-byte first cut and the final
+48-byte build (1d27796): ausniff 30 s at mcs4/40 — 1815 AUs, 60.5 fps,
+0 incomplete, 0 frame_id gaps, 0 resyncs.
+
+## 2026-10-02 relay cards (`radio.relays`)
+
+`maburgs` gains `[radio] relays = [...]`: each `"ipv4:port"` entry (numeric
+dotted IPv4 — a hostname fails boot; the CPE has no DNS anyway) adds a
+CPE510 `mabur-relay` unit as a card after the USB cards
+(`docs/cpe510-relay.md`, "maburgs RemoteCard"). **GS only — no drone
+change, no wire change, no flag day.** `maburplay` reads the new sideport
+keys (`cards[i].kind`) and ships in the same deploy; `tools/maburtop.py`
+must be the same commit to draw the `r<id>` rows.
+
+**Config and binary move together, with the daemon stopped** (the
+config-before-binary rule): an old `maburgs` fails boot on `relays`, the new
+one boots without it (no relays). Stop `S96maburgs`, swap `maburgs` (and
+`maburplay`) keeping `maburgs.pre-relay` / `maburplay.pre-relay`, save
+`/etc/maburgs.toml.pre-relay`, add `relays = ["10.83.11.1:8310"]` under
+`[radio]`, start `S96maburgs`, restart `S97maburplay`. Never start the old
+binary against the edited config.
+
+**Network.** The Radxa ZERO 3 has no Ethernet: the CPE needs a
+USB-Ethernet adapter on the GS. The CPE serves DHCP on its LAN,
+10.83.11.100-199, with **no router and no DNS** (mabur-openwrt
+`90-mabur-lan`). After a CPE `sysupgrade -n` its SSH host key changes:
+`ssh-keygen -R 10.83.11.1`.
+
+**`tx_card` pin.** A pin may name the relay, but under auto-scan its index
+is `n_usb + k` — a second USB card appearing shifts it; pin a relay only
+with an explicit `[[radio.cards]]` list.
+
+Verify: the GS log prints `cards: card N = relay 10.83.11.1:8310` and then
+`maburgs relay card N (…): owned and tuned`; maburtop shows an `r<N>` row
+with a relay strip reading `own=1`, `gaps` flat. `ausniff` is the gate.
+Rollback: `maburgs.pre-relay` + `maburplay.pre-relay` +
+`maburgs.toml.pre-relay` together (the old binary refuses the `relays`
+key).
+
+## 2026-10-03 channel set (no RC_VERSION bump)
+
+Home channel + candidates is replaced by one shared channel set,
+`radio.channels`, on both ends (`docs/channel-select.md`). **Binary THEN
+config, on each device** — the exception this page's intro already flags
+for exactly this shape of change: the new binary still boots on an old
+config (every new key has a default), but the new config fails the OLD
+binary at the unknown-key check (GS: `radio.channel` as a bare number,
+`radio.scan.enable`, `candidates`, `home_window_ms`, `split_after_ms`,
+`home_margin` are gone; drone: `radio.channel`, `radio.follow_gs` are
+gone). So on each device: swap the binary, confirm it is up, then push
+`gs/bundle/maburgs.default.toml` → GS `/etc/maburgs.toml` and
+`bundle/mabur.default.toml` → drone `/etc/mabur.toml`.
+
+**No `RC_VERSION` bump.** `Disc.op_channel`/`DiscAck.agreed_channel` and
+`Rcf.hop_ch`/`hop_epoch` are unchanged wire fields that both ends now mean
+literally over the whole set rather than one home channel, so a
+half-deployed pair (old binary one end, new the other, for however long
+the swap takes) just links on whichever channel both happen to be parked
+on — drone first or GS first does not matter, and there is no flag-day
+window of no video at all the way a wire bump produces.
+
+**Two new state files**, plain decimal text, written via a temp file +
+`rename()`: `/etc/mabur.channel` (drone) and `/etc/maburgs.channel` (GS).
+`rm` either one to make that end forget its remembered channel; on the
+next boot it falls back to `radio.channels[0]` (drone) or searches from
+`channels[0]`/the configured pin (GS) instead of re-finding whatever
+channel it last parked on. Deleting the GS's file is also how you force a
+fresh boot-time search after changing `radio.channels` itself, rather than
+the GS trusting a now-stale remembered member.
+
+Verify after the swap: drone stderr
+`maburd: channel set [40,64,112,144], parking on 40` (gains
+`(remembered)` after the first confirmed move); GS stderr
+`maburgs channel: set [40,64,112,144] mode auto start 40` (likewise) —
+both print once, at boot, before anything else. `ausniff` is the standing
+gate once both ends are up.
+
+Rollback is paired, as always: the old binary needs its old config
+(`radio.channel`/`follow_gs` etc.) restored alongside it on each device.
+Keep `maburd.pre-chanset` / `maburgs.pre-chanset` binary copies (with
+their old configs saved alongside) before swapping, the same convention
+as every other dated section on this page.
+
+## 2026-10-10 FrameHdr byte 3 codec→slice_rows (H.265 row slices, `docs/slices.md`)
+
+FrameHdr byte 3 was an always-H.265 codec id; it is now `slice_rows` (64-px
+CTU rows per slice of the AU, 0 = one slice). Unlike the `CAP_FRAME_WIRE`
+cases above, a mismatched pair still has video: an old maburd sends byte 3
+= 1, which a new maburgs reads as `slice_rows` 1 (damaged AUs then pass
+through as `no_template` instead of being salvaged); a new maburd's
+`slice_rows` is ignored by an old maburgs. Video continues, salvage is off
+or miscounted until both ends match — still deploy maburd and maburgs
+together. `[venc] slices` is
+a new drone key (default 1 = off, so an old config still boots the new
+binary unchanged) — binary before config, as always.

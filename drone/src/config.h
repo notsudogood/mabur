@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "mabur/channel_set.h"
+#include "mabur/link_key.h"
 #include "mabur/profile.h"
 #include "mabur/uep_encoder.h"
 #include "venc_cfg.h"  // VencCfg, VENC_RING_NAME — plain C99, host-safe
@@ -13,11 +15,11 @@ namespace mabur {
 struct RadioCfg {
   uint16_t usb_vid = 0x0bda;
   uint16_t usb_pid = 0;  // 0 = scan
-  uint8_t channel = 149;
   uint8_t width = 20;
-  // Honour Disc.op_channel: ack from the current channel, then retune
-  // (spec 2026-09-13-auto-channel-select §6). false = ack home, never move.
-  bool follow_gs = true;
+  // The channel set (spec 2026-10-03-auto-channel-set §2): the drone parks
+  // on the remembered member (else the first) and follows the GS to any
+  // member. Must be a superset of the GS's list.
+  std::vector<uint8_t> channels{40, 64, 112, 144};
   // How bring-up programs TX power:
   //   "offset" — program the wall-equalized per-rate diff table
   //              (SetTxPowerRateDiffs) once, then zero the global offset
@@ -42,6 +44,10 @@ struct RadioCfg {
   // ≤3-frame URB batches, which the seq-addressed FEC datapath and
   // the GS max-seq delivery accounting both tolerate).
   int tx_threads = 4;
+  // LDPC on video, probe and control frames. false = BCC, for a GS card
+  // that cannot decode HT-LDPC (RTL8821AU, bench 2026-10-02: 1/1000 LDPC vs
+  // 900+/1000 BCC). Costs every GS the LDPC coding gain while off.
+  bool ldpc = true;
 };
 
 struct FecCfg {
@@ -113,7 +119,6 @@ struct VencSectionCfg {
 };
 
 struct LinkCfg {
-  uint32_t vtx_id = 1;
   int failsafe_ms = 1000;
   int rendezvous_ms = 30000;
   // After a GS-commanded retune, hear the GS within this or go home.
@@ -130,6 +135,13 @@ struct LinkCfg {
   // slower than the tick would silently retime the housekeeping to the
   // drain period; == tick_ms reproduces the legacy single-cadence loop.
   int rc_drain_ms = 5;
+  // Pairing key (spec 2026-10-01 link-pairing §2): the key FILE path. The
+  // file is read at load; a missing file means the compiled-in default (and
+  // a boot log line), a malformed one fails boot naming the file.
+  std::string key_file = "/etc/mabur.key";
+  mabur::LinkKey key = mabur::kDefaultLinkKey;   // resolved at load
+  bool key_is_default = true;
+  std::string key_source;                        // path, "default", or "link.key" (GS overlay)
 };
 
 struct MspCfg {
@@ -229,6 +241,15 @@ struct GenlockCfg {
   bool enable = false;
 };
 
+// Software NACK (spec 2026-10-05 fec-nack): how long the drone keeps
+// recently sent base-layer source envelopes for re-sending, and the air
+// budget a GS's T_NACK requests may spend.
+struct NackDroneCfg {
+  int ring_ms = 150;
+  int air_pct = 5;
+  int burst_ms = 20;  // bucket depth: this much air of re-sends at the current op
+};
+
 struct Config {
   RadioCfg radio;
   FecCfg fec;
@@ -241,6 +262,7 @@ struct Config {
   LowPowerCfg low_power;
   RecordCfg record;
   GenlockCfg genlock;
+  NackDroneCfg nack;
   std::array<UepLayerCfg, 2> uep_layers() const;
 };
 

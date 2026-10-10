@@ -216,6 +216,11 @@ Consume the same numbers programmatically with:
   the FEC/SBI CPU (~6 ms standing; see the scale-break note in
   `docs/data-provenance.md`).
 
+  Since 2026-10-10 (slice salvage) the marker is `# aulog 5`: the
+  `aulog 4` twelve columns plus four trailing `slices kept filled
+  after_hole` columns (`gs/src/au_log.h`) — all 0 on an AU that was
+  neither split nor salvaged.
+
   `tools/flightjitter.py` is the analyzer: reproduces the player's jitter
   EMA from the AU rows — using each row's `t_complete` as the arrival
   basis when present (the writer-stamped ring completion time, sharper
@@ -317,7 +322,7 @@ Consume the same numbers programmatically with:
   (`docs/probe-blanking-fix-findings-2026-09-05.md`). Never fatal, like
   the ctl log.
 
-  **fec.log (feclog 2; feclog 1 from 2026-09-15 had no `bw`).** Per-episode FEC loss record, the
+  **fec.log (feclog 3; feclog 1 from 2026-09-15 had no `bw`, feclog 2 from 2026-09-24 no `rtx`).** Per-episode FEC loss record, the
   measurement behind "is the rung table's overhead pair oversized" —
   written by maburgs into the session directory (`gs/src/fec_log.h`),
   rotating with it, never fatal. A *loss episode* is a run of source
@@ -327,13 +332,14 @@ Consume the same numbers programmatically with:
   window of it, since those compete for the same repairs. `SwDecoder`
   books it at horizon eviction — the only point where "never delivered" is
   final — so a row lands roughly a horizon after the loss. Header
-  `feclog 2`, then `<t_ms> <sid> <mcs> <bw> <ov> <first_seq> <span> <m>
-  <rec> <aband> <stale> <r> <w>` per row: drain tick (mono ms, ~10 ms coarse),
+  `feclog 3`, then `<t_ms> <sid> <mcs> <bw> <ov> <first_seq> <span> <m>
+  <rec> <rtx> <aband> <stale> <r> <w>` per row: drain tick (mono ms, ~10 ms coarse),
   video layer (0 base / 1 enh), the op MCS and width (`feclog 1` rows are
   20 MHz) and that sid's commanded
   overhead at drain time (so a row scores against its own rung with no
   ctl.log join), wire seq of the first missing source, seqs spanned,
-  missing = recovered + abandoned, of those how many fell below the
+  missing = recovered + rtx + abandoned (`rtx`: filled by a software-NACK
+  retransmit, `docs/fec-nack.md`; feclog 1/2 rows read as 0), of those how many fell below the
   transition watermark (`stale`, the same debris class the ladder
   excludes), distinct covering repairs received (`r`, a two-card copy
   counts once) and the repair window as flown (`w`). `flightreport.py`'s
@@ -462,16 +468,20 @@ instead of 1 Hz:
   bring-up.
 - `D` — one scout dwell (the channel-ranker's raw input) — boot-time or
   in-session, distinguished by a trailing `sess` flag and three step-timing
-  columns the in-flight scout added.
+  columns the in-flight scout added; since `scanlog 6` (2026-10-05, CPE510
+  relay interference sweep/hop) a further trailing rx % field for a relay
+  sweep entry (`-` for a USB dwell), `docs/cpe510-relay.md`.
 - `K` — the pick at freeze, with the full ranking.
 - `M` — a GS retune that changes where the link lives (`commit`,
-  `ack_override`, `split_home`, `reunite`, plus the hop reasons
-  `hop_lead`/`hop_follow`/`hop_withdraw`/`hop_one_card`).
+  `ack_override`, `link_found`, plus the hop reasons
+  `hop_lead`/`hop_follow`/`hop_withdraw`/`hop_one_card`; `split_home`/
+  `reunite` only in `scanlog 4` and earlier files).
 - `V` — one verdict-engine window, on every verdict change and every
   non-healthy window.
 - `H` — one hop-controller event (`order`, `lead_confirm`,
   `one_card_retune`, `verify_pass`, `verify_fail`, `withdraw`, `hold_cap`,
-  `hold_exhausted`, each `would_`-prefixed while `hop.enable = false`).
+  `hold_exhausted`, `relocate`, …; `would_`-prefixed rows exist only in
+  recordings made before 2026-10-04, `docs/data-provenance.md`).
 
 Full formats, the config, the sideport keys it feeds, and the
 `cca − own` ranking assumption for the boot-time (`C`/`D`/`K`/`M`) records
@@ -481,11 +491,16 @@ bits, hop sequence, and Known limitations are in
 
 **Sideport: `hop` and `cards[i].dwell`.** Since 2026-09-14
 (in-flight-channel-hop) a new top-level `hop` object is unconditional
-(idle defaults while `hop.enable = false`, matching `link.probe`'s
-pattern): `hop = {enable, verdict, evidence, ref_rung, epoch, state
-(idle|ordered|verifying|hold), target, hops, holds, last_ms}` — `ref_rung`
+(idle defaults while pinned, matching `link.probe`'s
+pattern): `hop = {verdict, evidence, ref_rung, epoch, state
+(idle|ordered|verifying|hold), target, hops, holds, last_ms,
+sweep_timeouts}` — `ref_rung`
 and `target` are `null` while unfrozen / before the first-ever order,
-`last_ms` is `null` until any hop event has fired this session. Per card,
+`last_ms` is `null` until any hop event has fired this session.
+`sweep_timeouts` (since 2026-10-05, CPE relay hop) counts relay `SCAN`s
+that got no `SCAN_RESULT` before their timeout
+(`max(1000, passes·n·(observe_ms+40)+300)` ms), cumulative per maburgs
+process; 0 on a GS that never sweeps a relay. Per card,
 `cards[i].dwell` (`null` until that card's first completed dwell) carries
 `{visits, score, cost_us}` — `visits` is cumulative over every dwell,
 success or failure; `score`/`cost_us` are the last **successful** dwell's,
@@ -505,6 +520,39 @@ rankers use (renamed from `air%` in the final-review fix wave: the column
 was always foreign busy, never own airtime). Full key semantics, the OSD
 `(h)` mark, and the
 `flightreport.py` HOP section are in `docs/inflight-channel-hop.md`.
+
+**Sideport: `cards[i].kind` and `cards[i].relay`.** Since 2026-10-02
+(maburgs `RemoteCard`, `docs/cpe510-relay.md`) every card carries `kind`:
+`"usb"` or `"relay"` (a CPE510 `mabur-relay` unit from `[radio] relays`;
+relays follow the USB cards in the roster). A relay card also carries
+`relay = {state, owned, ch, sec, frames, gaps, your_drops, tx, tx_fail,
+tx_refused, reconnects, tx_scan_drop, sweeps}` (USB cards: key absent;
+the last two since 2026-10-05, protocol v4): `state`/`ch`/`sec` are
+the last `STATUS` (state 0 tuned, 1 retuning, 2 failed, 3 refused; `sec`
+0 HT20, 1 HT40+, 2 HT40-), `owned` is owned-and-tuned on our target,
+`frames` the `FRAME`s seen, `gaps` the relay→GS `seq` gaps — Ethernet/UDP
+loss between the CPE and the GS, **not** air loss (air loss stays in the
+per-class dot11-seq `delivery`), `your_drops` the relay's own count of
+frames it could not send us, `tx`/`tx_fail`/`tx_refused` the relay's
+injection counters (`tx_refused` = `TX` messages it would not inject: not
+from the owner, `mcs` > 7, a reserved flag bit, a bad length), and `reconnects` the client restarts —
+**both** the 5 s refused-restarts and the reopens after a lost relay;
+`tx_scan_drop` the owner `TX` frames the relay dropped while a sweep had
+it off channel, `sweeps` the `SCAN`s this card has sent. `RelayStatsIn`
+also carries `you_own` and the transport's `rx_drops`/`tx_drops` (the
+browser ring; 0 over UDP), but maburgs does **not** export them — only the
+web GS's stats JSON does (`relay_you_own`, …). On a
+relay card the per-class `snr`, `snr_a`, `snr_b`, `evm`, `evm_a`, `evm_b`
+are always `null` (the relay's "SNR" is RSSI above a calibrated floor, not
+a measurement — `CardCaps::snr_ok = false`); RSSI is real. `energy` is
+present but its `cca`/`fa` read 0 and `busy_pct` stays `null` (no NHM);
+`own`/`foreign`/`own_air_pct` are real.
+`tools/maburtop.py` labels relay rows `r<id>` (USB `c<id>`) and adds one
+strip row per relay under the cards grid (`st own gaps drops txref
+reconn`, warn when not owned or `gaps` grew); the player OSD draws an `R`
+id and a dashed SNR cell and counts a relay card as heard on RSSI alone.
+The 5 s stderr `stats:` line appends `relay[own= gaps= drops= reconn=]`
+per relay card.
 
 **Sideport: `link.probe` and `classes.probe`.** Since 2026-09-04 the probe
 stream's live gate state is exported unconditionally (even in static-pin
@@ -833,9 +881,23 @@ read the sideport. Reach for other tools only in these cases:**
   `active_low`/`bias` default to a button between the pin and GND with the
   internal pull-up). Short press, 50 ms debounce, edge-triggered: each
   press-pair produces one file, in whichever `dvr.mode` is configured — raw
-  mode waits for the next sync point (up to ~2 s) before the new file
+  mode waits for the next sync point (the next IDR — seconds on the GDR
+  link, and maburplay has no IDR-request path) before the new file
   opens, so the OSD REC indicator visibly lags the press, while burned mode
-  resumes at the next decoded frame. Files are `record-NNNN.mp4` under
+  resumes at the next decoded frame. As of the 2026-09-28 web local-recording
+  work, raw mode's sync point is decided by `common/`'s shared `RawDvr`
+  (`mabur::RawDvr`, `common/raw_dvr.h`) rather than code local to the player
+  — the same class the web GS's local recording uses — and that sync point
+  is a complete IRAP (`au_is_irap()`) once VPS+SPS+PPS are known. From
+  2026-09-28 to 2026-09-29 it was any AU carrying VPS+SPS+PPS — the GDR
+  encoder's TRAIL_R refresh start, a P slice: those files open on a P
+  slice, flag every refresh sync, and Apple's decoder refuses them (see
+  `docs/web-gs.md` for the repair recipe). **Before 2026-09-28** the
+  player's raw DVR synced on sid == 0 (BASE), which since the 2026-08-29
+  4→2 stream collapse is every other AU, not the refresh — so a raw file
+  recorded before that date marks every base frame as a sync point and its
+  fragments run ~33 ms (one base+enh pair) instead of the refresh period.
+  Files are `record-NNNN.mp4` under
   `dvr.dir`, indexed one past the highest `record-NNNN` already on the card
   — no timestamp, since the GS RTC is wrong at boot (same reasoning as the
   debug-log session directory's own `NNNN` index, above). The index
@@ -920,14 +982,14 @@ so the honest knob is `encoder.bitrate_max_kbps` (`waybeam.bitrate_max_kbps`
 before the fold-in renamed the section) — the bench runs 10000.
 Full findings: `docs/venc-ring-vanish-findings-2026-08-12.md` (committed
 with the detection port). The detection (pts-jump, EMA-period,
-shed-immune) ships in maburd and exports as
+shed-immune) ships in maburd and exported as
 `drone.enc.{vanished_base,vanished_enh,self_idr_refused}` on the sideport
-(Telem wire grew 61→67, then 67→70 for the venc ring stats below, 70→83
+until the 2026-09-30 telem diet removed them (Telem wire grew 61→67, then 67→70 for the venc ring stats below, 70→83
 for link-rtt, 83→84 for `roi_qp` and back to 83 the same night when the
 never-filled encoder `qp` byte was dropped — a
 version-mismatched pair just drops T_TELEM on CRC, so telemetry reads
-absent until both ends run the same build; video is unaffected) plus a 5 s
-`frame_ring:` stderr line in `/tmp/mabur.log`.
+absent until both ends run the same build; video is unaffected); the 5 s
+`frame_ring:` stderr line in `/tmp/mabur.log` still carries them.
 
 **ROI QP, no encoder QP, and the congestion-shed bit (2026-09-03).**
 `drone.enc.roi_qp` is RcAgent's ROI QP *override* as commanded (signed
@@ -937,8 +999,8 @@ analysis mistook it for "rate control never moved"
 (`docs/handover-venc-overshoot-2026-09-03.md`). For a few hours that day
 `drone.enc.qp` carried the encoder's `startQual` instead — which this
 firmware never fills — so the key was deleted rather than shipped as a
-permanent 0: **there is no encoder-QP readback on this SDK.** maburtop's
-encoder row shows `roi -NN`. Alongside,
+permanent 0: **there is no encoder-QP readback on this SDK.** (`roi_qp`
+itself left the wire in the 2026-09-30 telem diet.) Alongside,
 `drone.congestion_shed` (Telem flags bit4) is true while
 `RcAgent::run_congestion_guard` holds any shed level — the drone-local
 TxQueue-pressure / USB-failure shed (`docs/link-adaptation.md`, "Drone
@@ -946,9 +1008,11 @@ congestion shed") — distinct from `failsafe_shed` (rung 0 / lost link).
 A shed enh layer is silence to the GS ladder, so this bit is the only way
 to attribute an enh gap to congestion rather than RF, and the only way a
 bench can count sheds at all. maburtop's system row renders the pair as
-`shed FS|CONG|AIR|off`. The drone `stats:` stderr line carries `enc_pk100=`,
-the peak 100 ms encoder byte rate (kbit/s, decimal) inside that stats
-second — the burst the 1 Hz `drone.enc.mbps` average hides — and, since
+`shed FS|CONG|off` (`AIR` too until 2026-09-30); `flightreport.py`'s
+DRONE TX PATH section counts the periods each held. The drone `stats:`
+stderr line carries `enc_pk100=`, the peak 100 ms encoder byte rate
+(kbit/s, decimal) inside that stats second — the burst the 1 Hz
+`drone.enc.mbps` average (removed 2026-09-30) hid — and, since
 2026-09-20, `lp=`/`armed=` (see "2026-09-20 (low-power mode)" below).
 
 **2026-09-23 (pre-FEC loss is late, not lost; and pooled).** `link.pre_fec_loss`
@@ -997,7 +1061,33 @@ maburtop shows `VREC` / `VREC!<OFF|NOSLOT|NOCARD|NOMNT|FULL|WRERR>` on
 the drone line. The player turns the value into the REC field's VTX leg
 (`docs/vtx-recorder.md`). Recordings made before this date have no key.
 
-**2026-09-06 (air clock).** `drone.air_backlog_max_ms` is the per-window
+**2026-09-30 (telem diet, RC_VERSION 13).** `T_TELEM` shrank 98 → 48
+bytes: every field only maburtop read is gone (the key list is in
+`docs/data-provenance.md`). What stays under `drone.*`: `state`,
+`tlm_seq`/`tlm_age_ms`, `failsafe_shed`, `congestion_shed`, `low_power`,
+`rec`, `rcf.{age_ms,rx_pps}`, `enc.cmd_kbps`,
+`txq_wait_ms`, `txq.{drops,drop_pps}`, `radio.{usb_fail,rx}`, `uplink`
+(per drone antenna — the dead-antenna check), `sys.{soc_temp_c,cpu_pct}`.
+maburtop's `DEAF` cell is now derived from `radio.rx` (own + foreign +
+crcfail = 0) and its encoder-fps / sent→inj cross-check row is gone.
+`flightreport.py` gained a DRONE TX PATH section (txq wait, txq drops,
+USB fails, CPU, shed periods, once per `tlm_seq`).
+
+**2026-10-06 (software NACK, RC_VERSION 15; `docs/fec-nack.md`).**
+`link.nack{requests, repeats, syms_requested, tail_requests, filled, late_fill, wasted, dropped_deadline, suppressed, lead_skipped, fill_pps, fill_ms{p50,p90,max}, settle_ms, late_ms_max}`: the GS NackTracker, counters cumulative, `fill_*`/`late_ms_max` per export window; present only while `[link.nack] enable`. `lead_skipped` (2026-10-06 post-flight-0026): seqs whose request was withheld by `link.nack.min_lead_ms` because the answer could not land before the deadline.
+`drone.nack{rx, retx_syms, retx_refused}`: the drone's T_NACK answers from Telem, per Telem period (repeated until the next Telem; count once per `drone.tlm_seq`).
+
+**2026-10-10 (H.265 row slices, slice salvage; `docs/slices.md`).**
+`link.video` gains five keys from `FrameStream`'s per-AU `SliceAssembler`
+result: `slice_salvaged` (AUs rebuilt this window), `slices_kept` /
+`slices_filled` (slices that arrived complete vs. were skip-slice fills,
+summed over those AUs), `slices_after_hole` (kept slices whose position
+is past the first missing one), and `slice_fallback{no_params,
+unsupported, islice, no_template, geometry}` (why a damaged split AU fell
+back to the old truncated-prefix passthrough instead of salvaging).
+maburtop shows `salv`; `flightreport.py` gained a SLICE SALVAGE section.
+
+**2026-09-06 (air clock).** `drone.air_backlog_max_ms` was the per-window
 max of the drone's modelled air backlog (`AirClock`, spec
 2026-09-06; `docs/link-adaptation.md` "Drone air clock"),
 `drone.air_shed_drops` the enh AUs its admission gate has dropped since
@@ -1008,7 +1098,9 @@ this window — the third shed tier, below FS and CONG in maburtop's
 backlog reported, nothing dropped. Per frame, the same backlog rides the
 SBI body header (`air_ms`, ver 2) into the AU ring (SlotHdr v3, offset
 52) and the AU log's 12th column (`# aulog 3`); `tools/bench/airdrain.py
---model` compares it against the player's measured air excess.
+--model` compares it against the player's measured air excess. The three
+sideport keys and the `AIR` shed tier left with the 2026-09-30 telem diet;
+the per-frame `air_ms` is the surviving (finer) record.
 
 **2026-09-20 (low-power mode).** `drone.low_power` (Telem flags bit7) is
 true while the low-power operating point is in force
@@ -1020,17 +1112,17 @@ same way a shed is; the compact bar tints its fps cell caution while set
 link-sourced while the fps number is player-measured. The drone `stats:` line carries `lp=`/`armed=` and the
 `rc: low_power ENTER/EXIT` lines mark transitions.
 
-Since the venc fold-in (spec 2026-08-28) the drone also reports the
-PRODUCER side of that ring, straight from `venc_get_stats()`:
-`drone.enc.venc_ring_fill_pct` (0–100 occupancy at the telemetry tick) and
-`drone.enc.venc_full_drops` (lifetime access units the encoder discarded
-because maburd had not drained the ring). maburtop shows them as
-`vring NN% drop N` on the encoder row. Read them against
-`drone.enc.ring_drops`, which is the CONSUMER side of the same ring: fill
-climbing with `venc_full_drops` rising means the encoder is outrunning
-maburd, while `ring_drops` rising means maburd rejected slots it did read.
-A *stalled* encoder shows as neither — `drone.enc.fps`/`enc_frames` simply
-stop advancing.
+From the venc fold-in (spec 2026-08-28) until the 2026-09-30 telem diet
+the drone also reported the PRODUCER side of that ring, straight from
+`venc_get_stats()`: `drone.enc.venc_ring_fill_pct` and
+`drone.enc.venc_full_drops`, read against the CONSUMER-side
+`drone.enc.ring_drops`; all three are gone from the wire (the consumer
+side still prints on the `frame_ring:` stderr line).
+`drone.enc.idr_gs` (Telem.idr_gs, RC_VERSION 12 until the 2026-09-30 telem
+diet removed it) counted IDRs the
+drone issued because a GS asked for one over the RCF `idr_epoch` byte. Only
+the web GS asks (spec 2026-09-28), so with maburgs flying it stays 0.
+maburtop shows it as `idr N` on the encoder row.
 `self_idr_refused` counts base vanishes suppressed by the IDR-adjacency
 guard — the self-IDR CONSUMER is deliberately not wired: on the parked
 `idr-request` branch it amplified CPU overload into an IDR storm (rolling

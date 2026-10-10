@@ -25,26 +25,6 @@ TEST(fifo_order_and_batch_limit) {
   CHECK(q.dropped() == 0);
 }
 
-TEST(held_body_starts_its_own_batch) {
-  // Listen window (phase 3): the writer waits for a held body without
-  // holding back the bodies queued ahead of it.
-  TxQueue q(8);
-  q.push(body(0));
-  q.push(body(1));
-  UepBody held = body(2);
-  held.not_before_us = 12345;
-  q.push(std::move(held));
-  q.push(body(3));
-  std::vector<UepBody> out;
-  CHECK(q.pop_batch(out, 3, 0) == 2);  // stops in front of the held body
-  out.clear();
-  CHECK(q.pop_batch(out, 3, 0) == 2);  // the held body leads the next batch
-  REQUIRE(out.size() == 2);
-  CHECK(out[0].body[0] == 2);
-  CHECK(out[0].not_before_us == 12345);
-  CHECK(out[1].body[0] == 3);
-}
-
 TEST(overflow_drops_oldest) {
   TxQueue q(3);
   for (uint8_t i = 0; i < 5; ++i) q.push(body(i));  // 0,1 evicted
@@ -120,6 +100,38 @@ TEST(close_wakes_and_rejects) {
   std::vector<UepBody> out;
   CHECK(q.pop_batch(out, 4, 50) == 0);  // returns promptly, not 50ms-hang-then-item
   CHECK(q.depth() == 0);
+}
+
+// fec-nack (spec 2026-10-05 §4.2): a retransmit body jumps the line -- the
+// GS is waiting on it -- ahead of video bodies already queued.
+TEST(push_front_jumps_the_line_and_wakes) {
+  TxQueue q(8);
+  q.set_batch(4);
+  q.push(body(1)); q.push(body(2));                  // batched: no wake yet
+  q.push_front(body(9));
+  std::vector<UepBody> out;
+  CHECK(q.pop_batch(out, 3, 0) == 3);
+  CHECK(out[0].body[0] == 9 && out[1].body[0] == 1 && out[2].body[0] == 2);
+}
+
+// ...and wakes a consumer already blocked in pop_batch at once, even with a
+// partial feed_batch group pending (push() alone would not wake it).
+TEST(push_front_wakes_a_blocked_consumer_despite_batching) {
+  TxQueue q(8);
+  q.set_batch(4);
+  std::atomic<bool> got{false};
+  std::thread consumer([&] {
+    std::vector<UepBody> out;
+    // Blocks while the queue is empty; the push_front must end the wait.
+    if (q.pop_batch(out, 4, 5000) == 1 && out[0].body[0] == 9) got = true;
+  });
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  const auto t0 = std::chrono::steady_clock::now();
+  q.push_front(body(9));
+  consumer.join();
+  const auto waited = std::chrono::steady_clock::now() - t0;
+  CHECK(got.load());
+  CHECK(waited < std::chrono::milliseconds(1000));   // woken, not timed out
 }
 
 MTEST_MAIN

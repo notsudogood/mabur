@@ -50,9 +50,9 @@ RADIO_COLS = [("pps", 5), ("kbps", 6), ("rssi", 6), ("rssiA", 6), ("rssiB", 6),
 # Sticky class rows render in this fixed order regardless of dict/arrival
 # order; "ctrl" gets the short display label "ctl" (cls column is 4 wide,
 # compact renderer only).
-# 2-stream video (2026-08-29 airtime-balance-uep): s0 = BASE (mirrors the
-# ladder rung's mcs-1), s1 = ENH (canary attribution). probe is the
-# stream-5 candidate-mcs canary (spec 2026-09-04). s2/s3 are gone from
+# 2-stream video (2026-08-29 airtime-balance-uep): s0 = BASE, s1 = ENH,
+# both at the ladder rung's mcs (same-rate-fixed-pairs 2026-08-30). probe is
+# the stream-5 candidate-mcs canary (spec 2026-09-04). s2/s3 are gone from
 # the wire — class_seen_ never lights them up GS-side — but the string
 # space stays sparse-safe: an unrecognized class key from an old recording
 # would just never match here, not crash.
@@ -169,39 +169,13 @@ GRID_WIDTH = max(_grid_width(CARD_COLS), _grid_width(LNKSIG_COLS),
                  len(_dec_line("s0", {}, None)))  # widest compact grid row
 
 
-def _applied_mcsbw_cell(mcs, bw, w=7):
-    """'mcs5/20'-style composite cell, fixed-width like _rung_cell: compose
-    then truncate/pad so an untrusted/absurd mcs or bw off the wire can't
-    widen a row. w=7 fits today's real values (1-digit mcs, 2-digit bw)
-    exactly, matching the mockup with no extra padding."""
-    mcs_s = "--" if mcs is None else str(mcs)
-    bw_s = "--" if bw is None else str(bw)
-    s = f"mcs{mcs_s}/{bw_s}"
-    return s[:w].ljust(w) if len(s) > w else s.ljust(w)
-
-
-def _ov_cmd_cell(cmd_base, cmd_enh, ov_base, ov_enh):
-    """Prose-style (top bar / compact header) overhead cell: cmd_base/
-    cmd_enh are the GS-commanded pair the ladder currently sends
-    (link.op.overhead_base/overhead_enh — same-rate-fixed-pairs, Task 5);
-    ov_base/ov_enh are the drone's actual applied per-stream pair from
-    telemetry — '--' before the first T_TELEM snapshot. The runtime
-    AirBalancer solver that used to explain a commanded-vs-applied split is
-    deleted (2026-08-30 same-rate-fixed-pairs); applied now equals commanded
-    except while a bench :8301 ov_base_pct/ov_enh_pct override is armed, so
-    a divergence here means an armed override or a stale/old-daemon
-    snapshot, not a balancer doing its job."""
-    return (f"ov cmd b{_s(cmd_base, 2)}/e{_s(cmd_enh, 2)} "
-            f"(b {_s(ov_base, 2)}/e {_s(ov_enh, 2)})")
-
-
-def _ov_applied_cell(ov_base, ov_enh, w=4):
-    """Fixed-width grid cell for the drone's actual applied per-stream
-    overhead (compact DRONE row / wide 'applied' line) — no comparison
-    against the commanded op scalar; divergence means an armed :8301
-    override or staleness, not a balancer (see _ov_cmd_cell; the solver is
-    deleted as of 2026-08-30 same-rate-fixed-pairs)."""
-    return f"ov b{_f(ov_base, w, 2)}/e{_f(ov_enh, w, 2)}"
+def _ov_cmd_cell(cmd_base, cmd_enh):
+    """Prose-style (top bar / compact header) overhead cell: the
+    GS-commanded pair the ladder currently sends
+    (link.op.overhead_base/overhead_enh — same-rate-fixed-pairs, Task 5).
+    The drone's applied-overhead echo that used to sit beside it in
+    parentheses left telemetry 2026-09-30."""
+    return f"ov cmd b{_s(cmd_base, 2)}/e{_s(cmd_enh, 2)}"
 
 
 def _increased(cur, prev):
@@ -311,23 +285,21 @@ def render_rows_compact(model, wall, width):
         header = f"STALE — last seen {age:.1f} s ago".ljust(width)
     else:
         tx_card = link.get("tx_card")
-        vtx_id = link.get("vtx_id")
         chan = link.get("channel")
-        home = link.get("home")
         scan = d.get("scan") or {}
         hop = d.get("hop") or {}
         bw = op.get("bw")
         cmd_ov_base = op.get("overhead_base")
         cmd_ov_enh = op.get("overhead_enh")
-        drone_applied = (d.get("drone") or {}).get("applied") or {}
         state_s = state.upper() if isinstance(state, str) else "--"
         header = (
-            f"maburgs   {state_s}   vtx {_s(vtx_id)}   "
-            f"ch {_s(chan)}/h{_s(home)} scan {scan.get('state', '--')}:{_s(scan.get('rounds'))} "
+            f"maburgs   {state_s}   "
+            f"key {_s(link.get('key_fp'))}   "
+            f"ch {_s(chan)} scan {scan.get('state', '--')}:{_s(scan.get('rounds'))} "
             f"hop {hop.get('state', '--')}/{hop.get('verdict', '--')}   "
             f"tx c{_s(tx_card)}   "
             f"MCS {_s(mcs)}/{_s(bw)}   "
-            f"{_ov_cmd_cell(cmd_ov_base, cmd_ov_enh, drone_applied.get('overhead_base'), drone_applied.get('overhead_enh'))}"
+            f"{_ov_cmd_cell(cmd_ov_base, cmd_ov_enh)}"
         ).ljust(width)
     rows.append(header)
 
@@ -374,7 +346,8 @@ def render_rows_compact(model, wall, width):
                    if (e := c.get("energy")) and e.get("busy_pct") is not None else None,
                    CARD_COLS[12][1], 0),
             ]
-            rows.append(_grid_row(f"  c{_s(c.get('id'))}", cells))
+            label = ("r" if c.get("kind") == "relay" else "c") + str(_s(c.get("id")))
+            rows.append(_grid_row(f"  {label}", cells))
 
     # --- LNK blocks: one per link type, decode line + per-card signal rows.
     # Signal columns are shared across every block; their titles ride the
@@ -426,7 +399,6 @@ def render_rows_compact(model, wall, width):
     if drone is None:
         rows.append("DRONE   no telemetry (old maburd / peer caps)")
     else:
-        applied = drone.get("applied") or {}
         rcf = drone.get("rcf") or {}
         enc = drone.get("enc") or {}
         txq = drone.get("txq") or {}
@@ -436,26 +408,15 @@ def render_rows_compact(model, wall, width):
         state_d = drone.get("state")
         state_ds = state_d.upper() if isinstance(state_d, str) else None
         rows.append(
-            f"DRONE   {_f(state_ds, 8)}  gen {_f(drone.get('gen'), 6)}   "
-            f"applied {_applied_mcsbw_cell(applied.get('mcs'), applied.get('bw'))}"
-            f" {_ov_applied_cell(applied.get('overhead_base'), applied.get('overhead_enh'))}  "
+            f"DRONE   {_f(state_ds, 8)}   "
             f"rcf age {_age_cell(rcf.get('age_ms'))}  "
             f"tlm {_age_cell(drone.get('tlm_age_ms'))}"
         )
         rows.append(
-            f"ENC     {_f(enc.get('fps'), 5, 1)} fps   "
-            f"{_f(enc.get('mbps'), 5, 2)} Mbps   "
-            f"cmd {_f(enc.get('cmd_kbps'), 5)}k   "
-            f"roi {_f(enc.get('roi_qp'), 3)}   "
-            f"ring {_f(enc.get('ring_drops'), 5)}   "
-            f"dis {_f(enc.get('idr_disagree'), 3)}/{_f(enc.get('enhance_disagree'), 3)}   "
-            f"van {_f(enc.get('vanished_base'), 3)}/{_f(enc.get('vanished_enh'), 3)}   "
-            f"vring {_f(enc.get('venc_ring_fill_pct'), 3)}% "
-            f"drop {_f(enc.get('venc_full_drops'), 4)}"
+            f"ENC     cmd {_f(enc.get('cmd_kbps'), 5)}k"
         )
         rows.append(
-            f"TXQ     depth {_f(txq.get('depth'), 3)}/{_f(txq.get('cap'), 3)}   "
-            f"sent {_f(radio.get('sent_pps'), 6, 0)} pps   "
+            f"TXQ     wait {_f(drone.get('txq_wait_ms'), 5)} ms   "
             f"drop {_f(txq.get('drops'), 5)}   "
             f"usb fail {_f(radio.get('usb_fail'), 5)}"
         )
@@ -467,15 +428,15 @@ def render_rows_compact(model, wall, width):
         soc = sys_d.get("soc_temp_c")
         if soc is not None and soc <= -128:
             soc = None
-        radio_rx_ok = drone.get("radio_rx_ok")
-        rx_s = None if radio_rx_ok is None else ("ok" if radio_rx_ok else "DEAF")
+        rx_ok = _radio_rx_ok(drone)
+        rx_s = None if rx_ok is None else ("ok" if rx_ok else "DEAF")
         rows.append(
             f"SYS     soc {_f(soc, 3)}C   "
-            f"rf delta {_f(sys_d.get('thermal_delta'), 3)}   "
             f"cpu {_f(sys_d.get('cpu_pct'), 5, 1)}%   "
             f"radio rx {_f(rx_s, 4)}   "
             f"shed {(_shed_cell(drone) or '--').ljust(4)}"
             f"   {'LP' if drone.get('low_power') else '  '}"
+            f"   {'AUTH!' if drone.get('auth_reject') else ''}"
             f"   {_rec_cell(drone) or ''}"
         )
 
@@ -500,6 +461,7 @@ def render_rows_compact(model, wall, width):
         f"clean {_f(video.get('clean'), 7)}   "
         f"trunc {_f(video.get('truncated'), 4)}   "
         f"drop {_f(video.get('dropped'), 4)}"
+        f"   salv {_f(video.get('slice_salvaged'), 4)}"
     )
 
     # --- AU ring (PR C: replaced the RTP row -- video leaves maburgs via
@@ -574,13 +536,16 @@ def panel_topbar(model, wall):
     link = d.get("link") or {}
     op = link.get("op") or {}
     state = link.get("state")
-    state_s = state.upper() if isinstance(state, str) else "--"
-    vtx_id = link.get("vtx_id")
+    if state == "key_mismatch":
+        state_s = "KEY MISMATCH"
+    elif isinstance(state, str):
+        state_s = state.upper()
+    else:
+        state_s = "--"
     chan = link.get("channel")
     mcs, bw = op.get("mcs"), op.get("bw")
     cmd_ov_base = op.get("overhead_base")
     cmd_ov_enh = op.get("overhead_enh")
-    drone_applied = (d.get("drone") or {}).get("applied") or {}
     air = link.get("air_pct")
     session = model.session
     session_s = "--" if session is None else f"0x{session:08x}"
@@ -594,9 +559,9 @@ def panel_topbar(model, wall):
 
     dot = "●"
     text = (
-        f" maburgs  {dot} {state_s}   vtx {_s(vtx_id)}   ch {_s(chan)}   "
+        f" maburgs  {dot} {state_s}   key {_s(link.get('key_fp'))}   ch {_s(chan)}   "
         f"cmd MCS {_s(mcs)}/{_s(bw)}  "
-        f"{_ov_cmd_cell(cmd_ov_base, cmd_ov_enh, drone_applied.get('overhead_base'), drone_applied.get('overhead_enh'))}   "
+        f"{_ov_cmd_cell(cmd_ov_base, cmd_ov_enh)}   "
         f"air ~{_s(air, 0)}%      session {session_s}   "
         f"restarts {model.restarts}   rx {hz:.1f} Hz"
     )
@@ -606,6 +571,8 @@ def panel_topbar(model, wall):
         spans.append((dot_start, len(dot), "warn"))
     elif state == "session":
         spans.append((dot_start, len(dot), "good"))
+    elif state == "key_mismatch":
+        spans.append((dot_start, len(dot), "bad"))
 
     stale = model.last_rx_wall is not None and (wall - model.last_rx_wall) > STALE_S
     if stale:
@@ -626,18 +593,30 @@ def panel_topbar(model, wall):
 def _shed_cell(drone):
     """Which shed holds the enh layer: FS (failsafe, rung 0 / lost link)
     wins over CONG (drone-local TxQueue-pressure or USB-failure shed,
-    sideport drone.congestion_shed, 2026-09-03), which wins over AIR (the
-    air-clock admission gate dropped >= 1 enh AU this window,
-    drone.air_shed, 2026-09-06), else "off". None when the recording
-    predates the congestion key, so it renders as dashes."""
+    sideport drone.congestion_shed, 2026-09-03), else "off". None when the
+    recording predates the congestion key, so it renders as dashes. The
+    air-clock tier (drone.air_shed, "AIR") left the sideport 2026-09-30:
+    per-frame air_ms in au.log carries it now."""
     if drone.get("failsafe_shed"):
         return "FS"
     cong = drone.get("congestion_shed")
     if cong is None:
         return None
-    if cong:
-        return "CONG"
-    return "AIR" if drone.get("air_shed") else "off"
+    return "CONG" if cong else "off"
+
+
+def _radio_rx_ok(drone):
+    """Did the drone's receiver hand over ANY frame last telemetry period?
+    Derived from drone.radio.rx (own + foreign + crcfail) since the
+    radio_rx_ok flag left the wire 2026-09-30. None when the recording
+    carries no rx split."""
+    rx = (drone.get("radio") or {}).get("rx")
+    if not rx:
+        return None
+    vals = [rx.get(k) for k in ("own", "foreign", "crcfail")]
+    if any(v is None for v in vals):
+        return None
+    return sum(vals) > 0
 
 
 _REC_ERR = {1: "OFF", 2: "NOSLOT", 3: "NOCARD", 4: "NOMNT", 5: "FULL", 6: "WRERR"}
@@ -671,11 +650,11 @@ def panel_drone(model, wall):
     prev_drone = model.prev_drone or {}
     body = []
 
-    # state / gen / tlm age
+    # state / tlm age
     state = drone.get("state")
     state_s = state.upper() if isinstance(state, str) else None
     tlm_age = _age_cell(drone.get("tlm_age_ms"))
-    line = (f"state     {_f(state_s, 10)}   gen {_f(drone.get('gen'), 10)}   "
+    line = (f"state     {_f(state_s, 10)}   "
             f"tlm {tlm_age}")
     spans = []
     style_map = {"LINKED": "good", "FAILSAFE": "bad", "BOOT": "warn",
@@ -687,84 +666,31 @@ def panel_drone(model, wall):
     spans.append((tlm_idx, len(tlm_age), "dim"))
     body.append((line, spans))
 
-    # applied vs commanded op. Overhead is NOT compared against
-    # op.overhead_base/overhead_enh here: the runtime AirBalancer solver
-    # that used to explain a commanded-vs-applied split is deleted
-    # (2026-08-30 same-rate-fixed-pairs) — applied now equals commanded
-    # except while a bench :8301 override is armed, so a numeric diff here
-    # means an armed override or staleness, not the expected behavior an
-    # mcs/bw mismatch would flag.
-    applied = drone.get("applied") or {}
-    mcsbw = _applied_mcsbw_cell(applied.get("mcs"), applied.get("bw"))
-    ov_cell = _ov_applied_cell(applied.get("overhead_base"), applied.get("overhead_enh"))
-    line2 = f"applied   {mcsbw}   {ov_cell}"
-    spans2 = []
-    a_mcs, a_bw = applied.get("mcs"), applied.get("bw")
-    if a_mcs != op.get("mcs") or a_bw != op.get("bw"):
-        idx = line2.index(mcsbw)
-        spans2.append((idx, len(mcsbw), "bad"))
-    body.append((line2, spans2))
-
     # encoder
     enc = drone.get("enc") or {}
-    line3 = (f"encoder   {_f(enc.get('fps'), 5, 1)} fps    "
-             f"{_f(enc.get('mbps'), 5, 2)} Mbps    "
-             f"cmd {_f(enc.get('cmd_kbps'), 5)}k"
-             f"   roi {_f(enc.get('roi_qp'), 3)}"
-             f"   ring {_f(enc.get('ring_drops'), 5)}"
-             f"   dis {_f(enc.get('idr_disagree'), 3)}/{_f(enc.get('enhance_disagree'), 3)}"
-             f"   van {_f(enc.get('vanished_base'), 3)}/{_f(enc.get('vanished_enh'), 3)}"
-             f" ref {_f(enc.get('self_idr_refused'), 2)}"
-             f"   vring {_f(enc.get('venc_ring_fill_pct'), 3)}%"
-             f" drop {_f(enc.get('venc_full_drops'), 4)}")
-    ring = enc.get("ring_drops")
-    spans3 = []
-    dis_idx = line3.rindex("   dis ")  # anchor to cap ring span
-    if isinstance(ring, (int, float)) and ring > 0:
-        idx = line3.rindex("ring ") + 5
-        spans3.append((idx, dis_idx - idx, "bad"))
-    idr_dis = enc.get("idr_disagree")
-    enh_dis = enc.get("enhance_disagree")
-    if (isinstance(idr_dis, (int, float)) and idr_dis > 0) or (isinstance(enh_dis, (int, float)) and enh_dis > 0):
-        idx = line3.rindex("dis ") + 4
-        spans3.append((idx, len(line3) - idx, "bad"))
-    body.append((line3, spans3))
+    line3 = f"encoder   cmd {_f(enc.get('cmd_kbps'), 5)}k"
+    body.append((line3, []))
 
     # queue (txq)
     txq = drone.get("txq") or {}
-    depth, cap = txq.get("depth"), txq.get("cap")
-    depth_s, cap_s = _f(depth, 3), _f(cap, 3)
     drops_s = _f(txq.get("drops"), 5)
     wait_s = _f(drone.get("txq_wait_ms"), 5)
-    air_s = _f(drone.get("air_backlog_max_ms"), 4)
-    line4 = f"queue     {depth_s} / {cap_s}   txw {wait_s} ms   drops {drops_s}   air {air_s} ms"
+    line4 = f"queue     txw {wait_s} ms   drops {drops_s}"
     spans4 = []
-    if depth is not None and cap is not None and depth > cap / 2:
-        idx = line4.index(depth_s)
-        spans4.append((idx, len(depth_s), "warn"))
     if _increased(txq.get("drops"), (prev_drone.get("txq") or {}).get("drops")):
         idx = line4.rindex(drops_s)
         spans4.append((idx, len(drops_s), "bad"))
-    ab = drone.get("air_backlog_max_ms")
-    if isinstance(ab, (int, float)) and ab >= 25:
-        idx = line4.rindex(air_s)
-        spans4.append((idx, len(air_s), "warn"))
     body.append((line4, spans4))
 
     # radio (RadioTx)
     radio = drone.get("radio") or {}
     prev_radio = prev_drone.get("radio") or {}
-    sent_s = _f(radio.get("sent_pps"), 6, 0)
-    rdrops_s = _f(radio.get("drops"), 5)
     usbf_s = _f(radio.get("usb_fail"), 5)
     rx = radio.get("rx") or {}
-    line5 = (f"radio     sent {sent_s}/s   drops {rdrops_s}    usb fail {usbf_s}"
+    line5 = (f"radio     usb fail {usbf_s}"
              f"    rx own {_f(rx.get('own'), 3)} foreign {_f(rx.get('foreign'), 3)} "
              f"crc {_f(rx.get('crcfail'), 3)}")
     spans5 = []
-    if _increased(radio.get("drops"), prev_radio.get("drops")):
-        idx = line5.index(rdrops_s)
-        spans5.append((idx, len(rdrops_s), "bad"))
     if _increased(radio.get("usb_fail"), prev_radio.get("usb_fail")):
         idx = line5.rindex(usbf_s)
         spans5.append((idx, len(usbf_s), "bad"))
@@ -791,7 +717,6 @@ def panel_drone(model, wall):
         soc = None
     soc_s = _f(soc, 3)
     line8 = (f"system    soc {soc_s}°C    "
-             f"rf Δ{_f(sys_d.get('thermal_delta'), 2)}    "
              f"cpu {_f(sys_d.get('cpu_pct'), 5, 1)}%")
     spans8 = []
     if soc is not None:
@@ -799,20 +724,24 @@ def panel_drone(model, wall):
         if style:
             idx = line8.index(soc_s)
             spans8.append((idx, len(soc_s), style))
-    if drone.get("radio_rx_ok") is False:
+    if _radio_rx_ok(drone) is False:
         line8 += "    radio rx DEAF"
         idx = line8.rindex("DEAF")
         spans8.append((idx, len("DEAF"), "bad"))
     shed = _shed_cell(drone)
     shed_s = (shed if shed is not None else "--").ljust(4)
     line8 += f"    shed {shed_s}"
-    if shed in ("FS", "CONG", "AIR"):
+    if shed in ("FS", "CONG"):
         idx = line8.rindex(shed_s)
         spans8.append((idx, len(shed_s), "warn"))
     if drone.get("low_power"):
         line8 += "    LP"
         idx = line8.rindex("LP")
         spans8.append((idx, 2, "warn"))
+    if drone.get("auth_reject"):
+        line8 += "    AUTH!"
+        idx = line8.rindex("AUTH!")
+        spans8.append((idx, len("AUTH!"), "bad"))
     rec_cell = _rec_cell(drone)
     if rec_cell:
         line8 += f"    {rec_cell}"
@@ -852,6 +781,7 @@ def panel_video(model, wall):
     if _increased(video.get("dropped"), prev_video.get("dropped")):
         idx = line2.index(f"drop {drop_s}")
         spans2.append((idx, len(f"drop {drop_s}"), "bad"))
+    line2 += f"    salv {_f(video.get('slice_salvaged'), 4)}"
     body.append((line2, spans2))
 
     drop_ring_s, qdrop_s = _f(ring.get("dropped_oversize"), 3), _f(video.get("q_drop"), 3)
@@ -889,32 +819,6 @@ def panel_video(model, wall):
         line_lat = (f"lat ms p50/p99  enc {_lat('enc'):>7}  dq {_lat('dq'):>7}  "
                     f"air+ {_lat('air'):>7}  fec {_lat('fec'):>7}")
         body.append((line_lat, []))
-
-    drone = d.get("drone")
-    if drone is not None:
-        enc = drone.get("enc") or {}
-        enc_fps, out_fps = enc.get("fps"), video.get("fps")
-        radio = drone.get("radio") or {}
-        sent_pps = radio.get("sent_pps")
-        cards = d.get("cards") or []
-        inj_vals = [c.get("inj_pps") for c in cards if c.get("inj_pps") is not None]
-        inj_pps = max(inj_vals) if inj_vals else None
-
-        parts, cross_spans, cursor = [], [], 0
-        if enc_fps is not None and out_fps is not None:
-            seg = f"encoder {_f(enc_fps, 5, 1)} fps ──► out {_f(out_fps, 5, 1)} fps"
-            ok = enc_fps != 0 and abs(enc_fps - out_fps) <= 0.05 * abs(enc_fps)
-            cross_spans.append((cursor, len(seg), "good" if ok else "bad"))
-            parts.append(seg)
-            cursor += len(seg) + 6
-        if sent_pps is not None and inj_pps is not None:
-            seg2 = f"sent {_f(sent_pps, 5, 0)}/s ──► inj {_f(inj_pps, 5, 0)}/s"
-            ok2 = sent_pps != 0 and abs(sent_pps - inj_pps) <= 0.05 * abs(sent_pps)
-            cross_spans.append((cursor, len(seg2), "good" if ok2 else "bad"))
-            parts.append(seg2)
-        if parts:
-            body.append(("", []))
-            body.append(("      ".join(parts), cross_spans))
 
     return _panel("VIDEO OUT", body)
 
@@ -1036,8 +940,8 @@ def _ctl_row(ctl):
     """Ladder-controller summary row: current rung, this window's
     loss-pressure u against budget, and the most recent transition (or
     'none@0.00' before the first one ever fires). Rung overhead is a
-    base/enh pair now (same-rate-fixed-pairs) — rendered in the
-    _ov_applied_cell house style, not the removed scalar 'ov' key."""
+    base/enh pair now (same-rate-fixed-pairs) — rendered as b/e, not the
+    removed scalar 'ov' key."""
     rung = ctl.get("rung") or {}
     util = ctl.get("util")
     budget = ctl.get("budget")
@@ -1172,6 +1076,15 @@ def panel_ladder(model, wall):
         streak = pb.get("streak_bodies") or 0
         body.append((f" probe: r{_s(pb.get('rung'))} mcs{_s(pb.get('mcs'))} {pb.get('state', '?')}"
                      f" {streak}b u{_s(pb.get('u'), 2)} n{_s(pb.get('n'))} | {cards}", []))
+    nk = (d.get("link") or {}).get("nack") or {}
+    if nk:
+        dn = (d.get("drone") or {}).get("nack") or {}
+        fm = nk.get("fill_ms") or {}
+        body.append((f" nack: req{_s(nk.get('requests'))} fill{_s(nk.get('filled'))}"
+                     f" waste{_s(nk.get('wasted'))} sup{_s(nk.get('suppressed'))} lead{_s(nk.get('lead_skipped'))}"
+                     f" {_s(fm.get('p50'))}/{_s(fm.get('p90'))}/{_s(fm.get('max'))}ms"
+                     f" settle{_s(nk.get('settle_ms'))} | drone rx{_s(dn.get('rx'))}"
+                     f" syms{_s(dn.get('retx_syms'))} refused{_s(dn.get('retx_refused'))}", []))
     return _panel("LADDER", body, min_width=34)
 
 
@@ -1233,7 +1146,8 @@ def panel_gs_radios(model, wall):
                    if (e := c.get("energy")) and e.get("busy_pct") is not None else None,
                    CARD_COLS[12][1], 0),
             ]
-            text = _grid_row(f"  c{_s(c.get('id'))}", cells)
+            label = ("r" if c.get("kind") == "relay" else "c") + str(_s(c.get("id")))
+            text = _grid_row(f"  {label}", cells)
             spans = []
             if st_s == "UP":
                 spans.append((offsets[0], CARD_COLS[0][1], "good"))
@@ -1251,6 +1165,22 @@ def panel_gs_radios(model, wall):
             if txf is not None and txf > 0:
                 spans.append((offsets[10], CARD_COLS[10][1], "bad"))
             body.append((text, spans))
+        # cards[i].relay (CPE510 RemoteCard): the relay's own link state,
+        # one strip row per relay card under the grid. warn when the relay
+        # is not owned+tuned or its relay->GS seq gaps grew this datagram.
+        for c in cards:
+            r = c.get("relay")
+            if not r:
+                continue
+            text = _grid_row(f"  r{_s(c.get('id'))}", [
+                f"relay st={_s(r.get('state'))} own={int(bool(r.get('owned')))} "
+                f"gaps={_s(r.get('gaps'))} drops={_s(r.get('your_drops'))} "
+                f"txref={_s(r.get('tx_refused'))} reconn={_s(r.get('reconnects'))} "
+                f"sw={_s(r.get('sweeps'))} txsd={_s(r.get('tx_scan_drop'))}"
+                .ljust(_grid_width(CARD_COLS) - LABEL_W - 1)])
+            prev_r = (model.prev_cards.get(c.get("id")) or {}).get("relay") or {}
+            warn = not r.get("owned") or _increased(r.get("gaps"), prev_r.get("gaps"))
+            body.append((text, [(0, len(text), "warn")] if warn else []))
 
     return _panel("GS RADIOS (physical)", body)
 

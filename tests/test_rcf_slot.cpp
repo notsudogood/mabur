@@ -72,25 +72,6 @@ TEST(grace_only_when_idle_ahead) {
   CHECK(due.size() == 1);
 }
 
-TEST(window_mode_releases_at_every_burst_end_and_widens_grace) {
-  // Listen window (rollout phase 3): the drone keeps the gap, so a
-  // completion right before the predicted next burst -- held above -- now
-  // releases, and grace runs to window_ms - 2.
-  RcfSlotter s = cadenced();                    // next burst due ~1187
-  s.set_window_ms(5);
-  s.on_au_complete(1184, false);
-  CHECK(!offer(s, 1, 1186, false));             // 2 ms in: still grace (5 - 2 = 3)
-  CHECK(offer(s, 2, 1188, false));              // 4 ms in: past grace, held
-  s.on_au_first(1189);
-  s.on_au_complete(1197, false);
-  auto due = s.take_due(1197);
-  CHECK(due.size() == 1 && due[0].reason == SlotReason::Au);
-  s.set_window_ms(0);                           // off: back to predicting
-  CHECK(s.idle_ahead(1197));
-  s.on_au_first(1206);
-  CHECK(!s.idle_ahead(1220));
-}
-
 TEST(no_first_body_history_means_every_completion_releases) {
   RcfSlotter s(RcfSlotCfg{20, 100, 2, 3, 1});
   s.on_au_complete(1000, false);

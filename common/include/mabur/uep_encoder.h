@@ -38,10 +38,6 @@ struct UepBody {
   // whose q_ms the GS latches as the frame's dq. Lets the tx thread report
   // a queue-wait figure directly comparable to the GS dq segment.
   bool au_first = false;
-  // Listen window (rollout phase 3, drone/src/listen_window.h): the TX
-  // writer holds this body until this steady-clock µs, so the GS's status
-  // lands in a quiet gap after the previous burst. 0 = send at once.
-  uint64_t not_before_us = 0;
 };
 
 // Receives each body the instant its SBI group seals, while later FEC blocks
@@ -50,6 +46,11 @@ struct UepBody {
 // remaining GF256/SBI CPU (dq-spike 2026-08-31: the accumulate-then-push
 // shape serialized ~3.4 ms of that CPU in front of an idle radio).
 using UepBodySink = std::function<void(UepBody&&)>;
+
+// SPIKE 2026-10-05 (fec-nack): every SOURCE envelope a layer seals, as it
+// seals (sid, wire seq, envelope bytes). Feeds the drone's retransmit ring.
+// Called on the hot thread; must not block.
+using UepSourceTap = std::function<void(uint8_t sid, uint32_t seq, const uint8_t* env, size_t len)>;
 
 // Composes Fragmenter + SwEncoder + SbiPacker into one independent pipeline
 // per SVC temporal layer (stream_id 0..1), giving each layer its own
@@ -120,6 +121,9 @@ class UepEncoder {
 
   void set_shed(int stream_id, bool shed);
 
+  // SPIKE (fec-nack): install/clear the source-envelope tap (see UepSourceTap).
+  void set_source_tap(UepSourceTap tap);
+
   // True — and the drop is booked in dropped(stream_id) — when that layer is
   // shed. Lets callers skip per-frame work for shed frames BEFORE committing
   // resources (FramePipeline checks this before allocating a frame_id, so
@@ -146,6 +150,7 @@ class UepEncoder {
     uint64_t dropped_count = 0;
     uint64_t last_activity_ms = 0;
     bool has_activity = false;
+    const UepSourceTap* tap = nullptr;  // SPIKE (fec-nack): UepEncoder::tap_ or null
 
     Layer(const UepLayerCfg& cfg, uint8_t sid, uint32_t initial_seq,
           FecWorker* worker)
@@ -161,6 +166,7 @@ class UepEncoder {
   // The hot-path envelope sink: one envelope in, at most one body out to
   // sink (copy/alloc diet 2026-09-22 — no envelope vectors in between).
   static SwEnvSink env_sink(Layer& layer, const UepBodySink& sink);
+  UepSourceTap tap_;  // SPIKE (fec-nack)
   static void emit_flush(Layer& layer, const UepBodySink& sink);
   // Flush tail: sliding-window flush (+ the joining finish() when join is
   // set — flush_all only; poll() runs on the hot loop and must not wait)

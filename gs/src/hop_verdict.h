@@ -30,6 +30,10 @@ struct VerdictCardIn {
   bool valid = false;
   uint32_t foreign = 0, crc_fail = 0, fa = 0, cca = 0;
   double rssi_dbm = 0, snr_db = 0;
+  // snr_db is a real per-frame measurement (CardCaps::snr_ok). False on the
+  // CPE510 relay, whose SNR is RSSI above a calibrated floor: the weak test
+  // then reads RSSI alone instead of demanding both.
+  bool snr_valid = true;
   // Busy airtime (spec 2026-09-25-nhm-airtime §6): NHM busy % of the window
   // and our own video's airtime %, valid only when the card's NHM window
   // covered this window on this channel.
@@ -89,7 +93,7 @@ struct VerdictOut {
 // I/O, no threads, no hardware.
 class HopVerdict {
  public:
-  HopVerdict(HopCfg cfg, int n_cards);
+  HopVerdict(HopCfg cfg, BusyCfg busy, int n_cards);
   // One window. cards[i].valid=false = skipped (mid-dwell / dead); rung = ladder rung now.
   VerdictOut window(double now_ms, const std::vector<VerdictCardIn>& cards,
                     const VerdictLinkIn& link, int rung);
@@ -107,6 +111,7 @@ class HopVerdict {
 
  private:
   HopCfg cfg_;
+  BusyCfg busy_;
   int n_cards_;
   // trailing references (5 s = 5000 / window_ms samples), per card RSSI median, link recovered mean
   std::vector<std::deque<double>> rssi_hist_;

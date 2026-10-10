@@ -10,6 +10,7 @@ Quick index: carrier sense off 2026-08-05 · carrier sense ON again + RC_VERSION
 pick), `air_clock.efficiency`/`ampdu.min_mcs` → `_20`/`_40`, new required
 `link.ladder[].bw` — 2026-09-24 (`docs/bw40.md`) ·
 `feclog 2` adds a `bw` column after `mcs` 2026-09-24 (`feclog 1` rows are 20 MHz) ·
+`feclog 3` (2026-10): rtx column after rec; feclog 1/2 rows read as rtx 0 ·
 `probelog 3` adds a `bw` column after `mcs` 2026-09-24 (`probelog 1`/`2` rows are 20 MHz) ·
 NHM airtime evidence — `scanlog 4` (V card block gains `nhm_busy`/`own_air`,
 D gains `busy`, K entries reshape to `ch:worst_busy:floor:busy`), `[hop.verdict]`
@@ -35,7 +36,22 @@ per-body `first_ms` arrival stamp 2026-09-05 (probe-blanking fix; a
 `probelog 1` file's `t_ms` is the finalize tick and cannot be joined to
 `au-NNNN.log` for timing) · debug logs consolidate into one per-session
 directory and `au.log`'s clock switches WALL→MONOTONIC (`# aulog 4`,
-`# latlog 2`, both drop the `# sync` bridge) 2026-09-06.
+`# latlog 2`, both drop the `# sync` bridge) 2026-09-06 ·
+link pairing: RC_VERSION 14, `vtx_id` gone, `link.key_fp` /
+`link.state = key_mismatch` / `drone.auth_reject` 2026-10-01 ·
+channel set replaces home + candidates — `scanlog 5` (M loses
+`split_home`/`reunite`, H gains `boot_order`), sideport `link.home`
+removed — 2026-10-03 (`docs/channel-select.md`) · same marker: H
+`boot_order` renamed `relocate`, M gains `link_found`, `scan.pick`
+latched — 2026-10-04 · CPE relay interference sweep/hop (protocol v4) —
+`scanlog 6` (D gains trailing `rx`), sideport `cards[i].relay.tx_scan_drop`/
+`.sweeps`, `hop.sweep_timeouts` — 2026-10-05 (`docs/cpe510-relay.md`) ·
+2026-10-10: `au.log` marker `# aulog 5` (+4 salvage columns); sideport
+`link.video.slice_*` keys added; FrameHdr byte 3 is `slice_rows` (was
+codec id 0x01 — recordings before this date read as slice_rows 1 in no
+tool, the byte was never logged) (`docs/slices.md`) · 2026-10-10:
+maburplay submits slice-salvaged AUs, so LAT / e2e latency tails during
+loss include frames that were skipped before (section below).
 
 **`link.pre_fec_loss` scale break 2026-09-23, twice.** The ArrivalTracker
 guard behind `link.pre_fec_loss` (and the OSD LOSS row, `ctl.pre_fec_loss`,
@@ -179,7 +195,16 @@ SigmaStar image counts the SDK's parked D-state workers and read a flat
 ~13 whether idle or pegged — never a CPU signal in any recording;
 replaced by `drone.sys.cpu_pct`, the busy percent of the telemetry tick
 from a `/proc/stat` delta, `null` on the first tick after a maburd
-start).
+start); 2026-09-30 the telem diet (RC_VERSION 13, section below):
+`drone.gen`, `drone.radio_rx_ok`, `drone.probing`, `drone.air_shed`,
+`drone.air_backlog_max_ms`, `drone.air_shed_drops`, `drone.channel`,
+`drone.hop_epoch`, `drone.applied` (the whole block),
+`drone.enc.fps`/`mbps`/`roi_qp`/`ring_drops`/
+`idr_disagree`/`enhance_disagree`/`vanished_base`/`vanished_enh`/
+`self_idr_refused`/`venc_full_drops`/`venc_ring_fill_pct`/`idr_gs`,
+`drone.txq.depth`/`cap`, `drone.radio.sent_pps`/`drops`,
+`drone.sys.thermal_delta`; 2026-10-03 the channel set (section below):
+`link.home`.
 Removed keys are absent, not null. Keep appending to that list — not to protect
 consumers, but because a recording made before a removal still carries the
 key and `flightreport.py` still reads old recordings. The
@@ -790,3 +815,203 @@ Full detail: `docs/inflight-channel-hop.md` §2/§3/§8,
   `tools/maburtop.py` gains a per-card `fbusy` column (renamed from `air%`
   in the final-review fix wave: it was always foreign busy, never own
   airtime) (`max(0, busy_pct − own_air_pct)`). See `docs/observability.md`.
+
+## 2026-09-30 — telem diet: RC_VERSION 13, Telem 98 → 48 bytes
+
+`T_TELEM` dropped every field no GS consumer read — link control, the
+player OSD, the web UI, `flightreport.py` / `flightjitter.py` — leaving
+the ones that were maburtop-only on the wire nowhere. A **flag day**: a
+v12 drone and a v13 GS (or the reverse) do not parse each other's RC
+frames at all (`docs/deploy.md`).
+
+- **Removed Telem fields:** `generation`, `enc_frames`, `enc_kbytes`,
+  `roi_qp`, `ring_drops`, `idr_disagree`, `enhance_disagree`,
+  `vanished_base`, `vanished_enh`, `self_idr_refused`, `venc_full_drops`,
+  `venc_ring_fill_pct`, `txq_depth`, `txq_cap`, `radio_sent`,
+  `radio_drops`, `air_backlog_max_ms`, `air_shed_drops`, `thermal_delta`,
+  `channel`, `hop_epoch`, `applied_profile`, `applied_ov_base`,
+  `applied_ov_enh`, `idr_gs`, and flag bits 1 (`radio_rx_ok`), 2
+  (`probe_on`), 5 (`air_shed`). The drone-side counters still exist; most still print
+  on maburd's own 5 s `frame_ring:` stderr line.
+- **Removed sideport keys:** the list above. A recording before this date
+  still carries them; nothing in-repo reads them any more.
+- **Where the evidence went:** per-frame air backlog was always in the SBI
+  `air_ms` → `au.log` column 12 (finer than the 1 Hz window max);
+  "drone heard nothing" is `drone.radio.rx` own + foreign + crcfail = 0
+  (maburtop derives its `DEAF` cell from it); the drone's channel is
+  whichever channel its video arrives on (`link.channel`, `scan.log` `H`
+  lines); `link.streams[].ov` is now always the commanded op pair (it only
+  ever differed from the applied echo under the bench `:8301` override); a
+  web spotter's link setting is its configured width, no MCS; a web GS sees
+  for itself whether a requested key frame arrived, so the drone's served
+  count (`drone.enc.idr_gs`) went too.
+- **Exporter restart detection** used `generation` regressing as its
+  second signal; it now uses `drone.rcf_rx` / `drone.txq.drops`
+  regressing. Rates (`drone.rcf.rx_pps`, `drone.txq.drop_pps`) are
+  unaffected otherwise.
+- **`flightreport.py` DRONE TX PATH** (new section): txq wait p50/p90/max,
+  txq drops and USB fails as summed per-period growth, CPU p50/p90/max,
+  congestion/failsafe shed period counts — once per `tlm_seq`. It reads
+  keys that predate the diet, so it also reports on older recordings.
+
+## 2026-10-01 — link pairing: RC_VERSION 14, vtx_id deleted, auth tag
+
+Every GS→drone RC frame (DISC, RCF, CAL_CMD, CAL_RESULT) carries an 8-byte
+SipHash-2-4 tag before its CRC; DISC_ACK carries `vtx_nonce` + a flags byte.
+`vtx_id` is gone from every frame and both configs. A **flag day**.
+`docs/link-pairing.md`.
+
+- **Removed sideport key:** `link.vtx_id`.
+- **New sideport keys:** `link.key_fp` (string: `default` or 4 hex),
+  `link.state` gains the value `key_mismatch`, `drone.auth_reject` (bool,
+  Telem flags bit1 — bit1 was `radio_rx_ok` until 2026-09-30, so a
+  recording between those dates reads bit1 as the old meaning).
+- **Removed config keys:** `link.vtx_id` on both ends. **New:**
+  `link.key_file` on both ends, `link.key` (inline hex, web overlay only) on
+  the GS. An old config fails boot.
+- `ctllog 12` unchanged; the KEY MISMATCH state is in `flight.jsonl` via
+  `link.state`, not in `ctl.log`.
+
+
+## 2026-10-02 — relay cards: `cards[i].kind`, null SNR, TX selector on RSSI
+
+`maburgs` can run a CPE510 `mabur-relay` unit as a card (`[radio] relays`,
+`docs/cpe510-relay.md`). No wire change, no flag day, no new log marker.
+
+- **New sideport keys:** `cards[i].kind` (`"usb"` | `"relay"`) on every
+  card, and `cards[i].relay` (eleven keys, `docs/observability.md`) on
+  relay cards only. A recording before this date has no `kind`: every card
+  in it is USB.
+- **Null SNR/EVM on a relay card.** From this build on a recording may
+  carry a card with `kind: "relay"` whose per-class `snr`/`snr_a`/`snr_b`/
+  `evm*` are always `null` while its `rssi*` are real — the relay's "SNR"
+  is RSSI above a calibrated floor, so it is not exported. Card ids are
+  roster order (USB first, relays after), so a relay's id is
+  `n_usb + k`. `tools/flightreport.py` already tolerates null per-card SNR
+  (its sideport SNR readers take numbers only or print nothing; a relay's
+  `probe.log` rows carry `nan` SNR, which the probe stats already exclude);
+  it ignores `relay`.
+- **TX selector compares RSSI, not SNR — on every GS, relay or not.**
+  `TxSelector` picks the uplink card on best-chain RSSI with a true 3 dB
+  margin (2 s hold and the dead-card rule unchanged). Before, it compared
+  `snr_ema` in raw half-dB units against the same `3.0`, so the effective
+  margin was **1.5 dB** of SNR. A flight's `link.tx_card` switches (and
+  which card held the uplink) are not comparable across this line.
+- **Boot-scan DISC beacons leave the first non-scout card** (`boot_home_card`
+  in `gs/src/main.cpp` at the time; renamed `boot_scout_card` by the
+  2026-10-03 channel set below — same variable, same rule), not a
+  hard-coded card 0. On an all-USB GS that is still card 0; with one USB
+  card plus a relay the relay beacons on home while the USB card scans.
+
+## 2026-10-03 — channel set: scanlog 5, link.home removed
+
+Home channel + candidates is replaced by one shared channel set,
+`radio.channels`, on both ends. A "home" channel no longer exists as a
+concept: the drone parks on its remembered member (or the first) and only
+ever moves on a GS proposal, a GS order, or an unconfirmed move back to
+where it came from — never to a privileged fallback channel. Full detail:
+`docs/channel-select.md`.
+
+- **`scanlog 5`.** Bumped from `scanlog 4`. The header line reshapes from
+  `home=<n> candidates=<c1,c2,...> dwell_ms=<n> min_rounds=<n>
+  enable=<0|1> cards=<n>` to `channels=<c1,c2,...> mode=<auto|pinned>
+  dwell_ms=<n> min_rounds=<n> cards=<n>` — no `home=`, no `enable=`
+  (`radio.scan.enable` is gone), a `mode=` token in its place. `C`/`D`/`K`
+  record shapes are unchanged from
+  `scanlog 4`. `M`'s reason vocabulary **loses** `split_home` and
+  `reunite` — there is nothing to split from or reunite to any more — and
+  keeps `commit`/`ack_override` plus the in-flight hop's
+  `hop_lead`/`hop_follow`/`hop_withdraw`/`hop_one_card`. `H`'s kind
+  vocabulary **gains** `boot_order`: the one-time boot hop placed through
+  `HopController` while the boot pick is open, alongside the in-flight
+  hop's `order`/`verify_fail`/`escape`. A `scanlog 4` or earlier
+  recording's `M` lines may carry `split_home`/`reunite` and its `H` lines
+  never carry `boot_order` — read both as what they were.
+  **2026-10-04, marker unchanged:** `boot_order` is renamed `relocate`
+  (any order moving the link to where it should live — the pin or the
+  boot pick — after the link formed where the drone was found; only the
+  pre-merge 2026-10-03 bench builds wrote `boot_order`, and flightreport
+  reads both), `M` gains `link_found` (the link formed on the member the
+  drone's ack was heard on), and the sideport's `scan.pick` is latched at
+  the freeze instead of following the live op (before, it moved with
+  every hop).
+  `tools/flightreport.py` reads `scanlog 5` and still parses `split_home`
+  out of an older-marker file.
+- **Removed sideport key:** `link.home` (the configured home channel —
+  there is no home to report). `link.channel` is unchanged: the live
+  channel of the GS's TX card.
+- **Removed GS config keys:** `radio.channel` as a bare number (home),
+  `radio.scan.enable`, `radio.scan.candidates`, `radio.scan.home_window_ms`,
+  `radio.scan.split_after_ms`, `radio.scan.home_margin`. **Removed drone
+  config keys:** `radio.channel`, `radio.follow_gs`. **New, both ends:**
+  `radio.channels` (the set, 1-8 members); GS only: `radio.channel =
+  "auto"` (a string now, not a number) or a member to pin, plus
+  `radio.scan.search_ms`/`op_window_ms`/`pick_margin`/`one_card_ms`/
+  `max_ms`. No `RC_VERSION` bump — `Disc.op_channel`/
+  `DiscAck.agreed_channel` and `Rcf.hop_ch`/`hop_epoch` are unchanged wire
+  fields, now read over the whole set instead of a single home channel.
+- **State files, new:** `/etc/mabur.channel` (drone), `/etc/maburgs.channel`
+  (GS) — the remembered member, decimal text. Neither existed before this
+  date; their absence on an older recording's device is simply "older
+  build," not a fault.
+- **`tools/maburtop.py`:** drops the `h{home}` field; shows `scan.state`
+  (now including `moving`, the boot pick's relocation in flight) and
+  `scan.rounds`.
+
+## 2026-10-04 — pin is static: `hop.enable` deleted, no more `would_` rows, sideport `hop.enable` gone
+
+- `scan.log` `H` rows prefixed `would_` (shadow hops, `hop.enable = false`)
+  appear only in sessions recorded before this date. `flightreport.py`'s
+  SHADOW HOP REPORT path stays for them; no later build emits one.
+- **Removed sideport key:** `hop.enable`. Pinned reads `scan.state == "off"`
+  (so does a relay-only roster, which in auto is still reactive on its
+  one-card path); the authoritative mode is the `scanlog 5` header's
+  `mode=<auto|pinned>`.
+- **Removed GS config keys:** `hop.enable`, `hop.scout_when_disabled`;
+  `hop.verdict.busy_dbm`/`blocked_pct` are `radio.scan.busy_dbm`/
+  `blocked_pct`. A session's `scanlog 5` header is unchanged
+  (`mode=<auto|pinned>` already names the only mode knob).
+- **Behaviour break for comparisons:** a pinned flight before this date
+  could hop (and its `scan.pick` then disagreed with `link.channel`); after
+  it a pinned flight never hops, and its `cards[i].dwell` stays `null`
+  (no in-flight dwells). `docs/channel-select.md` "Which knob drives which
+  piece".
+
+## 2026-10-05 — CPE relay interference sweep/hop: scanlog 6
+
+Relay protocol v4 (`../mabur-openwrt`) adds `SURVEY`/`SCAN`/`SCAN_RESULT`,
+which lets a CPE510 relay card feed the in-flight hop verdict and the hop
+ranker; full detail: `docs/cpe510-relay.md` "Interference + hop on a
+relay", `docs/inflight-channel-hop.md` §2/§3/§8.
+
+- **`scanlog 6`.** Bumped from `scanlog 5`: `D` gains a further trailing
+  `<rx|->` (a relay sweep entry's rx % of the observe span; `-` for a USB
+  dwell, which has no rx reading, or an invalid relay reading) — on top of
+  `scanlog 4`'s `busy` column, so a `scanlog 6` `D` line has one more field
+  than a `scanlog 4`/`5` one. `C`/`K`/`M`/`V`/`H` are unchanged by this
+  bump. A relay sweep's `D` records come from the relay card (its `C`
+  record's positional `chip` field reads `ath9k`), carry `in_session=1`
+  and an `observe_ms` around 20 (the sweep's requested `observe_ms`,
+  `kSweepObserveMs`) rather than the USB dwell's 5. `tools/flightreport.py`
+  reads the new field
+  (`load_scanlog`'s `D` branch); a `scanlog 5` or earlier file has no `rx`
+  column and the parser reads it as `None` rather than misparsing the
+  line.
+- **New sideport keys:** `cards[i].relay` gains `tx_scan_drop` (owner `TX`
+  frames the relay dropped mid-sweep) and `sweeps` (`SCAN`s this card has
+  sent); `hop` gains `sweep_timeouts` (relay `SCAN`s that got no
+  `SCAN_RESULT` before their request-derived timeout, cumulative per
+  maburgs process; added in the final-review fix wave, same date) —
+  `docs/observability.md`. A recording before 2026-10-05 has none of the
+  three; absent means "not recorded", not 0.
+
+## 2026-10-10 — slice salvage: salvaged AUs reach the glass
+
+From 2026-10-10 maburplay (and the web GS) decode slice-salvaged AUs
+(`kRecFlagSliceSalvaged`, `docs/slices.md`) instead of skipping the
+damaged AU. Those frames now reach the glass and are timed, so the LAT /
+e2e latency distribution during loss includes frames that before
+2026-10-10 were skipped and never measured — typically the late ones
+that waited out `gap_ms`. A latency tail that grew across this date is
+not by itself a regression: compare flights across it knowingly, and
+split by `au.log`'s salvage columns (`# aulog 5`) where it matters.

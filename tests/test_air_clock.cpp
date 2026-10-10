@@ -1,6 +1,8 @@
 // AirClock: the drone's per-frame virtual air-serialization model (spec
 // 2026-09-06 air-clock §2). Every number below is the spec's worked
 // example: rung 2 = 19.5 Mb/s, efficiency 1.0, 60 fps (16 667 µs period).
+#include <thread>
+
 #include "../drone/src/air_clock.h"
 #include "mtest.h"
 
@@ -112,36 +114,19 @@ TEST(air_clock_backlog_saturates_u32) {
   CHECK(c.backlog_us(0) == 0xFFFFFFFFu);
 }
 
-TEST(reserve_until_books_the_listen_gap) {
-  // Listen window (phase 3): the gap the drone keeps after a burst is air
-  // the model must not hand to the next AU.
+// fec-nack (spec 2026-10-05 §4.3): the RX thread books retransmit bodies
+// while the hot thread books video and reads the backlog. free_at_us_ is
+// mutex-guarded; this is the shape (run it under -fsanitize=thread to see
+// the race the lock closes).
+TEST(air_clock_book_is_safe_from_two_threads) {
   AirClock c;
   c.set_rates(19.5, 19.5, 0.0, 0);
-  CHECK(c.free_at_us() == 0);
-  c.book(1000, 1950, 0);  // 1950 B x 0.410256 us/B = 800 us
-  CHECK(c.free_at_us() == 1800);
-  c.reserve_until(5800);  // a 4 ms gap after the burst
-  CHECK(c.free_at_us() == 5800);
-  c.reserve_until(3000);  // never moves backwards
-  CHECK(c.free_at_us() == 5800);
-  CHECK(c.backlog_us(2000) == 3800);
-  c.book(2000, 1950, 0);  // the next AU starts after the gap
-  CHECK(c.free_at_us() == 6600);
-}
-
-TEST(cost_us_is_what_book_charges) {
-  // Listen window (phase 3b) asks whether a body's air would overlap the
-  // window before booking it; the answer must be the booking's own price.
-  AirClock c;
-  c.set_rates(9.75, 19.5, 6.5, 100);
-  CHECK(c.cost_us(1000, 0) == 921);   // 1000 x 0.8205 + 100
-  CHECK(c.cost_us(1950, 1) == 900);   // 1950 x 0.4103 + 100
-  CHECK(c.cost_us(1000, AirClock::kProbeSid) == 1331);
-  CHECK(c.cost_us(1000, 7) == 0);     // bad sid
-  c.book(0, 1000, 0);
-  CHECK(c.free_at_us() == c.cost_us(1000, 0));
-  c.set_rates(19.5, 19.5, 0.0, 0);    // probe off: unpriced
-  CHECK(c.cost_us(1000, AirClock::kProbeSid) == 0);
+  std::thread t([&] { for (int i = 0; i < 10000; ++i) c.book(1000 + i, 1400, 0); });
+  uint64_t seen = 0;   // consumed, so the reads cannot be optimized away
+  for (int i = 0; i < 10000; ++i) seen += c.backlog_us(1000 + i);
+  t.join();
+  CHECK(c.backlog_us(0) > 0);
+  CHECK(seen < 0xFFFFFFFFull * 10000);
 }
 
 MTEST_MAIN

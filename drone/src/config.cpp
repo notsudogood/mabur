@@ -83,21 +83,31 @@ void assign_if_present(const Value& j, const char* key, T& out,
 }
 
 void parse_radio(const Value& j, RadioCfg& r) {
-  check_known_keys(j, {"usb_vid", "usb_pid", "channel", "width",
+  check_known_keys(j, {"usb_vid", "usb_pid", "channels", "width",
                         "power_mode", "tx_threads", "rate_walls_rel",
-                        "legacy_wall_rel", "wall_margin_db", "follow_gs"},
+                        "legacy_wall_rel", "wall_margin_db", "ldpc"},
                    "radio");
   assign_if_present(j, "usb_vid", r.usb_vid, "radio");
   assign_if_present(j, "usb_pid", r.usb_pid, "radio");
-  assign_if_present(j, "channel", r.channel, "radio");
   assign_if_present(j, "width", r.width, "radio");
   if (r.width != 20 && r.width != 40)
     fail("radio.width", "must be 20 or 40 (HT20 / HT40; nothing else is measured)");
-  if (r.width == 40 && mabur::ht40_offset(r.channel) == 0)
-    fail("radio.width", "40 MHz needs a standard 5 GHz pair and channel " +
-                            std::to_string(static_cast<int>(r.channel)) +
-                            " has none (common/include/mabur/ht40.h)");
-  assign_if_present(j, "follow_gs", r.follow_gs, "radio");
+  if (j.contains("channels")) {
+    const Value& a = j["channels"];
+    if (!a.is_array()) fail("radio.channels", "not an array");
+    r.channels.clear();
+    for (const Value& v : a) {
+      if (!v.is_number_integer()) fail("radio.channels", "not an integer");
+      const long ch = v.get<int64_t>();
+      if (ch < 1 || ch > 177) fail("radio.channels", "must be in [1,177]");
+      r.channels.push_back(static_cast<uint8_t>(ch));
+    }
+  } else {
+    note_default("radio", "channels", "[40, 64, 112, 144]");
+  }
+  if (auto e = mabur::channel_set_issue(r.channels, r.width, "radio.channels"))
+    fail(e->field, e->why);
+  assign_if_present(j, "ldpc", r.ldpc, "radio");
   assign_if_present(j, "power_mode", r.power_mode, "radio");
   assign_if_present(j, "tx_threads", r.tx_threads, "radio");
 
@@ -118,7 +128,6 @@ void parse_radio(const Value& j, RadioCfg& r) {
   assign_if_present(j, "legacy_wall_rel", r.legacy_wall_rel, "radio");
   assign_if_present(j, "wall_margin_db", r.wall_margin_db, "radio");
 
-  if (r.channel < 1 || r.channel > 177) fail("radio.channel", "must be in [1,177]");
   if (r.tx_threads < 1 || r.tx_threads > 8)
     fail("radio.tx_threads", "must be in [1,8]");
   if (r.power_mode != "offset" && r.power_mode != "none")
@@ -263,7 +272,7 @@ void parse_venc(const Value& j, VencSectionCfg& v) {
                     {"sensor_bin", "size", "fps", "gop_s", "qp_delta",
                      "max_ipprop", "min_iqp", "superframe_p_pct",
                      "intra_refresh_frames", "intra_refresh_qp",
-                     "ref_base", "ref_enhance", "ref_pred",
+                     "ref_base", "ref_enhance", "ref_pred", "slices",
                      "roi", "ae_fps", "awb_fps", "snapshot_quality",
                      "debug_port"},
                     "venc");
@@ -403,6 +412,31 @@ void parse_venc(const Value& j, VencSectionCfg& v) {
   if (v.core.ref_base != 0 && v.core.ref_enhance == 0)
     fail("venc.ref_enhance", "must be >= 1 when venc.ref_base is nonzero");
 
+  // H.265 row slices (spec 2026-10-10-h265-slices §5.1). Checked against
+  // the configured size, parsed above: the encoder cuts whole 64-px CTU
+  // rows, so only some counts exist, and asking for one that doesn't must
+  // fail boot rather than fly a different split.
+  if (j.contains("slices")) {
+    int n = 0;
+    assign_if_present(j, "slices", n, "venc");
+    const int rows = venc_cfg_ctb64_rows(static_cast<uint16_t>(v.core.height));
+    const bool ok = n == 1 || (n >= 2 && n <= rows &&
+                               venc_cfg_slice_rows(static_cast<uint16_t>(v.core.height),
+                                                   static_cast<uint8_t>(n)) != 0);
+    if (!ok) {
+      std::string legal = "1";
+      for (int c = 2; c <= rows; ++c)
+        if (venc_cfg_slice_rows(static_cast<uint16_t>(v.core.height), static_cast<uint8_t>(c)))
+          legal += ", " + std::to_string(c);
+      fail("venc.slices", "must be one of " + legal + " at " +
+                              std::to_string(v.core.height) +
+                              " lines (the encoder cuts whole 64-px CTU rows)");
+    }
+    v.core.slices = static_cast<uint8_t>(n);
+  } else {
+    note_default("venc", "slices", to_text(static_cast<int>(kDef.core.slices)));
+  }
+
   if (j.contains("roi")) {
     const Value& r = j.at("roi");
     check_known_keys(r, {"enabled", "steps", "center"}, "venc.roi");
@@ -477,16 +511,15 @@ void parse_venc(const Value& j, VencSectionCfg& v) {
 }
 
 void parse_link(const Value& j, LinkCfg& l) {
-  check_known_keys(j, {"vtx_id", "failsafe_ms", "rendezvous_ms", "tick_ms",
-                       "rc_drain_ms", "move_confirm_ms"}, "link");
-  assign_if_present(j, "vtx_id", l.vtx_id, "link");
+  check_known_keys(j, {"failsafe_ms", "rendezvous_ms", "tick_ms",
+                       "rc_drain_ms", "move_confirm_ms", "key_file"}, "link");
   assign_if_present(j, "failsafe_ms", l.failsafe_ms, "link");
   assign_if_present(j, "rendezvous_ms", l.rendezvous_ms, "link");
   assign_if_present(j, "move_confirm_ms", l.move_confirm_ms, "link");
   assign_if_present(j, "tick_ms", l.tick_ms, "link");
   assign_if_present(j, "rc_drain_ms", l.rc_drain_ms, "link");
+  assign_if_present(j, "key_file", l.key_file, "link");
 
-  if (l.vtx_id == 0) fail("link.vtx_id", "must be non-zero");
   if (l.move_confirm_ms < 200 || l.move_confirm_ms > 30000)
     fail("link.move_confirm_ms", "must be in [200,30000]");
   // tick_ms is the agent loop's housekeeping deadline (TickGate). Unbounded
@@ -505,6 +538,15 @@ void parse_link(const Value& j, LinkCfg& l) {
   // legacy single-cadence loop and stays legal.
   if (l.rc_drain_ms > l.tick_ms)
     fail("link.rc_drain_ms", "must be <= link.tick_ms");
+
+  try {
+    const auto kl = mabur::load_key_file(l.key_file);
+    l.key = kl.key;
+    l.key_is_default = kl.is_default;
+    l.key_source = kl.source;
+  } catch (const std::runtime_error& e) {
+    fail("link.key_file", e.what());
+  }
 }
 
 void parse_msp(const Value& j, MspCfg& m) {
@@ -560,6 +602,16 @@ void parse_record(const Value& j, RecordCfg& r) {
 void parse_genlock(const Value& j, GenlockCfg& g) {
   check_known_keys(j, {"enable"}, "genlock");
   assign_if_present(j, "enable", g.enable, "genlock");
+}
+
+void parse_nack(const Value& j, NackDroneCfg& n) {
+  check_known_keys(j, {"ring_ms", "air_pct", "burst_ms"}, "nack");
+  assign_if_present(j, "ring_ms", n.ring_ms, "nack");
+  assign_if_present(j, "air_pct", n.air_pct, "nack");
+  assign_if_present(j, "burst_ms", n.burst_ms, "nack");
+  if (n.ring_ms < 50 || n.ring_ms > 1000) fail("nack.ring_ms", "must be in [50,1000]");
+  if (n.air_pct < 0 || n.air_pct > 50) fail("nack.air_pct", "must be in [0,50]");
+  if (n.burst_ms < 1 || n.burst_ms > 200) fail("nack.burst_ms", "must be in [1,200]");
 }
 
 void parse_ampdu(const Value& j, AmpduCfg& a) {
@@ -637,8 +689,8 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
 
   static const char* kSections[] = {"radio", "fec", "encoder", "venc",
                                     "link", "msp", "ampdu", "air_clock", "low_power", "record",
-                                    "genlock"};
-  check_known_keys(j, {"radio", "fec", "encoder", "venc", "link", "msp", "ampdu", "air_clock", "low_power", "record", "genlock"}, "");
+                                    "genlock", "nack"};
+  check_known_keys(j, {"radio", "fec", "encoder", "venc", "link", "msp", "ampdu", "air_clock", "low_power", "record", "genlock", "nack"}, "");
 
   // A whole missing section means none of its keys are visited below, so
   // report the section itself. Dropping a [table] while hand-transcribing is
@@ -651,13 +703,17 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
   if (j.contains("fec")) parse_fec(j.at("fec"), cfg.fec);
   if (j.contains("encoder")) parse_encoder(j.at("encoder"), cfg.encoder);
   if (j.contains("venc")) parse_venc(j.at("venc"), cfg.venc);
-  if (j.contains("link")) parse_link(j.at("link"), cfg.link);
+  // A config with no [link] table at all must still resolve the pairing
+  // key (to the compiled-in default), so this section is parsed
+  // unconditionally rather than gated on j.contains("link") like the rest.
+  parse_link(j.contains("link") ? j.at("link") : Value(), cfg.link);
   if (j.contains("msp")) parse_msp(j.at("msp"), cfg.msp);
   if (j.contains("ampdu")) parse_ampdu(j.at("ampdu"), cfg.ampdu);
   if (j.contains("air_clock")) parse_air_clock(j.at("air_clock"), cfg.air_clock);
   if (j.contains("low_power")) parse_low_power(j.at("low_power"), cfg.low_power);
   if (j.contains("record")) parse_record(j.at("record"), cfg.record);
   if (j.contains("genlock")) parse_genlock(j.at("genlock"), cfg.genlock);
+  if (j.contains("nack")) parse_nack(j.at("nack"), cfg.nack);
 
   // Cross-section checks, only when the mode is on: a disabled mode's
   // values are irrelevant and the minimal configs the tests load (msp off,

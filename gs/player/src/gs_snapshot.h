@@ -13,9 +13,8 @@ namespace maburplay {
 // reveals a dead antenna. Never pool cards.
 struct GsCard {
   int id = 0;
-  // True only when BOTH rssi and snr arrived as numbers. A card that is
-  // present but silent renders its row with unlit bars and "never heard",
-  // which must never be confused with a weak signal.
+  // True when rssi arrived as a number. SNR is optional: a relay card never
+  // has one.
   bool heard = false;
   std::optional<double> rssi_dbm;
   std::optional<double> snr_db;
@@ -24,6 +23,7 @@ struct GsCard {
   // PHY status, so a perfectly healthy card reports null here until one
   // arrives. Gating `heard` on it would render a live antenna as dead.
   std::optional<double> evm_db;
+  bool relay = false;  // cards[i].kind == "relay": drawn with an "R" id
 };
 
 // The link half of the OSD's inputs, decoded from one sideport datagram.
@@ -45,17 +45,25 @@ struct GsSnapshot {
   // pick rather than the configured home. False when the block is absent
   // (older maburgs) or malformed.
   bool scan_auto = false;
-  // In-flight channel hop (spec 2026-09-14-inflight-channel-hop): true
-  // only while `channel` equals hop.target and that target isn't
-  // link.home -- i.e. the live channel is one the hop feature itself put
-  // it on, right now. Deliberately NOT "a hop has ever happened this
-  // session" (hop.hops is a monotonic counter that never resets on
-  // withdraw or on hopping back to home), and NOT a plain
-  // channel != home check either (that also fires for a boot-scan pick,
-  // which already has its own "(a)" mark and is unrelated to this
-  // feature). False when the block is absent (older maburgs) or the link
-  // is on home / a stale hop target.
+  // In-flight channel hop (spec 2026-09-14-inflight-channel-hop; keyed on
+  // scan.pick since the 2026-10-03 auto-channel-set feature deleted
+  // link.home): true only while `channel` equals hop.target AND
+  // scan.pick is present (non-null -- the GS has frozen its boot pick, or
+  // pin, for the process lifetime) AND that target isn't scan.pick --
+  // i.e. the live channel is one the hop feature itself put it on, right
+  // now, after the pick was settled. Deliberately NOT "a hop has ever
+  // happened this session" (hop.hops is a monotonic counter that never
+  // resets on withdraw or on hopping back to the pick), and NOT a plain
+  // channel != pick check either (that also fires for the still-open
+  // boot pick, which already has its own "(a)"/`moving` mark and is
+  // unrelated to this feature). False when the hop or scan block is
+  // absent (older maburgs), scan.pick is still null (boot phase), or the
+  // link is on the pick / a stale hop target.
   bool hopped = false;
+  // link.state == "key_mismatch": our key file differs from the drone's
+  // (spec 2026-10-01 link-pairing). False when the block is absent (older
+  // maburgs) or state is any other value.
+  bool key_mismatch = false;
   // drone.low_power (Telem flags bit7, spec 2026-09-20): the drone is
   // deliberately at its pre-arm low-power operating point (1 Mb/s /
   // 15 fps) because the FC reports DISARMED. False when the drone block is

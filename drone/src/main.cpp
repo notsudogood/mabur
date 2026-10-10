@@ -41,7 +41,7 @@
 #endif
 
 #include "air_clock.h"
-#include "listen_window.h"
+#include "nack_bucket.h"
 #include "air_rate.h"
 #include "ampdu_policy.h"
 #include "cal_apply.h"
@@ -51,6 +51,8 @@
 #include "debug_http.h"
 #include "frame_pipeline.h"
 #include "frame_source.h"
+#include "mabur/channel_file.h"
+#include "mabur/channel_set.h"
 #include "mabur/frame_wire.h"
 #include "mabur/ht40.h"
 #include "mabur/msp_source.h"
@@ -72,8 +74,8 @@
 #include "vtx_recorder.h"
 #include "tick_gate.h"
 #include "tx_queue.h"
+#include "mabur/retx_ring.h"
 #include "usb_tx_pool.h"
-#include "ta_responder.h"
 #ifdef MABUR_HAVE_VENC
 #include "venc_core.h"  // ARM only: drone/venc is not compiled on host builds
 #endif
@@ -186,8 +188,6 @@ inline void await_retune_gate(const std::atomic<bool>* waiting) {
   while (waiting->load(std::memory_order_acquire)) std::this_thread::yield();
 }
 
-uint64_t now_steady_us();  // defined below, with the dq_split gauge
-
 // Wraps IRtlRadio::send_packet with a mutex — shared between the hot
 // thread (video bodies) and the agent thread (send_control / DISC_ACK).
 struct DevourerSink : mabur::FrameSink {
@@ -220,24 +220,8 @@ struct DevourerSink : mabur::FrameSink {
   // Writer-priority flag paired with `gate` — see await_retune_gate above.
   std::atomic<bool>* gate_waiting = nullptr;
 
-  // Listen window (rollout phase 3b): a control/MSP/pong/telemetry send
-  // that would reach the air inside a burst's listen window waits for the
-  // window to end. Null = no window (dry-run).
-  mabur::ListenWindow* listen = nullptr;
-
   bool send(const uint8_t* p, size_t n) override {
     if (ready && !ready->load(std::memory_order_acquire)) return false;
-    if (listen) {
-      // ~1 ms from this call to the air (control path, measured on the
-      // turnaround bench); bounded so a stale gap can never wedge a sender.
-      const uint64_t t0 = now_steady_us();
-      const uint64_t until = listen->quiet_until(t0, 1000);
-      if (until > t0) {
-        std::this_thread::sleep_for(std::chrono::microseconds(
-            std::min<uint64_t>(until - t0, mabur::ListenWindow::kMaxHoldUs)));
-        listen->on_direct_hold();
-      }
-    }
     await_retune_gate(gate_waiting);
     std::shared_lock<std::shared_mutex> sg;
     if (gate) sg = std::shared_lock<std::shared_mutex>(*gate);
@@ -393,6 +377,7 @@ struct RealActuator : mabur::Actuator {
   std::atomic<bool>* cal_active = nullptr;
 
   std::vector<uint8_t> control_radiotap;  // built once; control channel is fixed
+  bool ldpc = true;                       // cfg.radio.ldpc, for control_radiotap
   uint16_t control_seq = 0;
 
   // Last values commanded to the encoder — read by the telemetry collector
@@ -443,7 +428,7 @@ struct RealActuator : mabur::Actuator {
 
   void send_control(const std::vector<uint8_t>& body) override {
     if (control_radiotap.empty()) {
-      control_radiotap = devourer::build_stream_radiotap(control_tx_mode());
+      control_radiotap = devourer::build_stream_radiotap(control_tx_mode(ldpc));
     }
     std::vector<uint8_t> frame;
     frame.reserve(control_radiotap.size() + kDot11HeaderLen + body.size());
@@ -532,8 +517,9 @@ struct RealActuator : mabur::Actuator {
 #endif
   }
 
-  // RcAgent calls this on a Disc.op_channel move and on the move-confirm/
-  // rendezvous fallback home, from the agent thread only (same contract as
+  // RcAgent calls this on a promoted session's agreed-channel move
+  // ("disc"), an RCF hop order ("hop") and an unconfirmed move's return to
+  // where it came from ("move_unconfirmed"), from the agent thread only (same contract as
   // apply_op/send_control above). Null in dry-run (dev == nullptr): there is
   // no device and no tx_gate to take, so that path is a pure stderr echo.
   std::shared_mutex* tx_gate = nullptr;
@@ -542,7 +528,7 @@ struct RealActuator : mabur::Actuator {
   // See await_retune_gate's comment for why a reader-preferring rwlock
   // cannot be left to starve this writer: it runs on the agent thread.
   std::atomic<bool>* retune_waiting = nullptr;
-  uint8_t cur = 0;  // set to cfg.radio.channel where the actuator is configured
+  uint8_t cur = 0;  // set to start_ch where the actuator is configured
   // A retune that arrived during a calibration sweep and has not been
   // performed yet (see retune() below). Agent-thread-only, like every other
   // member here.
@@ -553,10 +539,11 @@ struct RealActuator : mabur::Actuator {
   // devourer's IRtlRadio.h threading contract forbids one concurrent with
   // ANY other device call — not just a bulk-OUT. A calibration sweep runs
   // the three TX-power knobs (DevicePowerCtl, below) from the TX writer
-  // thread for up to 180 s, which is far longer than link.rendezvous_ms
-  // (30 s): the agent's own FAILSAFE->RENDEZVOUS go_home_ fires mid-sweep
-  // as a matter of course. Two rules keep that safe without ever blocking
-  // the agent thread on a sweep:
+  // thread for up to 180 s, and nothing stops a retune being requested in
+  // that time: a hop order or a promoted session's DISC move in an RCF that
+  // was already queued, or move_unconfirmed's return when the GS goes
+  // radio-silent for the sweep (move_confirm_ms is 2 s). Two rules keep
+  // that safe without ever blocking the agent thread on a sweep:
   //   * the three power calls take tx_gate SHARED (they are device calls,
   //     not senders, but the gate is what serialises them against this one);
   //   * a retune requested while cal_active simply does not happen — it is
@@ -565,9 +552,10 @@ struct RealActuator : mabur::Actuator {
   //     re-apply. `cur` deliberately stays on the radio's REAL channel
   //     while deferred, so the replayed retune still logs the true from->to
   //     and a same-channel deferral cannot be mistaken for a completed move.
-  // RcAgent's move-confirm/rendezvous machinery already handles "the retune
-  // did not take" (it hears nothing on the new channel and goes home), so a
-  // deferral degrades to that path rather than to a wedged link.
+  // RcAgent's move-confirm machinery already handles "the retune did not
+  // take" (it hears nothing on the new channel and returns to the channel it
+  // came from), so a deferral degrades to that path rather than to a wedged
+  // link.
   // Not host-testable: RealActuator lives in main.cpp and needs a real
   // IRtlRadio, so this comment is the specification.
   void retune(uint8_t ch, const char* reason) override {
@@ -608,13 +596,15 @@ struct RealActuator : mabur::Actuator {
     if (retune_waiting) retune_waiting->store(true, std::memory_order_release);
     {
       std::unique_lock<std::shared_mutex> g(*tx_gate);
-      // The DISC_ACK that precedes this retune (RcAgent sends it via
-      // send_control -> sink->send, synchronous) has RETURNED from
+      // The promote Telem that precedes a "disc" retune (main sends it on
+      // RcAgent::take_session_promoted(), before tick() executes the
+      // deferred move; sink->send, synchronous) has RETURNED from
       // send_packet but may still be sitting in the chip's TX FIFO -- the
-      // GS commits the move on hearing that ack arrive on the OLD (home)
-      // channel; if FastRetune races it out from under the ack and it
-      // actually airs on the new channel instead, the GS never hears it on
-      // home and the lost-ack/retry cycle fires on every single move.
+      // GS commits the move on hearing that LINKED Telem arrive on the OLD
+      // channel (link pairing spec 2026-10-01 §6); if FastRetune races it
+      // out from under the Telem and it actually airs on the new channel
+      // instead, the GS never hears it there and every move falls back to
+      // the slower kMoveAfterRcfs path.
       // Holding the gate exclusive already stops any NEW send from
       // starting, but does nothing about a frame the chip already
       // accepted and queued before this lock was taken; this sleep is
@@ -683,6 +673,17 @@ struct RealActuator : mabur::Actuator {
 #else
     return false;
 #endif
+  }
+
+  // Spec 2026-10-03-auto-channel-set §3: RcAgent calls this once per
+  // confirmed move, from the agent thread. A failed write is one stderr
+  // line, never fatal -- the drone still parks on the right channel this
+  // session, it just won't remember it across a restart.
+  void remember_channel(uint8_t ch) override {
+    if (dry_run) { std::fprintf(stderr, "[dry-run] remember_channel(%u)\n", ch); return; }
+    if (!mabur::write_channel_file(mabur::kDroneChannelFile, ch))
+      std::fprintf(stderr, "maburd: could not write %s (channel %u not remembered)\n",
+                   mabur::kDroneChannelFile, static_cast<unsigned>(ch));
   }
 };
 
@@ -895,9 +896,9 @@ std::vector<RcInRecord> read_rc_in(const std::string& path) {
   return recs;
 }
 
-int run_dry_run(const Config& cfg, const std::string& in_path, const std::string& out_path,
-                const std::string& rc_in_path, const std::string& msp_in_path,
-                const std::string& msp_out_path) {
+int run_dry_run(const Config& cfg, uint8_t start_ch, const std::string& in_path,
+                const std::string& out_path, const std::string& rc_in_path,
+                const std::string& msp_in_path, const std::string& msp_out_path) {
   FileSink file_sink;
   file_sink.f = std::fopen(out_path.c_str(), "wb");
   if (!file_sink.f) {
@@ -916,7 +917,8 @@ int run_dry_run(const Config& cfg, const std::string& in_path, const std::string
   actuator.dev = nullptr;
   actuator.dry_run = true;
 
-  RcAgent agent(cfg, actuator);
+  RcAgent agent(cfg, actuator, nullptr, start_ch);
+  agent.install_session_for_replay(1, 1);  // --rc-in frames are tagged under (1,1) by tests/integration/mabur_rc.py
   // Debug endpoint is startable here too (no MABUR_HAVE_VENC on a host
   // build, so every route just answers "disabled") -- keeps host/dry-run
   // and real mode on one code path instead of special-casing it out.
@@ -935,6 +937,9 @@ int run_dry_run(const Config& cfg, const std::string& in_path, const std::string
 
   auto frames = read_frame_file(in_path);
   FramePipeline pipe;
+  pipe.set_slice_geometry(
+      venc_cfg_ctb64_rows(static_cast<uint16_t>(cfg.venc.core.height)),
+      venc_cfg_slice_rows(static_cast<uint16_t>(cfg.venc.core.height), cfg.venc.core.slices));
   auto rc_recs = read_rc_in(rc_in_path);
   size_t rc_idx = 0;
 
@@ -1138,7 +1143,7 @@ uint16_t open_usb_and_get_pid(uint16_t vid, uint16_t configured_pid,
   return 0;
 }
 
-int run_real_mode(const Config& cfg, const std::string& cfg_path) {
+int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_path) {
   // Before libusb_init and the venc bring-up, so every thread either
   // library spawns inherits core 0; the hot thread claims core 1 itself.
   if (two_core_target()) {
@@ -1314,7 +1319,7 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
     // exits before there is anything to contend with.
     if (two_core_target()) pin_self_to(kHotCore);
     try {
-      const uint8_t ch = static_cast<uint8_t>(cfg.radio.channel);
+      const uint8_t ch = start_ch;
       rtl_device->InitWrite(cfg.radio.width == 40
                                 ? SelectedChannel{ch, mabur::ht40_offset(ch), CHANNEL_WIDTH_40}
                                 : SelectedChannel{ch, 0, CHANNEL_WIDTH_20});
@@ -1350,13 +1355,7 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
   // and the writer runs on the agent thread — see await_retune_gate.
   std::atomic<bool> retune_waiting{false};
 
-  // Listen window (rollout phase 3, listen_window.h): shared by the RX
-  // callback (statuses), the hot thread (each AU's gap), the TX writer and
-  // the direct senders (holds), and the agent thread (T_LWSTAT).
-  mabur::ListenWindow listen_win;
-
   DevourerSink dev_sink;
-  dev_sink.listen = &listen_win;
   dev_sink.dev = rtl_device.get();
   dev_sink.ready = &device_ready;
   dev_sink.gate = &tx_gate;
@@ -1406,7 +1405,8 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
   actuator.ampdu = cfg.ampdu;
   actuator.tx_gate = &tx_gate;
   actuator.retune_waiting = &retune_waiting;
-  actuator.cur = static_cast<uint8_t>(cfg.radio.channel);
+  actuator.cur = start_ch;
+  actuator.ldpc = cfg.radio.ldpc;
   // Encoder starts at the "normal" ROI QP (RcAgent only calls set_roi_qp on
   // a low<->normal transition — see run_bitrate_policy's roi_low_ default),
   // so the telemetry collector needs this seeded to reflect what's actually
@@ -1421,7 +1421,7 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
                              cfg.venc.core.height);
   actuator.recorder = &vtx_rec;
 
-  RcAgent agent(cfg, actuator, &ov_override);
+  RcAgent agent(cfg, actuator, &ov_override, start_ch);
 
 #ifdef MABUR_HAVE_VENC
   // Boot the encoder BEFORE the radio and before any thread starts: it
@@ -1551,10 +1551,8 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
   // be agent_thread-local variables) is what keeps the stream single
   // regardless of which thread sent the last frame.
   std::atomic<uint16_t> telem_wire_seq{0};
-  // T_LWSTAT sequence (listen window, phase 3); agent thread only.
-  uint16_t lw_wire_seq = 0;
   std::atomic<uint16_t> telem_dot11_seq{0};
-  std::vector<uint8_t> telem_radiotap = devourer::build_stream_radiotap(control_tx_mode());
+  std::vector<uint8_t> telem_radiotap = devourer::build_stream_radiotap(control_tx_mode(cfg.radio.ldpc));
   // Minor 5 fix: the TX writer thread's calibration ack (below) starts from
   // the most recent REAL Telem the agent thread built, not a default-
   // constructed one -- otherwise the GS's `latest_telem` (its OSD/sideport
@@ -1620,47 +1618,16 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
   // apply_op, Important fix 2) -- wire it up now that cal_active exists.
   actuator.cal_active = &cal_active;
 
-  // Cumulative encoder/ring counters (spec 2026-07-26 drone-telemetry):
-  // written by the hot thread, read by the agent thread's telemetry
-  // collector. FramePipeline/FrameSource don't track these themselves (see
-  // frame_ring stats block below), so maburd tracks them here. Two
-  // different patterns live in this group: enc_frames/enc_bytes/ring_drops
-  // are computed right here (fetch_add) because nothing else tracks them,
-  // while idr_disagree_total/enhance_disagree_total are relaxed-published
-  // MIRRORS (store, not fetch_add) of counters FramePipeline already owns
-  // and updates on the hot thread — see pipe.idr_disagreements() below.
+  // Cumulative encoder output (spec 2026-07-26 drone-telemetry): written by
+  // the hot thread, read by the agent thread's peak-rate sampler for the
+  // stats line. Telemetry stopped carrying them 2026-09-30 (RC_VERSION 13).
   std::atomic<uint64_t> enc_frames_total{0};
   std::atomic<uint64_t> enc_bytes_total{0};
-  std::atomic<uint64_t> idr_disagree_total{0};
-  std::atomic<uint64_t> enhance_disagree_total{0};
-  std::atomic<uint64_t> ring_drops_total{0};
-  // venc-ring vanish detection (docs/venc-ring-vanish-findings-2026-08-12.md):
-  // relaxed-published mirrors of FramePipeline's counters (the
-  // idr_disagree_total pattern). Detection-only port of 65c94fd: the
-  // pipeline's self-IDR latch level is deliberately NOT consumed here — the
-  // self-IDR mechanism needs the redesign queued in that doc (kill switch,
-  // GOP-aware suppression, rate-based guard) before it returns.
-  std::atomic<uint64_t> vanished_base_total{0};
-  std::atomic<uint64_t> vanished_enh_total{0};
-  std::atomic<uint64_t> self_idr_refused_total{0};
   // TxQueue wait window max (spec 2026-08-30 latency-accounting, Task 4):
   // tx thread publishes the largest push→pop delay it saw since the last
   // 1 Hz telemetry read; the agent thread's collector (Task 5) exchanges it
   // back to 0 so each tick reports its own window, not a running max.
   std::atomic<uint32_t> txq_wait_max_ms{0};
-  // Air clock (spec 2026-09-06 §4.3): hot thread CAS-max'es the modelled
-  // backlog after every AU (txq_wait_max_ms pattern; the 1 Hz collector
-  // exchanges it back to 0) and mirrors FramePipeline::air_dropped() the
-  // way enhance_disagree_total mirrors its counter.
-  std::atomic<uint32_t> air_backlog_max_us{0};
-  std::atomic<uint64_t> air_shed_drops_total{0};
-  // The same modelled backlog, last value rather than window max: what the
-  // turnaround responder stamps into each pong (rollout phase 2).
-  std::atomic<uint32_t> air_backlog_now_us{0};
-  // Turnaround bench responder (rollout phase 2, ta_responder.h). Built
-  // below once the queues it reports exist, before StartRxLoop opens the
-  // RX callback that feeds it.
-  std::unique_ptr<mabur::TaResponder> ta_responder;
   // Agent thread -> hot thread: link came up from BOOT/RENDEZVOUS, so every
   // frame encoded so far died before the air — re-mark the discontinuity
   // window so the GS gets the re-base signal on frames that can actually
@@ -1670,6 +1637,20 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
   // RX callback: pulls RC frames (rc::frame_type >= 0) off the air and
   // queues them for the agent thread. Runs on the main thread (inside
   // rtl_device->Init's blocking RX loop).
+  // 2026-10-05 (fec-nack, Task 10): retransmit ring of base-layer source
+  // envelopes (hot thread writes via the UepEncoder source tap, RX thread
+  // reads) and the T_NACK handler, bound once txq exists (it is declared
+  // after this callback). Sized by [nack].ring_ms of base-layer history at
+  // encoder.bitrate_max_kbps; env_len is the sealed base envelope (sw
+  // header + base symbol_size). Counters are per Telem period (exchanged
+  // at the 1 Hz build); nack_bad / retx_miss are drone-local only.
+  const size_t retx_env_len = static_cast<size_t>(mabur::sw::kSwHeaderLen) + static_cast<size_t>(cfg.fec.symbol_size[0]);
+  mabur::RetxRing retx(mabur::RetxRing::slots_for(cfg.encoder.bitrate_max_kbps, cfg.nack.ring_ms, cfg.fec.symbol_size[0]), retx_env_len);
+  std::fprintf(stderr, "maburd: nack retx ring %zu slots x %zu B = %zu B (ring_ms %d at %d kbps)\n",
+               retx.slots(), retx_env_len, retx.slots() * retx_env_len, cfg.nack.ring_ms,
+               cfg.encoder.bitrate_max_kbps);
+  std::function<void(const uint8_t*, size_t)> nack_hook;
+  std::atomic<uint64_t> nack_rx{0}, nack_bad{0}, retx_syms{0}, retx_refused{0}, retx_miss{0};
   auto rx_callback = [&](const Packet& pkt) {
     rx_beat.fetch_add(1, std::memory_order_relaxed);
     if (pkt.RxAtrib.crc_err) rx_crcfail_frames.fetch_add(1, std::memory_order_relaxed);
@@ -1679,26 +1660,12 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
     const int rc_type = rc::frame_type(body, body_len);
     if (rc_type >= 0) {
       // T_CAL_CMD/T_CAL_RESULT go to cal_queue instead of rc_queue: they
-      // are not vtx_id-filtered the way Rcf/Disc are inside RcAgent (the
-      // GS's CalControl has no config access and always sends vtx_id=0),
-      // and CalSweep's on_cmd/on_result must run on the TX writer thread,
+      // need CalSweep's on_cmd/on_result to run on the TX writer thread,
       // not the agent thread rc_queue feeds.
-      if (rc_type == rc::T_TA_PING) {
-        // Turnaround bench: answered on the responder's own thread, never
-        // the agent's -- the agent loop's tick would sit inside the very
-        // turnaround being measured. Stamped first thing.
-        if (!pkt.RxAtrib.crc_err && ta_responder)
-          ta_responder->on_ping(body, body_len, now_steady_us());
-      } else if (rc_type == rc::T_STATUS) {
-        // Listen window (phase 3): timed against its AU's gap on this
-        // thread, the moment it arrives; the agent never sees it.
-        if (!pkt.RxAtrib.crc_err) {
-          const uint64_t st_us = now_steady_us();
-          if (auto st = rc::parse_status(body, body_len))
-            if (st->vtx_id == cfg.link.vtx_id) listen_win.on_status(*st, st_us);
-        }
-      } else if (rc_type == rc::T_CAL_CMD || rc_type == rc::T_CAL_RESULT) {
+      if (rc_type == rc::T_CAL_CMD || rc_type == rc::T_CAL_RESULT) {
         cal_queue.push(body, body_len);
+      } else if (rc_type == rc::T_NACK) {
+        if (nack_hook) nack_hook(body, body_len);  // RX thread (fec-nack)
       } else {
         rc_queue.push(body, body_len);
       }
@@ -1727,7 +1694,7 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
       name_thread("mbr-msp");
       // Robust control modulation, same tier as DISC_ACK; MSP is a third
       // producer on the mutex-guarded dev_sink.send() path (never the pool).
-      std::vector<uint8_t> radiotap = devourer::build_stream_radiotap(control_tx_mode());
+      std::vector<uint8_t> radiotap = devourer::build_stream_radiotap(control_tx_mode(cfg.radio.ldpc));
       uint16_t seq = 0;
       std::random_device rd;
       MspSource src(to_msp_source_cfg(cfg.msp),
@@ -1813,6 +1780,72 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
   // glitch root cause). ~256 bodies ≈ 150 ms at 1700 bodies/s.
   constexpr size_t kTxQueueCap = 256;  // also feeds Telem.txq_cap
   TxQueue txq(kTxQueueCap);
+  // spec 2026-09-06 air clock. Lives out here, not in the hot thread, since
+  // fec-nack: the hot thread prices it (set_rates via apply_op_to_clock),
+  // books every video/probe body and reads the backlog; the RX thread's
+  // T_NACK handler below books every retransmit body. AirClock's own mutex
+  // guards it; both sides lock per BODY, never per symbol.
+  AirClock air_clock;
+  // Software NACK answer (spec 2026-10-05 fec-nack §4.2-4.3), RX thread.
+  // Verified request -> ring lookups -> fresh SBI bodies marked retx ->
+  // TxQueue head, under a token bucket of nack.air_pct of the base layer's
+  // delivered capacity, nack.burst_ms of that capacity deep (flight 0026,
+  // 2026-10-06: a fixed 64-symbol depth was 4 ms of air at rung 5 and 30 ms
+  // at rung 0, and refused half of every cascade's requests). A
+  // repeat-flagged request is answered twice (and draws two tokens per
+  // symbol). The bucket, packer and scratch envelope are RX-thread-only;
+  // ring, txq, air_clock and agent are thread-safe.
+  // The UepBody carries stream_id 0, so RadioTx::build_frame and the air
+  // clock see plain base-layer bodies; the retx mark lives only in the SBI
+  // stream byte, which the GS routes as base and decodes as a retransmit.
+  TokenBucket retx_bucket(64.0);  // re-sized from the op at every refill
+  mabur::SbiPacker retx_packer(static_cast<int>(retx_env_len), cfg.fec.blocks_per_body[0],
+                               static_cast<uint8_t>(0 | mabur::kSbiRetxMark));
+  std::vector<uint8_t> retx_env(retx_env_len);
+  std::vector<std::vector<uint8_t>> retx_out;
+  nack_hook = [&](const uint8_t* body, size_t len) {
+    // A malformed frame (radio corruption, sid != 0) counts nack_bad only;
+    // check_nack raises auth_reject itself for a tag/counter failure.
+    rc::Nack nk;
+    if (agent.check_nack(body, len, &nk) != RcAgent::NackCheck::kOk) {
+      nack_bad.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+    const rc::Nack* n = &nk;
+    nack_rx.fetch_add(1, std::memory_order_relaxed);
+    const auto op = shared_op.load();
+    const double sym_per_s =
+        op ? delivered_mbps(op->ladder[0], cfg.air_clock) * 1e6 / 8.0 / static_cast<double>(retx_env_len)
+           : 0.0;
+    if (op) retx_bucket.set_depth(TokenBucket::depth_for(sym_per_s, cfg.nack.burst_ms));
+    retx_bucket.refill(now_steady_us(), sym_per_s * cfg.nack.air_pct / 100.0);
+    const bool twice = (n->flags & rc::kNackFlagRepeat) != 0;
+    const double cost = twice ? 2.0 : 1.0;
+    retx_out.clear();
+    for (uint8_t i = 0; i < n->n; ++i) {
+      for (int b = 0; b < 32; ++b) {
+        if (!(n->e[i].bitmap & (1u << b))) continue;
+        const uint32_t seq = n->e[i].first_seq + static_cast<uint32_t>(b);
+        if (!retx.get(seq, retx_env.data())) { retx_miss.fetch_add(1, std::memory_order_relaxed); continue; }
+        if (!retx_bucket.take(cost)) { retx_refused.fetch_add(1, std::memory_order_relaxed); continue; }
+        retx_syms.fetch_add(1, std::memory_order_relaxed);
+        auto out = retx_packer.add_one(retx_env.data(), retx_env.size());
+        if (!out.empty()) retx_out.push_back(std::move(out));
+      }
+    }
+    auto tail = retx_packer.flush_one();
+    if (!tail.empty()) retx_out.push_back(std::move(tail));
+    // push_front stacks, so push each pass back-to-front: the bodies then
+    // leave in request order (pass 1 then pass 2) ahead of queued video.
+    const uint32_t now_ms = static_cast<uint32_t>(now_steady_ms());
+    for (int rep = 0; rep < (twice ? 2 : 1); ++rep)
+      for (auto it = retx_out.rbegin(); it != retx_out.rend(); ++it) {
+        const uint64_t p_us = now_steady_us();
+        const size_t bytes = it->size();
+        txq.push_front(UepBody{0, *it, now_ms, p_us, false});
+        air_clock.book(p_us, bytes, 0);
+      }
+  };
   // fec.feed_batch: group the TX writer's wakeups so bodies leave in
   // URB-filling batches (see TxQueue::set_batch); the hot thread flushes at
   // every AU end so a tail group never waits on the next frame.
@@ -1832,23 +1865,9 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
     // is behaviourally identical to the old default "mabur_f".
     FrameSource fsrc(VENC_RING_NAME);
     FramePipeline pipe;
-    AirClock air_clock;   // spec 2026-09-06; priced by apply_op_to_clock
-    // Listen window (phase 3b): the window the last AU keeps, [from, until)
-    // (until == from: none). A body whose modelled air would overlap it --
-    // the next AU's, a late repair or probe of the last one -- is held until
-    // it ends; see listen_window.h. au_cadence says when the next AU is due
-    // so a window never reaches into it.
-    uint64_t gap_from_us = 0, gap_until_us = 0;
-    mabur::AuCadence au_cadence;
-    auto listen_gate = [&](UepBody& b, uint64_t p_us, size_t bytes, int sid) {
-      const uint64_t start = std::max(air_clock.free_at_us(), p_us);
-      const uint64_t hold = mabur::ListenWindow::hold_until(
-          start, air_clock.cost_us(bytes, sid), gap_from_us, gap_until_us);
-      if (hold) {
-        b.not_before_us = hold;
-        air_clock.reserve_until(hold);
-      }
-    };
+    pipe.set_slice_geometry(
+        venc_cfg_ctb64_rows(static_cast<uint16_t>(cfg.venc.core.height)),
+        venc_cfg_slice_rows(static_cast<uint16_t>(cfg.venc.core.height), cfg.venc.core.slices));
     std::vector<uint8_t> fbuf(VENC_FRAME_META_SIZE + 512 * 1024);
     uint64_t last_reattach = 0;
     uint64_t last_ring_stats_ms = 0;
@@ -1866,6 +1885,9 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
     // unpinned). Sending it to kRestCore is what makes the policy a win.
     FecWorker fec_worker(two_core_target() ? kRestCore : -1);
     UepEncoder uep(cfg.uep_layers(), cfg.fec.flush_ms, &fec_worker);
+    uep.set_source_tap([&retx](uint8_t sid, uint32_t seq, const uint8_t* env, size_t n) {
+      if (sid == 0) retx.put(seq, env, n);  // base layer only (fec-nack)
+    });
 
     // Probe stream (spec 2026-09-04 §2): same FEC geometry as the enh layer
     // (block_payload/bpb), so a probe body is the same wire size as a video
@@ -1980,9 +2002,6 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
           b.pushed_us = p_us;
           const size_t body_bytes = b.body.size();
           const int body_sid = b.stream_id;
-          // A late repair queues behind the probe: it goes now if its air
-          // ends before the window opens, else it waits the window out.
-          listen_gate(b, p_us, body_bytes, body_sid);
           txq.push(std::move(b));
           air_clock.book(p_us, body_bytes, body_sid);
           any = true;
@@ -2046,14 +2065,9 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
                       b.enqueued_ms = static_cast<uint32_t>(p_us / 1000);
                       b.pushed_us = p_us;
                       b.au_first = first;
-                      if (first) au_cadence.on_au_first(p_us);
                       first = false;
                       const size_t body_bytes = b.body.size();
                       const int body_sid = b.stream_id;
-                      // Listen window: a body that would reach into the
-                      // previous burst's window waits it out; the model
-                      // starts the rest of the AU after it.
-                      listen_gate(b, p_us, body_bytes, body_sid);
                       txq.push(std::move(b));
                       air_clock.book(p_us, body_bytes, body_sid);
                       split_sink_sum_us += now_steady_us() - s_us;
@@ -2073,32 +2087,9 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
           const uint64_t p_us = now_steady_us();
           pb.enqueued_ms = static_cast<uint32_t>(p_us / 1000);
           pb.pushed_us = p_us;
-          listen_gate(pb, p_us, pb.body.size(), AirClock::kProbeSid);
           air_clock.book(p_us, pb.body.size(), AirClock::kProbeSid);
           txq.push(std::move(pb));
           txq.flush();
-        }
-        // Listen window (rollout phase 3b): this AU's burst, probe
-        // included, is modelled off air at the clock's free_at. While the
-        // GS's statuses ask for a window, place it the learned delay after
-        // that end, cut to end before the next AU is due (skipped if that
-        // leaves too little). Record it keyed by the frame id the probe
-        // carries, which is what the GS's status names; with no window the
-        // record still times the statuses against the burst's end.
-        if (!first) {
-          const uint64_t g_now = now_steady_us();
-          const uint64_t g_end = std::max(air_clock.free_at_us(), g_now);
-          const uint32_t g_us = listen_win.gap_us(g_now);
-          mabur::ListenWindow::Window win{g_end, g_end, false};
-          if (g_us) {
-            win = mabur::ListenWindow::place(g_end, listen_win.delay_us(), g_us,
-                                             au_cadence.next_due_us());
-            if (win.skipped) listen_win.on_fit_skip();
-          }
-          listen_win.on_au_gap(static_cast<uint16_t>(pipe.next_frame_id() - 1), g_end,
-                               win.from, win.until);
-          gap_from_us = win.from;
-          gap_until_us = win.until;
         }
         // dq_split accounting: ring wait is loop-top → read return (the
         // interval during which this frame did not yet exist for us), CPU is
@@ -2114,28 +2105,8 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
           split_cpu_sum_us += cpu_us;
           if (cpu_us > split_cpu_max_us) split_cpu_max_us = cpu_us;
         }
-        {
-          // Arrival-side backlog: the same quantity the gate and the wire
-          // air_ms use (backlog_us, computed before pipe.encode), not a
-          // fresh post-booking sample -- that would always include this
-          // frame's own just-booked airtime (a rung-2 IDR alone ~23 ms).
-          const uint32_t bl = backlog_us;
-          air_backlog_now_us.store(bl, std::memory_order_relaxed);
-          uint32_t prev = air_backlog_max_us.load(std::memory_order_relaxed);
-          while (bl > prev &&
-                 !air_backlog_max_us.compare_exchange_weak(prev, bl)) {}
-          air_shed_drops_total.store(pipe.air_dropped(), std::memory_order_relaxed);
-        }
         enc_frames_total.fetch_add(1, std::memory_order_relaxed);
         enc_bytes_total.fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
-        idr_disagree_total.store(pipe.idr_disagreements(),
-                                 std::memory_order_relaxed);
-        enhance_disagree_total.store(pipe.enhance_disagreements(),
-                                     std::memory_order_relaxed);
-        vanished_base_total.store(pipe.vanished_base(), std::memory_order_relaxed);
-        vanished_enh_total.store(pipe.vanished_enhance(), std::memory_order_relaxed);
-        self_idr_refused_total.store(pipe.self_idr_refused(),
-                                     std::memory_order_relaxed);
       }
       // Ring-pressure observability (spec: the drain-feedback policy's
       // future input): one stderr line every 5 s.
@@ -2149,24 +2120,18 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
       // (write_idx - read_idx). Since the venc fold-in the producer is a
       // thread of THIS process, so its drop count is no longer unreachable:
       // it comes from venc_get_stats() (VencStats.full_drops), which reads
-      // the encoder's own handle — see the T_TELEM collector below, which
-      // publishes it as Telem.venc_full_drops. This line stays
-      // consumer-side-only on purpose, so the two provenances never blur.
+      // the encoder's own handle. This line stays consumer-side-only on
+      // purpose, so the two provenances never blur.
       // See tests/test_frame_source.cpp
       // (consumer_fill_reports_only_consumer_side_counters).
       if (now - last_ring_stats_ms >= 5000) {
         last_ring_stats_ms = now;
         venc_frame_ring_fill_t f{};
         if (fsrc.fill(&f)) {
-          // Telem.ring_drops (spec 2026-07-26 drone-telemetry): the two
-          // counters this process can actually move, per the comment above.
-          ring_drops_total.store(
-              static_cast<uint64_t>(f.oversize_drops) + static_cast<uint64_t>(f.bad_slot_drops),
-              std::memory_order_relaxed);
           std::fprintf(stderr,
               "maburd frame_ring: fill=%u%% (%u/%u) reads=%llu oversize=%llu "
               "bad_slot=%llu idr_disagree=%llu enhance_disagree=%llu "
-              "vanished=%llu/%llu self_idr_refused=%llu\n",
+              "vanished=%llu/%llu self_idr_refused=%llu slice_mismatch=%llu\n",
               f.fill_pct, f.used_slots, f.slot_count,
               (unsigned long long)f.reads,
               (unsigned long long)f.oversize_drops,
@@ -2175,7 +2140,8 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
               (unsigned long long)pipe.enhance_disagreements(),
               (unsigned long long)pipe.vanished_base(),
               (unsigned long long)pipe.vanished_enhance(),
-              (unsigned long long)pipe.self_idr_refused());
+              (unsigned long long)pipe.self_idr_refused(),
+              (unsigned long long)pipe.slice_mismatch());
         }
         // dq_split window report (dq-spike follow-up): the pre-push half of
         // the interval the wire q_ms spans. The post-push half (true queue
@@ -2254,9 +2220,9 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
   // made from the TX writer thread, and devourer's IRtlRadio.h contract
   // forbids any of them concurrent with a channel set. RealActuator::retune
   // takes tx_gate exclusive around FastRetune, so each call here takes it
-  // SHARED -- a cal session lasts up to 180 s while link.rendezvous_ms is
-  // 30 s, so the agent's FAILSAFE->RENDEZVOUS go_home_ retune landing
-  // mid-sweep is the normal case, not a corner. retune's other half of the
+  // SHARED -- a cal session lasts up to 180 s, long enough for a hop, DISC
+  // or move_unconfirmed retune to be requested mid-sweep, so that is the
+  // normal case, not a corner. retune's other half of the
   // fix defers the move entirely while cal_active, and the deferred replay
   // fires on the agent thread's falling edge -- by which time this thread
   // may still be inside the post-session power restore. So the gate covers
@@ -2417,7 +2383,6 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
       // kGapUs exactly, or the GS's listen-window deadline
       // (plan_duration_ms) desyncs from what actually airs.
       rc::CalCmd verify;
-      verify.vtx_id = result.vtx_id;
       verify.nonce = result.nonce;
       verify.phase = cal::kPhaseVerify;
       // Authority for all three: gs/src/cal_plan.h's kVerifyFrames/
@@ -2531,6 +2496,9 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
     // ~0.385 ms/body burst pace into USB round-trip vs airtime. A blocking
     // ~1.1 ms per 3-body batch here = the URB round-trip IS the pace.
     uint64_t sb_calls = 0, sb_bodies = 0, sb_sum_us = 0, sb_max_us = 0;
+    // Cal frames whose tag did not verify under the current session (link
+    // pairing spec 2026-10-01 §7): dropped; Telem flags bit1 carries it.
+    uint64_t cal_auth_rejects = 0;
     uint32_t last_qw_report_ms = static_cast<uint32_t>(now_steady_ms());
     while (!g_devourer_should_stop) {
       // Calibration control frames (cal_queue, fed by the RX callback):
@@ -2538,6 +2506,11 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
       // pump()'s thread (cal_sweep.h constraint 1).
       std::vector<uint8_t> cal_body;
       while (cal_queue.pop(cal_body)) {
+        if (!agent.verify_cal_frame(cal_body.data(), cal_body.size(),
+                                     cal_sweep.active())) {
+          ++cal_auth_rejects;
+          continue;
+        }
         const int cal_type = rc::frame_type(cal_body.data(), cal_body.size());
         const uint64_t cal_now = now_steady_ms();
         if (cal_type == rc::T_CAL_CMD) {
@@ -2637,18 +2610,6 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
 
       batch.clear();
       if (txq.pop_batch(batch, 3, 5) == 0) continue;
-      // Listen window (phase 3b): a held body starts its own batch
-      // (pop_batch); wait out the window before it goes to the radio. Ahead
-      // of the q_ms patch below, so a held AU-first body shows in the GS's
-      // dq segment (a held late repair or probe has no dq of its own).
-      if (batch[0].not_before_us) {
-        const uint64_t h0 = now_steady_us();
-        if (batch[0].not_before_us > h0) {
-          std::this_thread::sleep_for(std::chrono::microseconds(std::min<uint64_t>(
-              batch[0].not_before_us - h0, mabur::ListenWindow::kMaxHoldUs)));
-          listen_win.on_gate_hold(now_steady_us() - h0);
-        }
-      }
       // Patch each body's SBI q_ms with its TxQueue wait (push→pop), and
       // fold the batch's worst case into the window-max gauge (spec
       // 2026-08-30 latency-accounting, Task 4). enqueued_ms == 0 means the
@@ -2693,12 +2654,13 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
         if (sb_calls > 0) {
           std::fprintf(stderr,
               "maburd tx_send: calls=%llu bodies=%llu us/call mean=%llu "
-              "max=%llu us/body=%llu\n",
+              "max=%llu us/body=%llu cal_auth_rej=%llu\n",
               (unsigned long long)sb_calls,
               (unsigned long long)sb_bodies,
               (unsigned long long)(sb_sum_us / sb_calls),
               (unsigned long long)sb_max_us,
-              (unsigned long long)(sb_bodies ? sb_sum_us / sb_bodies : 0));
+              (unsigned long long)(sb_bodies ? sb_sum_us / sb_bodies : 0),
+              (unsigned long long)cal_auth_rejects);
         }
         sb_calls = sb_bodies = sb_sum_us = sb_max_us = 0;
       }
@@ -2711,51 +2673,6 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
       if (sb_dt > sb_max_us) sb_max_us = sb_dt;
     }
   });
-
-  // Turnaround bench responder (rollout phase 2): answers T_TA_PING with
-  // T_TA_PONG on the hardware queue the ping names. Pongs ride the same
-  // direct, mutex-guarded send as every control frame (dev_sink.send, never
-  // the video pool), at control robustness, with the lane as the devourer
-  // per-packet queue (TxMode::hw_queue; lane 0 = today's default queue).
-  // Bounded by TaResponder's rate limit; idle unless the GS pings.
-  {
-    auto radiotaps = std::make_shared<std::array<std::vector<uint8_t>, rc::kTaMaxLane + 1>>();
-    for (uint8_t lane = 0; lane <= rc::kTaMaxLane; ++lane) {
-      devourer::TxMode m = control_tx_mode();
-      m.hw_queue = static_cast<devourer::HwQueue>(lane);
-      (*radiotaps)[lane] = devourer::build_stream_radiotap(m);
-    }
-    auto ta_seq = std::make_shared<uint16_t>(0);
-    mabur::TaResponder::Cfg tc;
-    tc.vtx_id = cfg.link.vtx_id;
-    ta_responder = std::make_unique<mabur::TaResponder>(
-        tc, [] { return now_steady_us(); },
-        [radiotaps, ta_seq](uint8_t lane, const std::vector<uint8_t>& body) {
-          const auto& rt = (*radiotaps)[lane <= rc::kTaMaxLane ? lane : 0];
-          std::vector<uint8_t> frame;
-          frame.reserve(rt.size() + kDot11HeaderLen + body.size());
-          frame.insert(frame.end(), rt.begin(), rt.end());
-          const auto hdr = build_dot11_header(*ta_seq);
-          *ta_seq = static_cast<uint16_t>((*ta_seq + 1) & 0xFFF);
-          frame.insert(frame.end(), hdr.begin(), hdr.end());
-          frame.insert(frame.end(), body.begin(), body.end());
-          return frame;
-        },
-        [&](const uint8_t* f, size_t n) {
-          // Quiet during a calibration session, like telemetry and MSP.
-          if (cal_active.load(std::memory_order_relaxed)) return false;
-          return dev_sink.send(f, n);
-        },
-        [&] {
-          mabur::TaResponder::QueueState q;
-          q.txq_depth = static_cast<uint16_t>(std::min<size_t>(txq.depth(), 0xFFFF));
-          q.pool_depth = static_cast<uint16_t>(std::min<size_t>(tx_pool.depth(), 0xFFFF));
-          q.air_backlog_100us = static_cast<uint16_t>(std::min<uint32_t>(
-              air_backlog_now_us.load(std::memory_order_relaxed) / 100u, 0xFFFFu));
-          return q;
-        });
-    ta_responder->start();
-  }
 
   // Agent thread: drains the RC queue every cfg.link.rc_drain_ms, ticks
   // RcAgent on cfg.link.tick_ms, runs the watchdog, and handles SIGUSR1
@@ -2781,8 +2698,6 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
     // comment for why a shared counter is load-bearing there.
     uint64_t last_telem_ms = start;
     mabur::CpuBusySampler cpu_busy;  // /proc/stat delta per telemetry tick
-    uint64_t rx_beat_at_last_telem = 0;
-    uint64_t air_drops_at_last_telem = 0;
 
     mabur::TickGate tick_gate(now_steady_ms(), cfg.link.tick_ms);
     // Peak 100 ms encoder rate for the stats line (peak_rate.h): fed every
@@ -2796,6 +2711,82 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
     // the falling edge, on THIS thread (apply_op's documented contract),
     // not from the TX writer thread that noticed cal_active clear.
     bool cal_was_active_for_ladder = false;
+    // TxStats::failed as of the last housekeeping tick, for send_telem.
+    uint64_t telem_usb_fail = 0;
+    // One T_TELEM frame: the 1 Hz periodic one, and the link-pairing
+    // "promote" frame (spec 2026-10-01 §6 step 4) sent right after an RCF
+    // promoted a session, before tick() runs its deferred retune.
+    auto send_telem = [&](uint64_t now) {
+      TelemInputs ti;
+      ti.state = static_cast<int>(agent.state());
+      ti.failsafe_shed = agent.failsafe_shed();
+      ti.congestion_shed = agent.congestion_shed();
+      ti.low_power = agent.low_power();
+      ti.auth_reject = agent.take_auth_reject();
+      ti.rec_status = vtx_rec.status_byte();
+      // have_feedback() false means no RCF has EVER been accepted (still
+      // BOOT/RENDEZVOUS) — 0 would read as maximally fresh, the opposite of
+      // the truth. Pass a value make_telem's saturate<uint16_t> clamps to
+      // 65535 ("never"), matching the wire field's documented sentinel.
+      ti.rcf_age_ms = agent.have_feedback()
+                          ? (now - agent.last_feedback_ms())
+                          : static_cast<uint64_t>(UINT16_MAX) + 1;
+      // link-rtt: which RCF that age references. Invalid (flags bit3
+      // clear) outside LINKED (failsafe rebase, unconfirmed-move fallback),
+      // where the age is fresh but no RCF backs it — the GS must not match
+      // a stale seq against it.
+      if (const auto fseq = agent.last_feedback_seq()) {
+        ti.rcf_seq_echo = *fseq;
+        ti.rcf_seq_echo_valid = true;
+      }
+      ti.rcf_rx = agent.rcf_accepted();
+      ti.cmd_kbps = actuator.last_bitrate_kbps;
+      ti.txq_drops = txq.dropped();
+      ti.txq_wait_max_ms = txq_wait_max_ms.exchange(0, std::memory_order_relaxed);
+      ti.usb_fail = telem_usb_fail;
+      // fec-nack, per period (spec 2026-10-05 §5): bumped by the RX
+      // thread's T_NACK handler, drained here.
+      ti.nack_rx = nack_rx.exchange(0, std::memory_order_relaxed);
+      ti.retx_syms = retx_syms.exchange(0, std::memory_order_relaxed);
+      ti.retx_refused = retx_refused.exchange(0, std::memory_order_relaxed);
+      // RX-side channel view for this period (cca-on 2026-09-23): the
+      // RX callback's frame split, drained per Telem. No register read
+      // here -- see rx_own_frames' declaration for why.
+      ti.rx_own = rx_own_frames.exchange(0, std::memory_order_relaxed);
+      ti.rx_foreign = rx_foreign_frames.exchange(0, std::memory_order_relaxed);
+      ti.rx_crcfail = rx_crcfail_frames.exchange(0, std::memory_order_relaxed);
+      ti.uplink = uplink_track.snap();
+      ti.soc_temp_c = read_soc_temp_c();
+      if (ti.soc_temp_c == -128)  // SigmaStar: no thermal_zone
+        ti.soc_temp_c = read_soc_temp_c_sigmastar();
+      ti.cpu_pct = cpu_busy.sample();
+#ifdef MABUR_HAVE_VENC
+      // link-rtt t3: pts-domain clock at telem build. Stays 0 (the
+      // wire's "unavailable" sentinel) on host builds and when
+      // MI_SYS_GetCurPts is unresolved.
+      ti.pts_at_build_us = venc_cur_pts_us();
+#endif
+
+      const rc::Telem telem_struct = make_telem(
+          telem_wire_seq.fetch_add(1, std::memory_order_relaxed), ti);
+      // Minor fix 5: publish this real snapshot for the TX writer
+      // thread's calibration ack to start from (send_cal_ack_telem)
+      // instead of a default-constructed Telem.
+      last_telem_snapshot.store(
+          std::make_shared<const rc::Telem>(telem_struct),
+          std::memory_order_relaxed);
+      auto telem = rc::pack_telem(telem_struct);
+
+      std::vector<uint8_t> frame;
+      frame.reserve(telem_radiotap.size() + kDot11HeaderLen + telem.size());
+      frame.insert(frame.end(), telem_radiotap.begin(), telem_radiotap.end());
+      const uint16_t dot11_seq =
+          telem_dot11_seq.fetch_add(1, std::memory_order_relaxed) & 0xFFF;
+      auto hdr = build_dot11_header(dot11_seq);
+      frame.insert(frame.end(), hdr.begin(), hdr.end());
+      frame.insert(frame.end(), telem.begin(), telem.end());
+      dev_sink.send(frame.data(), frame.size());
+    };
     while (!g_devourer_should_stop) {
       uint64_t now = now_steady_ms();
       enc_peak.sample(now, enc_bytes_total.load(std::memory_order_relaxed),
@@ -2823,6 +2814,10 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
       while (rc_queue.pop(rc_body)) {
         agent.on_rc_frame(rc_body.data(), rc_body.size(), now);
       }
+      // Promote Telem (spec §6 step 4): one frame on the CURRENT channel
+      // telling the GS we hold its session, before tick() runs the
+      // deferred retune. The GS follows on a LINKED Telem.
+      if (agent.take_session_promoted()) send_telem(now);
 
       if (tick_gate.due(now)) {
         devourer::ThermalStatus thermal = rtl_device->GetThermalStatus();
@@ -2830,6 +2825,7 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
         RadioHealth health;
         health.thermal_delta = thermal.valid ? thermal.delta : 0;
         health.tx_drops = txstats.failed;
+        telem_usb_fail = txstats.failed;
         health.txq_depth = txq.depth();
         health.txq_cap = kTxQueueCap;
         agent.tick(now, health);
@@ -2917,154 +2913,7 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
         if (!cal_sweeping.load(std::memory_order_relaxed) &&
             now - last_telem_ms >= 1000) {
           last_telem_ms = now;
-
-          TelemInputs ti;
-          ti.state = static_cast<int>(agent.state());
-          ti.channel = agent.channel();
-          ti.hop_epoch = agent.hop_epoch();
-          ti.failsafe_shed = agent.failsafe_shed();
-          ti.congestion_shed = agent.congestion_shed();
-          ti.probe_on = agent.probe_on();
-          ti.low_power = agent.low_power();
-          ti.rec_status = vtx_rec.status_byte();
-          // "advanced in the last 2 s" (spec) approximated as "advanced over
-          // the last telemetry tick" (~1 s here) — the collector runs on this
-          // same 1 Hz cadence, so a stricter 2 s window would just double-count
-          // the same beat across two ticks.
-          ti.radio_rx_ok = rb > rx_beat_at_last_telem;
-          rx_beat_at_last_telem = rb;
-          ti.generation = agent.current().generation;
-          // Telemetry rides the robust base rate (slot 0, mcs-1) to ensure
-          // control packets are reliably delivered even at the edge of coverage.
-          // The ladder is 2-slot: slot 0 (base, mcs-1) and slot 1 (enh, mcs).
-          ti.mode = agent.current().ladder[0].mode;
-          ti.mcs = agent.current().ladder[0].mcs;
-          ti.bw = agent.current().ladder[0].bw;
-          // applied_ov_base/enh report the commanded op PAIR (Task 6,
-          // RC_VERSION 5 — the fixed per-rung values RcAgent applies
-          // directly to the UEP layers), or the debug-HTTP per-layer
-          // override when armed (the same two atomics run_bitrate_policy's
-          // override check reads).
-          {
-            const int ob = ov_override.ovr_base_pct.load(std::memory_order_relaxed);
-            const int oe = ov_override.ovr_enh_pct.load(std::memory_order_relaxed);
-            if (ob >= 0 && oe >= 0) {
-              ti.applied_ov_base = ob / 100.0;
-              ti.applied_ov_enh = oe / 100.0;
-            } else {
-              ti.applied_ov_base = agent.current().fec_ov_base;
-              ti.applied_ov_enh = agent.current().fec_ov_enh;
-            }
-          }
-          // have_feedback() false means no RCF has EVER been accepted (still
-          // BOOT/RENDEZVOUS) — 0 would read as maximally fresh, the opposite of
-          // the truth. Pass a value make_telem's saturate<uint16_t> clamps to
-          // 65535 ("never"), matching the wire field's documented sentinel.
-          ti.rcf_age_ms = agent.have_feedback()
-                              ? (now - agent.last_feedback_ms())
-                              : static_cast<uint64_t>(UINT16_MAX) + 1;
-          // link-rtt: which RCF that age references. Invalid (flags bit3
-          // clear) after a DISC re-establish or failsafe rebase, where the
-          // age is fresh but no RCF backs it — the GS must not match a
-          // stale seq against it.
-          if (const auto fseq = agent.last_feedback_seq()) {
-            ti.rcf_seq_echo = *fseq;
-            ti.rcf_seq_echo_valid = true;
-          }
-          ti.rcf_rx = agent.rcf_accepted();
-          ti.enc_frames = enc_frames_total.load(std::memory_order_relaxed);
-          ti.enc_bytes = enc_bytes_total.load(std::memory_order_relaxed);
-          ti.cmd_kbps = actuator.last_bitrate_kbps;
-          // roi_qp is what RcAgent COMMANDED (the ROI override); the
-          // encoder's own QP comes from venc_get_stats below and stays 0
-          // on host builds. They were one field until 2026-09-03, and the
-          // flight-0011 analysis read the ROI value as the rate
-          // controller's — docs/handover-venc-overshoot-2026-09-03.md.
-          ti.roi_qp = actuator.last_roi_qp;
-          ti.ring_drops = ring_drops_total.load(std::memory_order_relaxed);
-          ti.txq_depth = txq.depth();
-          ti.txq_cap = kTxQueueCap;
-          ti.txq_drops = txq.dropped();
-          ti.txq_wait_max_ms = txq_wait_max_ms.exchange(0, std::memory_order_relaxed);
-          ti.radio_sent = tx.sent();
-          ti.radio_drops = tx.drops();
-          ti.usb_fail = txstats.failed;
-          // RX-side channel view for this period (cca-on 2026-09-23): the
-          // RX callback's frame split, drained per Telem. No register read
-          // here -- see rx_own_frames' declaration for why.
-          ti.rx_own = rx_own_frames.exchange(0, std::memory_order_relaxed);
-          ti.rx_foreign = rx_foreign_frames.exchange(0, std::memory_order_relaxed);
-          ti.rx_crcfail = rx_crcfail_frames.exchange(0, std::memory_order_relaxed);
-          ti.uplink = uplink_track.snap();
-          ti.soc_temp_c = read_soc_temp_c();
-          if (ti.soc_temp_c == -128)  // SigmaStar: no thermal_zone
-            ti.soc_temp_c = read_soc_temp_c_sigmastar();
-          ti.thermal_delta = health.thermal_delta;
-          ti.cpu_pct = cpu_busy.sample();
-          ti.idr_disagree = idr_disagree_total.load(std::memory_order_relaxed);
-          ti.enhance_disagree = enhance_disagree_total.load(std::memory_order_relaxed);
-          ti.vanished_base = vanished_base_total.load(std::memory_order_relaxed);
-          ti.vanished_enh = vanished_enh_total.load(std::memory_order_relaxed);
-          ti.self_idr_refused = self_idr_refused_total.load(std::memory_order_relaxed);
-          ti.air_backlog_max_ms =
-              air_backlog_max_us.exchange(0, std::memory_order_relaxed) / 1000u;
-          ti.air_shed_drops = air_shed_drops_total.load(std::memory_order_relaxed);
-          ti.air_shed = ti.air_shed_drops > air_drops_at_last_telem;
-          air_drops_at_last_telem = ti.air_shed_drops;
-#ifdef MABUR_HAVE_VENC
-          // Producer side of the frame ring, straight from the encoder
-          // (venc_get_stats is thread-safe and reads the shm header, not a
-          // cached copy). ring_drops above is the CONSUMER side — the two
-          // count different losses and both are needed to tell "encoder
-          // outran maburd" from "maburd rejected a slot". A silently
-          // stalled encoder has neither: it shows as ti.enc_frames flat.
-          VencStats vs{};
-          venc_get_stats(&vs);
-          ti.venc_full_drops = vs.full_drops;
-          ti.venc_ring_fill_pct = static_cast<int>(vs.ring_fill_pct);
-          // link-rtt t3: pts-domain clock at telem build. Stays 0 (the
-          // wire's "unavailable" sentinel) on host builds and when
-          // MI_SYS_GetCurPts is unresolved.
-          ti.pts_at_build_us = venc_cur_pts_us();
-#endif
-
-          const rc::Telem telem_struct = make_telem(
-              telem_wire_seq.fetch_add(1, std::memory_order_relaxed), ti);
-          // Minor fix 5: publish this real snapshot for the TX writer
-          // thread's calibration ack to start from (send_cal_ack_telem)
-          // instead of a default-constructed Telem.
-          last_telem_snapshot.store(
-              std::make_shared<const rc::Telem>(telem_struct),
-              std::memory_order_relaxed);
-          auto telem = rc::pack_telem(telem_struct);
-
-          std::vector<uint8_t> frame;
-          frame.reserve(telem_radiotap.size() + kDot11HeaderLen + telem.size());
-          frame.insert(frame.end(), telem_radiotap.begin(), telem_radiotap.end());
-          const uint16_t dot11_seq =
-              telem_dot11_seq.fetch_add(1, std::memory_order_relaxed) & 0xFFF;
-          auto hdr = build_dot11_header(dot11_seq);
-          frame.insert(frame.end(), hdr.begin(), hdr.end());
-          frame.insert(frame.end(), telem.begin(), telem.end());
-          dev_sink.send(frame.data(), frame.size());
-
-          // Listen window report (phase 3): where this period's statuses
-          // landed against their AU's gap, and what the gap cost. Only while
-          // the GS is (or just was) sending statuses -- a separate frame so
-          // T_TELEM and RC_VERSION stay untouched.
-          const uint64_t lw_now = now_steady_us();
-          if (listen_win.active(lw_now)) {
-            auto lw = rc::pack_lwstat(listen_win.take(
-                cfg.link.vtx_id, lw_wire_seq++, lw_now));
-            std::vector<uint8_t> lf;
-            lf.reserve(telem_radiotap.size() + kDot11HeaderLen + lw.size());
-            lf.insert(lf.end(), telem_radiotap.begin(), telem_radiotap.end());
-            auto lh = build_dot11_header(static_cast<uint16_t>(
-                telem_dot11_seq.fetch_add(1, std::memory_order_relaxed) & 0xFFF));
-            lf.insert(lf.end(), lh.begin(), lh.end());
-            lf.insert(lf.end(), lw.begin(), lw.end());
-            dev_sink.send(lf.data(), lf.size());
-          }
+          send_telem(now);
         }
       }
 
@@ -3170,7 +3019,7 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
   // (radio_tx.cpp), so the wire never depends on this.
 
   device_ready.store(true, std::memory_order_release);
-  std::fprintf(stderr, "maburd entering RX loop on channel %d\n", cfg.radio.channel);
+  std::fprintf(stderr, "maburd entering RX loop on channel %d\n", start_ch);
   rtl_device->StartRxLoop(rx_callback);
 
   // Init() returns once g_devourer_should_stop is set (SIGINT/SIGTERM) or the
@@ -3182,17 +3031,6 @@ int run_real_mode(const Config& cfg, const std::string& cfg_path) {
   if (tx_thread.joinable()) tx_thread.join();
   if (agent_thread.joinable()) agent_thread.join();
   if (msp_thread.joinable()) msp_thread.join();
-  if (ta_responder) {
-    std::fprintf(stderr,
-                 "maburd turnaround: %llu pings answered, %llu pong frames sent "
-                 "(%llu failed), dropped %llu rate / %llu busy\n",
-                 static_cast<unsigned long long>(ta_responder->answered()),
-                 static_cast<unsigned long long>(ta_responder->frames_sent()),
-                 static_cast<unsigned long long>(ta_responder->send_failed()),
-                 static_cast<unsigned long long>(ta_responder->rate_dropped()),
-                 static_cast<unsigned long long>(ta_responder->busy_dropped()));
-    ta_responder->stop();  // before the pool and the device go away
-  }
   tx_pool.stop();  // drain + join senders before device teardown
 
   vtx_rec.shutdown();   // close the file before the record channel is torn down
@@ -3272,11 +3110,34 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "  %s\n", d.c_str());
   }
 
+  // Spec 2026-10-03-auto-channel-set §3: park on the remembered member,
+  // else the first. A missing/garbage/non-member file is silently the
+  // first member -- nothing to configure, nothing to repair.
+  const auto remembered_ch = mabur::read_channel_file(mabur::kDroneChannelFile);
+  const bool use_remembered =
+      remembered_ch && mabur::channel_set_member(cfg.radio.channels, *remembered_ch);
+  const uint8_t start_ch = use_remembered ? *remembered_ch : cfg.radio.channels.front();
+  {
+    std::string set_str;
+    for (size_t i = 0; i < cfg.radio.channels.size(); ++i) {
+      if (i) set_str += ",";
+      set_str += std::to_string(cfg.radio.channels[i]);
+    }
+    std::fprintf(stderr, "maburd: channel set [%s], parking on %u%s\n", set_str.c_str(),
+                 static_cast<unsigned>(start_ch), use_remembered ? " (remembered)" : "");
+  }
+
   std::fprintf(stderr,
                "fec: symbol_size=[%d,%d] bpb=[%d,%d] window=%d\n",
                cfg.fec.symbol_size[0], cfg.fec.symbol_size[1],
                cfg.fec.blocks_per_body[0], cfg.fec.blocks_per_body[1],
                cfg.fec.window);
+
+  std::fprintf(stderr, "link: key %s (%s)\n",
+               mabur::key_fingerprint(cfg.link.key).c_str(), cfg.link.key_source.c_str());
+  if (cfg.link.key_is_default)
+    std::fprintf(stderr, "link: DEFAULT key in use -- any default install can control this drone; "
+                         "see docs/deploy.md 'Pairing'\n");
 
   if (dry_run) {
     if (in_path.empty() || out_path.empty()) {
@@ -3284,8 +3145,8 @@ int main(int argc, char** argv) {
       print_usage(argv[0]);
       return 1;
     }
-    return run_dry_run(cfg, in_path, out_path, rc_in_path, msp_in_path, msp_out_path);
+    return run_dry_run(cfg, start_ch, in_path, out_path, rc_in_path, msp_in_path, msp_out_path);
   }
 
-  return run_real_mode(cfg, cfg_path);
+  return run_real_mode(cfg, start_ch, cfg_path);
 }

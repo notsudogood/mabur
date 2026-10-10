@@ -22,8 +22,8 @@ double HopVerdict::median(std::deque<double> v) {
   return (n % 2) ? v[n / 2] : (v[n / 2 - 1] + v[n / 2]) / 2.0;
 }
 
-HopVerdict::HopVerdict(HopCfg cfg, int n_cards)
-    : cfg_(cfg), n_cards_(n_cards), rssi_hist_(n_cards) {}
+HopVerdict::HopVerdict(HopCfg cfg, BusyCfg busy, int n_cards)
+    : cfg_(cfg), busy_(busy), n_cards_(n_cards), rssi_hist_(n_cards) {}
 
 void HopVerdict::reset() {
   frozen_ = false;
@@ -93,7 +93,8 @@ VerdictOut HopVerdict::window(double now_ms, const std::vector<VerdictCardIn>& c
                         (rec_ref > 0 && link.recovered > hv.recovered_x * rec_ref &&
                          link.recovered >= static_cast<uint32_t>(std::max(hv.recovered_min, 0))) ||
                         starved;
-  const bool weak = cards[best].rssi_dbm < hv.weak_rssi_dbm && cards[best].snr_db < hv.weak_snr_db;
+  const bool weak = cards[best].rssi_dbm < hv.weak_rssi_dbm &&
+                    (!cards[best].snr_valid || cards[best].snr_db < hv.weak_snr_db);
   // Guard: a frozen reference that was never established for this card
   // (out-of-range or invalid-with-no-history at freeze time, see below)
   // reads back as 0 -- a real RSSI is never exactly 0 dBm, so treat 0 as
@@ -127,7 +128,7 @@ VerdictOut HopVerdict::window(double now_ms, const std::vector<VerdictCardIn>& c
       have_busy_reading = true;
     }
   }
-  blocked = have_busy_reading && min_foreign_busy_pct >= hv.blocked_pct;
+  blocked = have_busy_reading && min_foreign_busy_pct >= busy_.blocked_pct;
   o.evidence = (impaired ? kEvImpaired : 0) | (weak ? kEvWeak : 0) | (fading ? kEvFading : 0) |
                (contended ? kEvContended : 0) | (raised ? kEvRaised : 0) | (blocked ? kEvBlocked : 0) |
                (starved ? kEvStarved : 0);

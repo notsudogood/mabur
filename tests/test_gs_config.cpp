@@ -1,16 +1,28 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <functional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include "mtest.h"
 #include "config.h"
+#include "mabur/link_key.h"
 
 static std::string write_tmp(const std::string& text) {
   std::string path = "/tmp/maburgs_test_config.toml";
   std::ofstream f(path);
   f << text;
   return path;
+}
+
+static std::string what_of(const std::function<void()>& fn) {
+  try {
+    fn();
+  } catch (const std::exception& e) {
+    return e.what();
+  }
+  return "";
 }
 
 // The shipped bundle must load through the real loader. Its values are
@@ -23,7 +35,7 @@ TEST(default_bundle_config_loads) {
 
 TEST(missing_keys_fall_back_to_defaults) {
   auto cfg = maburgs::load_config(write_tmp(""));
-  CHECK(cfg.radio.channel == 149);
+  CHECK(cfg.radio.channels.front() == 40);
   CHECK(cfg.video.frame_lookahead == 8);
 }
 
@@ -300,6 +312,44 @@ TEST(out_entry_missing_a_port_is_rejected) {
   std::remove(p.c_str());
 }
 
+// Software NACK (spec 2026-10-05 fec-nack section 7): [link.nack] is
+// optional and absent = off; the spike's settle_ms knob is gone (settle is
+// adaptive), and lookback must stay inside the decoder's seq horizon.
+TEST(link_nack_section_parses_and_defaults_off) {
+  auto off = maburgs::load_config(write_tmp(""));
+  CHECK(!off.link.nack.enable && off.link.nack.lookback == 256 &&
+        off.link.nack.repeat_ms == 16 && off.link.nack.max_tries == 2);
+  CHECK(off.link.nack.min_lead_ms == 12);
+  auto on = maburgs::load_config(write_tmp(
+      "[link.nack]\nenable = true\nlookback = 128\nrepeat_ms = 20\nmax_tries = 1\nmin_lead_ms = 8\n"));
+  CHECK(on.link.nack.enable && on.link.nack.lookback == 128 &&
+        on.link.nack.repeat_ms == 20 && on.link.nack.max_tries == 1);
+  CHECK(on.link.nack.min_lead_ms == 8);
+  bool lead_threw = false;
+  try { maburgs::load_config(write_tmp("[link.nack]\nmin_lead_ms = 0\n")); } catch (const std::exception&) { lead_threw = true; }
+  CHECK(lead_threw);  // 0 would send requests that cannot be answered in time
+  bool threw = false;
+  try { maburgs::load_config(write_tmp("[link.nack]\nsettle_ms = 5\n")); } catch (const std::exception&) { threw = true; }
+  CHECK(threw);   // the spike's knob is gone; settle is adaptive
+  threw = false;
+  try { maburgs::load_config(write_tmp("[link.nack]\nlookback = 600\n")); } catch (const std::exception&) { threw = true; }
+  CHECK(threw);   // must stay below fec.seq_horizon (512 default)
+  // ...and the bound follows fec.seq_horizon rather than a fixed number.
+  auto wide = maburgs::load_config(write_tmp(
+      "[fec]\nseq_horizon = 1024\n[link.nack]\nlookback = 600\n"));
+  CHECK(wide.link.nack.lookback == 600);
+}
+
+TEST(nack_disabled_sends_nothing) {
+  // Config off => the exporter never sees a block and the tracker is never
+  // constructed enabled; pinned here at the config/exporter seam, and in
+  // test_nack_tracker's disabled_tracker_is_inert for the tracker itself.
+  auto off = maburgs::load_config(write_tmp(""));
+  CHECK(!off.link.nack.enable);
+  auto bundle = maburgs::load_config(std::string(MABUR_GS_BUNDLE_DIR) + "/maburgs.default.toml");
+  CHECK(!bundle.link.nack.enable);
+}
+
 TEST(stale_video_out_key_throws) {
   bool threw = false;
   try { maburgs::load_config(write_tmp("[video_out]\nport = 5600\n")); }
@@ -320,7 +370,6 @@ TEST(gs_load_config_parses_arrays_of_tables) {
       "index = 1\n"
       "\n"
       "[link]\n"
-      "vtx_id = 1\n"
       "\n"
       "[[link.ladder]]\n"
       "mcs = 2\n"
@@ -346,7 +395,7 @@ TEST(gs_load_config_reports_defaulted_keys) {
   // The sections must be PRESENT for their keys to be visited: a whole
   // missing section is reported as the section, not key by key.
   const std::string path = write_tmp(
-      "[link]\nvtx_id = 1\n"
+      "[link]\n"
       "\n[stats]\ninterval_ms = 500\n");
   std::vector<std::string> defaulted;
   auto cfg = maburgs::load_config(path, &defaulted);
@@ -385,9 +434,9 @@ TEST(gs_load_config_errors_carry_file_and_line) {
 // absent value resolves to link.down_util, not to get_num's own default).
 TEST(gs_load_config_reports_previously_invisible_defaults) {
   const std::string path = write_tmp(
-      "[radio]\nchannel = 149\n"
+      "[radio]\n"
       "\n[fec]\nseq_horizon = 512\n"
-      "\n[link]\nvtx_id = 1\ndown_util = 0.4\n"
+      "\n[link]\ndown_util = 0.4\n"
       "\n[link.probe]\nenable = true\n");
   std::vector<std::string> defaulted;
   auto cfg = maburgs::load_config(path, &defaulted);
@@ -420,98 +469,119 @@ TEST(gs_load_config_reports_previously_invisible_defaults) {
   CHECK(std::abs(cfg.link.ladder_cfg.probe.max_util - 0.4) < 1e-9);
 }
 
-TEST(radio_scan_defaults_when_absent) {
-  auto p = write_tmp("[radio]\nchannel = 136\n");
-  auto cfg = maburgs::load_config(p);
-  CHECK(cfg.radio.scan.enable == true);
-  CHECK(cfg.radio.scan.candidates.empty());
+TEST(radio_channels_default_set_and_auto) {
+  auto cfg = maburgs::load_config(write_tmp(""));
+  REQUIRE(cfg.radio.channels.size() == 4);
+  CHECK(cfg.radio.channels[0] == 40 && cfg.radio.channels[1] == 64 &&
+        cfg.radio.channels[2] == 112 && cfg.radio.channels[3] == 144);
+  CHECK(!cfg.radio.pin.has_value());                 // "auto"
   CHECK(cfg.radio.scan.dwell_ms == 250);
   CHECK(cfg.radio.scan.settle_ms == 30);
   CHECK(cfg.radio.scan.min_rounds == 3);
-  CHECK(cfg.radio.scan.home_window_ms == 300);
-  CHECK(cfg.radio.scan.split_after_ms == 5000);
-  CHECK(cfg.radio.scan.home_margin == 20);
+  CHECK(cfg.radio.scan.search_ms == 100);
+  CHECK(cfg.radio.scan.op_window_ms == 300);
+  CHECK(cfg.radio.scan.search_after_ms == 5000);
+  CHECK(cfg.radio.scan.pick_margin == 20);
+  CHECK(cfg.radio.scan.one_card_ms == 5000);
+  CHECK(cfg.radio.scan.max_ms == 30000);
+}
+
+TEST(radio_channel_auto_string_or_member_pin) {
+  auto a = maburgs::load_config(write_tmp("[radio]\nchannel = \"auto\"\nchannels = [136, 144]\nwidth = 40\n"));
+  CHECK(!a.radio.pin.has_value());
+  REQUIRE(a.radio.channels.size() == 2);
+  auto p = maburgs::load_config(write_tmp("[radio]\nchannel = 144\nchannels = [136, 144]\nwidth = 40\n"));
+  REQUIRE(p.radio.pin.has_value()); CHECK(*p.radio.pin == 144);
+  bool threw = false;
+  try { maburgs::load_config(write_tmp("[radio]\nchannel = 112\nchannels = [136, 144]\n")); }
+  catch (const std::exception& e) { threw = std::string(e.what()).find("radio.channel") != std::string::npos; }
+  CHECK(threw);                                        // pin must be a member
+  threw = false;
+  try { maburgs::load_config(write_tmp("[radio]\nchannel = \"manual\"\n")); }
+  catch (const std::exception&) { threw = true; }
+  CHECK(threw);
+}
+
+// The pin is range-checked BEFORE the uint8_t cast: 296 wraps to 40, a
+// member of the default set, and used to be accepted as a 40 pin.
+// Revert (cast first): no throw.
+TEST(radio_channel_pin_out_of_range_fails_before_the_cast) {
+  for (const char* body : {"[radio]\nchannel = 296\n", "[radio]\nchannel = 0\n",
+                           "[radio]\nchannel = -216\n"}) {
+    bool threw = false;
+    try { maburgs::load_config(write_tmp(body)); }
+    catch (const std::exception& e) { threw = std::string(e.what()).find("radio.channel") != std::string::npos; }
+    CHECK(threw);
+  }
+}
+
+TEST(radio_channels_validated_by_channel_set_rules) {
+  bool threw = false;
+  try { maburgs::load_config(write_tmp("[radio]\nchannels = [40, 36]\nwidth = 40\n")); }
+  catch (const std::exception& e) { threw = std::string(e.what()).find("radio.channels") != std::string::npos; }
+  CHECK(threw);                                        // mixed offsets
+  threw = false;
+  try { maburgs::load_config(write_tmp("[radio]\nchannels = []\n")); }
+  catch (const std::exception&) { threw = true; }
+  CHECK(threw);
+  threw = false;
+  try { maburgs::load_config(write_tmp("[radio]\nchannels = [40, 40]\n")); }
+  catch (const std::exception&) { threw = true; }
+  CHECK(threw);
 }
 
 TEST(radio_scan_parses_and_validates) {
-  auto p = write_tmp(
-      "[radio]\nchannel = 136\n[radio.scan]\nenable = false\n"
-      "candidates = [149, 153, 161]\ndwell_ms = 500\nsettle_ms = 40\n"
-      "min_rounds = 2\nhome_window_ms = 400\nsplit_after_ms = 8000\n"
-      "home_margin = 5\n");
-  auto cfg = maburgs::load_config(p);
-  CHECK(cfg.radio.scan.enable == false);
-  REQUIRE(cfg.radio.scan.candidates.size() == 3);
-  CHECK(cfg.radio.scan.candidates[0] == 149);
-  CHECK(cfg.radio.scan.candidates[2] == 161);
+  auto cfg = maburgs::load_config(write_tmp(
+      "[radio.scan]\ndwell_ms = 500\nsettle_ms = 40\nmin_rounds = 2\nsearch_ms = 60\n"
+      "op_window_ms = 400\nsearch_after_ms = 8000\npick_margin = 5\none_card_ms = 0\nmax_ms = 20000\n"));
   CHECK(cfg.radio.scan.dwell_ms == 500);
-  CHECK(cfg.radio.scan.home_margin == 5);
-
+  CHECK(cfg.radio.scan.search_ms == 60);
+  CHECK(cfg.radio.scan.op_window_ms == 400);
+  CHECK(cfg.radio.scan.search_after_ms == 8000);
+  CHECK(cfg.radio.scan.pick_margin == 5);
+  CHECK(cfg.radio.scan.one_card_ms == 0);
+  CHECK(cfg.radio.scan.max_ms == 20000);
   bool threw = false;
-  try { maburgs::load_config(write_tmp("[radio.scan]\ndwell_ms = 10\n")); }
-  catch (const std::runtime_error& e) { threw = std::string(e.what()).find("radio.scan.dwell_ms") != std::string::npos; }
-  CHECK(threw);
-  threw = false;
-  try { maburgs::load_config(write_tmp("[radio.scan]\ncandidates = [0]\n")); }
-  catch (const std::runtime_error& e) { threw = std::string(e.what()).find("radio.scan.candidates") != std::string::npos; }
-  CHECK(threw);
-  threw = false;
-  try { maburgs::load_config(write_tmp("[radio.scan]\nhome_window_ms = 30\n")); }
-  catch (const std::runtime_error& e) { threw = std::string(e.what()).find("radio.scan.home_window_ms") != std::string::npos; }
-  CHECK(threw);
-  threw = false;
-  try { maburgs::load_config(write_tmp("[radio.scan]\nbogus = 1\n")); }
-  catch (const std::runtime_error& e) { threw = std::string(e.what()).find("radio.scan.bogus") != std::string::npos; }
-  CHECK(threw);
+  try { maburgs::load_config(write_tmp("[radio.scan]\nsearch_ms = 10\n")); }
+  catch (const std::exception&) { threw = true; }
+  CHECK(threw);                                        // [40,2000]
 }
 
-TEST(scan_candidates_must_share_home_offset_at_40) {
-  // FastRetune keeps width AND offset on both ends: with home 136
-  // (132+136, primary = upper half, offset 2) a retune to 140 would land
-  // on the off-grid 136+140, not 140+144, and the drone's ht40_offset(140)
-  // would disagree. Candidates are pair primaries on home's side.
-  auto ok = maburgs::load_config(write_tmp(
-      "[radio]\nchannel = 136\nwidth = 40\n[radio.scan]\ncandidates = [144, 40, 128]\n"));
-  CHECK(ok.radio.scan.candidates.size() == 3);
-  bool threw = false;
-  try {
-    maburgs::load_config(write_tmp(
-        "[radio]\nchannel = 136\nwidth = 40\n[radio.scan]\ncandidates = [140]\n"));
-  } catch (const std::exception& e) {
-    threw = std::string(e.what()).find("radio.scan.candidates") != std::string::npos &&
-            std::string(e.what()).find("140") != std::string::npos;
+TEST(removed_scan_and_home_keys_fail_boot) {
+  for (const char* body : {"[radio.scan]\nenable = true\n", "[radio.scan]\ncandidates = [144]\n",
+                           "[radio.scan]\nhome_window_ms = 300\n", "[radio.scan]\nsplit_after_ms = 5000\n",
+                           "[radio.scan]\nhome_margin = 20\n"}) {
+    bool threw = false;
+    try { maburgs::load_config(write_tmp(body)); } catch (const std::exception&) { threw = true; }
+    CHECK(threw);
   }
-  CHECK(threw);
-  threw = false;
-  try {
-    maburgs::load_config(write_tmp(
-        "[radio]\nchannel = 136\nwidth = 40\n[radio.scan]\ncandidates = [165]\n"));
-  } catch (const std::exception& e) {
-    threw = std::string(e.what()).find("radio.scan.candidates") != std::string::npos &&
-            std::string(e.what()).find("165") != std::string::npos;
-  }
-  CHECK(threw);
-  // At 20 MHz nothing changes: any 20 MHz channel is a candidate.
-  auto c20 = maburgs::load_config(write_tmp(
-      "[radio]\nchannel = 136\nwidth = 20\n[radio.scan]\ncandidates = [140, 165]\n"));
-  CHECK(c20.radio.scan.candidates.size() == 2);
 }
 
 TEST(hop_defaults_when_absent) {
-  auto cfg = maburgs::load_config(write_tmp("[radio]\nchannel = 136\n"));
-  CHECK(cfg.hop.enable == false);
-  CHECK(cfg.hop.scout_when_disabled == true);
+  auto cfg = maburgs::load_config(write_tmp(""));
   CHECK(cfg.hop.window_ms == 150 && cfg.hop.persist == 2);
   CHECK(cfg.hop.dwell_observe_ms == 5 && cfg.hop.dwell_period_ms == 333);
   CHECK(cfg.hop.confirm_ms == 500 && cfg.hop.verify_ms == 1000 && cfg.hop.cooldown_ms == 2000);
   CHECK(cfg.hop.max_hops_per_min == 4 && cfg.hop.backoff_ms == 30000 && cfg.hop.one_card_repeats == 5);
   CHECK(cfg.hop.verdict.loss_pct == 3.0 && cfg.hop.verdict.fa_pps == 100 && cfg.hop.verdict.weak_rssi_dbm == -78);
+  CHECK(cfg.radio.scan.busy.busy_dbm == -83 && cfg.radio.scan.busy.blocked_pct == 50.0);
+}
+// 2026-10-04: pin is static. The mode knob is radio.channel alone; the
+// busy-air thresholds belong to every measurer, so they live under
+// radio.scan. Removed keys fail boot, as every removed key does.
+TEST(removed_hop_keys_fail_boot) {
+  for (const char* body : {"[hop]\nenable = true\n", "[hop]\nscout_when_disabled = false\n",
+                           "[hop.verdict]\nbusy_dbm = -83\n", "[hop.verdict]\nblocked_pct = 50\n"}) {
+    bool threw = false;
+    try { maburgs::load_config(write_tmp(body)); } catch (const std::exception&) { threw = true; }
+    CHECK(threw);
+  }
 }
 TEST(hop_parses_and_validates) {
   auto cfg = maburgs::load_config(write_tmp(
-      "[hop]\nenable = true\nwindow_ms = 200\npersist = 3\ndwell_observe_ms = 8\n"
+      "[hop]\nwindow_ms = 200\npersist = 3\ndwell_observe_ms = 8\n"
       "[hop.verdict]\nfa_pps = 250\nweak_rssi_dbm = -80\n"));
-  CHECK(cfg.hop.enable && cfg.hop.window_ms == 200 && cfg.hop.persist == 3 && cfg.hop.dwell_observe_ms == 8);
+  CHECK(cfg.hop.window_ms == 200 && cfg.hop.persist == 3 && cfg.hop.dwell_observe_ms == 8);
   CHECK(cfg.hop.verdict.fa_pps == 250 && cfg.hop.verdict.weak_rssi_dbm == -80);
   bool threw = false;
   try { maburgs::load_config(write_tmp("[hop]\nwindow_ms = 10\n")); }
@@ -526,6 +596,16 @@ TEST(hop_parses_and_validates) {
   catch (const std::runtime_error& e) { threw = std::string(e.what()).find("hop.verdict.bogus") != std::string::npos; }
   CHECK(threw);
 }
+TEST(hop_relay_burst_period_ms_default_and_range) {
+  CHECK(maburgs::load_config(write_tmp("")).hop.relay_burst_period_ms == 1000);
+  CHECK(maburgs::load_config(write_tmp("[hop]\nrelay_burst_period_ms = 500\n")).hop.relay_burst_period_ms == 500);
+  CHECK(what_of([] { maburgs::load_config(write_tmp("[hop]\nrelay_burst_period_ms = 50\n")); })
+            .find("relay_burst_period_ms") != std::string::npos);
+  // min 500: under ~450 ms a burst can re-fire on the tick the trigger
+  // returns after a result and starve the controller (final review item 5)
+  CHECK(what_of([] { maburgs::load_config(write_tmp("[hop]\nrelay_burst_period_ms = 400\n")); })
+            .find("relay_burst_period_ms") != std::string::npos);
+}
 TEST(radio_scan_energy_period_ms_is_gone) {
   bool threw = false;
   try { maburgs::load_config(write_tmp("[radio.scan]\nenergy_period_ms = 1000\n")); }
@@ -537,7 +617,7 @@ TEST(radio_scan_energy_period_ms_is_gone) {
 
 TEST(ladder_rung_bw_is_required_and_20_or_40) {
   auto cfg = maburgs::load_config(write_tmp(
-      "[radio]\nchannel = 136\nwidth = 40\n"
+      "[radio]\nwidth = 40\n"
       "[[link.ladder]]\nmcs = 4\nbw = 20\noverhead_base = 0.5\noverhead_enh = 0.25\n"
       "[[link.ladder]]\nmcs = 3\nbw = 40\noverhead_base = 0.5\noverhead_enh = 0.25\n"));
   auto& L = cfg.link.ladder_cfg.ladder;
@@ -569,7 +649,7 @@ TEST(ladder_rung_bw_40_needs_radio_width_40) {
   bool threw = false;
   try {
     maburgs::load_config(write_tmp(
-        "[radio]\nchannel = 136\nwidth = 20\n"
+        "[radio]\nwidth = 20\n"
         "[[link.ladder]]\nmcs = 3\nbw = 40\noverhead_base = 0.5\noverhead_enh = 0.25\n"));
   } catch (const std::exception& e) {
     threw = std::string(e.what()).find("link.ladder[0].bw") != std::string::npos &&
@@ -579,24 +659,44 @@ TEST(ladder_rung_bw_40_needs_radio_width_40) {
 }
 
 TEST(radio_width_is_20_or_40_and_40_needs_a_pair) {
-  CHECK(maburgs::load_config(write_tmp("[radio]\nchannel = 136\nwidth = 40\n")).radio.width == 40);
+  CHECK(maburgs::load_config(write_tmp("[radio]\nwidth = 40\n")).radio.width == 40);
   bool threw = false;
-  try { maburgs::load_config(write_tmp("[radio]\nchannel = 136\nwidth = 80\n")); }
+  try { maburgs::load_config(write_tmp("[radio]\nwidth = 80\n")); }
   catch (const std::exception& e) { threw = std::string(e.what()).find("radio.width") != std::string::npos; }
   CHECK(threw);
   threw = false;
-  try { maburgs::load_config(write_tmp("[radio]\nchannel = 165\nwidth = 40\n")); }
+  // A channel-set member with no 40 MHz pair is caught by channel_set_issue
+  // on radio.channels now, not a bare radio.channel pin check.
+  try { maburgs::load_config(write_tmp("[radio]\nchannels = [165]\nwidth = 40\n")); }
   catch (const std::exception& e) {
-    threw = std::string(e.what()).find("radio.width") != std::string::npos &&
+    threw = std::string(e.what()).find("radio.channels") != std::string::npos &&
             std::string(e.what()).find("165") != std::string::npos;
   }
   CHECK(threw);
 }
 
+TEST(width_issue_helpers_match_the_loader) {
+  // The web GS validates its page channel/width override with these same
+  // helpers; load_config's radio.width / ladder checks go through them.
+  CHECK(!maburgs::radio_width_issue(136, 40));
+  CHECK(!maburgs::radio_width_issue(165, 20));
+  auto e = maburgs::radio_width_issue(165, 40);
+  REQUIRE(e.has_value());
+  CHECK(e->field == "radio.width" && e->why.find("165") != std::string::npos);
+  CHECK(maburgs::radio_width_issue(136, 80).has_value());
+  maburgs::LinkCfg link;
+  CHECK(!maburgs::link_width_issue(link, 20));   // default ladder is all 20
+  link.ladder_cfg.ladder.back().bw = 40;
+  auto l = maburgs::link_width_issue(link, 20);
+  REQUIRE(l.has_value());
+  CHECK(l->field.rfind("link.ladder[", 0) == 0);
+  CHECK(!maburgs::link_width_issue(link, 40));
+}
+
 TEST(static_bw_defaults_20_and_40_needs_radio_width_40) {
   CHECK(maburgs::load_config(write_tmp("")).link.static_bw == 20);
   auto cfg = maburgs::load_config(write_tmp(
-      "[radio]\nchannel = 136\nwidth = 40\n[link]\nstatic_mcs = 3\nstatic_bw = 40\n"));
+      "[radio]\nwidth = 40\n[link]\nstatic_mcs = 3\nstatic_bw = 40\n"));
   CHECK(cfg.link.static_bw == 40);
   bool threw = false;
   try { maburgs::load_config(write_tmp("[link]\nstatic_mcs = 3\nstatic_bw = 40\n")); }
@@ -1203,68 +1303,31 @@ TEST(debug_log_rejects_out_of_range_and_unknown_keys) {
 // radio.cards is the one permitted omission, and it is not laziness: its
 // ABSENCE is the auto-scan setting (a list pins cards and skips the probe),
 // so there is no value the bundle could write that means "scan the bus".
-// Turnaround bench (rollout phase 2): off unless asked, lanes and burst
-// shape bounded by the wire's own limits.
-TEST(turnaround_defaults_parse_and_bounds) {
-  auto d = maburgs::load_config(write_tmp(""));
-  CHECK(d.turnaround.rate_hz == 0.0);
-  CHECK((d.turnaround.lanes == std::vector<int>{0, 4}));
-  CHECK(d.turnaround.frames == 1);
-  CHECK(d.turnaround.bytes == 64);
-
-  auto c = maburgs::load_config(write_tmp(
-      "[turnaround]\nrate_hz = 10\nlanes = [0, 4, 5, 6]\nframes = 6\nbytes = 1400\n"));
-  CHECK(c.turnaround.rate_hz == 10.0);
-  CHECK((c.turnaround.lanes == std::vector<int>{0, 4, 5, 6}));
-  CHECK(c.turnaround.frames == 6);
-  CHECK(c.turnaround.bytes == 1400);
-
-  for (const char* bad : {"[turnaround]\nlanes = [7]\n", "[turnaround]\nlanes = []\n",
-                          "[turnaround]\nframes = 9\n", "[turnaround]\nbytes = 25\n",
-                          "[turnaround]\nrate_hz = 51\n", "[turnaround]\nrate = 5\n"}) {
-    bool threw = false;
-    try { maburgs::load_config(write_tmp(bad)); } catch (const std::exception&) { threw = true; }
-    CHECK(threw);
-  }
-}
-
-// Listen window (rollout phase 3): off unless asked; the gap is bounded by
-// what the drone will keep (ListenWindow::kMaxGapUs, 10 ms).
-TEST(listen_defaults_parse_and_bounds) {
-  auto d = maburgs::load_config(write_tmp(""));
-  CHECK(d.listen.ms == 0);
-  CHECK(d.listen.ab_s == 0);
-  auto c = maburgs::load_config(write_tmp("[listen]\nms = 4\nab_s = 30\n"));
-  CHECK(c.listen.ms == 4);
-  CHECK(c.listen.ab_s == 30);
-  for (const char* bad : {"[listen]\nms = 11\n", "[listen]\nms = -1\n",
-                          "[listen]\nab_s = 3601\n", "[listen]\ngap = 4\n"}) {
-    bool threw = false;
-    try { maburgs::load_config(write_tmp(bad)); } catch (const std::exception&) { threw = true; }
-    CHECK(threw);
-  }
-}
-
 TEST(bundle_default_sets_every_known_key_but_radio_cards) {
   std::vector<std::string> defaulted;
   maburgs::load_config(std::string(MABUR_GS_BUNDLE_DIR) + "/maburgs.default.toml",
                        &defaulted);
   for (const std::string& d : defaulted)
     std::fprintf(stderr, "  bundle leaves defaulted: %s\n", d.c_str());
+  // radio.cards is auto-scan by design. link.key (Task 4's optional inline
+  // overlay) is read by presence (gs/src/config.cpp), so its absence --
+  // the bundle deliberately leaves it unset in favour of key_file -- must
+  // NOT register as a defaulted key (fix round 1, Task 4 review): it would
+  // otherwise print "link.key=" under every plain boot's defaulted-key
+  // list, diluting the real DEFAULT-key warning right next to it.
   CHECK(defaulted.size() == 1);
   CHECK(!defaulted.empty() && defaulted[0] == "radio.cards=(auto-scan)");
 }
 
 // spec 2026-09-25-nhm-airtime §6; default blocked_pct is 50, not the spec's
 // 30 -- hw spike findings (docs/nhm-airtime-spike-findings-2026-09-25.md).
-TEST(hop_verdict_busy_keys) {
-  auto c = maburgs::load_config(write_tmp(
-      "[hop]\nenable = true\n[hop.verdict]\nbusy_dbm = -80\nblocked_pct = 25\n"));
-  CHECK(c.hop.verdict.busy_dbm == -80);
-  CHECK(c.hop.verdict.blocked_pct == 25.0);
+// Under radio.scan since 2026-10-04: every measurer reads them.
+TEST(scan_busy_keys_parse_and_validate) {
+  auto c = maburgs::load_config(write_tmp("[radio.scan]\nbusy_dbm = -86\nblocked_pct = 40\n"));
+  CHECK(c.radio.scan.busy.busy_dbm == -86 && c.radio.scan.busy.blocked_pct == 40.0);
   bool threw = false;
-  try { maburgs::load_config(write_tmp("[hop.verdict]\nbusy_dbm = -82\n")); }
-  catch (const std::runtime_error& e) { threw = std::string(e.what()).find("hop.verdict") != std::string::npos; }
+  try { maburgs::load_config(write_tmp("[radio.scan]\nbusy_dbm = -82\n")); }
+  catch (const std::runtime_error& e) { threw = std::string(e.what()).find("radio.scan.busy_dbm") != std::string::npos; }
   CHECK(threw);   // -82 is not an NHM bucket edge
 }
 
@@ -1323,4 +1386,146 @@ TEST(hop_confirm_extend_ms_key) {
   catch (const std::runtime_error&) { threw = true; }
   CHECK(threw);
   CHECK(maburgs::HopCfg{}.confirm_extend_ms == 3000);
+}
+
+// ---- Task 4: link.key_file + link.key overlay (spec 2026-10-01-link-pairing §2) ----
+
+TEST(link_key_file_missing_uses_default_and_says_so) {
+  auto path = write_tmp("[link]\nkey_file = \"" + std::string(MABUR_TEST_SCRATCH_DIR) +
+                        "/gs_absent.key\"\n");
+  auto cfg = maburgs::load_config(path);
+  CHECK(cfg.link.key_is_default);
+  CHECK(cfg.link.key == mabur::kDefaultLinkKey);
+  CHECK(cfg.link.key_source == "default");
+}
+
+TEST(link_key_file_present_is_loaded_and_bad_fails_boot) {
+  const std::string kf = std::string(MABUR_TEST_SCRATCH_DIR) + "/gs_cfg.key";
+  { std::ofstream o(kf); o << "# key\n3f9a1c77e04b5d2290ab6ef1c8d34e5a\n"; }
+  auto path = write_tmp("[link]\nkey_file = \"" + kf + "\"\n");
+  auto cfg = maburgs::load_config(path);
+  CHECK(!cfg.link.key_is_default);
+  CHECK(mabur::key_to_hex(cfg.link.key) == "3f9a1c77e04b5d2290ab6ef1c8d34e5a");
+  CHECK(cfg.link.key_source == kf);
+  { std::ofstream o(kf); o << "garbage\n"; }
+  const std::string msg = what_of([&] { (void)maburgs::load_config(path); });
+  CHECK(msg.find("link.key_file") != std::string::npos);
+  CHECK(msg.find(kf) != std::string::npos);
+}
+
+TEST(link_vtx_id_is_an_unknown_key_now) {
+  auto path = write_tmp("[link]\nvtx_id = 1\n");
+  const std::string msg = what_of([&] { (void)maburgs::load_config(path); });
+  CHECK(msg.find("link.vtx_id") != std::string::npos);
+  CHECK(msg.find("unknown key") != std::string::npos);
+}
+
+TEST(link_key_inline_overrides_key_file) {
+  auto path = write_tmp("[link]\nkey_file = \"/nonexistent/x.key\"\nkey = \"3F9A1C77E04B5D2290AB6EF1C8D34E5A\"\n");
+  auto cfg = maburgs::load_config(path);
+  CHECK(!cfg.link.key_is_default);
+  CHECK(mabur::key_to_hex(cfg.link.key) == "3f9a1c77e04b5d2290ab6ef1c8d34e5a");
+  CHECK(cfg.link.key_source == "link.key");
+  auto bad = write_tmp("[link]\nkey = \"zz\"\n");
+  const std::string msg = what_of([&] { (void)maburgs::load_config(bad); });
+  CHECK(msg.find("link.key") != std::string::npos);
+  CHECK(msg.find("32 hex") != std::string::npos);
+}
+
+static std::string write_tmp_at(const std::string& path, const std::string& text) {
+  std::ofstream f(path);
+  f << text;
+  return path;
+}
+static const char* kBundle = MABUR_GS_BUNDLE_DIR "/maburgs.default.toml";
+
+// Overlay: arrays replace wholesale (the page's ladder is the ladder).
+TEST(overlay_replaces_ladder_wholesale) {
+  const auto base = maburgs::load_config(kBundle);
+  const auto ov = write_tmp_at("/tmp/maburgs_test_overlay.toml",
+      "[link]\nmax_mcs = 7\n[[link.ladder]]\nmcs = 2\nbw = 20\n"
+      "overhead_base = 0.6\noverhead_enh = 0.3\n");
+  const auto c = maburgs::load_config(kBundle, nullptr, ov);
+  REQUIRE(c.link.ladder_cfg.ladder.size() == 1);
+  CHECK(c.link.ladder_cfg.ladder[0].mcs == 2);
+  CHECK(c.link.ladder_cfg.ladder[0].bw == 20);
+  CHECK(c.link.ladder_cfg.ladder[0].overhead_base > 0.599 &&
+        c.link.ladder_cfg.ladder[0].overhead_base < 0.601);
+  // A key the overlay did not name keeps the FILE's value, not the struct default.
+  CHECK(c.link.ladder_cfg.down_util == base.link.ladder_cfg.down_util);
+  CHECK(c.radio.channels == base.radio.channels);
+}
+
+// Overlay: tables merge key-by-key.
+TEST(overlay_merges_tables_keywise) {
+  const auto base = maburgs::load_config(kBundle);
+  const auto ov = write_tmp_at("/tmp/maburgs_test_overlay.toml", "[link]\nstatic_mcs = 3\n");
+  const auto c = maburgs::load_config(kBundle, nullptr, ov);
+  CHECK(c.link.static_mcs == 3);
+  CHECK(c.link.ladder_cfg.ladder.size() == base.link.ladder_cfg.ladder.size());
+}
+
+// Overlay: strict keys still apply.
+TEST(overlay_unknown_key_fails) {
+  const auto ov = write_tmp_at("/tmp/maburgs_test_overlay.toml", "[link]\nbogus = 1\n");
+  std::string msg;
+  try { maburgs::load_config(kBundle, nullptr, ov); } catch (const std::exception& e) { msg = e.what(); }
+  CHECK(msg.find("link.bogus") != std::string::npos);
+  CHECK(msg.find("unknown key") != std::string::npos);
+}
+
+// Overlay: a bad rung fails with the same field/why a file rung would.
+TEST(overlay_bad_rung_fails_like_file) {
+  const auto ov = write_tmp_at("/tmp/maburgs_test_overlay.toml",
+      "[[link.ladder]]\nmcs = 0\nbw = 40\noverhead_base = 0.2\noverhead_enh = 0.3\n");
+  std::string msg;
+  try { maburgs::load_config(kBundle, nullptr, ov); } catch (const std::exception& e) { msg = e.what(); }
+  CHECK(msg.find("link.ladder[0].overhead_base: must be >= overhead_enh") != std::string::npos);
+}
+
+// Overlay: missing file is a config error, not a crash.
+TEST(overlay_missing_file_fails) {
+  bool threw = false;
+  try { maburgs::load_config(kBundle, nullptr, "/tmp/definitely_not_here_overlay.toml"); }
+  catch (const std::exception&) { threw = true; }
+  CHECK(threw);
+}
+
+// radio.relays (spec 2026-10-02-maburgs-remote-card §3): CPE510 relays are
+// RemoteCards appended after the USB cards, "ipv4:port" each.
+TEST(radio_relays_default_empty_and_parse) {
+  auto none = maburgs::load_config(write_tmp(""));
+  CHECK(none.radio.relays.empty());
+  auto two = maburgs::load_config(write_tmp(
+      "[radio]\nrelays = [\"10.83.11.1:8310\", \"10.83.11.2:8310\"]\n"));
+  REQUIRE(two.radio.relays.size() == 2);
+  CHECK(two.radio.relays[0] == "10.83.11.1:8310");
+  CHECK(two.radio.relays[1] == "10.83.11.2:8310");
+}
+
+TEST(radio_relays_entries_are_validated) {
+  auto w = what_of([] { maburgs::load_config(write_tmp("[radio]\nrelays = [\"10.83.11.1\"]\n")); });
+  CHECK(w.find("radio.relays[0]") != std::string::npos && w.find("port") != std::string::npos);
+  w = what_of([] { maburgs::load_config(write_tmp("[radio]\nrelays = [\"10.83.11.1:0\"]\n")); });
+  CHECK(w.find("radio.relays[0]") != std::string::npos);
+  w = what_of([] { maburgs::load_config(write_tmp("[radio]\nrelays = [\"10.0.0.1:8310\", \"10.0.0.1:8310\"]\n")); });
+  CHECK(w.find("radio.relays[1]") != std::string::npos && w.find("duplicate") != std::string::npos);
+  // A hostname is refused: the UDP transport resolves nothing (getaddrinfo
+  // on the core thread every 2 s reopen would stall video on a dead resolver).
+  w = what_of([] { maburgs::load_config(write_tmp("[radio]\nrelays = [\"cpe.local:8310\"]\n")); });
+  CHECK(w.find("radio.relays[0]") != std::string::npos &&
+        w.find("dotted IPv4") != std::string::npos);
+  w = what_of([] { maburgs::load_config(write_tmp("[radio]\nrelays = [\"10.83.11:8310\"]\n")); });
+  CHECK(w.find("dotted IPv4") != std::string::npos);
+  w = what_of([] { maburgs::load_config(write_tmp("[radio]\nrelays = [8310]\n")); });
+  CHECK(w.find("radio.relays[0]") != std::string::npos);
+}
+
+TEST(tx_card_may_name_a_relay_after_the_explicit_cards) {
+  auto cfg = maburgs::load_config(write_tmp(
+      "[radio]\ntx_card = 1\nrelays = [\"10.83.11.1:8310\"]\n[[radio.cards]]\nusb_pid = 34842\n"));
+  CHECK(cfg.radio.tx_card == 1);   // card 0 = the USB entry, card 1 = the relay
+  auto w = what_of([] { maburgs::load_config(write_tmp(
+      "[radio]\ntx_card = 2\nrelays = [\"10.83.11.1:8310\"]\n[[radio.cards]]\nusb_pid = 34842\n")); });
+  CHECK(w.find("radio.tx_card") != std::string::npos);
 }

@@ -2,6 +2,7 @@
 #include <limits>
 #include <string>
 #include <vector>
+#include "au_ring.h"
 #include "json.hpp"
 #include "mabur/profile.h"
 #include "mtest.h"
@@ -12,7 +13,6 @@ using nlohmann::json;
 namespace {
 StatsInput base_input() {
   StatsInput in;
-  in.vtx_id = 1;
   in.channel = 149;
   in.in_session = true;
   in.tx_card = 0;
@@ -70,7 +70,6 @@ TEST(first_emission_immediate_with_null_rates) {
   CHECK(j["cards"][0]["foreign_pps"].is_null());
   CHECK(j["cards"][0]["self_pps"].is_null());
   // gauges are live even on the first datagram
-  CHECK(j["link"]["vtx_id"] == 1);
   // The player's compact OSD names the channel the rest of its line
   // describes, and it can only get it from here.
   CHECK(j["link"]["channel"] == 149);
@@ -95,82 +94,35 @@ TEST(op_exports_overhead_pair_not_scalar) {
   CHECK(op["overhead_enh"].get<double>() > 0.499 && op["overhead_enh"].get<double>() < 0.501);
 }
 
+// link pairing (2026-10-01): link.key_fp, link.state == key_mismatch, and
+// drone.auth_reject (Telem flags bit1) surface Task 5/6's session-pairs
+// state on the sideport.
+TEST(link_carries_key_fp_and_mismatch_state_and_drone_auth_reject) {
+  Capture cap;
+  StatsExporter ex(1, 500, cap.fn());
+  StatsInput in = base_input();
+  in.key_fp = "a1b2";
+  in.in_session = false;
+  in.key_mismatch = true;
+  mabur::rc::Telem t; t.flags = 0x02;
+  in.telem = t;
+  ex.poll(1000, in);
+  json j = cap.last();
+  CHECK(j["link"]["key_fp"] == "a1b2");
+  CHECK(j["link"]["state"] == "key_mismatch");
+  CHECK(j["drone"]["auth_reject"] == true);
+
+  in.key_mismatch = false; in.in_session = true; t.flags = 0; in.telem = t;
+  ex.poll(1500, in);
+  j = cap.last();
+  CHECK(j["link"]["state"] == "session");
+  CHECK(j["drone"]["auth_reject"] == false);
+}
+
 // link-rtt (2026-09-02): link.rtt is null until the estimator has a sample,
 // then carries the control-path RTT (EWMA + session min + n), the filtered
 // pts offset, and floor_ms when the anchor was usable — all from StatsInput,
 // the exporter never computes them.
-TEST(listen_window_block_with_and_without_a_drone_report) {
-  Capture cap;
-  StatsExporter ex(1, 500, cap.fn());
-  StatsInput in = base_input();
-  in.listen.on = true;
-  in.listen.ms = 4;
-  in.listen.ab_s = 30;
-  in.listen.sent = 120;
-  in.listen.probe = 110;
-  in.listen.deadline = 8;
-  in.listen.completion = 2;
-  in.listen.late_max_ms = 3;
-  ex.poll(1000, in);
-  json lw = cap.last()["link"]["listen"];
-  CHECK(lw["on"] == true);
-  CHECK(lw["ms"] == 4);
-  CHECK(lw["ab_s"] == 30);
-  CHECK(lw["sent"] == 120);
-  CHECK(lw["probe"] == 110);
-  CHECK(lw["deadline"] == 8);
-  CHECK(lw["completion"] == 2);
-  CHECK(lw["late_max_ms"] == 3);
-  CHECK(lw["drone"].is_null());
-
-  mabur::rc::LwStat d;
-  d.version = 1;
-  d.seq = 9;
-  d.listen_ms = 4;
-  d.status_rx = 55;
-  d.hist[2] = 40;
-  d.hist[7] = 1;
-  d.nofid = 2;
-  d.gate_holds = 6;
-  d.gate_hold_sum_ms = 9;
-  d.gate_hold_max_ms = 3;
-  d.direct_holds = 4;
-  in.listen.drone = d;
-  in.listen.drone_rx_ms = 1490;
-  ex.poll(1600, in);
-  json dj = cap.last()["link"]["listen"]["drone"];
-  CHECK(dj["seq"] == 9);
-  CHECK(dj["rx_ms"] == 1490);
-  CHECK(dj["ms"] == 4);
-  CHECK(dj["status_rx"] == 55);
-  REQUIRE(dj["hist"].size() == 8);
-  CHECK(dj["hist"][2] == 40);
-  CHECK(dj["hist"][7] == 1);
-  CHECK(dj["nofid"] == 2);
-  CHECK(dj["gate_holds"] == 6);
-  CHECK(dj["gate_hold_sum_ms"] == 9);
-  CHECK(dj["gate_hold_max_ms"] == 3);
-  CHECK(dj["direct_holds"] == 4);
-  CHECK(dj["v"] == 1);
-  CHECK(!dj.contains("inside"));
-
-  // v2 (phase 3b): the learned window's fields replace nofid/direct_holds.
-  d.version = 2;
-  d.inside = 31;
-  d.delay_100us = 47;
-  d.fit_skips = 5;
-  in.listen.drone = d;
-  ex.poll(2200, in);
-  dj = cap.last()["link"]["listen"]["drone"];
-  CHECK(dj["v"] == 2);
-  CHECK(dj["inside"] == 31);
-  CHECK(dj["delay_ms"].get<double>() > 4.69 && dj["delay_ms"].get<double>() < 4.71);
-  CHECK(dj["fit_skips"] == 5);
-  CHECK(dj["status_rx"] == 55);
-  CHECK(!dj.contains("nofid"));
-  CHECK(!dj.contains("direct_holds"));
-}
-
 TEST(link_rtt_null_then_values) {
   Capture cap;
   StatsExporter ex(1, 500, cap.fn());
@@ -554,26 +506,26 @@ TEST(stream_rows_fall_back_to_op_overhead_without_telem) {
   const json j = cap.last();
   CHECK(std::abs(j["link"]["streams"][0]["ov"].get<double>() - 0.25) < 1e-9);
   CHECK(std::abs(j["link"]["streams"][1]["ov"].get<double>() - 0.5) < 1e-9);
-  CHECK(j["link"]["vtx_id"] == 1);
 }
 
-TEST(stream_rows_carry_applied_overhead_from_telem) {
-  // Telem present: base -> applied_ov_base, enh -> applied_ov_enh (the
-  // pair actually flying -- the op pair, or the debug-HTTP override when
-  // armed; Task 7 deleted the solver that used to compute this).
+TEST(stream_rows_ignore_telem_use_commanded_overhead) {
+  // The drone's applied-overhead echo left Telem 2026-09-30: with a telem
+  // snapshot present the stream rows still carry the commanded op pair.
   Capture cap;
   StatsExporter ex(1, 500, cap.fn());
   StatsInput in = base_input();
+  in.op.overhead_base = 0.25;
+  in.op.overhead_enh = 0.5;
   in.streams[1].bodies = 100;
   mabur::rc::Telem t;
-  t.applied_ov_base = 0.40;
-  t.applied_ov_enh = 0.60;
+  t.tlm_seq = 1;
   in.telem = t; in.telem_rx_ms = 900;
   ex.poll(1000, in);
   const json j = cap.last();
-  CHECK(std::abs(j["link"]["streams"][0]["ov"].get<double>() - 0.40) < 1e-9);
-  CHECK(std::abs(j["link"]["streams"][1]["ov"].get<double>() - 0.60) < 1e-9);
+  CHECK(std::abs(j["link"]["streams"][0]["ov"].get<double>() - 0.25) < 1e-9);
+  CHECK(std::abs(j["link"]["streams"][1]["ov"].get<double>() - 0.5) < 1e-9);
 }
+
 TEST(drone_section_null_then_rates) {
   Capture cap;
   StatsExporter ex(1, 500, cap.fn());
@@ -581,49 +533,36 @@ TEST(drone_section_null_then_rates) {
   ex.poll(1000, in);
   CHECK(cap.last()["drone"].is_null());
   mabur::rc::Telem t;
-  t.tlm_seq = 1; t.state = 2; t.enc_frames = 1000; t.enc_kbytes = 1000;
-  t.rcf_rx = 100; t.radio_sent = 5000; t.up_rssi[1] = 52; t.soc_temp_c = 61;
-  t.idr_disagree = 1; t.enhance_disagree = 2;
-  t.roi_qp = -24;
+  t.tlm_seq = 1; t.state = 2;
+  t.rcf_rx = 100; t.txq_drops = 4; t.up_rssi[1] = 52; t.soc_temp_c = 61;
   t.rx_own = 13; t.rx_foreign = 14; t.rx_crcfail = 15;
-  t.flags = 0x94;  // probing + congestion_shed + low_power
+  t.flags = 0x90;  // congestion_shed + low_power
   t.rec_status = 0x0E;  // state 2 (error), err 3 (no card)
   in.telem = t; in.telem_rx_ms = 1400;
   ex.poll(1500, in);
   json j = cap.last();
   CHECK(j["drone"]["state"] == "linked");
   CHECK(j["drone"]["tlm_age_ms"] == 100);
-  CHECK(j["drone"]["enc"]["fps"].is_null());        // one snapshot only
-  CHECK(j["drone"]["enc"]["idr_disagree"] == 1);
-  CHECK(j["drone"]["enc"]["enhance_disagree"] == 2);
+  CHECK(j["drone"]["rcf"]["rx_pps"].is_null());     // one snapshot only
   CHECK(j["drone"]["uplink"]["rssi_b"].get<double>() > -58.1 &&
         j["drone"]["uplink"]["rssi_b"].get<double>() < -57.9);
   CHECK(j["drone"]["failsafe_shed"] == false);
-  CHECK(j["drone"]["radio_rx_ok"] == false);
-  CHECK(j["drone"]["probing"] == true);
   CHECK(j["drone"]["congestion_shed"] == true);
   CHECK(j["drone"]["low_power"] == true);
   CHECK(j["drone"]["rec"]["state"] == 2);
   CHECK(j["drone"]["rec"]["err"] == 3);
-  // enc.roi_qp is the ROI override (signed); there is no enc.qp key.
-  CHECK(!j["drone"]["enc"].contains("qp"));
-  CHECK(j["drone"]["enc"]["roi_qp"] == -24);
   // drone.radio.rx: the drone's own RX-side frame split for the last
   // telemetry period (cca-on 2026-09-23).
   CHECK(j["drone"]["radio"]["rx"]["own"] == 13);
   CHECK(j["drone"]["radio"]["rx"]["foreign"] == 14);
   CHECK(j["drone"]["radio"]["rx"]["crcfail"] == 15);
-  t.tlm_seq = 2; t.enc_frames = 1060; t.enc_kbytes = 2125;
-  t.rcf_rx = 120; t.radio_sent = 6460;
-  t.flags = 0;  // probe over, shed lifted -- bits clear
+  t.tlm_seq = 2; t.rcf_rx = 120; t.txq_drops = 10;
+  t.flags = 0;  // shed lifted -- bits clear
   in.telem = t; in.telem_rx_ms = 2400;               // 1000 ms later
   ex.poll(2500, in);
   j = cap.last();
-  CHECK(j["drone"]["enc"]["fps"].get<double>() > 59.9 && j["drone"]["enc"]["fps"].get<double>() < 60.1);
-  CHECK(j["drone"]["enc"]["mbps"].get<double>() > 9.1 && j["drone"]["enc"]["mbps"].get<double>() < 9.3);
   CHECK(j["drone"]["rcf"]["rx_pps"].get<double>() > 19.9 && j["drone"]["rcf"]["rx_pps"].get<double>() < 20.1);
-  CHECK(j["drone"]["radio"]["sent_pps"].get<double>() > 1459 && j["drone"]["radio"]["sent_pps"].get<double>() < 1461);
-  CHECK(j["drone"]["probing"] == false);
+  CHECK(j["drone"]["txq"]["drop_pps"].get<double>() > 5.9 && j["drone"]["txq"]["drop_pps"].get<double>() < 6.1);
   CHECK(j["drone"]["congestion_shed"] == false);
   CHECK(j["drone"]["low_power"] == false);
   // same tlm_seq again: rates keep the last computed window, age grows
@@ -631,60 +570,90 @@ TEST(drone_section_null_then_rates) {
   CHECK(cap.last()["drone"]["tlm_age_ms"] == 600);
 }
 
-// A maburd restart resets tlm_seq/generation/every cumulative counter back
-// toward 0. Two normal snapshots establish a rate window; a third snapshot
-// whose tlm_seq/generation/counters are all LOWER than the second (the
-// restart) must null every telem rate for that poll instead of computing a
-// ~4e9-scale garbage delta — and the snapshot after THAT (a fresh, distinct
-// pair with the restart as its new baseline) must produce sane rates again.
+// Keys dropped with the 2026-09-30 telem diet (RC_VERSION 13) must not come
+// back as zeros: every one of them is gone from the drone block, and the
+// removed flag bits (radio_rx_ok / probing / air_shed) with them.
+TEST(telem_diet_keys_absent) {
+  Capture cap;
+  StatsExporter ex(1, 500, cap.fn());
+  StatsInput in = base_input();
+  mabur::rc::Telem t;
+  t.tlm_seq = 1; t.state = 2;
+  in.telem = t; in.telem_rx_ms = 900;
+  ex.poll(1000, in);
+  const json d = cap.last()["drone"];
+  for (const char* k : {"gen", "radio_rx_ok", "probing", "air_shed", "air_backlog_max_ms",
+                        "air_shed_drops", "channel", "hop_epoch", "applied"})
+    CHECK(!d.contains(k));
+  for (const char* k : {"fps", "mbps", "roi_qp", "ring_drops", "idr_disagree",
+                        "enhance_disagree", "vanished_base", "vanished_enh",
+                        "self_idr_refused", "venc_full_drops", "venc_ring_fill_pct",
+                        "idr_gs"})
+    CHECK(!d["enc"].contains(k));
+  CHECK(!d["txq"].contains("depth"));
+  CHECK(!d["txq"].contains("cap"));
+  CHECK(!d["radio"].contains("sent_pps"));
+  CHECK(!d["radio"].contains("drops"));
+  CHECK(!d["sys"].contains("thermal_delta"));
+  // Kept neighbours still present.
+  CHECK(d["enc"].contains("cmd_kbps"));
+  CHECK(d["txq"].contains("drops"));
+  CHECK(d["radio"].contains("usb_fail"));
+  CHECK(d["sys"].contains("cpu_pct"));
+}
+
+// A maburd restart resets tlm_seq and every cumulative counter back toward
+// 0. Two normal snapshots establish a rate window; a third snapshot whose
+// counters are LOWER than the second (the restart) must null every telem
+// rate for that poll instead of computing a ~4e9-scale garbage delta — and
+// the snapshot after THAT (a fresh, distinct pair with the restart as its
+// new baseline) must produce sane rates again. The restart here lands its
+// new tlm_seq a small step PAST the old one (0 -> ... -> 3 after 2), so
+// only the counter regression can catch it -- the case `generation` used to
+// cover before RC_VERSION 13. REVERT CHECK: drop the rcf_rx/txq_drops terms
+// from is_restart and rx_pps below reads ~4.29e9.
 TEST(telem_restart_nulls_rates_then_recovers) {
   Capture cap;
   StatsExporter ex(1, 500, cap.fn());
   StatsInput in = base_input();
 
   mabur::rc::Telem t;
-  t.tlm_seq = 1; t.generation = 1; t.state = 2;
-  t.enc_frames = 1000; t.enc_kbytes = 1000;
-  t.rcf_rx = 100; t.radio_sent = 5000;
+  t.tlm_seq = 1; t.state = 2;
+  t.rcf_rx = 100; t.txq_drops = 50;
   in.telem = t; in.telem_rx_ms = 1000;
   ex.poll(1000, in);
-  CHECK(cap.last()["drone"]["enc"]["fps"].is_null());   // one snapshot only
+  CHECK(cap.last()["drone"]["rcf"]["rx_pps"].is_null());   // one snapshot only
 
-  t.tlm_seq = 2; t.enc_frames = 1060; t.enc_kbytes = 2125;
-  t.rcf_rx = 120; t.radio_sent = 6460;
+  t.tlm_seq = 2; t.rcf_rx = 120; t.txq_drops = 56;
   in.telem = t; in.telem_rx_ms = 2000;                  // 1000 ms later
   ex.poll(2500, in);
   json j = cap.last();
-  CHECK(j["drone"]["enc"]["fps"].get<double>() > 59.9 && j["drone"]["enc"]["fps"].get<double>() < 60.1);
-  CHECK(j["drone"]["enc"]["mbps"].get<double>() > 9.1 && j["drone"]["enc"]["mbps"].get<double>() < 9.3);
   CHECK(j["drone"]["rcf"]["rx_pps"].get<double>() > 19.9 && j["drone"]["rcf"]["rx_pps"].get<double>() < 20.1);
-  CHECK(j["drone"]["radio"]["sent_pps"].get<double>() > 1459 && j["drone"]["radio"]["sent_pps"].get<double>() < 1461);
+  CHECK(j["drone"]["txq"]["drop_pps"].get<double>() > 5.9 && j["drone"]["txq"]["drop_pps"].get<double>() < 6.1);
 
-  // Restart: tlm_seq goes backwards (1 < 2), generation regresses (0 < 1),
-  // and every cumulative counter drops back near 0.
-  t.tlm_seq = 1; t.generation = 0;
-  t.enc_frames = 5; t.enc_kbytes = 2;
-  t.rcf_rx = 1; t.radio_sent = 10;
+  // Restart: tlm_seq steps forward by one (2 -> 3, indistinguishable from a
+  // normal tick by seq alone) but every cumulative counter drops back near 0.
+  t.tlm_seq = 3; t.rcf_rx = 1; t.txq_drops = 0;
   in.telem = t; in.telem_rx_ms = 3000;
   ex.poll(3500, in);
   j = cap.last();
-  CHECK(j["drone"]["tlm_seq"] == 1);
-  CHECK(j["drone"]["gen"] == 0);
-  CHECK(j["drone"]["enc"]["fps"].is_null());            // no garbage rate
-  CHECK(j["drone"]["enc"]["mbps"].is_null());
-  CHECK(j["drone"]["rcf"]["rx_pps"].is_null());
-  CHECK(j["drone"]["radio"]["sent_pps"].is_null());
+  CHECK(j["drone"]["tlm_seq"] == 3);
+  CHECK(j["drone"]["rcf"]["rx_pps"].is_null());         // no garbage rate
+  CHECK(j["drone"]["txq"]["drop_pps"].is_null());
 
   // Next distinct snapshot after the restart: a clean pair, sane rates.
-  t.tlm_seq = 2; t.enc_frames = 65; t.enc_kbytes = 1002;
-  t.rcf_rx = 21; t.radio_sent = 1510;
+  t.tlm_seq = 4; t.rcf_rx = 21; t.txq_drops = 3;
   in.telem = t; in.telem_rx_ms = 4000;                  // 1000 ms after the restart snapshot
   ex.poll(4500, in);
   j = cap.last();
-  CHECK(j["drone"]["enc"]["fps"].get<double>() > 59.9 && j["drone"]["enc"]["fps"].get<double>() < 60.1);
-  CHECK(j["drone"]["enc"]["mbps"].get<double>() > 8.1 && j["drone"]["enc"]["mbps"].get<double>() < 8.3);
   CHECK(j["drone"]["rcf"]["rx_pps"].get<double>() > 19.9 && j["drone"]["rcf"]["rx_pps"].get<double>() < 20.1);
-  CHECK(j["drone"]["radio"]["sent_pps"].get<double>() > 1499 && j["drone"]["radio"]["sent_pps"].get<double>() < 1501);
+  CHECK(j["drone"]["txq"]["drop_pps"].get<double>() > 2.9 && j["drone"]["txq"]["drop_pps"].get<double>() < 3.1);
+
+  // And the seq-backwards restart still trips on its own.
+  t.tlm_seq = 1; t.rcf_rx = 40; t.txq_drops = 5;       // counters happen to grow
+  in.telem = t; in.telem_rx_ms = 5000;
+  ex.poll(5500, in);
+  CHECK(cap.last()["drone"]["rcf"]["rx_pps"].is_null());
 }
 
 // Deaf-radio case: the wire's all-zero uplink default (never heard an RC
@@ -952,16 +921,15 @@ TEST(uplink_snr_is_exported_in_dB_not_half_dB) {
 // drone.applied would sail through the suite while silently un-doing a
 // documented schema removal (CLAUDE.md records it as the one exception to
 // the additive-only v:1 rule). Checked against the exporter's real output,
-// with a telem snapshot present so drone.applied/drone.sys actually exist —
+// with a telem snapshot present so the drone block actually exists —
 // against a null drone section these `contains` checks would pass vacuously.
-// sys.thermal_delta is asserted PRESENT in the same breath: the sensor and
-// its telemetry deliberately survived; only the actuator died.
-TEST(removed_power_keys_absent_thermal_delta_kept) {
+// (sys.thermal_delta, once asserted present here, left the wire 2026-09-30.)
+TEST(removed_power_keys_absent) {
   Capture cap;
   StatsExporter ex(1, 500, cap.fn());
   StatsInput in = base_input();
   mabur::rc::Telem t;
-  t.tlm_seq = 1; t.state = 2; t.thermal_delta = 3;
+  t.tlm_seq = 1; t.state = 2;
   in.telem = t; in.telem_rx_ms = 900;
   ex.poll(1000, in);
   const json j = cap.last();
@@ -969,11 +937,8 @@ TEST(removed_power_keys_absent_thermal_delta_kept) {
   CHECK(!j["link"]["op"].contains("offset_qdb"));
   CHECK(j["link"]["op"]["mcs"] == 5);          // the object is still populated
   REQUIRE(j["drone"].is_object());
-  REQUIRE(j["drone"]["applied"].is_object());
-  CHECK(!j["drone"]["applied"].contains("offset_qdb"));
-  CHECK(!j["drone"]["applied"].contains("derate_qdb"));
-  REQUIRE(j["drone"]["sys"].is_object());
-  CHECK(j["drone"]["sys"]["thermal_delta"] == 3);
+  // drone.applied itself left the sideport 2026-09-30 (telem diet).
+  CHECK(!j["drone"].contains("applied"));
 }
 
 TEST(exporter_link_rungs_array) {
@@ -1022,43 +987,6 @@ TEST(exporter_link_rungs_array) {
   ex.poll(1700, pin);
   auto jp = nlohmann::json::parse(sent);
   CHECK(!jp["link"].contains("rungs"));
-}
-
-// drone.enc.{vanished_base,vanished_enh,self_idr_refused}: the venc-ring
-// vanish counters (docs/venc-ring-vanish-findings-2026-08-12.md), additive
-// under v:1.
-// REVERT CHECK: fails if any of the three keys is dropped from the enc block.
-TEST(vanish_counters_exported) {
-  Capture cap;
-  StatsExporter ex(1, 500, cap.fn());
-  StatsInput in = base_input();
-  mabur::rc::Telem t;
-  t.vanished_base = 2;
-  t.vanished_enh = 5;
-  t.self_idr_refused = 1;
-  in.telem = t;
-  ex.poll(1000, in);
-  const json enc = cap.last()["drone"]["enc"];
-  CHECK(enc["vanished_base"] == 2);
-  CHECK(enc["vanished_enh"] == 5);
-  CHECK(enc["self_idr_refused"] == 1);
-}
-
-// drone.enc.{venc_full_drops,venc_ring_fill_pct}: the PRODUCER side of the
-// venc shm ring (spec 2026-08-28 venc-foldin, Task B6), additive under v:1.
-// REVERT CHECK: fails if either key is dropped from the enc block.
-TEST(venc_ring_stats_exported) {
-  Capture cap;
-  StatsExporter ex(1, 500, cap.fn());
-  StatsInput in = base_input();
-  mabur::rc::Telem t;
-  t.venc_full_drops = 4;
-  t.venc_ring_fill_pct = 62;
-  in.telem = t;
-  ex.poll(1000, in);
-  const json enc = cap.last()["drone"]["enc"];
-  CHECK(enc["venc_full_drops"] == 4);
-  CHECK(enc["venc_ring_fill_pct"] == 62);
 }
 
 TEST(exporter_attrib_block_and_stream_stale) {
@@ -1162,10 +1090,9 @@ TEST(video_lat_present_when_set) {
   CHECK(lat["fec"][1] == 8000);
 }
 
-TEST(exports_home_scan_block_and_card_energy) {
+TEST(exports_scan_block_and_card_energy) {
   StatsInput in = base_input();
   in.channel = 149;
-  in.home = 136;
   in.scan_state = "frozen";
   in.scan_rounds = 7;
   in.scan_pick = 149;
@@ -1177,7 +1104,7 @@ TEST(exports_home_scan_block_and_card_energy) {
   CHECK(ex.poll(1000, in));
   json j = cap.last();
   CHECK(j["link"]["channel"] == 149);
-  CHECK(j["link"]["home"] == 136);
+  CHECK(!j["link"].contains("home"));
   CHECK(j["scan"]["state"] == "frozen");
   CHECK(j["scan"]["rounds"] == 7);
   CHECK(j["scan"]["pick"] == 149);
@@ -1185,10 +1112,12 @@ TEST(exports_home_scan_block_and_card_energy) {
   CHECK(j["cards"][0]["energy"]["igi"] == 40);
   in.scan_pick = std::nullopt;
   in.cards[0].energy = std::nullopt;
+  in.scan_state = "moving";
   CHECK(ex.poll(2000, in));
   j = cap.last();
   CHECK(j["scan"]["pick"].is_null());
   CHECK(j["cards"][0]["energy"].is_null());
+  CHECK(j["scan"]["state"] == "moving");
 }
 
 TEST(card_energy_igi_null_when_absent) {
@@ -1205,10 +1134,9 @@ TEST(card_energy_igi_null_when_absent) {
   CHECK(j["cards"][0]["energy"]["igi"].is_null());
 }
 
-TEST(exports_hop_block_card_dwell_and_drone_channel) {
+TEST(exports_hop_block_and_card_dwell) {
   StatsInput in = base_input();
   REQUIRE(in.cards.size() == 1);
-  in.hop.enable = true;
   in.hop.verdict = "interfered";
   in.hop.evidence = 6;
   in.hop.ref_rung = 3;
@@ -1218,17 +1146,14 @@ TEST(exports_hop_block_card_dwell_and_drone_channel) {
   in.hop.hops = 1;
   in.hop.holds = 0;
   in.hop.last_ms = 250;
+  in.hop.sweep_timeouts = 3;
   in.cards[0].dwell = StatsDwellIn{12, 13, 9800};
   in.cards.push_back(StatsCardIn{});  // card 1: never scouted -> dwell stays null
-  mabur::rc::Telem t;
-  t.channel = 149;
-  t.hop_epoch = 2;
-  in.telem = t; in.telem_rx_ms = 900;
   Capture cap;
   StatsExporter ex(1, 500, cap.fn());
   CHECK(ex.poll(1000, in));
   json j = cap.last();
-  CHECK(j["hop"]["enable"] == true);
+  CHECK(!j["hop"].contains("enable"));   // deleted 2026-10-04 with hop.enable
   CHECK(j["hop"]["verdict"] == "interfered");
   CHECK(j["hop"]["evidence"] == 6);
   CHECK(j["hop"]["ref_rung"] == 3);
@@ -1238,22 +1163,20 @@ TEST(exports_hop_block_card_dwell_and_drone_channel) {
   CHECK(j["hop"]["hops"] == 1);
   CHECK(j["hop"]["holds"] == 0);
   CHECK(j["hop"]["last_ms"] == 250);
+  CHECK(j["hop"]["sweep_timeouts"] == 3);
   CHECK(j["cards"][0]["dwell"]["visits"] == 12);
   CHECK(j["cards"][0]["dwell"]["score"] == 13);
   CHECK(j["cards"][0]["dwell"]["cost_us"] == 9800);
   CHECK(j["cards"][1]["dwell"].is_null());
-  CHECK(j["drone"]["channel"] == 149);
-  CHECK(j["drone"]["hop_epoch"] == 2);
 }
 
 TEST(hop_ref_rung_and_target_null_when_absent) {
   StatsInput in = base_input();
-  // in.hop stays default: enable=false, ref_rung/target unset.
+  // in.hop stays default: ref_rung/target unset.
   Capture cap;
   StatsExporter ex(1, 500, cap.fn());
   CHECK(ex.poll(1000, in));
   json j = cap.last();
-  CHECK(j["hop"]["enable"] == false);
   CHECK(j["hop"]["ref_rung"].is_null());
   CHECK(j["hop"]["target"].is_null());
   CHECK(j["hop"]["last_ms"].is_null());
@@ -1288,6 +1211,107 @@ TEST(ctl_rung_ladder_and_rungs_carry_bw) {
   REQUIRE(j["link"]["streams"].size() >= 1);
   CHECK(j["link"]["streams"][0]["rung_mcs"] == 3);
   CHECK(j["link"]["streams"][0]["rung_bw"] == 40);
+}
+
+
+// A relay card (CPE510 RemoteCard) carries no SNR/EVM on the wire: its
+// snr*/evm* keys must read null rather than a fabricated 0 dB, its kind
+// names it, and its relay-side counters ride along under cards[i].relay.
+// USB cards stay kind "usb" with no relay key at all.
+TEST(relay_card_exports_kind_relay_block_and_null_snr) {
+  Capture cap;
+  StatsExporter ex(1, 500, cap.fn());
+  StatsInput in = base_input();
+  in.cards[0].classes[0].frames = 10;     // s0 seen on card 0 too
+  in.cards[0].classes[0].has_ema = true;
+  in.cards[0].classes[0].rssi_ema = 60;
+  in.cards[0].classes[0].snr_ema = 80;
+  StatsCardIn r;
+  r.up = true;
+  r.snr_ok = false;
+  r.kind = "relay";
+  r.relay = RelayStatsIn{0, 136, 2, true, 1000, 3, 0, 20, 0, 1, 2};
+  r.classes[0].frames = 10;
+  r.classes[0].has_ema = true;
+  r.classes[0].rssi_ema = 60;
+  r.classes[0].snr_ema = 80;
+  r.classes[0].evm_has = true;            // ignored: !snr_ok wins
+  r.classes[0].evm_ema = -40;
+  in.cards.push_back(r);
+  REQUIRE(ex.poll(1000, in));
+  json j = cap.last();
+  CHECK(j["cards"][0]["kind"] == "usb");
+  CHECK(!j["cards"][0].contains("relay"));
+  CHECK(j["cards"][1]["kind"] == "relay");
+  CHECK(j["cards"][1]["relay"]["owned"] == true);
+  CHECK(j["cards"][1]["relay"]["gaps"] == 3);
+  CHECK(j["cards"][1]["relay"]["reconnects"] == 2);
+  CHECK(j["cards"][1]["classes"]["s0"]["rssi"].get<double>() == -50.0);
+  CHECK(j["cards"][1]["classes"]["s0"]["snr"].is_null());
+  CHECK(j["cards"][1]["classes"]["s0"]["snr_a"].is_null());
+  CHECK(j["cards"][1]["classes"]["s0"]["snr_b"].is_null());
+  CHECK(j["cards"][1]["classes"]["s0"]["evm"].is_null());
+  CHECK(!j["cards"][0]["classes"]["s0"]["snr"].is_null());   // when its has_ema is true
+}
+
+// fec-nack (spec 2026-10-05 section 8): link.nack exports the tracker's
+// cumulative counters + this window's fill latency (nearest-rank p50/p90),
+// only while [link.nack] is enabled; drone.nack carries Telem's counters.
+TEST(link_nack_block_and_drone_nack_counters) {
+  Capture cap;
+  StatsExporter ex(1, 500, cap.fn());
+  StatsInput in = base_input();
+  in.nack.enabled = true;
+  in.nack.cum.requests = 5; in.nack.cum.filled = 7; in.nack.cum.suppressed = 1;
+  in.nack.win.fill_ms = {40, 10, 30, 20};   // unsorted on purpose
+  in.nack.win.filled = 4; in.nack.win.late_ms_max = 9;
+  in.nack.settle_ms = 11; in.nack.interval_s = 2.0;
+  mabur::rc::Telem t;
+  t.nack_rx = 3; t.retx_syms = 44; t.retx_refused = 1;
+  in.telem = t; in.telem_rx_ms = 900;
+  ex.poll(1000, in);
+  json j = cap.last();
+  CHECK(j["link"]["nack"]["requests"] == 5);
+  CHECK(j["link"]["nack"]["filled"] == 7);
+  CHECK(j["link"]["nack"]["suppressed"] == 1);
+  CHECK(j["link"]["nack"]["repeats"] == 0 && j["link"]["nack"]["syms_requested"] == 0 &&
+        j["link"]["nack"]["tail_requests"] == 0 && j["link"]["nack"]["late_fill"] == 0 &&
+        j["link"]["nack"]["wasted"] == 0 && j["link"]["nack"]["dropped_deadline"] == 0);
+  CHECK(j["link"]["nack"]["fill_pps"] == 2.0);
+  CHECK(j["link"]["nack"]["fill_ms"]["p50"] == 20 && j["link"]["nack"]["fill_ms"]["p90"] == 40 &&
+        j["link"]["nack"]["fill_ms"]["max"] == 40);
+  CHECK(j["link"]["nack"]["settle_ms"] == 11 && j["link"]["nack"]["late_ms_max"] == 9);
+  CHECK(j["drone"]["nack"]["rx"] == 3 && j["drone"]["nack"]["retx_syms"] == 44 &&
+        j["drone"]["nack"]["retx_refused"] == 1);
+
+  // Empty window / first export: null percentiles and rate, not zeros.
+  in.nack.win = {};
+  in.nack.interval_s = 0.0;
+  ex.poll(1600, in);
+  j = cap.last();
+  CHECK(j["link"]["nack"]["fill_pps"].is_null());
+  CHECK(j["link"]["nack"]["fill_ms"]["p50"].is_null() && j["link"]["nack"]["fill_ms"]["p90"].is_null() &&
+        j["link"]["nack"]["fill_ms"]["max"].is_null());
+
+  in.nack.enabled = false;
+  ex.poll(2200, in);
+  CHECK(!cap.last()["link"].contains("nack"));
+}
+
+TEST(video_exports_slice_salvage_counters) {
+  Capture cap;
+  StatsExporter ex(1, 500, cap.fn());
+  auto in = base_input();
+  in.slice_salvaged = 7; in.slices_kept = 20; in.slices_filled = 8; in.slices_after_hole = 5;
+  in.slice_fallback[maburgs::kSliceFbISlice] = 2;
+  CHECK(ex.poll(1000, in));
+  const json v = cap.last()["link"]["video"];
+  CHECK(v["slice_salvaged"] == 7);
+  CHECK(v["slices_kept"] == 20);
+  CHECK(v["slices_filled"] == 8);
+  CHECK(v["slices_after_hole"] == 5);
+  CHECK(v["slice_fallback"]["islice"] == 2);
+  CHECK(v["slice_fallback"]["no_params"] == 0);
 }
 
 MTEST_MAIN

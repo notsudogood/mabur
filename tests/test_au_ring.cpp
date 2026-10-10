@@ -455,7 +455,7 @@ TEST(last_record_matches_the_published_slot) {
   mabur::framewire::FrameHdr h;
   h.frame_id = 7;
   h.flags = 0x01;  // kFlagIdr
-  h.codec = mabur::framewire::kCodecH265;
+  h.slice_rows = 0;
   h.pts_us = 4242;
   w.begin(h, /*sid=*/1);
   const uint8_t payload[] = {0, 0, 0, 1, 0x40, 0x01};
@@ -480,6 +480,7 @@ TEST(last_record_matches_the_published_slot) {
   CHECK(m.enc_us == 7000);
   CHECK(m.drone_q_ms == 3);
   CHECK(m.drone_air_ms == 21);
+  CHECK(w.last_record().codec == maburgs::kRingCodecH265);
 }
 
 TEST(last_record_stamps_t_complete_when_caller_passes_zero) {
@@ -493,6 +494,26 @@ TEST(last_record_stamps_t_complete_when_caller_passes_zero) {
   w.finish(false, maburgs::AuLatMeta{});
   CHECK(w.last_record().t_complete_us != 0);   // writer filled it
   CHECK((w.last_record().flags & 0x80) == 0);  // not complete
+}
+
+TEST(salvaged_au_carries_the_flag_and_is_decodable) {
+  ScratchFile sf("test_au_ring", ".ring");
+  maburgs::AuRingWriter w;
+  REQUIRE(w.open(sf.path, maburgs::AuRingGeom{4096, 4}));
+  mabur::framewire::FrameHdr h;
+  h.frame_id = 3;
+  w.begin(h, 1);
+  const uint8_t payload[] = {0, 0, 0, 1, 0x02, 0x01, 0xAA};
+  w.append(payload, sizeof(payload));
+  maburgs::AuLatMeta lat;
+  lat.slice.salvaged = true;
+  lat.slice.slices = 4; lat.slice.kept = 3; lat.slice.filled = 1; lat.slice.kept_after_hole = 2;
+  REQUIRE(w.finish(false, lat) != UINT64_MAX);
+  CHECK(w.last_record().flags & maburgs::kRecFlagSliceSalvaged);
+  CHECK(!(w.last_record().flags & maburgs::kRecFlagComplete));
+  CHECK(maburgs::au_decodable(w.last_record().flags));
+  CHECK(w.last_record().slice.kept_after_hole == 2);
+  CHECK(!maburgs::au_decodable(0x01));
 }
 
 MTEST_MAIN

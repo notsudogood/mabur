@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <random>
 
+#include "mabur/link_key.h"
 #include "mabur/rc_proto.h"
 #include "mabur/uep_encoder.h"
 
@@ -22,8 +24,148 @@ int round_to_100(double v) { return static_cast<int>(std::lround(v / 100.0) * 10
 
 }  // namespace
 
-RcAgent::RcAgent(const Config& cfg, Actuator& act, OvOverride* ovr)
-    : cfg_(cfg), act_(act), ovr_(ovr), channel_(cfg.radio.channel) {}
+RcAgent::RcAgent(const Config& cfg, Actuator& act, OvOverride* ovr, uint8_t start_ch)
+    : cfg_(cfg), act_(act), ovr_(ovr),
+      channel_(mabur::channel_set_member(cfg.radio.channels, start_ch) ? start_ch
+                                                                        : cfg.radio.channels.front()) {}
+
+uint32_t RcAgent::fresh_vtx_nonce_() {
+  static thread_local std::mt19937 rng{std::random_device{}()};
+  uint32_t n;
+  do { n = rng(); } while (n == 0);
+  return n;
+}
+
+void RcAgent::clear_sessions_() {
+  current_ = Session{};
+  pending_ = Session{};
+  publish_session_();
+}
+
+void RcAgent::publish_session_() {
+  published_session_.store(current_.valid
+      ? (static_cast<uint64_t>(current_.vrx_nonce) << 32) | current_.vtx_nonce : 0,
+      std::memory_order_release);
+}
+
+// Freshness first (cheap, and the seq32 candidate is an input to the tag):
+// a pair with no accepted RCF yet takes the wire seq as seq32 (the GS starts
+// both at 1 on a new vtx_nonce); after that the 16-bit delta extends the
+// last accepted seq32. Only a frame that also verifies moves the tracker,
+// which the caller does.
+bool RcAgent::verify_rcf_(const uint8_t* body, size_t len, const rc::Rcf& r,
+                          const Session& s, uint32_t* seq32) const {
+  if (!s.valid) return false;
+  uint32_t cand;
+  if (!s.have_seq) {
+    cand = r.seq;
+  } else {
+    const uint16_t delta = static_cast<uint16_t>(r.seq - static_cast<uint16_t>(s.last_seq32));
+    if (delta < 1 || delta > 32767) return false;
+    cand = s.last_seq32 + delta;
+  }
+  if (!rc::verify_control(body, len, cfg_.link.key, rc::TagCtx{s.vrx_nonce, s.vtx_nonce, cand}))
+    return false;
+  *seq32 = cand;
+  return true;
+}
+
+bool RcAgent::verify_session_tagged(const uint8_t* body, size_t len, uint32_t seq32,
+                                    uint64_t* session) const {
+  const uint64_t p = published_session_.load(std::memory_order_acquire);
+  if (p == 0) return false;
+  if (!rc::verify_control(body, len, cfg_.link.key,
+          rc::TagCtx{static_cast<uint32_t>(p >> 32), static_cast<uint32_t>(p & 0xFFFFFFFFu), seq32}))
+    return false;
+  if (session) *session = p;
+  return true;
+}
+
+bool RcAgent::accept_nack_counter(uint32_t counter) {
+  return accept_nack_counter(counter, published_session_.load(std::memory_order_acquire));
+}
+
+// Keyed by the pair's vtx nonce rather than reset from publish_session_():
+// a reset store can never be ordered against an RX-thread CAS that verified
+// under the OLD pair and lands after it -- that would plant the old pair's
+// (possibly large) counter in the new pair's space and refuse the GS's
+// restarted counters until they overtake it. With the key in the same word,
+// a stale-keyed state just reads as "nothing accepted yet".
+bool RcAgent::accept_nack_counter(uint32_t counter, uint64_t session) {
+  if (session == 0 || session != published_session_.load(std::memory_order_acquire)) return false;
+  const uint64_t key = session & 0xFFFFFFFFu;   // vtx_nonce
+  uint64_t cur = nack_last_.load(std::memory_order_relaxed);
+  for (;;) {
+    const uint32_t last = (cur >> 32) == key ? static_cast<uint32_t>(cur) : 0;
+    if (counter <= last) return false;
+    if (nack_last_.compare_exchange_weak(cur, (key << 32) | counter, std::memory_order_relaxed))
+      return true;
+  }
+}
+
+RcAgent::NackCheck RcAgent::check_nack(const uint8_t* body, size_t len, rc::Nack* out) {
+  auto n = rc::parse_nack(body, len);
+  if (!n || n->sid != 0) return NackCheck::kMalformed;
+  uint64_t session = 0;
+  if (!verify_session_tagged(body, len, n->counter, &session) ||
+      !accept_nack_counter(n->counter, session)) {
+    note_auth_reject();
+    return NackCheck::kRejected;
+  }
+  *out = *n;
+  return NackCheck::kOk;
+}
+
+bool RcAgent::verify_cal_frame(const uint8_t* body, size_t len, bool sweep_running) {
+  auto verifies = [&](uint64_t s) {
+    return s != 0 && rc::verify_control(body, len, cfg_.link.key,
+        rc::TagCtx{static_cast<uint32_t>(s >> 32), static_cast<uint32_t>(s & 0xFFFFFFFFu), 0});
+  };
+  // The latch only outlives the published session while a sweep runs: the
+  // GS is radio-silent for every phase, so the drone reaches FAILSAFE (and
+  // clears current_) inside every run, yet the run's later CAL_CMDs and its
+  // CAL_RESULT are still tagged under the pair it was going under.
+  if (!sweep_running) cal_latch_session_ = 0;
+  const uint64_t p = published_session_.load(std::memory_order_acquire);
+  uint64_t used = 0;
+  if (verifies(p)) used = p;
+  else if (cal_latch_session_ != p && verifies(cal_latch_session_)) used = cal_latch_session_;
+  bool ok = used != 0;
+  if (ok) {
+    cal_latch_session_ = used;
+    if (used != cal_ring_session_) {
+      // New pair: the seen nonces belonged to the old one, whose tags no
+      // longer verify anyway (the latch has moved off it too).
+      cal_ring_session_ = used;
+      cal_seen_n_ = cal_seen_next_ = 0;
+      have_cal_current_ = false;
+    }
+  }
+  if (ok && rc::frame_type(body, len) == rc::T_CAL_CMD) {
+    // In-session freshness (spec 2026-10-01 §5): a cal nonce already seen
+    // in this session, other than the running one, is a replay.
+    if (auto c = rc::parse_cal_cmd(body, len)) {
+      if (!have_cal_current_ || c->nonce != cal_current_) {
+        const auto seen_end = cal_seen_.begin() + static_cast<std::ptrdiff_t>(cal_seen_n_);
+        if (std::find(cal_seen_.begin(), seen_end, c->nonce) != seen_end) {
+          ok = false;
+        } else {
+          cal_seen_[cal_seen_next_] = c->nonce;
+          cal_seen_next_ = (cal_seen_next_ + 1) % kCalNonceRing;
+          if (cal_seen_n_ < kCalNonceRing) ++cal_seen_n_;
+          cal_current_ = c->nonce;
+          have_cal_current_ = true;
+        }
+      }
+    }
+  }
+  if (!ok) auth_reject_.store(true, std::memory_order_relaxed);
+  return ok;
+}
+
+void RcAgent::install_session_for_replay(uint32_t vrx_nonce, uint32_t vtx_nonce) {
+  pending_ = Session{vrx_nonce, vtx_nonce, true, 0, false, channel_};
+}
 
 void RcAgent::note_chain_break() {
   chain_break_pending_.store(true, std::memory_order_relaxed);
@@ -100,7 +242,7 @@ bool RcAgent::idr_due(uint64_t now_ms, bool chain) {
 // hysteresis — the spec mandates failsafe = robust MCS + floor bitrate, and
 // a degraded radio link must never keep flooding at the last LINKED rate.
 void RcAgent::apply_max_range(uint64_t now_ms) {
-  auto ladder = rc::ladder_from(PhyMode::HT, 0, 20);
+  auto ladder = rc::ladder_from(PhyMode::HT, 0, 20, cfg_.radio.ldpc);
 
   // Forced shed while MAX_RANGE is the operating point (BOOT/RENDEZVOUS or a
   // LINKED->FAILSAFE entry) — held sticky in failsafe_shed_ until an
@@ -157,7 +299,7 @@ void RcAgent::apply_ladder_op(const std::array<LayerTxSpec, 2>& ladder,
     // over it.
     PhyMode pm; uint8_t pmcs, pbw;
     rc::decode_profile(probe_profile, pm, pmcs, pbw);
-    applied_.probe = rc::ladder_from(ladder[1].mode, pmcs, pbw)[1];
+    applied_.probe = rc::ladder_from(ladder[1].mode, pmcs, pbw, cfg_.radio.ldpc)[1];
   }
   applied_.shed[0] = false;
   // shed_level_ still counts 0..3 (congestion semantics untouched — see
@@ -440,8 +582,18 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
     // Genlock (efficient-link plan step 2): a standing camera-rate setpoint.
     // Only when this drone opted in -- without [genlock] enable it never
     // advertised CAP_GENLOCK, so a setpoint here is a GS that ignored that.
+    // Tagged like T_NACK: the frame's counter is the tag's seq32, and only a
+    // counter above the last one accepted in this session is fresh.
     auto g = rc::parse_genlock(body, len);
-    if (!g.has_value() || g->vtx_id != cfg_.link.vtx_id || !cfg_.genlock.enable) return;
+    if (!g.has_value() || !cfg_.genlock.enable) return;
+    uint64_t session = 0;
+    if (!verify_session_tagged(body, len, g->counter, &session) ||
+        (session == genlock_session_ && g->counter <= genlock_counter_)) {
+      note_auth_reject();
+      return;
+    }
+    genlock_session_ = session;
+    genlock_counter_ = g->counter;
     ++genlock_rx_;
     genlock_mfps_ = g->mfps;
     if (act_.set_sensor_mfps(g->mfps))
@@ -452,110 +604,89 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
   }
   if (type == rc::T_DISC) {
     auto d = rc::parse_disc(body, len);
-    if (!d.has_value() || d->vtx_id != cfg_.link.vtx_id) return;
-
-    // Auto channel select (spec 2026-09-13 auto-channel-select §6): a DISC
-    // is a proposal (Disc.op_channel), not a command. follow_gs=false, or a
-    // proposal that already matches where we are, is a no-op move; anything
-    // else means we ack agreeing to the NEW channel (sent from the CURRENT
-    // channel, before we've moved there — the ack itself must still reach
-    // the GS on the channel it's listening on) and then request the retune.
-    // Idempotent by construction: a repeated DISC for a channel we're
-    // already agreeing to move to (or already on) computes move=false and
-    // touches nothing further.
-    const bool move = cfg_.radio.follow_gs && d->op_channel != channel_;
-    const uint8_t agreed = cfg_.radio.follow_gs ? d->op_channel : cfg_.radio.channel;
-
-    if (state_ == State::LINKED) {
-      // Ack-only: a rebooted GS starts in SESSION with peer_caps_=0 and
-      // its video tail gated off; its ~1 Hz keep-alive DISC is the only
-      // way it can re-learn chip_caps (stale-caps deadlock, 2026-08-12).
-      // Reply, but change NOTHING else — the init-profile apply, state
-      // transition and watchdog refresh stay LINKED-entry-only (op-thrash
-      // fix, 2026-07-12). A channel move IS honoured here, though: it's the
-      // one thing a keep-alive DISC can carry that a steady LINKED session
-      // has no other way to learn about.
-      act_.send_control(rc::pack_disc_ack(make_disc_ack(d->vrx_nonce, d->seq, agreed)));
-      if (move) {
-        act_.retune(d->op_channel, "disc");
-        channel_ = d->op_channel;
-        move_from_ch_ = 0;
-        move_pending_ = true;
-        move_at_ms_ = now_ms;
-      } else {
-        move_pending_ = false;
-      }
+    if (!d.has_value()) return;
+    // Auto channel select (spec 2026-10-03-auto-channel-set §2/§6): a DISC
+    // is a proposal (Disc.op_channel), not a command -- we agree to it when
+    // it's a member of our channel set; a non-member is answered with the
+    // current channel instead (the GS logs ack_override). The agreement
+    // rides the ack and the pending pair; the move itself happens only once
+    // that pair is promoted (see T_RCF).
+    const uint8_t agreed = member_(d->op_channel) ? d->op_channel : channel_;
+    if (!rc::verify_control(body, len, cfg_.link.key, rc::TagCtx{})) {
+      // Wrong key on the GS. Answer so the GS can SHOW it (spec §8) instead
+      // of looking like the stale-caps deadlock; change nothing else.
+      auth_reject_.store(true, std::memory_order_relaxed);
+      act_.send_control(rc::pack_disc_ack(
+          make_disc_ack(d->vrx_nonce, 0, rc::kAckKeyMismatch, d->seq, agreed)));
       return;
     }
-
-    act_.send_control(rc::pack_disc_ack(make_disc_ack(d->vrx_nonce, d->seq, agreed)));
-    if (move) {
-      act_.retune(d->op_channel, "disc");
-      channel_ = d->op_channel;
-      move_from_ch_ = 0;
-      move_pending_ = true;
-      move_at_ms_ = now_ms;
+    // A DISC only elicits an ack (spec §6): no op, no retune, no LINKED
+    // entry, no watchdog refresh. The first RCF that verifies under the
+    // acked pair does those. The ack itself still goes out on every DISC,
+    // LINKED included: a rebooted GS's keep-alive is the only way it
+    // re-learns chip_caps (stale-caps deadlock, 2026-08-12).
+    uint32_t vtx;
+    if (state_ == State::LINKED && current_.valid && d->vrx_nonce == current_.vrx_nonce) {
+      vtx = current_.vtx_nonce;                       // keep-alive: same answer
+    } else if (pending_.valid && d->vrx_nonce == pending_.vrx_nonce) {
+      vtx = pending_.vtx_nonce;                       // lost-ack retry: same answer
+      pending_.agreed_ch = agreed;
     } else {
-      move_pending_ = false;
+      // New GS process, or our own GS heard again while we are NOT linked
+      // (failsafe/rendezvous): a fresh pair, so its seq32 restarts on both
+      // ends (the GS resets on a NEW vtx_nonce; a > 1 h gap would otherwise
+      // desync the wrap count).
+      vtx = fresh_vtx_nonce_();
+      pending_ = Session{d->vrx_nonce, vtx, true, 0, false, agreed};
     }
-
-    int row_idx = std::clamp<int>(d->init_profile, 0,
-                                   static_cast<int>(rc::profile_table().size()) - 1);
-    auto ladder = rc::ladder_for_row(row_idx);
-    const auto& row = rc::profile_table()[static_cast<size_t>(row_idx)];
-    apply_ladder_op(ladder, row.ov_base, row.ov_enh, rc::kNoProbeProfile);
-
-    if (state_ != State::FAILSAFE) link_established_ = true;
-    state_ = State::LINKED;
-    last_fb_ms_ = now_ms;
-    have_last_fb_ = true;
-    // A DISC establishes a (new) GS session — same session-boundary seq
-    // reset as failsafe entry above.
-    have_last_seq_ = false;
-    // Same restarted-GS rationale as have_last_seq_ above (see the FAILSAFE
-    // entry comment below): a new session's hop epoch numbering can start
-    // over, so a latched hop_epoch_/hop_ch_ from the old session must not
-    // survive to silently swallow the new session's first hop order.
-    have_hop_ = false;
-    hop_epoch_ = 0;
-    hop_ch_ = 0;
-
-    // Same rationale as RCF's entering_linked force: DISC always
-    // (re)establishes LINKED from RENDEZVOUS/FAILSAFE, so the newly resolved
-    // op's bitrate must take effect immediately rather than waiting for the
-    // steady-state throttle/hysteresis gate (or, worse, never running at all
-    // — DISC apply previously never called run_bitrate_policy(), leaving
-    // the encoder stuck at whatever bitrate was last set, e.g. the MAX_RANGE
-    // floor, until the first post-DISC RCF arrived).
-    run_bitrate_policy(now_ms, /*force=*/true);
+    act_.send_control(rc::pack_disc_ack(make_disc_ack(d->vrx_nonce, vtx, 0, d->seq, agreed)));
     return;
   }
 
   if (type == rc::T_RCF) {
     auto r = rc::parse_rcf(body, len);
-    if (!r.has_value() || r->vtx_id != cfg_.link.vtx_id) return;
-
-    bool fresh;
-    if (!have_last_seq_) {
-      fresh = true;
+    if (!r.has_value()) return;
+    uint32_t seq32 = 0;
+    if (verify_rcf_(body, len, *r, current_, &seq32)) {
+      // in-session
+    } else if (verify_rcf_(body, len, *r, pending_, &seq32)) {
+      // Promotion (spec §6 step 4): pending becomes current. A session swap
+      // while LINKED touches nothing but the pair (op-thrash rule); from
+      // any other state this RCF's own apply path below enters LINKED.
+      current_ = pending_;
+      pending_ = Session{};
+      publish_session_();
+      session_promoted_ = true;
+      // Session boundary: a new GS session's hop epoch and IDR epoch
+      // numbering start over, so the old session's latches must not
+      // swallow its first hop order or IDR request.
+      have_hop_ = false;
+      hop_epoch_ = 0;
+      hop_ch_ = 0;
+      idr_epoch_seen_ = 0;
+      idr_gs_pending_ = false;
+      if (current_.agreed_ch != 0 && current_.agreed_ch != channel_)
+        deferred_move_ch_ = current_.agreed_ch;          // after main's promote Telem
     } else {
-      uint16_t delta = static_cast<uint16_t>(r->seq - last_seq_);
-      fresh = delta >= 1 && delta <= 32767;
+      // Wrong key, wrong pair, stale or replayed seq: drop, flag for the
+      // next Telem, never move the seq tracker. No log (spec §7).
+      auth_reject_.store(true, std::memory_order_relaxed);
+      return;
     }
-    if (!fresh) return;
-    last_seq_ = r->seq;
-    have_last_seq_ = true;
+    current_.last_seq32 = seq32;
+    current_.have_seq = true;
     ++rcf_accepted_;
     // Any accepted RCF confirms an in-flight move (spec §6: "the first GS
     // frame received after the move confirms it") -- it arrived on the
     // channel we retuned to, so there's nothing left for tick()'s fallback
     // to guard against.
+    if (move_pending_) act_.remember_channel(channel_);   // the GS heard us here: persist
     move_pending_ = false;
 
     PhyMode mode;
     uint8_t mcs, bw;
     rc::decode_profile(r->profile, mode, mcs, bw);
-    auto ladder = rc::ladder_from(mode, mcs, bw);
+    auto ladder = rc::ladder_from(mode, mcs, bw, cfg_.radio.ldpc);
 
     State prev_state = state_;
     apply_ladder_op(ladder, r->fec_overhead_base, r->fec_overhead_enh, r->probe_profile);
@@ -570,7 +701,9 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
       have_hop_ = true;
       hop_epoch_ = r->hop_epoch;
       hop_ch_ = r->hop_ch;
-      if (r->hop_ch != channel_) {
+      // The pair is still recorded above regardless, so a non-member order
+      // is not re-evaluated on every repeat of the same (epoch, ch).
+      if (member_(r->hop_ch) && r->hop_ch != channel_) {
         act_.retune(r->hop_ch, "hop");
         move_from_ch_ = channel_;
         channel_ = r->hop_ch;
@@ -587,6 +720,16 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
       if (want != rec_applied_ && act_.set_record(want == 1)) rec_applied_ = want;
     }
 
+    // GS-requested IDR (spec 2026-09-28): a CHANGED epoch is a request.
+    // Marked seen on receipt -- pending stays set until tick() serves it, so
+    // any number of bumps collapse into one IDR. No silent adopt of the
+    // session's first epoch: a DISC link-up sends no IDR, and a page that
+    // asked before the link came up needs one.
+    if (r->idr_epoch != idr_epoch_seen_) {
+      idr_epoch_seen_ = r->idr_epoch;
+      idr_gs_pending_ = true;
+    }
+
     if (prev_state == State::BOOT || prev_state == State::RENDEZVOUS)
       link_established_ = true;
     state_ = State::LINKED;
@@ -601,6 +744,15 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
     // true rather than aspirational.
     if (entering_linked && idr_due(now_ms, /*chain=*/false)) {
       act_.request_idr();
+      // This link-up IDR already covers any GS request pending on this same
+      // RCF (spec 2026-09-28 fix round 1): FAILSAFE entry resets
+      // idr_epoch_seen_ to 0, so the first RCF back reads the page's
+      // (unchanged) epoch as a fresh change and arms idr_gs_pending_ right
+      // above -- without this, that pending request survives to the next
+      // tick and fires a redundant second IDR ~100 ms later. Leave
+      // idr_epoch_seen_ alone: the epoch itself is still correctly seen, so
+      // the same epoch in a later RCF stays "not a new request".
+      idr_gs_pending_ = false;
     }
 
     // RCFs that transition into LINKED (from RENDEZVOUS or FAILSAFE) force
@@ -614,32 +766,43 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
 }
 
 void RcAgent::tick(uint64_t now_ms, const RadioHealth& health) {
+  // A promoted session's agreed channel (spec 2026-10-01 §6 step 5). Run
+  // here, not on the promoting RCF, so main has sent one Telem saying
+  // LINKED on the CURRENT channel first -- the GS follows on it.
+  if (deferred_move_ch_ != 0) {
+    const uint8_t ch = deferred_move_ch_;
+    deferred_move_ch_ = 0;
+    act_.retune(ch, "disc");
+    move_from_ch_ = channel_;
+    channel_ = ch;
+    move_pending_ = true;
+    move_at_ms_ = now_ms;
+  }
   if (state_ == State::BOOT) {
     apply_max_range(now_ms);
     state_ = State::RENDEZVOUS;
     return;
   }
 
-  if (move_pending_ && now_ms - move_at_ms_ >= static_cast<uint64_t>(cfg_.link.move_confirm_ms) &&
-      move_from_ch_ != 0 && move_from_ch_ != cfg_.radio.channel && move_from_ch_ != channel_) {
-    // Unconfirmed HOP: first back to the channel we hopped from, where a GS
-    // that withdrew the order is (spec 2026-09-14 §1 step 4). One step only:
-    // the move stays pending, so silence there falls through to home below.
-    act_.retune(move_from_ch_, "move_unconfirmed");
-    channel_ = move_from_ch_;
-    move_from_ch_ = 0;
-    move_at_ms_ = now_ms;
-  }
   if (move_pending_ && now_ms - move_at_ms_ >= static_cast<uint64_t>(cfg_.link.move_confirm_ms)) {
-    // Unconfirmed move (spec §6): nothing from the GS on the new channel.
+    // Unconfirmed move (spec 2026-10-03 §3): nothing from the GS on the new
+    // channel. Back to the channel we came from -- where the GS found us,
+    // or where a withdrawing GS still is -- and stay there. There is no
+    // home to fall through to.
+    if (move_from_ch_ != 0 && move_from_ch_ != channel_) {
+      act_.retune(move_from_ch_, "move_unconfirmed");
+      channel_ = move_from_ch_;
+    }
     move_from_ch_ = 0;
+    move_pending_ = false;
     if (state_ == State::LINKED) apply_max_range(now_ms);
     state_ = State::RENDEZVOUS;
-    have_last_seq_ = false;
+    clear_sessions_();
     have_hop_ = false;
     hop_epoch_ = 0;
     hop_ch_ = 0;
-    go_home_("move_unconfirmed");
+    idr_epoch_seen_ = 0;
+    idr_gs_pending_ = false;
   }
 
   // Chain-break intake, evaluated against the state as of this tick's ENTRY
@@ -660,21 +823,32 @@ void RcAgent::tick(uint64_t now_ms, const RadioHealth& health) {
     act_.request_idr();
   }
 
+  // GS-requested IDR (spec 2026-09-28), same tick-entry state rule as the
+  // chain-break consumer above. Unlike a chain break, a refused request is
+  // DEFERRED (pending survives to the next tick): the requester is frozen
+  // and waiting, and dropping would cost it a full retry interval. Still
+  // bounded by idr_due's 100 ms floor.
+  if (idr_gs_pending_ && state_ == State::LINKED && idr_due(now_ms, /*chain=*/false)) {
+    act_.request_idr();
+    idr_gs_pending_ = false;
+    ++idr_gs_total_;
+  }
+
   if (state_ == State::LINKED) {
     if (have_last_fb_ && now_ms - last_fb_ms_ >= static_cast<uint64_t>(cfg_.link.failsafe_ms)) {
       apply_max_range(now_ms);
       state_ = State::FAILSAFE;
-      // Session boundary: forget the RCF seq baseline. The Python VTX has
-      // NO stale-seq check at all (adaptive_link.py applies every valid
-      // RCF); the port added replay protection, which locked out a
-      // RESTARTED GS (its seq restarts at 0 -> every RCF reads stale for
-      // up to 32k seqs, ~28 min at 20 Hz — bench 2026-07-12: metronomic
-      // 3 s LINKED / 1 s FAILSAFE with a healthy air link). Resetting at
-      // failsafe keeps in-session replay protection with no lockout.
-      have_last_seq_ = false;
+      // Failsafe entry clears both sessions (spec 2026-10-01 §7): a kept
+      // pair would leave every RCF the GS sent during the fade replayable
+      // for the life of the process. Recovery: the GS's next keep-alive
+      // DISC gets a fresh pair; its RCFs set auth_reject until then
+      // (<= ~1 s, one beacon_keepalive_ms).
+      clear_sessions_();
       have_hop_ = false;
       hop_epoch_ = 0;
       hop_ch_ = 0;
+      idr_epoch_seen_ = 0;
+      idr_gs_pending_ = false;
       // Rebase the rendezvous_ms timer from the moment failsafe was
       // entered (not the last real feedback), so a link silent since t=0
       // with failsafe_ms=1000/rendezvous_ms=30000 falls back to
@@ -685,7 +859,6 @@ void RcAgent::tick(uint64_t now_ms, const RadioHealth& health) {
     if (have_last_fb_ &&
         now_ms - last_fb_ms_ >= static_cast<uint64_t>(cfg_.link.rendezvous_ms)) {
       state_ = State::RENDEZVOUS;
-      go_home_("rendezvous");
     }
   }
 
@@ -752,10 +925,12 @@ void RcAgent::tick(uint64_t now_ms, const RadioHealth& health) {
   run_congestion_guard(now_ms, health);
 }
 
-rc::DiscAck RcAgent::make_disc_ack(uint32_t nonce, uint16_t seq, uint8_t agreed) const {
+rc::DiscAck RcAgent::make_disc_ack(uint32_t vrx_nonce, uint32_t vtx_nonce, uint8_t flags,
+                                   uint16_t seq, uint8_t agreed) const {
   DiscAck ack;
-  ack.vtx_id = cfg_.link.vtx_id;
-  ack.vrx_nonce = nonce;
+  ack.vrx_nonce = vrx_nonce;
+  ack.vtx_nonce = vtx_nonce;
+  ack.flags = flags;
   // Frame wire is the only video format maburd speaks; the bit stays on the
   // wire (one legal value) so a GS can still refuse a peer that lacks it.
   // CAP_TELEMETRY: this drone also sends T_TELEM frames on its uplink
@@ -763,34 +938,20 @@ rc::DiscAck RcAgent::make_disc_ack(uint32_t nonce, uint16_t seq, uint8_t agreed)
   // CAP_CALIBRATE: this build understands T_CAL_CMD/T_CAL_RESULT (Task 11
   // wires them up in main.cpp) -- a real gate, unlike CAP_TELEMETRY:
   // gs/src/cal_session.cpp's start() refuses a session outright without it.
-  // CAP_TURNAROUND: answers T_TA_PING (rollout phase 2, ta_responder.h).
-  // CAP_LISTEN: keeps a quiet gap after each burst while T_STATUS arrives
-  // and reports T_LWSTAT (rollout phase 3, listen_window.h).
   // CAP_GENLOCK: applies T_GENLOCK to the sensor rate -- only when the
   // owner opted in ([genlock] enable), so the GS never steers a camera
   // nobody asked it to.
-  ack.chip_caps = rc::CAP_FRAME_WIRE | rc::CAP_TELEMETRY | rc::CAP_CALIBRATE |
-                  rc::CAP_TURNAROUND | rc::CAP_LISTEN;
+  ack.chip_caps = rc::CAP_FRAME_WIRE | rc::CAP_TELEMETRY | rc::CAP_CALIBRATE;
   if (cfg_.genlock.enable) ack.chip_caps |= rc::CAP_GENLOCK;
-  // agreed is follow_gs ? the DISC's proposed op_channel : home (spec
-  // 2026-09-13 auto-channel-select §6) -- computed by the caller, which
-  // also drives the actual retune, so the ack and the move can never
-  // disagree about what was agreed to.
+  // agreed is member_(op_channel) ? the DISC's proposed op_channel : the
+  // current channel (spec 2026-10-03-auto-channel-set §2/§6) -- computed by
+  // the caller, which also stores it in the pending pair whose promotion
+  // drives the actual retune, so the ack and the move can never disagree
+  // about what was agreed to.
   ack.agreed_channel = agreed;
   ack.agreed_width = cfg_.radio.width;
   ack.seq = seq;
   return ack;
-}
-
-void RcAgent::go_home_(const char* why) {
-  // `why` is spec §7's retune reason: it rides through to the Actuator,
-  // which is where the stderr line is printed (see RealActuator in
-  // main.cpp) -- RcAgent itself logs nothing.
-  if (channel_ != cfg_.radio.channel) {
-    act_.retune(cfg_.radio.channel, why);
-    channel_ = cfg_.radio.channel;
-  }
-  move_pending_ = false;
 }
 
 }  // namespace mabur

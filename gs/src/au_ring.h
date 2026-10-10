@@ -63,6 +63,25 @@ inline constexpr size_t kAuSlotHdrBytes = 64;
 // bits grow upward from there).
 inline constexpr uint8_t kRecFlagComplete = 0x80;
 
+// Slice salvage (spec 2026-10-10-h265-slices §5): an AU FrameStream could
+// not complete, rebuilt as a decodable picture -- every slice that arrived
+// whole, plus one synthetic all-skip fill per lost slice. Ring-local flag,
+// next to kRecFlagComplete at the top of the byte. A salvaged AU is never
+// also complete; consumers decode either (au_decodable), and only a
+// complete one may arm a decoder.
+enum SliceFallback : uint8_t { kSliceFbNone = 0, kSliceFbNoParams, kSliceFbUnsupported,
+                               kSliceFbISlice, kSliceFbNoTemplate, kSliceFbGeometry, kSliceFbCount };
+struct SliceSalvage { bool salvaged = false; uint8_t slices = 0, kept = 0, filled = 0,
+                      kept_after_hole = 0; uint8_t fallback = kSliceFbNone; };
+inline constexpr uint8_t kRecFlagSliceSalvaged = 0x40;
+inline bool au_decodable(uint8_t flags) {
+  return (flags & (kRecFlagComplete | kRecFlagSliceSalvaged)) != 0; }
+
+// The ring slot's codec byte (offset 30). The wire stopped carrying a codec
+// id on 2026-10-10 (FrameHdr byte 3 became slice_rows); mabur is H.265 only,
+// so the writer stamps this constant. Part 2's ring v4 drops the byte.
+inline constexpr uint8_t kRingCodecH265 = 0x01;
+
 struct AuRingGeom {
   uint32_t slot_bytes = 512 * 1024;
   uint32_t slot_count = 16;
@@ -81,6 +100,9 @@ struct AuRecordMeta {
   uint16_t drone_q_ms = 0;
   uint16_t enc_us = 0;
   uint16_t drone_air_ms = 0;
+  // Writer side only: last_record() copies it from AuLatMeta; readers leave
+  // it default.
+  SliceSalvage slice;
 };
 
 // GS-side per-AU latency stamps (SlotHdr v2). Passed to finish() so the
@@ -99,6 +121,14 @@ struct AuLatMeta {
   uint16_t drone_q_ms = 0;    // from SBI q_ms via the AU's first fragment
   uint16_t enc_us = 0;        // from SBI enc_us, same latch
   uint16_t drone_air_ms = 0;  // from SBI air_ms, same latch as drone_q_ms
+  // fragment 0 of this AU arrived retx-marked (fec-nack, Task 5/7): a NACK
+  // retransmit filled the AU's header fragment, so the latency-anchor guard
+  // (Task 7) must not trust this AU's arrival time as a clean anchor sample.
+  bool hdr_retx = false;
+  // Slice salvage (spec 2026-10-10-h265-slices §5): FrameStream's verdict
+  // for this AU. finish() turns slice.salvaged into kRecFlagSliceSalvaged;
+  // the counts ride to AuLog through last_record(). Not in the SlotHdr.
+  SliceSalvage slice;
 };
 
 // Creates/truncates the ring file and publishes AUs accumulated between

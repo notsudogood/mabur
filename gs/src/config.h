@@ -1,11 +1,15 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "ladder_controller.h"
+#include "mabur/channel_set.h"
+#include "mabur/link_key.h"
 #include "mabur/uep_encoder.h"
+#include "mabur/nack_tracker.h"
 
 namespace maburgs {
 
@@ -16,21 +20,33 @@ struct CardCfg {
   int index = 0;
 };
 
-/// Boot-time channel scan (spec 2026-09-13-auto-channel-select). The GS
-/// measures `candidates` (plus radio.channel, the home channel) with a
-/// spare card while it waits for the drone and proposes the least busy one
-/// in DISC. enable=false: every DISC proposes home and nothing retunes.
+/// Channel search + measurement over radio.channels (spec
+/// 2026-10-03-auto-channel-set §2). dwell/settle/min_rounds are the
+/// measurement; search_ms the DISC burst at the start of an unlinked dwell;
+/// op_window_ms the one-card beacon window on op; search_after_ms how long
+/// every card holds op after a loss before sweeping; pick_margin how much a
+/// candidate must beat the current channel by; one_card_ms the one-card
+/// silent measurement prelude; max_ms the ceiling on an open pick.
+/// What counts as busy air. Shared by every measurer -- the boot scout
+/// and its pair ranker, the in-flight scout and its ranker, the verdict
+/// engine -- so it lives under [radio.scan], not [hop]: a pinned GS with
+/// no reactive hop still measures.
+struct BusyCfg {
+  int busy_dbm = -83;         // nf::kNhmAbsThDbm bucket edge (nhm_busy.h::busy_dbm_is_edge)
+  double blocked_pct = 50.0;  // foreign busy airtime that makes a window/channel "blocked"
+};
+
 struct ScanCfg {
-  bool enable = true;
-  std::vector<uint8_t> candidates;
   int dwell_ms = 250;
   int settle_ms = 30;
   int min_rounds = 3;
-  int home_window_ms = 300;
-  int split_after_ms = 5000;
-  // A candidate replaces home only if its worst visit is at least this many
-  // busy units below home's (ChannelRanker). 0 = lowest worst wins.
-  int home_margin = 20;
+  int search_ms = 100;
+  int op_window_ms = 300;
+  int search_after_ms = 5000;
+  int pick_margin = 20;
+  int one_card_ms = 5000;
+  int max_ms = 30000;
+  BusyCfg busy;
 };
 
 /// In-flight channel hop verdict thresholds (spec 2026-09-14-inflight-
@@ -48,13 +64,6 @@ struct HopVerdictCfg {
   int fading_drop_db = 6;
   int foreign_pps = 50;
   int fa_pps = 100;
-  // NHM busy-airtime evidence (spec 2026-09-25-nhm-airtime §6). busy_dbm
-  // must be an nf::kNhmAbsThDbm bucket edge (nhm_busy.h::busy_dbm_is_edge).
-  // blocked_pct default is 50, not the spec's 30 -- the hw spike found
-  // busy_dbm -83 / blocked_pct 50 the working pair (docs/nhm-airtime-
-  // spike-findings-2026-09-25.md).
-  int busy_dbm = -83;
-  double blocked_pct = 50.0;  // foreign busy airtime that makes a window/channel "blocked"
   // AU rate below this fraction of the trailing per-window AU mean reads
   // `starved` even when a trickle of own frames still arrives (bench
   // session 0232, 2026-09-26: 5-30 own frames/s under a long-frame jam).
@@ -62,12 +71,11 @@ struct HopVerdictCfg {
   double starved_frac = 0.25;
 };
 
-/// In-flight channel hop (spec 2026-09-14-inflight-channel-hop). enable
-/// governs whether a bad verdict actually retunes; scout_when_disabled lets
-/// the scout keep ranking candidates for observability even while disabled.
+/// In-flight channel hop (spec 2026-09-14-inflight-channel-hop). Runs in
+/// auto mode only: radio.channel = N pins the link and the reactive layer
+/// is off (ChannelCore::reactive_). What counts as busy air is
+/// radio.scan.busy, shared with the boot scout.
 struct HopCfg {
-  bool enable = false;
-  bool scout_when_disabled = true;
   int window_ms = 150;
   int persist = 2;
   int dwell_observe_ms = 5;
@@ -85,12 +93,22 @@ struct HopCfg {
   int max_hops_per_min = 4;
   int backoff_ms = 30000;
   int one_card_repeats = 5;
+  // Freshness-burst pacing when the burst card is a relay: its sweep blanks
+  // it for ~280 ms, so 333 ms (dwell_period_ms) in Hold would leave it ~85
+  // % deaf (spec 2026-10-05 §4).
+  int relay_burst_period_ms = 1000;
   HopVerdictCfg verdict;
 };
 
 /// Radio hardware: channel, bandwidth, cards, and transmit card selection.
 struct RadioCfg {
-  uint8_t channel = 149;
+  // The channel set (spec 2026-10-03 §2): the drone parks on a member, the
+  // GS picks among them. Both ends list the same set (the drone's may be a
+  // superset). Validated by mabur::channel_set_issue.
+  std::vector<uint8_t> channels{40, 64, 112, 144};
+  // `channel = "auto"` -> nullopt (measure the set, boot hop); a member ->
+  // pinned there, no measurement.
+  std::optional<uint8_t> pin;
   // HT20/HT40 (2026-09-24 HT40 top rungs): validated to 20 or 40 in
   // config.cpp, and 40 additionally requires `channel` to sit on a standard
   // 5 GHz pair (mabur::ht40_offset) -- a 20-tuned receiver cannot hear a 40
@@ -102,6 +120,11 @@ struct RadioCfg {
   std::vector<CardCfg> cards;
   bool auto_scan = true;
   int tx_card = -1;            // -1 = auto-select (Plan 2)
+  // CPE510 mabur-relay units (protocol v4 over UDP), "ipv4:port" each
+  // (numeric; the UDP transport resolves nothing). Every entry becomes a RemoteCard AFTER the USB cards, in this order. Empty =
+  // none. Several are supported by the code; the CPE firmware fixes every
+  // unit at 10.83.11.1, so more than one needs a firmware addressing change.
+  std::vector<std::string> relays;
   ScanCfg scan;
 };
 
@@ -118,9 +141,8 @@ struct FecCfg {
   int seq_horizon = 512;
 };
 
-/// Link-layer configuration: VTX ID, feedback rate, keepalive.
+/// Link-layer configuration: feedback rate, keepalive.
 struct LinkCfg {
-  uint32_t vtx_id = 1;
   int feedback_ms = 100;
   int beacon_keepalive_ms = 1000;
   // RCF slotting (gs-uplink-self-blanking findings 2026-09-02): while video
@@ -142,6 +164,9 @@ struct LinkCfg {
   // delay on the ladder's util input: 192 symbols is ~60 ms at rung 5,
   // ~165 ms at rung 0, both under the feedback period + probation.
   int arrival_guard_syms = 192;
+  // Software NACK, base layer (spec 2026-10-05 fec-nack §7). Optional
+  // [link.nack]: absent = off. lookback < fec.seq_horizon (checked).
+  mabur::NackCfg nack;
   // Static-link mode: when static_mcs >= 0 the adaptive controller is
   // bypassed entirely and every RCF commands exactly this MCS/FEC overhead
   // (HT, 20 MHz). Rendezvous/keep-alive/failsafe machinery is unaffected.
@@ -178,6 +203,14 @@ struct LinkCfg {
                         {5, 0.5, 0.5},
                         {6, 0.5, 0.5},
                         {7, 0.2, 0.2}}};
+
+  // Pairing key (spec 2026-10-01 link-pairing §2): the key FILE path. The
+  // file is read at load; a missing file means the compiled-in default (and
+  // a boot log line), a malformed one fails boot naming the file.
+  std::string key_file = "/etc/mabur.key";
+  mabur::LinkKey key = mabur::kDefaultLinkKey;   // resolved at load
+  bool key_is_default = true;
+  std::string key_source;                        // path, "default", or "link.key" (GS overlay)
 };
 
 /// Video reassembly tuning (PR C: the RTP output destination is gone --
@@ -255,28 +288,6 @@ struct DebugLogCfg {
   int rung_period_s = 10;    // ctl.log R lines (the per-rung store snapshot)
 };
 
-/// Turnaround bench (feedback-repair rollout phase 2,
-/// docs/feedback-repair-rollout.md): ping the drone at random moments and log
-/// ping-on-air -> pong-on-air to ta.log, with the drone's video queue loaded.
-/// Off (rate_hz 0) by default; needs debug_log on for the log and a drone
-/// advertising CAP_TURNAROUND.
-struct TurnaroundCfg {
-  double rate_hz = 0.0;          // pings per second, jittered; 0 = off
-  std::vector<int> lanes{0, 4};  // pong hardware queues, round robin: 0 = drone default, 1..6 = BK/BE/VI/VO/Mgmt/High
-  int frames = 1;                // pong frames per ping (repair burst size)
-  int bytes = 64;                // bytes per pong frame body
-};
-
-// Listen window (feedback-repair rollout phase 3, gs/src/listen_burst.h): the
-// GS sends a T_STATUS at every drone burst end and asks the drone to keep a
-// quiet gap of `ms` after each burst; held RCFs release into that gap instead
-// of RcfSlotter's predicted idle. ab_s > 0 alternates on/off every ab_s
-// seconds so one flight carries both arms of the A/B.
-struct ListenCfg {
-  int ms = 0;    // 0 = off (today's behaviour), 1..10
-  int ab_s = 0;  // 0 = always on while ms > 0
-};
-
 /// Ground station configuration: radio, FEC, link, video reassembly, AU ring, MSP OSD.
 struct Config {
   RadioCfg radio;
@@ -288,13 +299,29 @@ struct Config {
   AuRingOutCfg au_ring;
   DebugLogCfg debug_log;
   HopCfg hop;
-  TurnaroundCfg turnaround;
-  ListenCfg listen;
 
   /// Builds decoder configuration with per-stream RS and UEP overhead
   /// (2 streams since the airtime-balance-uep fold-in).
   std::array<mabur::UepLayerCfg, 2> uep_layers() const;
 };
+
+/// One radio/width validation failure: `field` and `why` exactly as
+/// load_config reports them ("config: ...: <field>: <why>").
+struct ConfigIssue {
+  std::string field, why;
+};
+
+/// radio.width's own checks: 20 or 40, and 40 only on a channel with a
+/// standard 5 GHz HT40 pair (mabur::ht40_offset). load_config runs it on the
+/// file's radio section; the web GS runs it on its page channel/width
+/// override. std::nullopt = OK.
+std::optional<ConfigIssue> radio_width_issue(uint8_t channel, int width);
+
+/// Ladder/static-pin width vs the receiver's tuned width: a 40 MHz rung or
+/// static_bw pin needs width 40 (a 20-tuned receiver cannot hear HT40).
+/// load_config runs it against radio.width; the web GS (GS mode) against
+/// its override. std::nullopt = OK.
+std::optional<ConfigIssue> link_width_issue(const LinkCfg& link, int width);
 
 /// Loads configuration from a TOML file (MABUR_GS_BUNDLE_DIR/maburgs.default.toml).
 /// Fail-fast: missing keys use struct defaults; unknown keys, out-of-range values,
@@ -303,7 +330,15 @@ struct Config {
 /// `defaulted`, when non-null, receives "dotted.key=value" for every known
 /// key the file did not set. main() prints it once at startup so a
 /// hand-transcribed config shows its gaps in the log, not in the air.
+///
+/// `overlay_path`, when non-empty, names a second TOML file deep-merged into
+/// the main document BEFORE any validation: tables merge key-by-key, every
+/// other value (arrays included -- `[[link.ladder]]` replaces the whole
+/// ladder) replaces. Strict-key and range checks then run on the merged
+/// document exactly as for a single file. The web GS writes its config form
+/// as an overlay (spec 2026-09-27-web-ui §3.2); maburgs never passes one.
 Config load_config(const std::string& path,
-                   std::vector<std::string>* defaulted = nullptr);
+                   std::vector<std::string>* defaulted = nullptr,
+                   const std::string& overlay_path = {});
 
 }  // namespace maburgs

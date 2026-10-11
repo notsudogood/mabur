@@ -402,7 +402,7 @@ laptop and a serial cable.
 
 ```sh
 cp /etc/mabur.toml.pre-cal /etc/mabur.toml
-/etc/init.d/S00mabur restart
+/etc/init.d/S96mabur restart
 ```
 
 `.pre-cal` is overwritten on every successful run, so it always holds the

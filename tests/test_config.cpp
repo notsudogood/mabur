@@ -155,6 +155,74 @@ TEST(load_config_encoder_roi_threshold_negative_throws_naming_field) {
   std::filesystem::remove(path);
 }
 
+// ---- [[encoder.rung]] (2026-10-11): per-rung budget / ceiling ------------
+
+TEST(encoder_rung_table_parses_and_inherits_what_it_leaves_out) {
+  auto path = write_temp_toml(
+      "[encoder]\nbitrate_min_kbps = 300\nbitrate_max_kbps = 24000\nairtime_budget = 0.65\n"
+      "[[encoder.rung]]\nmcs = 5\nbw = 40\nairtime_budget = 0.60\nmax_kbps = 35000\n"
+      "[[encoder.rung]]\nmcs = 4\nbw = 40\nmax_kbps = 25000\n"
+      "[[encoder.rung]]\nmcs = 0\nbw = 20\nmax_kbps = 500\n");
+  Config c = load_config(path.string());
+  REQUIRE(c.encoder.rungs.size() == 3);
+  const auto* r5 = c.encoder.rung_for(5, 40);
+  REQUIRE(r5 != nullptr);
+  CHECK(r5->airtime_budget == 0.60);
+  CHECK(r5->max_kbps == 35000);
+  const auto* r4 = c.encoder.rung_for(4, 40);
+  REQUIRE(r4 != nullptr);
+  CHECK(r4->airtime_budget < 0);   // inherits the global budget
+  CHECK(c.encoder.rung_for(4, 20) == nullptr);   // keyed by width too
+  CHECK(c.encoder.rung_for(0, 20)->max_kbps == 500);
+  CHECK(c.encoder.peak_max_kbps() == 35000);     // above the global 24000
+  std::filesystem::remove(path);
+}
+
+TEST(encoder_rung_table_absent_is_empty_and_peak_is_the_global) {
+  auto path = write_temp_toml("[encoder]\nbitrate_max_kbps = 24000\n");
+  Config c = load_config(path.string());
+  CHECK(c.encoder.rungs.empty());
+  CHECK(c.encoder.peak_max_kbps() == 24000);
+  std::filesystem::remove(path);
+}
+
+TEST(encoder_rung_table_rejects_bad_entries_naming_them) {
+  const char* bad[] = {
+      // max_kbps at or below the floor
+      "[encoder]\nbitrate_min_kbps = 1000\n[[encoder.rung]]\nmcs = 0\nbw = 20\nmax_kbps = 500\n",
+      // duplicate rung
+      "[[encoder.rung]]\nmcs = 5\nbw = 40\nmax_kbps = 30000\n[[encoder.rung]]\nmcs = 5\nbw = 40\nmax_kbps = 20000\n",
+      // missing bw
+      "[[encoder.rung]]\nmcs = 5\nmax_kbps = 30000\n",
+      // budget out of range
+      "[[encoder.rung]]\nmcs = 5\nbw = 40\nairtime_budget = 1.2\n",
+      // sets nothing
+      "[[encoder.rung]]\nmcs = 5\nbw = 40\n",
+      // bad width / mcs / unknown key
+      "[[encoder.rung]]\nmcs = 5\nbw = 80\nmax_kbps = 30000\n",
+      "[[encoder.rung]]\nmcs = 9\nbw = 40\nmax_kbps = 30000\n",
+      "[[encoder.rung]]\nmcs = 5\nbw = 40\nmax_kbps = 30000\nfps = 30\n",
+      // above the encoder's ceiling
+      "[[encoder.rung]]\nmcs = 5\nbw = 40\nmax_kbps = 300000\n",
+  };
+  for (const char* t : bad) {
+    auto path = write_temp_toml(t);
+    std::string msg = what_of([&] { (void)load_config(path.string()); });
+    CHECK(msg.find("encoder.rung[") != std::string::npos);
+    std::filesystem::remove(path);
+  }
+}
+
+// The 2026-10-11 floor: bitrate_min_kbps 300 is now a real setting (the
+// encoder clamps at VENC_BITRATE_MIN_KBPS, 300), still >= 100 to load.
+TEST(encoder_bitrate_min_300_loads) {
+  auto path = write_temp_toml("[encoder]\nbitrate_min_kbps = 300\n");
+  Config c = load_config(path.string());
+  CHECK(c.encoder.bitrate_min_kbps == 300);
+  CHECK(VENC_BITRATE_MIN_KBPS == 300);
+  std::filesystem::remove(path);
+}
+
 // ---- Task B5: venc section / waybeam retirement -------------------------
 
 // A full, valid venc block matching the brief's fixture (spec 2026-08-28

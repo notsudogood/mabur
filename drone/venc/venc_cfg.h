@@ -110,18 +110,24 @@ typedef struct {
  * layer normalises the leading '/'. */
 #define VENC_RING_NAME "/mabur_f"
 
-/* Practical VENC bitrate rails, ported verbatim from
- * waybeam_venc f956a52:include/venc_config.h.  Below ~1 Mbit/s the H.26x
- * stream collapses (decoder drops SVC-T, RC oscillates), so this is a
- * clamp on every rate that reaches the encoder, not a reject. */
-#define VENC_BITRATE_MIN_KBPS 1000
+/* VENC bitrate rails: a clamp on every rate that reaches the encoder, not
+ * a reject.  Ported from waybeam_venc f956a52:include/venc_config.h with
+ * MIN 1000, whose note reads "below ~1 Mbit/s the H.26x stream collapses
+ * (decoder drops SVC-T, RC oscillates)" -- an upstream observation, never
+ * measured on mabur.  Lowered to 300 on 2026-10-11 for a lowest-rung
+ * survival bitrate (encoder.bitrate_min_kbps / [[encoder.rung]] max_kbps
+ * now reach it).  The pilot's OSD already showed ~0.3 Mbit/s while
+ * disarmed (low-power mode, 30 fps) with the picture decoding, but a CBR
+ * TARGET this low is unflown -- watch for RC oscillation and decode drops
+ * on rung 0. */
+#define VENC_BITRATE_MIN_KBPS 300
 #define VENC_BITRATE_MAX_KBPS 200000
 
 /* Rate the encoder channel is CREATED at.  There is no venc.bitrate key
  * (spec §3): the real rate arrives from RcAgent via
  * star6e_controls_apply_bitrate() within the first control tick, so the
  * boot value only has to be legal, not correct. */
-#define VENC_BOOT_BITRATE_KBPS VENC_BITRATE_MIN_KBPS
+#define VENC_BOOT_BITRATE_KBPS 1000   /* unchanged by the 2026-10-11 floor move */
 
 #ifdef __cplusplus
 extern "C" {
@@ -165,6 +171,9 @@ uint8_t venc_cfg_slice_rows(uint16_t height, uint8_t slices);
  * kbps is the value handed to the encoder (decimal kbps, x1024 inside),
  * fps the rate the RC budgets at. 0 when pct or fps is 0 (= off). Pure,
  * host-tested (tests/test_venc_cfg.cpp). */
+/* Smallest P-frame cap venc_superframe_p_bytes() will program; below it
+ * the cap is off (returns 0). */
+#define VENC_SUPERFRAME_MIN_BYTES 4096u
 uint32_t venc_superframe_p_bytes(unsigned pct, unsigned kbps, unsigned fps);
 
 #ifdef __cplusplus

@@ -93,5 +93,16 @@ uint32_t venc_superframe_p_bytes(unsigned pct, unsigned kbps, unsigned fps)
 	/* Per-frame budget in bits = programmed bps / fps; programmed bps is
 	 * kbps * 1024 (star6e_controls.c apply_bitrate). */
 	bits_per_frame = ((uint64_t)kbps * 1024ull) / fps;
-	return (uint32_t)(bits_per_frame * pct / 100ull / 8ull);
+	{
+		const uint64_t bytes = bits_per_frame * pct / 100ull / 8ull;
+		/* Below VENC_SUPERFRAME_MIN_BYTES the cap is off (0 = NONE): the
+		 * 2026-09-03 sweep saw a cap within ~1.5x of the budget collapse
+		 * the rate, and the 300 kbps floor (2026-10-11) would put a 200 %
+		 * cap near 1.3 kB, under what a 1080p P frame with an intra-refresh
+		 * stripe needs at any QP.  Every rate the cap was ever run at
+		 * (>= 1000 kbps at 60 fps, 200 %: 4266 B) stays above it. */
+		if (bytes < VENC_SUPERFRAME_MIN_BYTES)
+			return 0;
+		return (uint32_t)bytes;
+	}
 }

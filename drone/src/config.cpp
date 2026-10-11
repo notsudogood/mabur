@@ -223,7 +223,7 @@ void parse_fec(const Value& j, FecCfg& f) {
 void parse_encoder(const Value& j, EncoderCfg& e) {
   check_known_keys(j,
                     {"bitrate_min_kbps", "bitrate_max_kbps", "airtime_budget",
-                     "roi_threshold_kbps", "roi_qp_low", "roi_qp_normal"},
+                     "roi_threshold_kbps", "roi_qp_low", "roi_qp_normal", "rung"},
                     "encoder");
   assign_if_present(j, "bitrate_min_kbps", e.bitrate_min_kbps, "encoder");
   assign_if_present(j, "bitrate_max_kbps", e.bitrate_max_kbps, "encoder");
@@ -238,6 +238,47 @@ void parse_encoder(const Value& j, EncoderCfg& e) {
   if (e.airtime_budget <= 0.0 || e.airtime_budget > 1.0)
     fail("encoder.airtime_budget", "must be in (0,1]");
   if (e.roi_threshold_kbps < 0) fail("encoder.roi_threshold_kbps", "must be >= 0");
+
+  // [[encoder.rung]] (2026-10-11): per-rung budget/ceiling, keyed by the
+  // commanded rung's (mcs, bw). Read after the globals so the ceiling can be
+  // checked against the floor it must stay above.
+  e.rungs.clear();
+  if (j.contains("rung")) {
+    const Value& arr = j.at("rung");
+    g_line = arr.line();
+    if (!arr.is_array()) fail("encoder.rung", "must be [[encoder.rung]] tables");
+    size_t i = 0;
+    for (const Value& rj : arr) {
+      const std::string where = "encoder.rung[" + std::to_string(i++) + "]";
+      g_line = rj.line();
+      if (!rj.is_object()) fail(where, "must be a table");
+      check_known_keys(rj, {"mcs", "bw", "airtime_budget", "max_kbps"}, where);
+      if (!rj.contains("mcs") || !rj.contains("bw")) fail(where, "needs both mcs and bw");
+      EncoderRungCfg r;
+      assign_if_present(rj, "mcs", r.mcs, where);
+      assign_if_present(rj, "bw", r.bw, where);
+      // Leaving either out is the point (it inherits the [encoder] value),
+      // so an absent one is not reported as defaulted.
+      if (rj.contains("airtime_budget"))
+        assign_if_present(rj, "airtime_budget", r.airtime_budget, where);
+      if (rj.contains("max_kbps")) assign_if_present(rj, "max_kbps", r.max_kbps, where);
+      if (r.mcs < 0 || r.mcs > 7) fail(where + ".mcs", "must be in [0,7]");
+      if (r.bw != 20 && r.bw != 40) fail(where + ".bw", "must be 20 or 40");
+      if (rj.contains("airtime_budget") && (r.airtime_budget <= 0.0 || r.airtime_budget > 1.0))
+        fail(where + ".airtime_budget", "must be in (0,1]");
+      if (rj.contains("max_kbps") &&
+          (r.max_kbps <= e.bitrate_min_kbps || r.max_kbps > VENC_BITRATE_MAX_KBPS))
+        fail(where + ".max_kbps",
+             "must be above encoder.bitrate_min_kbps and at most " +
+                 std::to_string(VENC_BITRATE_MAX_KBPS));
+      if (!rj.contains("airtime_budget") && !rj.contains("max_kbps"))
+        fail(where, "sets neither airtime_budget nor max_kbps");
+      if (e.rung_for(r.mcs, r.bw))
+        fail(where, "duplicate entry for mcs " + std::to_string(r.mcs) + " / " +
+                        std::to_string(r.bw) + " MHz");
+      e.rungs.push_back(r);
+    }
+  }
 }
 
 // venc: boot-time encoder pipeline config -> VencCfg (spec 2026-08-28

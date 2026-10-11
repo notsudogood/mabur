@@ -147,6 +147,15 @@ bw  = 40
 overhead_base = 0.5
 overhead_enh  = 0.25
 
+# Added 2026-10-11 with the drone's per-rung bitrate caps ([[encoder.rung]]
+# in mabur.toml: 35 Mbps here, 25 at mcs 4 / 40). Unflown at the time of
+# writing; delete this rung to go back to mcs 4 / 40 as the top.
+[[link.ladder]]
+mcs = 5
+bw  = 40
+overhead_base = 0.5
+overhead_enh  = 0.25
+
 # Before stepping up, the drone sends test packets at the next rung; the
 # step happens only if they arrive clean.
 [link.probe]

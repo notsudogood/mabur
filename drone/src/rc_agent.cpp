@@ -432,13 +432,23 @@ void RcAgent::run_bitrate_policy(uint64_t now_ms, bool force) {
   // gone. (A probe's different MCS is deliberately NOT a term: see rate_e.)
   const double denom = kShareBase * (1.0 + ovb) / rate_b +
                        (1.0 - kShareBase) * (1.0 + ove) / rate_e;
-  double kbps = 1000.0 * cfg_.encoder.airtime_budget / denom;
+  // Per-rung budget and ceiling ([[encoder.rung]], 2026-10-11), keyed by
+  // the commanded BASE rung; anything an entry leaves out (or a rung with
+  // no entry) uses the [encoder] globals.
+  double budget = cfg_.encoder.airtime_budget;
+  int max_kbps = cfg_.encoder.bitrate_max_kbps;
+  if (const EncoderRungCfg* r =
+          cfg_.encoder.rung_for(applied_.ladder[0].mcs, applied_.ladder[0].bw)) {
+    if (r->airtime_budget > 0) budget = r->airtime_budget;
+    if (r->max_kbps > 0) max_kbps = r->max_kbps;
+  }
+  double kbps = 1000.0 * budget / denom;
   // NOTE the encoder has its own floor below this one: venc's apply_bitrate
-  // rails at VENC_BITRATE_MIN_KBPS (1000), so a configured bitrate_min_kbps
-  // under 1000 is silently re-clamped there and this policy's "structural
-  // minimum" would not be the one in force.
+  // rails at VENC_BITRATE_MIN_KBPS (300 since 2026-10-11), so a configured
+  // bitrate_min_kbps under 300 is silently re-clamped there and this
+  // policy's "structural minimum" would not be the one in force.
   kbps = std::clamp(kbps, static_cast<double>(cfg_.encoder.bitrate_min_kbps),
-                     static_cast<double>(cfg_.encoder.bitrate_max_kbps));
+                     static_cast<double>(max_kbps));
   // Low-power cap (spec 2026-09-20): min(), so FAILSAFE's floor and the
   // cap compose; config validation keeps the cap inside the encoder clamp.
   if (low_power_active_)

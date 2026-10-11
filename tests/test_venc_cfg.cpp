@@ -72,6 +72,16 @@ TEST(superframe_p_bytes_follows_the_rung_budget) {
   CHECK(venc_superframe_p_bytes(1000, 200000, 1) > 0);     // no overflow at the rails
 }
 
+// 2026-10-11: under VENC_SUPERFRAME_MIN_BYTES (4096) the cap is off rather
+// than a ~1.3 kB ceiling at the new 300 kbps floor; every rate the cap ever
+// ran at (>= 1000 kbps, 60 fps, 200 %) is unaffected.
+TEST(superframe_p_cap_is_off_below_its_minimum) {
+  CHECK(venc_superframe_p_bytes(200, 1000, 60) == 4266);   // old floor: unchanged
+  CHECK(venc_superframe_p_bytes(200, 960, 60) == 4096);    // exactly at the minimum: kept
+  CHECK(venc_superframe_p_bytes(200, 500, 60) == 0);       // rung-0 survival rate: off
+  CHECK(venc_superframe_p_bytes(200, 300, 60) == 0);       // the floor: off
+}
+
 // The SSC338Q cuts slices in whole 64-px CTU rows (findings 2026-10-09):
 // 1080p = 17 rows, and only counts whose fixed row height reproduces the
 // count are achievable.

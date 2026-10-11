@@ -369,3 +369,55 @@ at mcs0-3 (0.68 / 0.63 at mcs5 / 7). Two consequences:
   per width, `ampdu.min_mcs_20` (bundle 4) / `ampdu.min_mcs_40` (bundle 2) —
   the 40 MHz rungs (mcs3/4) both clear their own floor and aggregate
   (`docs/bw40.md`).
+
+## 8. Per-rung budget and ceiling, and the 300 kbps floor (2026-10-11)
+
+`[[encoder.rung]]` (drone `mabur.toml`) overrides `airtime_budget` and/or
+`bitrate_max_kbps` for one rung, keyed by the commanded BASE rung's
+`mcs` + `bw` (the GS `[[link.ladder]]` keys). A key an entry leaves out, and
+every rung without an entry, uses the `[encoder]` value. `max_kbps` replaces
+the global ceiling in both directions: above it, for a fast rung, and below
+it, for the slowest. `run_bitrate_policy` reads it
+(`drone/src/rc_agent.cpp`). The NACK retransmit ring is sized at the highest
+ceiling any rung may run (`EncoderCfg::peak_max_kbps()`), not at the global
+one. There are no compiled-in entries. An existing `/etc/mabur.toml` keeps
+its old behaviour until the tables are added to it.
+
+Bundle values (all `ov` 0.5 / 0.25, so the share-weighted factor is 1.40):
+
+| rung | budget | formula | ceiling | commanded |
+|---|---|---|---|---|
+| mcs5 / 40 | 0.60 | 35.6 Mbps | 35000 | 35.0 Mbps |
+| mcs4 / 40 | 0.60 | 25.7 Mbps | 25000 | 25.0 Mbps |
+| mcs3 / 40 | 0.65 (global) | 18.8 Mbps | 24000 | 18.8 Mbps |
+| mcs0 / 20 | 0.65 (global) | 2.8 Mbps | 500 | 0.5 Mbps |
+
+The mcs5 / 40 rung only flies if the GS ladder has it (added to the GS
+bundle the same day; a saved GS config needs the rung appended by hand).
+
+**What a ceiling does to frame time on air.** At a fixed fps the average
+frame's time on air is roughly the effective budget × the frame interval,
+whatever the rung. Flight 0027 flew mcs4 / 40 at the old 24 Mbps cap, an
+effective budget of ≈ 0.56. The bundle above runs ≈ 0.58 at mcs4 / 40 and ≈
+0.59 at mcs5 / 40. So the faster rung is spent on bitrate, not on shorter
+frames. Per-frame air time at the top two rungs is ~4–5 % **longer** than in
+0027, not shorter. In 0027, 593 of 21 057 AUs took longer than one frame
+interval (16.7 ms) from first to last fragment. 168 of those were ≥ 60 kB,
+where size alone explains it. The other 425 were smaller frames held up by
+loss repair. The drone's modelled air backlog at frame arrival never passed
+15 ms (p99 3 ms), so `air_clock.shed_ms` 25 never fired. The long frames
+were long on their own, not queued behind earlier ones. To cut size-driven
+latency, lower the effective budget (a lower `max_kbps` or `airtime_budget`
+on the rung). A faster rung at the same budget does not do it.
+
+**The floor.** `VENC_BITRATE_MIN_KBPS` is 300 (was 1000, inherited from
+waybeam with the note "below ~1 Mbit/s the stream collapses (decoder drops
+SVC-T, RC oscillates)"). The bundle's `bitrate_min_kbps` follows it. The
+boot bitrate stays 1000 (`VENC_BOOT_BITRATE_KBPS`). Under 4096 B per frame
+the SuperFrame P cap switches off (`VENC_SUPERFRAME_MIN_BYTES`) rather than
+imposing a ~1 kB re-encode ceiling. Every rate the cap ran at before
+(≥ 1000 kbps at 60 fps, 200 %) is unchanged. **Unflown.** The upstream
+collapse warning has not been re-tested at 300–500 kbps. The firmware's
+default MaxQp (~48) means a busy scene can overshoot a 500 kbps command.
+The ~0.3 Mbps seen on the OSD while disarmed (low-power mode, 30 fps, a
+mostly static scene) does not show that 1080p60 in flight holds 500.

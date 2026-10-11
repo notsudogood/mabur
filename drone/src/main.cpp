@@ -1642,20 +1642,21 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   // envelopes (hot thread writes via the UepEncoder source tap, RX thread
   // reads) and the T_NACK handler, bound once txq exists (it is declared
   // after this callback). Sized by [nack].ring_ms of base-layer history at
-  // encoder.bitrate_max_kbps; env_len is the sealed base envelope (sw
-  // header + base symbol_size). Counters are per Telem period (exchanged
+  // the highest bitrate any rung may run (encoder.peak_max_kbps(): the
+  // global ceiling or a higher [[encoder.rung]] max_kbps); env_len is the
+  // sealed base envelope (sw header + base symbol_size). Counters are per Telem period (exchanged
   // at the 1 Hz build); nack_bad / retx_miss are drone-local only.
   const size_t retx_env_len = static_cast<size_t>(mabur::sw::kSwHeaderLen) + static_cast<size_t>(cfg.fec.symbol_size[0]);
-  mabur::RetxRing retx(mabur::RetxRing::slots_for(cfg.encoder.bitrate_max_kbps, cfg.nack.ring_ms, cfg.fec.symbol_size[0]), retx_env_len);
+  mabur::RetxRing retx(mabur::RetxRing::slots_for(cfg.encoder.peak_max_kbps(), cfg.nack.ring_ms, cfg.fec.symbol_size[0]), retx_env_len);
   std::fprintf(stderr, "maburd: nack retx ring %zu slots x %zu B = %zu B (ring_ms %d at %d kbps)\n",
                retx.slots(), retx_env_len, retx.slots() * retx_env_len, cfg.nack.ring_ms,
-               cfg.encoder.bitrate_max_kbps);
+               cfg.encoder.peak_max_kbps());
   // 2026-10-10: the enhance layer's own ring ([nack] enh): a lost 6-body
   // aggregate takes a whole enh frame's worth of symbols, more than its 25%
   // repair overhead can rebuild, and the GS now asks for those too. Sized
   // for the enh share of the stream (0.4 of it) at its own symbol_size.
   const size_t retx_env_len1 = static_cast<size_t>(mabur::sw::kSwHeaderLen) + static_cast<size_t>(cfg.fec.symbol_size[1]);
-  mabur::RetxRing retx1(cfg.nack.enh ? mabur::RetxRing::slots_for(cfg.encoder.bitrate_max_kbps, cfg.nack.ring_ms,
+  mabur::RetxRing retx1(cfg.nack.enh ? mabur::RetxRing::slots_for(cfg.encoder.peak_max_kbps(), cfg.nack.ring_ms,
                                                                   cfg.fec.symbol_size[1], 0.4)
                                      : 1,
                         retx_env_len1);

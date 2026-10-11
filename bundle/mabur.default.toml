@@ -34,12 +34,32 @@ feed_batch      = 1        # blocks handed to the radio together (1 = send each 
 flush_ms        = 25       # send out a partly filled block after this many ms without new video
 
 [encoder]
-bitrate_min_kbps   = 1000
-bitrate_max_kbps   = 24000
-airtime_budget     = 0.65  # share of the link's real capacity the video may use
+bitrate_min_kbps   = 300   # lowest the link may push the encoder (the encoder's own floor is 300)
+bitrate_max_kbps   = 24000 # highest bitrate, for any rung without its own max_kbps below
+airtime_budget     = 0.65  # share of the link's real capacity the video may use (rungs without their own)
 roi_threshold_kbps = 3000  # below this bitrate, apply roi_qp_low (only when [venc.roi] is enabled)
 roi_qp_low         = -24
 roi_qp_normal      = 0
+
+# Per-rung overrides, keyed by the rung's mcs + bw (as in the GS [[link.ladder]]).
+# Either key may be left out; the [encoder] value above is used for it.
+# A rung with no entry uses both [encoder] values.
+[[encoder.rung]]
+mcs            = 5
+bw             = 40
+airtime_budget = 0.60
+max_kbps       = 35000     # only flies if the GS ladder has an mcs 5 / 40 MHz rung
+
+[[encoder.rung]]
+mcs            = 4
+bw             = 40
+airtime_budget = 0.60
+max_kbps       = 25000
+
+[[encoder.rung]]
+mcs      = 0
+bw       = 20
+max_kbps = 500             # slowest rung: just enough picture to fly home on
 
 [venc]
 sensor_bin = "/etc/sensors/imx415_greg_fpvXIX_colortrans.bin"  # camera sensor tuning file

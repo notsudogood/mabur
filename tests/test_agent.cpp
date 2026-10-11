@@ -950,6 +950,70 @@ TEST(bitrate_policy_clamps_to_bitrate_max) {
   CHECK(act.bitrates.back() == 20000);
 }
 
+// 3b'. Per-rung budget and ceiling ([[encoder.rung]], 2026-10-11), keyed by
+// the commanded BASE rung. Same op as 3 (mcs2/20, ov 0.5, efficiencies
+// 1.0: denom = 1.5/19.5): budget 0.30 gives 1000*0.30*13 = 3900, where the
+// global 0.65 gives 8500 -- and an entry for a different width must not
+// match.
+TEST(bitrate_policy_uses_the_matching_rung_budget_only) {
+  {
+    Config cfg = make_cfg();
+    cfg.encoder.rungs = {EncoderRungCfg{2, 20, 0.30, -1}};
+    MockActuator act;
+    RcAgent agent(cfg, act);
+    agent.tick(0, RadioHealth{});
+    const uint32_t vtx = ack_agent(agent, act);
+    auto wire = make_rcf_wire(1, encode_profile(PhyMode::HT, 2, 20), 8, vtx);
+    agent.on_rc_frame(wire.data(), wire.size(), 100);
+    REQUIRE(!act.bitrates.empty());
+    CHECK(act.bitrates.back() == 3900);
+  }
+  {
+    Config cfg = make_cfg();
+    cfg.encoder.rungs = {EncoderRungCfg{2, 40, 0.30, -1}};
+    MockActuator act;
+    RcAgent agent(cfg, act);
+    agent.tick(0, RadioHealth{});
+    const uint32_t vtx = ack_agent(agent, act);
+    auto wire = make_rcf_wire(1, encode_profile(PhyMode::HT, 2, 20), 8, vtx);
+    agent.on_rc_frame(wire.data(), wire.size(), 100);
+    REQUIRE(!act.bitrates.empty());
+    CHECK(act.bitrates.back() == 8500);   // unlisted rung: the globals
+  }
+}
+
+// A rung's max_kbps replaces the global ceiling in both directions: above
+// it (mcs5/20 at budget 0.65 wants 650*52/1.5 = 22533 -> 22500, which the
+// global 20000 would clamp) and below it (mcs0/20 wants 2816; the rung-0
+// survival cap of 500 holds it there, under a 300 floor).
+TEST(bitrate_policy_rung_ceiling_overrides_the_global_both_ways) {
+  {
+    Config cfg = make_cfg();
+    cfg.encoder.rungs = {EncoderRungCfg{5, 20, -1.0, 25000}};
+    MockActuator act;
+    RcAgent agent(cfg, act);
+    agent.tick(0, RadioHealth{});
+    const uint32_t vtx = ack_agent(agent, act);
+    auto wire = make_rcf_wire(1, encode_profile(PhyMode::HT, 5, 20), 8, vtx);
+    agent.on_rc_frame(wire.data(), wire.size(), 100);
+    REQUIRE(!act.bitrates.empty());
+    CHECK(act.bitrates.back() == 22500);
+  }
+  {
+    Config cfg = make_cfg();
+    cfg.encoder.bitrate_min_kbps = 300;
+    cfg.encoder.rungs = {EncoderRungCfg{0, 20, -1.0, 500}};
+    MockActuator act;
+    RcAgent agent(cfg, act);
+    agent.tick(0, RadioHealth{});
+    const uint32_t vtx = ack_agent(agent, act);
+    auto wire = make_rcf_wire(1, encode_profile(PhyMode::HT, 0, 20), 8, vtx);
+    agent.on_rc_frame(wire.data(), wire.size(), 100);
+    REQUIRE(!act.bitrates.empty());
+    CHECK(act.bitrates.back() == 500);
+  }
+}
+
 // 3c. MAX_RANGE degenerate case: both ladder slots are mcs0 (base clamps at
 // 0) and both pair members are 2.0, so the weighting cancels and the
 // failsafe floor bitrate must be unchanged by the policy rewrites.

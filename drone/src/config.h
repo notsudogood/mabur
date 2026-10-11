@@ -84,6 +84,18 @@ struct FecCfg {
   int feed_batch = 0;
 };
 
+// One [[encoder.rung]] entry (2026-10-11): the bitrate policy's budget and
+// ceiling for one ladder rung, keyed by the BASE layer's (mcs, bw) -- the
+// rung the GS commanded. A field left at -1 inherits the [encoder] global.
+// max_kbps REPLACES encoder.bitrate_max_kbps for that rung (it may sit above
+// it), so one rung can run faster than the rest without raising them all.
+struct EncoderRungCfg {
+  int mcs = 0;
+  int bw = 20;
+  double airtime_budget = -1.0;
+  int max_kbps = -1;
+};
+
 // RcAgent's bitrate/ROI policy knobs (ex-WaybeamCfg; the HTTP fields
 // host/port/idr_path went with the waybeam section they lived in — venc is
 // in-process now, no control-plane HTTP left to address).
@@ -100,6 +112,25 @@ struct EncoderCfg {
   // centre of frame exactly when the link is poorest.
   int roi_qp_low = -24;
   int roi_qp_normal = 0;
+  // Per-rung overrides ([[encoder.rung]]); empty = every rung uses the
+  // globals above, exactly as before 2026-10-11. No compiled-in entries: a
+  // config that predates the table must behave as it always did.
+  std::vector<EncoderRungCfg> rungs;
+
+  // The entry for this rung, or nullptr.
+  const EncoderRungCfg* rung_for(int mcs, int bw) const {
+    for (const auto& r : rungs)
+      if (r.mcs == mcs && r.bw == bw) return &r;
+    return nullptr;
+  }
+  // The highest bitrate any rung may run: what buffers sized "at the maximum
+  // bitrate" (the NACK retransmit ring) must be sized for.
+  int peak_max_kbps() const {
+    int m = bitrate_max_kbps;
+    for (const auto& r : rungs)
+      if (r.max_kbps > m) m = r.max_kbps;
+    return m;
+  }
 };
 
 // Boot-time encoder pipeline config, handed to venc_core_start() as a

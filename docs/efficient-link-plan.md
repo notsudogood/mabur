@@ -413,7 +413,22 @@ steered seconds. Fixes:
 *Against all four:* one or two flights each; A's threshold was chosen on
 the first two flights (the second 2026-10-11 flight is the only
 out-of-sample check), B can still keep a channel that has gone bad (A is
-then what leaves it), and C and D are unflown.
+then what leaves it), and C and D were unflown when built.
+
+**First flight on that build (2026-10-11 evening, GS eMMC session 0027,
+channel 112 throughout, raw recording on).** D: armed at 24 Mbps with
+recording on, decode p99 15 ms and 14 % spiky seconds (was 41 ms / 91 %;
+recording off 14 ms / 11 %). B: the start-up scan kept 112 where the event
+rule would have moved to 144 (29 vs 0 events, all halves 0.0 % busy). A:
+no sustained-loss window and no hop, correctly -- 0.08 % loss while armed;
+replayed over the flight, 0 fires. C: the one record press came 4 s
+before arming and a real IDR arrived within that press's second with no
+rung change, arm or link-up near it, which fits the request; one press,
+not proof. No frame lost on either layer for the first time (0 failed FEC
+episodes), 80 % of armed time at 40 MHz, genlock native 60.078 and
+within 2 ms 77 % of steered seconds (2 s past half a refresh). *Against
+it:* a clean channel at mostly short range (RSSI p50 −45 dBm), recorded to
+eMMC rather than an SD card, and the player/maburgs logs were not kept.
 
 ## Kept from feedback repair
 

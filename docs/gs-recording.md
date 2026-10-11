@@ -47,7 +47,17 @@ file I/O at a lower priority. The file is byte-identical to before
 (about 5 s at 24 Mbps) behind, the recording **stops with an error**
 (the OSD's REC turns to a fault, the file so far is kept, the log says
 `the SD card fell N MB behind`) rather than stalling the picture.
-Unflown: the next flight's GS RECORDING section is the check.
+**Flown 2026-10-11 (GS eMMC session 0027, firmware efficient-link-nack-gs4):**
+armed at 24 Mbps with raw recording on for 252 s, decode p99 15 ms and e2e
+p99 56 ms, 14 % of seconds at or above 70 ms -- against 41 ms / 82 ms /
+91 % with the inline writer and 14 ms / 55 ms / 11 % with recording off
+(table above). *Against it:* that flight recorded to the GS's on-board
+eMMC (no SD card inserted), which is faster than a typical SD card; the
+thread takes the write off the loop on any card, but a card that cannot
+sustain the bitrate now ends the recording with an error instead, and
+that path has not been seen in flight. The player log (`the SD card fell
+… behind`) was not captured, and the file itself has not been played
+back yet.
 
 ## Pressing record
 

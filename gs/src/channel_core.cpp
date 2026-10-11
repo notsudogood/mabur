@@ -83,6 +83,7 @@ ChannelCore::ChannelCore(ChannelCoreCfg cfg, std::vector<LinkCard*> cards, VrxCo
     sc.beacon_period_ms = 20;
     sc.one_card_ms = cfg_.radio.scan.one_card_ms;
     sc.pick_margin = static_cast<uint32_t>(cfg_.radio.scan.pick_margin);
+    sc.pick_busy_margin_pct = cfg_.radio.scan.pick_busy_margin_pct;
     sc.one_card = one_card_ || relay_search_only_;   // a sole relay interleaves op windows like a sole USB card
     sc.link_width_mhz = cfg_.radio.width;
     sc.busy_dbm = cfg_.radio.scan.busy.busy_dbm;
@@ -294,6 +295,7 @@ void ChannelCore::freeze_pick_(double t, const char* why) {
 void ChannelCore::apply_hop_action_(const HopAction& act, double now_ms) {
   switch (act.kind) {
     case HopAction::Order:
+      verdict_.forget_loss();   // the verify window judges the target on its own loss
       vrx_.set_hop(act.target, act.epoch);
       vrx_.restore_rung(act.restore_rung, now_ms);
       vrx_.blank_store(now_ms + cfg_.hop.confirm_ms + 150.0);
@@ -522,6 +524,7 @@ void ChannelCore::step_hop_edge_and_window_(const ChannelTickIn& in) {
   VerdictLinkIn vl;
   const auto s1 = s1_hop_loss_.sample(now_ms);
   vl.pre_fec_loss = s1.valid ? s1.loss : 0.0;
+  vl.loss_valid = s1.valid;
   const uint64_t recovered_now = in.agg ? in.agg->decoder().stats(0).syms_recovered +
                                               in.agg->decoder().stats(1).syms_recovered
                                         : 0;

@@ -48,8 +48,13 @@ class ChannelRanker {
   // original rule). Bench 2026-09-13: clean channels tie within ~10 units,
   // so without it the pick among clean channels is a coin toss that costs
   // a calibrated current channel for nothing.
+  // busy_margin_pct > 0: the 20 MHz twin of pair_proposal's airtime rule
+  // (pair_pick.h) -- with a busy reading on current and on at least one
+  // unblocked candidate, current is kept unless the least-busy such
+  // candidate is busy_margin_pct points less busy; the event margin above
+  // applies only without readings.
   ChannelRanker(std::vector<uint8_t> channels, int min_rounds, uint32_t margin = 0,
-                double blocked_pct = 1e9);
+                double blocked_pct = 1e9, double busy_margin_pct = 0.0);
   void add(const RankSample& s);
   std::vector<RankEntry> ranked() const { return ranked(min_rounds_); }
   // Same, with a caller-chosen visit bar (the scout's one-card deadline
@@ -67,6 +72,7 @@ class ChannelRanker {
   int min_rounds_;
   uint32_t margin_;
   double blocked_pct_;
+  double busy_margin_pct_;
   std::vector<RankEntry> entries_;  // config order
 };
 

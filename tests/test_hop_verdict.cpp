@@ -207,6 +207,127 @@ TEST(converted_edge_of_range_reading_is_fade) {
   auto raw = v.window(t + 150, {card(28, 20, 0, 4), card(28, 20, 0, 4)}, {0.06, 80}, 5);
   CHECK(!(raw.evidence & kEvWeak));
 }
+// ---- sustained unexplained loss (flight 2026-10-11, channel 64)
+// Default window 150 ms, sustained_ms 10000 -> 66 windows of history.
+static VerdictLinkIn lossy(double loss, bool valid = true) {
+  VerdictLinkIn l; l.pre_fec_loss = loss; l.recovered = 20; l.loss_valid = valid; return l;
+}
+// Feeds `n` windows; returns the first window index that triggered, or -1.
+static int feed(HopVerdict& v, double& t, int n, double loss, double rssi = -45, double snr = 38,
+                VerdictOut* last = nullptr) {
+  int fired = -1;
+  for (int i = 0; i < n; ++i, t += 150) {
+    auto o = v.window(t, {card(rssi, snr, 0, 4), card(rssi, snr - 1, 0, 4)}, lossy(loss), 3);
+    if (o.trigger && fired < 0) fired = i;
+    if (last) *last = o;
+  }
+  return fired;
+}
+// 1 % per window: under loss_pct (3 %) and with the recovered rate at its
+// reference, so no per-window term ever fires. 40 clean warm-up windows
+// sit in the 66-window history: the mean reaches 0.5 % at the 33rd lossy
+// window, and the 2-of-3 persistence trigger follows one window later.
+TEST(sustained_loss_with_no_visible_cause_is_interfered) {
+  HopVerdict v(cfg(), BusyCfg{}, 2); double t = warm(v, 0);
+  VerdictOut o;
+  CHECK(feed(v, t, 31, 0.01, -45, 38, &o) < 0);
+  CHECK(o.v == Verdict::Healthy); CHECK(!(o.evidence & kEvSustained));
+  const int fired = feed(v, t, 10, 0.01, -45, 38, &o);
+  CHECK(fired >= 0 && fired <= 4);
+  CHECK(o.v == Verdict::Interfered);
+  CHECK(o.evidence & kEvSustained); CHECK(o.evidence & kEvImpaired);
+  CHECK(!(o.evidence & (kEvContended | kEvRaised | kEvBlocked)));
+  CHECK(v.sustained_loss() >= 0.005);
+}
+// Every clean-channel window of two flights stayed under 0.3 % on a 10 s
+// mean; the threshold is 0.5 %.
+TEST(loss_under_the_sustained_threshold_never_hops) {
+  HopVerdict v(cfg(), BusyCfg{}, 2); double t = warm(v, 0);
+  VerdictOut o;
+  CHECK(feed(v, t, 400, 0.004, -45, 38, &o) < 0);
+  CHECK(!(o.evidence & kEvSustained));
+}
+// Low SNR is range, not interference: the ladder owns it, however long it
+// loses. Weak (-90/8) and merely low (-74/16, not weak) alike.
+TEST(sustained_loss_at_low_snr_never_hops) {
+  for (double rssi : {-90.0, -74.0}) {
+    const double snr = rssi < -80 ? 8 : 16;
+    HopVerdict v(cfg(), BusyCfg{}, 2); double t = warm(v, 0);
+    VerdictOut o;
+    for (int i = 0; i < 200; ++i, t += 150) {
+      o = v.window(t, {card(rssi, snr, 0, 0), card(rssi - 1, snr - 1, 0, 0)}, lossy(0.02), 0);
+      CHECK(!o.trigger);
+    }
+    CHECK(!(o.evidence & kEvSustained)); CHECK(v.sustained_loss() > 0.019);
+  }
+}
+// Sustained loss that becomes a fade (RSSI 10 dB under the reference frozen
+// at the onset) stops reading interfered: the trigger lets go within the
+// 3-window persistence.
+TEST(sustained_loss_that_turns_into_a_fade_stops_triggering) {
+  HopVerdict v(cfg(), BusyCfg{}, 2); double t = warm(v, 0);
+  CHECK(feed(v, t, 80, 0.02, -61, 30) >= 0);
+  VerdictOut o;
+  for (int i = 0; i < 3; ++i, t += 150)
+    o = v.window(t, {card(-71, 25, 0, 4), card(-72, 24, 0, 4)}, lossy(0.02), 2);
+  CHECK(o.v == Verdict::Unknown); CHECK(o.evidence & kEvFading); CHECK(o.evidence & kEvSustained);
+  CHECK(!o.trigger);
+}
+// A relay card's SNR is RSSI above a calibrated floor, not a measurement.
+TEST(sustained_rule_needs_a_real_snr) {
+  HopVerdict v(cfg(), BusyCfg{}, 2); double t = warm(v, 0);
+  VerdictOut o;
+  for (int i = 0; i < 120; ++i, t += 150) {
+    auto relay = card(-45, 40, 0, 4); relay.snr_valid = false;
+    o = v.window(t, {relay, VerdictCardIn{}}, lossy(0.02), 3);
+    CHECK(!o.trigger);
+  }
+  CHECK(!(o.evidence & kEvSustained));
+}
+// A hop order drops the history: the verify window on the target must not
+// inherit the old channel's loss, and a withdrawn order has to rebuild a
+// full history before it can trigger again.
+TEST(forget_loss_needs_a_full_new_history) {
+  HopVerdict v(cfg(), BusyCfg{}, 2); double t = warm(v, 0);
+  CHECK(feed(v, t, 80, 0.02) >= 0);
+  v.forget_loss();
+  CHECK(v.sustained_loss() < 0);
+  VerdictOut o;
+  feed(v, t, 65, 0.02, -45, 38, &o);
+  CHECK(!(o.evidence & kEvSustained));
+  feed(v, t, 1, 0.02, -45, 38, &o);
+  CHECK(o.evidence & kEvSustained);
+}
+TEST(reset_after_a_landed_hop_clears_the_history) {
+  HopVerdict v(cfg(), BusyCfg{}, 2); double t = warm(v, 0);
+  feed(v, t, 80, 0.02);
+  v.reset();
+  CHECK(v.sustained_loss() < 0);
+  v.window(t, {card(-45, 38, 0, 4), card(-45, 37, 0, 4)}, lossy(0.02), 3);
+  v.new_session();
+  CHECK(v.sustained_loss() < 0);
+}
+// Blanked windows (a hop in progress, no traffic) read 0 loss with
+// valid=false: they must neither dilute the history nor count toward it.
+TEST(invalid_loss_windows_do_not_feed_the_history) {
+  HopVerdict v(cfg(), BusyCfg{}, 2); double t = 0;
+  for (int i = 0; i < 200; ++i, t += 150)
+    v.window(t, {card(-45, 38, 0, 4), card(-45, 37, 0, 4)}, lossy(0.0, false), 3);
+  CHECK(v.sustained_loss() < 0);
+  feed(v, t, 66, 0.01);
+  CHECK(v.sustained_loss() > 0.0099);
+  for (int i = 0; i < 100; ++i, t += 150)
+    v.window(t, {card(-45, 38, 0, 4), card(-45, 37, 0, 4)}, lossy(0.0, false), 3);
+  CHECK(v.sustained_loss() > 0.0099);
+}
+TEST(sustained_loss_pct_zero_disables) {
+  HopCfg c = cfg(); c.verdict.sustained_loss_pct = 0;
+  HopVerdict v(c, BusyCfg{}, 2); double t = warm(v, 0);
+  VerdictOut o;
+  CHECK(feed(v, t, 200, 0.02, -45, 38, &o) < 0);
+  CHECK(!(o.evidence & kEvSustained));
+}
+
 MTEST_MAIN
 
 static maburgs::VerdictCardIn busy_card(double busy, double own, bool valid = true) {

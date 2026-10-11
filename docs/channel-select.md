@@ -62,6 +62,7 @@ search_ms       = 100   # DISC burst at the start of every unlinked dwell on a p
 op_window_ms    = 300   # one card: how long the sole card beacons on op between dwells
 search_after_ms = 5000  # on link loss, keep every card on op this long before sweeping
 pick_margin     = 20    # auto: the pick must beat the channel the link is on by this many busy units
+pick_busy_margin_pct = 5  # auto, with NHM readings: ...or be this many % of airtime less busy instead (0 = off)
 one_card_ms     = 5000  # one card, auto: measure silently this long before the first DISC
 max_ms          = 30000 # auto: the pick is frozen at the latest this long after GS start
 busy_dbm        = -83   # both modes: energy level that counts the air as busy (an NHM bucket edge)
@@ -124,6 +125,7 @@ Validation (`gs/src/config.cpp`, `drone/src/config.cpp`, shared code in
 | `radio.scan.op_window_ms` | 40–10000 |
 | `radio.scan.search_after_ms` | 0–600000 |
 | `radio.scan.pick_margin` | 0–100000 |
+| `radio.scan.pick_busy_margin_pct` | 0.0–100.0 (0 = event score only) |
 | `radio.scan.one_card_ms` | 0–60000 |
 | `radio.scan.max_ms` | 1000–600000 |
 | `radio.scan.busy_dbm` | −104 – −70, on an `nf::kNhmAbsThDbm` bucket edge (`-104 -101 -98 -95 -92 -89 -86 -83 -80 -75 -70`) |
@@ -378,6 +380,34 @@ unblocked pair. The channel the link currently sits on (`op`) plays the
 role home used to play: a candidate must beat it by `pick_margin`, ties
 stay on `op`. Config order breaks remaining ties. Returns `op` when
 nothing else is ranked.
+
+**Airtime margin (2026-10-11).** With `pick_busy_margin_pct` > 0 (default
+5) and an NHM busy reading on both halves of `op`'s pair, airtime decides
+instead of the event score: `op` is kept unless the least-busy unblocked
+candidate with readings on both halves is at least that many percentage
+points less busy (ties on busy go to the lower event score, then config
+order). A blocked `op` still loses to any unblocked candidate, and
+without readings the event-score rule above applies unchanged. Same rule
+at 20 MHz (`ChannelRanker`). `op` is where the link is, or before a link
+the remembered channel the GS started on, so in practice this keeps the
+channel the last flight ended on unless the scan sees clearly more
+traffic there.
+
+Why: on the 2026-10-11 flight both units started on 144, which had flown
+the whole previous flight at 0.03 % pre-FEC loss. The scan (three
+quarter-second dwells per half) scored 60+64 at 486 events and 140+144 at
+750, both 0.0 % busy, so the event margin (20) moved the link to 64,
+which then lost 0.5–3.8 % at 33–40 dB SNR for 100 s
+(`docs/inflight-channel-hop.md` "Sustained unexplained loss"). The same
+day, 108+112 flew clean at 40 MHz although 108 had scored 2109 events at
+boot: event counts from a 0.75 s ground scan did not predict in-flight
+loss either way. Counterpart: busy % read 0.0 on both 64 and 144 too, so
+it did not predict 64's trouble either. The margin does not pick a better
+channel; it stops a near-tie from moving the link off a known one. A
+remembered channel that later goes bad is now left by the in-flight
+sustained-loss rule instead. Pinned by `tests/test_pair_pick.cpp`
+(`airtime_margin_*`, built from that flight's K line) and
+`tests/test_channel_ranker.cpp` (`ranker_airtime_margin_*`).
 
 The whole pick is `BootPick` (`gs/src/boot_pick.{h,cpp}`, pure, every
 exit covered by `tests/test_boot_pick.cpp`); `main.cpp` only feeds it a

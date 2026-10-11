@@ -149,4 +149,23 @@ TEST(proposal_with_an_explicit_visit_bar_overrides_min_rounds) {
   CHECK(r.proposal(136, 2) == 136);
 }
 
+// ---- airtime margin, 20 MHz (radio.scan.pick_busy_margin_pct, 2026-10-11)
+static void visit3(ChannelRanker& r, uint8_t ch, uint32_t fa, double busy) {
+  for (int i = 0; i < 3; ++i) r.add(rsb(ch, fa, busy));
+}
+TEST(ranker_airtime_margin_keeps_a_clean_current_channel) {
+  ChannelRanker plain({40, 64, 144}, 3, 20, 50, 0.0), air({40, 64, 144}, 3, 20, 50, 5.0);
+  for (ChannelRanker* r : {&plain, &air}) {
+    visit3(*r, 40, 900, 18.3); visit3(*r, 64, 460, 0.0); visit3(*r, 144, 750, 0.0);
+  }
+  CHECK(plain.proposal(144) == 64);   // event score alone
+  CHECK(air.proposal(144) == 144);    // equal airtime: stay
+  CHECK(air.proposal(40) == 64);      // 18.3 % vs 0.0 %: move to the calmest
+}
+TEST(ranker_airtime_margin_does_not_hold_a_blocked_channel) {
+  ChannelRanker r({64, 144}, 3, 20, 50, 5.0);
+  visit3(r, 64, 460, 0.0); visit3(r, 144, 750, 70.0);
+  CHECK(r.proposal(144) == 64);
+}
+
 MTEST_MAIN

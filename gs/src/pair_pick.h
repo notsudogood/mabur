@@ -33,9 +33,21 @@ std::vector<uint8_t> scan_half_set(const std::vector<uint8_t>& set);
 // the margin check below it compares `score` (the worse half's worst_busy
 // event count), not busy, so a candidate that out-orders current on busy
 // alone usually still loses to margin on score and current keeps the pair.
+//
+// busy_margin_pct > 0 (radio.scan.pick_busy_margin_pct, 2026-10-11): when
+// current's pair is ranked, unblocked and has a busy reading on both
+// halves, AIRTIME decides instead of the event score -- current is kept
+// unless the least-busy unblocked candidate with a reading on both halves
+// is at least busy_margin_pct points less busy. The event score alone
+// moved a flight off a channel that had flown clean (144, worse-half busy
+// 0.0 %) onto one that lost 0.5-3.8 % in flight (64, also 0.0 %) on 486 vs
+// 750 events from three quarter-second dwells. Without a reading on
+// current, or with no candidate that has one, the event-score rule above
+// applies unchanged.
 uint8_t pair_proposal(const std::vector<RankEntry>& all, uint8_t current,
                       const std::vector<uint8_t>& set, int min_rounds,
-                      uint32_t margin, double blocked_pct = 1e9);
+                      uint32_t margin, double blocked_pct = 1e9,
+                      double busy_margin_pct = 0.0);
 
 // True when any pair in `set` is ranked under the same both-halves rule
 // pair_proposal uses. The boot-pick freeze's "did the scan measure

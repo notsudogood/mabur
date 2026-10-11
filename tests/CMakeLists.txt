@@ -206,6 +206,8 @@ if(MABUR_BUILD_GS)
   # Round-trips maburplay's VtxRecClient against maburgs' RecControl
   # (gs/src/rec_control.h) over real loopback sockets on a test-only port.
   add_mtest(test_vtx_rec_client test_vtx_rec_client.cpp LIBS mabur_player_core)
+  # The raw recorder on a writer thread (gs/player/src/async_raw_dvr.h).
+  add_mtest(test_async_raw_dvr test_async_raw_dvr.cpp LIBS mabur_player_core)
   # Same shape for the genlock setpoint: GenlockClient -> GenlockControl.
   add_mtest(test_genlock_client test_genlock_client.cpp LIBS mabur_player_core)
   add_mtest(test_gs_source test_gs_source.cpp LIBS mabur_player_core)

@@ -1359,6 +1359,8 @@ static int run_radio(const maburgs::Config& cfg) {
     cal_ctl.poll(cal_session);
     rec_ctl.poll();
     vrx.set_rec_wish(rec_ctl.wire());
+    // The raw recorder's keyframe asks (rec_control.h): one IDR per change.
+    vrx.set_idr_epoch(static_cast<uint8_t>(rec_ctl.idr_requests()));
     // Loud, exactly once per accepted `maburcal start` (Idle/Done/Failed ->
     // AwaitAck): the operator's own terminal is streaming CalControl's
     // "CAL start -> ok started" reply already, but this is the one place

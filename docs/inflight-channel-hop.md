@@ -179,19 +179,20 @@ blanked when a hop lands (`HopAction::Confirm` + 150 ms settle,
 judged on the channel it verifies; `s1_loss` itself, which feeds the
 sideport/ctl-log/OSD gauge, is never blanked.
 
-Seven independent evidence bits, OR'd together every window
+Eight independent evidence bits, OR'd together every window
 (`gs/src/hop_verdict.h`'s `kEvImpaired/kEvWeak/kEvFading/kEvContended/
-kEvRaised/kEvBlocked/kEvStarved`):
+kEvRaised/kEvBlocked/kEvStarved/kEvSustained`):
 
 | bit | rule | key (default) |
 |---|---|---|
-| impaired | link pre-FEC loss % > `loss_pct` **or** (recovered count > `recovered_x` × its 5 s trailing mean **and** recovered count >= `recovered_min`) **or** `starved` | `hop.verdict.loss_pct` (3.0), `recovered_x` (3.0), `recovered_min` (8) |
+| impaired | link pre-FEC loss % > `loss_pct` **or** (recovered count > `recovered_x` × its 5 s trailing mean **and** recovered count >= `recovered_min`) **or** `starved` **or** `sustained` | `hop.verdict.loss_pct` (3.0), `recovered_x` (3.0), `recovered_min` (8) |
 | weak | best card's RSSI < `weak_rssi_dbm` **and** SNR < `weak_snr_db` (RSSI alone when that card has no real SNR — `snr_valid` false on a CPE510 relay) | `weak_rssi_dbm` (−78), `weak_snr_db` (12) |
 | fading | best card's RSSI more than `fading_drop_db` below its frozen/trailing reference | `fading_drop_db` (6) |
 | contended | any card's foreign frames/s > `foreign_pps` | `foreign_pps` (50) |
 | raised | any card's FA/s > `fa_pps` | `fa_pps` (100) |
 | blocked | the MINIMUM, across cards with a busy reading, of that card's NHM busy % minus its own reconstructed airtime % >= `blocked_pct` | `busy_dbm` (−83), `blocked_pct` (50) |
 | starved (0x40) | at least one card valid this window and **zero** own frames on every valid card (`VerdictLinkIn::starved`, set in `main.cpp`'s per-card loop), **or** the window's AU count (`VerdictLinkIn::au_count`, the `au_seq` delta) < `starved_frac` × its trailing mean, when that mean is >= 2 AUs/window | `starved_frac` (0.25; 0 = zero-frames rule only) |
+| sustained (0x80) | the mean pre-FEC loss over the last `sustained_ms` of **valid** windows (`VerdictLinkIn::loss_valid`; a hop's blanked windows are skipped) is >= `sustained_loss_pct`, the history is full, **and** the best card's measured SNR is >= `sustained_min_snr_db` (never on a card without a real SNR). The history is a property of the channel: it is fed frozen or not, and cleared when a hop order is placed (`forget_loss()`), when a hop lands (`reset()`) and at a new session | `sustained_ms` (10000), `sustained_loss_pct` (0.5; 0 = off), `sustained_min_snr_db` (20) |
 
 **A CPE510 relay card's inputs (protocol v4, 2026-10-05,
 `docs/cpe510-relay.md` "Interference + hop on a relay"):** `cca` is always
@@ -305,8 +306,30 @@ true) was found unpinned by a branch-reorder mutation during review and
 is now covered by `weak_takes_priority_over_contended_when_not_fading`.
 The hop trigger is
 `interfered` in `hop.persist` (2 default) of the last 3 windows
-(`VerdictOut::trigger`). `fade` and `unknown` never hop in v1 — the ladder
+(`VerdictOut::trigger`). `fade` and `unknown` never hop — the ladder
 handles both.
+
+**Sustained unexplained loss (2026-10-11).** An impaired window that is
+not weak and not fading, with no contended/raised/blocked evidence, but
+`sustained` set, classifies `interfered` — the same `!fading` gate as
+contended/raised. Why: on the 2026-10-11 flight the link sat 100 s on
+channel 64 losing 0.5–3.8 % pre-FEC at 33–40 dB SNR, with no foreign
+frames and only slightly raised false alarms, so every impaired window
+read `unknown` and nothing hopped until a few `raised` windows finally
+stacked up at 313 s. Replayed over the recorded loss (`flight.jsonl`
+pre-FEC loss, 10 s mean, SNR guard): the rule fires on that flight's
+channel 64 at 216 s, and never on its channel 112, on the whole of the
+2026-10-10 flight (channel 144) or on the later 2026-10-11 flight (144) —
+0 of about 5,800 clean-channel samples. Counterpart: the threshold was
+chosen from the first two of those flights, so only the third is an
+out-of-sample check, and the replay used the sideport's loss figure, not
+the verdict's own window. The SNR guard exists because a slow range fade
+is absorbed into the 5 s RSSI reference while windows stay clean, so it
+can read "not fading" by the time loss starts: loss at >= 20 dB SNR is
+not range. Pinned by `sustained_loss_with_no_visible_cause_is_interfered`,
+`sustained_loss_at_low_snr_never_hops`,
+`sustained_loss_that_turns_into_a_fade_stops_triggering` and
+`forget_loss_needs_a_full_new_history` (`tests/test_hop_verdict.cpp`).
 
 **References.** Per card, a 5 s trailing median of RSSI; link-level, the 5 s
 trailing mean of the FEC recovered rate; both frozen at the first impaired
@@ -856,6 +879,9 @@ busy_dbm             = -83     # now radio.scan.busy_dbm (2026-10-04)
 blocked_pct          = 50      # now radio.scan.blocked_pct (2026-10-04)
 recovered_min        = 8
 starved_frac         = 0.25
+sustained_ms         = 10000
+sustained_loss_pct   = 0.5
+sustained_min_snr_db = 20
 ```
 
 `recovered_min` (added 2026-09-26, §2) is the floor under the recovered
@@ -902,6 +928,9 @@ unknown keys fail boot:
 | `radio.scan.busy_dbm` (was `hop.verdict.busy_dbm`) | −104 – −70, must sit on an `nf::kNhmAbsThDbm` bucket edge |
 | `radio.scan.blocked_pct` (was `hop.verdict.blocked_pct`) | 1.0–100.0 |
 | `hop.verdict.starved_frac` | 0.0–1.0 (0 = zero-own-frames rule only) |
+| `hop.verdict.sustained_ms` | 1000–120000 |
+| `hop.verdict.sustained_loss_pct` | 0.0–100.0 (0 = off) |
+| `hop.verdict.sustained_min_snr_db` | 0–60 |
 
 `[hop]`/`[hop.verdict]` were wholly new sections with defaults for every
 key, so an old config without them booted unchanged on the new binary
@@ -946,7 +975,8 @@ H <t> <kind> <epoch> <target> <score> <elapsed_ms>            # a hop event
   card's chunk, not a genuinely per-card value. The evidence field is the
   §2 bitmask in hex: impaired 0x01, weak 0x02, fading 0x04, contended
   0x08, raised 0x10, blocked 0x20, starved 0x40 (0x40 added 2026-09-26,
-  additive — the marker stays `scanlog 4`).
+  additive — the marker stays `scanlog 4`), sustained 0x80 (added
+  2026-10-11, additive, marker unchanged).
 - **H** — one per `HopController` state transition or logged decision.
   `kind` is always a single snake_case token — `order`, `lead_confirm`,
   `one_card_retune`, `verify_pass`, `verify_fail`, `escape`, `withdraw`, `session_lost`, `hold_cap`,

@@ -25,9 +25,9 @@ relays  = []               # CPE510 mabur-relay units, "ipv4:port" each (UDP 831
 # search_ms to find the drone. In auto mode it also measures every 20 MHz
 # half for dwell_ms, min_rounds times, and once the ranking is mature the
 # link moves to the cleanest member if it beats the current one by
-# pick_margin busy units. One card: op_window_ms beacon windows on op between
+# pick_margin busy units (pick_busy_margin_pct % of airtime when measured). One card: op_window_ms beacon windows on op between
 # dwells, and a silent one_card_ms measurement before the first DISC.
-# Auto only: dwell_ms, settle_ms, min_rounds, pick_margin, one_card_ms, max_ms.
+# Auto only: dwell_ms, settle_ms, min_rounds, pick_margin, pick_busy_margin_pct, one_card_ms, max_ms.
 # Both modes: search_ms, op_window_ms, search_after_ms, busy_dbm, blocked_pct.
 [radio.scan]
 dwell_ms        = 250
@@ -37,6 +37,8 @@ search_ms       = 100
 op_window_ms    = 300
 search_after_ms = 5000
 pick_margin     = 20
+pick_busy_margin_pct = 5  # with airtime readings: stay where the link is (or was last time) unless another
+                          # channel is this many % less busy; pick_margin then only applies without them. 0 = off
 one_card_ms     = 5000
 max_ms          = 30000
 busy_dbm        = -83   # energy level that counts the air as busy: an NHM bucket edge, -104 -101 -98 -95 -92 -89 -86 -83 -80 -75 -70
@@ -263,3 +265,6 @@ fading_drop_db       = 6      # signal this much below its recent level = fading
 foreign_pps          = 50     # other transmitters' packets per second
 fa_pps               = 100    # false detections per second (non-Wi-Fi noise)
 starved_frac         = 0.25   # video rate below this fraction of normal = starved (keep below 0.5)
+sustained_ms         = 10000  # loss with no visible cause, averaged over this long...
+sustained_loss_pct   = 0.5    # ...at or above this % = interfered (hop), unless the signal is weak or fading; 0 = off
+sustained_min_snr_db = 20     # ...and only while the signal-to-noise ratio is at least this (low SNR = range, the ladder's job)

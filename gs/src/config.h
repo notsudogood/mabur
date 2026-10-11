@@ -44,6 +44,11 @@ struct ScanCfg {
   int op_window_ms = 300;
   int search_after_ms = 5000;
   int pick_margin = 20;
+  // Airtime margin (2026-10-11): with NHM busy readings, the start-up pick
+  // keeps the current channel (where the link is, else the remembered one)
+  // unless another is this many percentage points less busy. The event
+  // score (pick_margin) then decides only without readings. 0 = off.
+  double pick_busy_margin_pct = 5.0;
   int one_card_ms = 5000;
   int max_ms = 30000;
   BusyCfg busy;
@@ -69,6 +74,20 @@ struct HopVerdictCfg {
   // session 0232, 2026-09-26: 5-30 own frames/s under a long-frame jam).
   // 0 disables the AU term. 60->30 fps low-power is 0.5, so keep it below.
   double starved_frac = 0.25;
+  // Sustained unexplained loss (flight 2026-10-11): an impaired window that
+  // is neither weak nor fading, and carries no foreign/FA/busy evidence,
+  // classifies `interfered` instead of `unknown` once the mean pre-FEC loss
+  // over the last sustained_ms of valid windows reaches sustained_loss_pct.
+  // Channel 64 lost 0.5-3.8 % at 33-40 dB SNR for 100 s with no visible
+  // cause, and `unknown` never hops. A 10 s mean >= 0.5 % separated it from
+  // every clean-channel window of two flights (0 of ~3,200). 0 disables.
+  int sustained_ms = 10000;
+  double sustained_loss_pct = 0.5;
+  // ...and only while the best card's measured SNR is at least this: loss
+  // at high SNR is not a range problem (channel 64 lost at 33-40 dB), while
+  // a slow fade is absorbed into the 5 s RSSI reference and never reads
+  // `fading`. A card without a real SNR (relay) never satisfies it.
+  int sustained_min_snr_db = 20;
 };
 
 /// In-flight channel hop (spec 2026-09-14-inflight-channel-hop). Runs in

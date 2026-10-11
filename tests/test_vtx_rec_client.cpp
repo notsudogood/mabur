@@ -24,4 +24,20 @@ TEST(client_sends_on_change_and_every_period) {
   CHECK(ctl.wire() == mabur::rc::kRecKnown);
 }
 
+TEST(client_keyframe_requests_are_paced_and_reach_rec_control) {
+  constexpr int kPort = 18402;
+  maburgs::RecControl ctl;
+  REQUIRE(ctl.open(kPort));
+  maburplay::VtxRecClient cli;
+  REQUIRE(cli.open(kPort));
+  CHECK(cli.request_idr(0));           // the first ask goes out at once
+  CHECK(!cli.request_idr(499));        // inside the period: quiet
+  CHECK(cli.request_idr(500));
+  CHECK(cli.idr_sent() == 2);
+  CHECK(cli.sent() == 0);              // separate from the VTX wish
+  ctl.poll();
+  CHECK(ctl.idr_requests() == 2);
+  CHECK(ctl.wire() == 0);
+}
+
 MTEST_MAIN

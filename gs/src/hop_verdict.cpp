@@ -34,6 +34,8 @@ void HopVerdict::reset() {
   healthy_streak_ = 0;
   seen_interfered_ = false;
   recent_interfered_.clear();
+  // A landed hop is a new channel: the old one's loss says nothing about it.
+  loss_hist_.clear();
   // The persistence window is cleared with the snapshot: leaving it
   // latched would hand the controller a trigger built from windows
   // measured on the channel we have just left.
@@ -47,6 +49,15 @@ void HopVerdict::reset() {
 void HopVerdict::new_session() {
   au_hist_.clear();
   ref_au_ = 0;
+  loss_hist_.clear();
+}
+
+void HopVerdict::forget_loss() { loss_hist_.clear(); }
+
+double HopVerdict::sustained_loss() const {
+  const size_t n = static_cast<size_t>(std::max(1, cfg_.verdict.sustained_ms / cfg_.window_ms));
+  if (loss_hist_.size() < n) return -1.0;
+  return std::accumulate(loss_hist_.begin(), loss_hist_.end(), 0.0) / static_cast<double>(loss_hist_.size());
 }
 
 int HopVerdict::ref_rung() const { return ref_rung_; }
@@ -84,6 +95,24 @@ VerdictOut HopVerdict::window(double now_ms, const std::vector<VerdictCardIn>& c
   const bool starved =
       link.starved || (hv.starved_frac > 0 && au_ref >= 2.0 &&
                        static_cast<double>(link.au_count) < hv.starved_frac * au_ref);
+  // sustained: the channel has lost >= sustained_loss_pct on average over
+  // the last sustained_ms of valid windows. Fed frozen or not -- it is a
+  // property of the channel, not a pre-onset reference -- and only from
+  // valid readings (a hop's blanked windows read 0 and would dilute it).
+  // The history must be full: a short one after a hop or at session start
+  // is not "sustained", and neither is loss at low SNR (range: the ladder's
+  // job). Sustained loss is itself an impairment: a channel
+  // that loses steadily below loss_pct per window (and whose recovered
+  // reference has risen to match) never trips the per-window terms.
+  if (link.loss_valid) {
+    const size_t loss_n = static_cast<size_t>(std::max(1, hv.sustained_ms / cfg_.window_ms));
+    loss_hist_.push_back(link.pre_fec_loss);
+    while (loss_hist_.size() > loss_n) loss_hist_.pop_front();
+  }
+  const double mean_loss = sustained_loss();
+  const bool high_snr = cards[best].snr_valid && cards[best].snr_db >= hv.sustained_min_snr_db;
+  const bool sustained = hv.sustained_loss_pct > 0 && mean_loss >= 0 &&
+                         mean_loss * 100.0 >= hv.sustained_loss_pct && high_snr;
   // recovered_min: a floor under the recovered term. On a clean channel
   // the trailing mean sits near 0.2/window, so 1-5 recovered symbols read
   // "3x the reference" with 0 % loss (bench 2026-09-26, session 0232: 97 %
@@ -92,7 +121,7 @@ VerdictOut HopVerdict::window(double now_ms, const std::vector<VerdictCardIn>& c
   const bool impaired = link.pre_fec_loss * 100.0 > hv.loss_pct ||
                         (rec_ref > 0 && link.recovered > hv.recovered_x * rec_ref &&
                          link.recovered >= static_cast<uint32_t>(std::max(hv.recovered_min, 0))) ||
-                        starved;
+                        starved || sustained;
   const bool weak = cards[best].rssi_dbm < hv.weak_rssi_dbm &&
                     (!cards[best].snr_valid || cards[best].snr_db < hv.weak_snr_db);
   // Guard: a frozen reference that was never established for this card
@@ -131,13 +160,19 @@ VerdictOut HopVerdict::window(double now_ms, const std::vector<VerdictCardIn>& c
   blocked = have_busy_reading && min_foreign_busy_pct >= busy_.blocked_pct;
   o.evidence = (impaired ? kEvImpaired : 0) | (weak ? kEvWeak : 0) | (fading ? kEvFading : 0) |
                (contended ? kEvContended : 0) | (raised ? kEvRaised : 0) | (blocked ? kEvBlocked : 0) |
-               (starved ? kEvStarved : 0);
+               (starved ? kEvStarved : 0) | (sustained ? kEvSustained : 0);
   if (!impaired) o.v = Verdict::Healthy;
   else if (weak) o.v = Verdict::Fade;
   // blocked beats fading: a real fade lowers power and cannot raise NHM
   // busy; analog desense reads as a fade (docs/analog-vtx-findings-2026-09-25.md).
   else if (blocked) o.v = Verdict::Interfered;
   else if ((contended || raised) && !fading) o.v = Verdict::Interfered;
+  // Loss with no visible cause that will not go away: the 2026-10-11 flight
+  // sat 100 s on a channel losing 0.5-3.8 % at 33-40 dB SNR, every window
+  // `unknown`. Same !fading gate as contended/raised -- a range fade that
+  // loses for 10 s is the ladder's job, and `weak` (checked first) already
+  // claims the edge of range.
+  else if (sustained && !fading) o.v = Verdict::Interfered;
   else o.v = Verdict::Unknown;
   // ---- reference freeze / thaw
   if (impaired && !frozen_) {

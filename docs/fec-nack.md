@@ -429,6 +429,27 @@ the measurement. Compare `flightreport`'s FEC section (sid 1 `failed`
 counts), NACK section (`wasted share`, `held_fec`, the `enh:` line) and
 SLICE SALVAGE (`early give-up`) against the 2026-10-10 flight.
 
+### How the second build flew (2026-10-11, two flights)
+
+Enhance-layer NACK, at 40 MHz where the 2026-10-10 flight lost 32 of 33
+enhance episodes (24- and 16-symbol aggregates at 25 % overhead):
+
+- First flight (138 s at 40 MHz, on channel 112): 14 enh requests filled
+  136 symbols (about 8 whole lost aggregates) with none wasted and no
+  deadline missed; the enhance layer lost **0** frames at 40 MHz. The
+  4 enhance frames it did lose were all on channel 64 at 20 MHz, where FEC
+  usually rebuilt the symbol first (wasted 84, deadline drops 50).
+- Second flight (about 200 s armed, channel 144): 25 enh requests, 145 of
+  158 symbols filled, 2 wasted; one enhance episode lost at 4/40.
+
+Base layer: no losses on either flight; its re-sends were mostly redundant
+(52 % of requested symbols rebuilt by FEC before the re-send landed on the
+first flight). *Against it:* 40 MHz time was short on the first flight
+(138 s vs 516 s on 2026-10-10) and both flights were on cleaner channels
+than the one that went wrong, so the sample of large enhance losses is
+small; ARQ shadow on the first flight still counted 1 lost enhance episode
+in 126.
+
 ## Known limitations
 
 - The tail-trigger geometry guard in `gs/src/main.cpp` is a tautology:

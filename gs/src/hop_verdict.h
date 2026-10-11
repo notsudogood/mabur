@@ -12,7 +12,7 @@ enum class Verdict { Healthy, Fade, Interfered, Unknown };
 const char* to_string(Verdict v);   // "healthy" "fade" "interfered" "unknown"
 
 enum : uint8_t { kEvImpaired = 1, kEvWeak = 2, kEvFading = 4, kEvContended = 8, kEvRaised = 16,
-                 kEvBlocked = 32, kEvStarved = 64 };
+                 kEvBlocked = 32, kEvStarved = 64, kEvSustained = 128 };
 
 // The verdict thresholds (hop.verdict.weak_rssi_dbm / weak_snr_db /
 // fading_drop_db) are written in dBm / dB. The aggregator's EMAs are
@@ -53,6 +53,10 @@ struct VerdictLinkIn {
   // its trailing mean it widens `starved` to an AU-rate collapse -- see
   // HopVerdictCfg::starved_frac.
   uint32_t au_count = 0;
+  // pre_fec_loss is a real reading (main.cpp: the s1 hop-loss sampler's
+  // `valid`, false while a hop blanks it). Only valid windows feed the
+  // sustained-loss history.
+  bool loss_valid = true;
 };
 
 struct VerdictOut {
@@ -107,6 +111,14 @@ class HopVerdict {
   // comes back at a lower fps would read starved). RSSI/recovered
   // histories are untouched; reset() is still the per-hop thaw.
   void new_session();
+  // A hop order was placed: drop the sustained-loss history. The verify
+  // window after the hop must judge the target on its own windows -- the
+  // channel just left would otherwise fail it on arrival -- and a withdrawn
+  // order rebuilds the history from scratch before it can trigger again.
+  void forget_loss();
+  // Mean pre-FEC loss over the sustained-loss history, or -1 while the
+  // history is shorter than hop.verdict.sustained_ms (observability).
+  double sustained_loss() const;
   int ref_rung() const;               // -1 while healthy
 
  private:
@@ -117,6 +129,10 @@ class HopVerdict {
   std::vector<std::deque<double>> rssi_hist_;
   std::deque<double> rec_hist_;
   std::deque<double> au_hist_;     // per-window AU count, same trailing rule as rec_hist_
+  // Last sustained_ms / window_ms valid pre-FEC loss readings, frozen or
+  // not: unlike the references above it measures the channel, not a
+  // pre-onset baseline. Cleared on reset() (a hop landed) and new_session().
+  std::deque<double> loss_hist_;
   bool frozen_ = false;
   double prev_ms_ = 0;
   bool have_prev_ = false;

@@ -18,7 +18,13 @@ namespace maburgs {
 constexpr int kRecControlPort = 8401;
 
 // Loopback-only UDP listener for the record button's VTX wish
-// (spec 2026-09-26-vtx-recorder). Commands: "vtx_rec on" / "vtx_rec off".
+// (spec 2026-09-26-vtx-recorder). Commands: "vtx_rec on" / "vtx_rec off",
+// and "idr" (2026-10-11): maburplay's raw recorder is armed and waiting for
+// a sync point. Each one bumps idr_requests(), whose low byte rides every
+// RCF as idr_epoch -- the web GS's request path (docs/web-gs.md "Key-frame
+// recovery"); the drone serves one paced IDR per change. The live encoder
+// is GDR and sends a real IRAP almost never on its own, so without this a
+// press after arming could wait the whole flight.
 // The wish is HELD until the next command -- no decay: a crashed player
 // must never stop the onboard recording by silence. It starts UNKNOWN
 // (wire byte 0), so a maburgs restart does not stop it either; the player
@@ -65,10 +71,15 @@ class RecControl {
     return changed;
   }
 
-  // Parses one command; true iff the wish changed. I/O-free for tests.
+  // Parses one command; true iff the wish changed (an "idr" never changes
+  // it: it counts). I/O-free for tests.
   bool apply(const std::string& line) {
     std::string s = line;
     while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.pop_back();
+    if (s == "idr") {
+      ++idr_;
+      return false;
+    }
     bool on;
     if (s == "vtx_rec on") on = true;
     else if (s == "vtx_rec off") on = false;
@@ -78,6 +89,10 @@ class RecControl {
     on_ = on;
     return changed;
   }
+
+  // Keyframe requests received so far; the RCF carries the low byte as
+  // idr_epoch (0 until the first request, so a link-up sends none).
+  uint32_t idr_requests() const { return idr_; }
 
   // The RCF byte: 0 until the first command, then kRecKnown | (kRecOn if on).
   uint8_t wire() const {
@@ -89,6 +104,7 @@ class RecControl {
   int fd_ = -1;
   bool known_ = false;
   bool on_ = false;
+  uint32_t idr_ = 0;
 };
 
 }  // namespace maburgs

@@ -97,4 +97,50 @@ TEST(current_unranked_means_best_ranked_wins) {
   CHECK(pair_proposal({}, 136, {136, 144}, 3, 20) == 136);   // nothing ranked: stay
 }
 
+// ---- airtime margin (radio.scan.pick_busy_margin_pct, 2026-10-11)
+// The 2026-10-11 flight's K line: ch:worst_busy:floor:busy%. The link was
+// found on 144 (remembered); the event score picked 60+64 (486 vs 750,
+// both 0.0 % busy) and the flight then lost 0.5-3.8 % on 64 for 100 s.
+static std::vector<RankEntry> k_flight2() {
+  return {{36, 580, 3, true, -90, true, 3.2},  {40, 929, 3, true, -88, true, 18.3},
+          {60, 486, 3, true, -90, true, 0.0},  {64, 464, 3, true, -91, true, 0.0},
+          {108, 2109, 3, true, -94, true, 0.0}, {112, 25, 3, true, -95, true, 0.0},
+          {140, 0, 3, true, -92, true, 0.0},   {144, 750, 3, true, -92, true, 0.0}};
+}
+static const std::vector<uint8_t> kSet = {40, 64, 112, 144};
+TEST(airtime_margin_keeps_a_clean_current_channel) {
+  const auto all = k_flight2();
+  CHECK(pair_proposal(all, 144, kSet, 3, 20, 50, 0.0) == 64);    // the event score alone moved it
+  CHECK(pair_proposal(all, 144, kSet, 3, 20, 50, 5.0) == 144);   // equal airtime: stay
+}
+TEST(airtime_margin_still_leaves_a_busy_current_channel) {
+  // Remembered 40 (home Wi-Fi, 36+40 worse half 18.3 % busy): the calmest
+  // unblocked candidate is 0.0 % busy, >= 5 points calmer -> move; ties on
+  // busy go to the lower event score (60+64: 486 < 750 < 2109).
+  CHECK(pair_proposal(k_flight2(), 40, kSet, 3, 20, 50, 5.0) == 64);
+}
+TEST(airtime_margin_ignores_small_busy_differences) {
+  // The later 2026-10-11 flight's K line: remembered 112 (108 2.4 %, 112
+  // 1.6 %) against 140+144 at 0.0 % -- 2.4 points is under the margin.
+  std::vector<RankEntry> all = {{36, 143, 3, true, -90, true, 2.0},  {40, 2764, 3, true, -86, true, 16.3},
+                                {60, 388, 3, true, -90, true, 0.0},  {64, 55, 3, true, -91, true, 0.4},
+                                {108, 2234, 3, true, -94, true, 2.4}, {112, 41, 3, true, -95, true, 1.6},
+                                {140, 102, 3, true, -92, true, 0.0}, {144, 257, 3, true, -92, true, 0.0}};
+  CHECK(pair_proposal(all, 112, kSet, 3, 20, 50, 5.0) == 112);
+  CHECK(pair_proposal(all, 112, kSet, 3, 20, 50, 2.0) == 144);   // calmest: 140+144 (0.0) beats 60+64 (0.4)
+}
+TEST(airtime_margin_does_not_hold_a_blocked_channel) {
+  auto all = k_flight2();
+  all[7].worst_busy_pct = 60.0;   // 144 blocked (blocked_pct 50)
+  CHECK(pair_proposal(all, 144, kSet, 3, 20, 50, 5.0) == 64);
+}
+TEST(airtime_margin_needs_a_reading_on_both_halves) {
+  auto all = k_flight2();
+  all[6].busy_valid = false;      // 140 without NHM: current has no full reading -> event score
+  CHECK(pair_proposal(all, 144, kSet, 3, 20, 50, 5.0) == 64);
+  auto b = k_flight2();
+  for (auto& e : b) if (e.ch != 140 && e.ch != 144) e.busy_valid = false;   // no candidate has one
+  CHECK(pair_proposal(b, 144, kSet, 3, 20, 50, 5.0) == 64);
+}
+
 MTEST_MAIN

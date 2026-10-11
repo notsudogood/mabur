@@ -378,6 +378,43 @@ tracker, `held_fec` and early give-ups (NACK, SLICE SALVAGE), genlock lock
 share and reference steps, and GS RECORDING (latency per recorder state,
 from `rec=`).
 
+## Third build, 2026-10-11: two flights, four fixes
+
+**Channel 64 cost the first flight's first half.** The GS's start-up scan
+moved the link off 144 (clean all of 2026-10-10) onto 64 on a near-tie,
+and 64 lost 0.5–3.8 % pre-FEC at 33–40 dB SNR with no visible cause: at
+equal signal it lost 10–20× what 112 or 144 did, the ladder sat at 20 MHz
+(17 % of time at 40 MHz vs 81 % on 112), and 46 % of seconds had an e2e
+p99 ≥ 70 ms (10 % on 112). Nothing hopped for 100 s because the verdict
+called the loss `unknown`. EVM on 64 was as good as on 112 and the drone's
+own receiver was clean, so it was not the drone's transmitter; the home
+Wi-Fi on 36–48 was busy all flight but its activity did not track 64's
+loss (correlation 0.0), so the source is unidentified. Genlock was not
+the cause of those spikes: the stage that grew in spiky seconds was the
+wait for repairs (p99 15 → 43 ms) while the phase error stayed as small
+as in calm seconds. Fixes:
+
+- **A. Hop on sustained unexplained loss** (`[hop.verdict] sustained_*`,
+  `docs/inflight-channel-hop.md`). Replayed: fires at 216 s instead of
+  313 s on channel 64; never on 112, 144 or the second flight.
+- **B. The start-up pick keeps a known channel** unless another is 5
+  points of airtime calmer (`radio.scan.pick_busy_margin_pct`,
+  `docs/channel-select.md`).
+
+**Raw recording was the second flight's spikes** (`docs/gs-recording.md`):
+91 % of seconds ≥ 70 ms with it on at 24 Mbps vs 11 % off, all in the
+decode stage, on a clean link (0.06 % loss) with genlock locked 88 % of
+steered seconds. Fixes:
+
+- **C. Ask the drone for a keyframe** while a recording waits for one.
+- **D. Recorder I/O on a writer thread**, and genlock's calibration
+  restarts if a recording starts inside it.
+
+*Against all four:* one or two flights each; A's threshold was chosen on
+the first two flights (the second 2026-10-11 flight is the only
+out-of-sample check), B can still keep a channel that has gone bad (A is
+then what leaves it), and C and D are unflown.
+
 ## Kept from feedback repair
 
 The shadow log (`arq.log`) and `fec.log` stay on every flight — they are how

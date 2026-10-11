@@ -246,6 +246,24 @@ class Genlock {
   const Cal& cal() const { return cal_; }
   uint64_t reference_steps() const { return ref_steps_; }
 
+  // Calibration is running (its native or probe step).
+  bool calibrating() const { return stage_ == kCalNative || stage_ == kCalProbe; }
+
+  // Start a running calibration over from its native step: something that
+  // disturbs the GS's frame timing landed inside it -- a recording starting.
+  // On the 2026-10-11 flight calibration ran 341-358 s, raw recording began
+  // writing at 347 s, and native read 60.274 against 60.079-60.082 on three
+  // other sessions. The native step re-sends 0 first, so a camera left at
+  // the probe rate is put back before it is measured again. False (no-op)
+  // outside calibration.
+  bool restart_calibration() {
+    if (!calibrating()) return false;
+    stage_ = kCalNative;
+    stage_ticks_ = 0;
+    cal_samples_.clear();
+    return true;
+  }
+
   // Forget the setpoint history and calibration (the next steering tick
   // calibrates again) and the old pts space's phase points. For a drone
   // restart.

@@ -23,6 +23,7 @@ struct ScoutCfg {
   int beacon_period_ms = 20;
   int one_card_ms = 5000;          // one card + measure: silent prelude before the first DISC
   uint32_t pick_margin = 20;
+  double pick_busy_margin_pct = 0.0;   // radio.scan.pick_busy_margin_pct (pair_pick.h)
   bool one_card = false;
   uint8_t link_width_mhz = 20;     // radio.width: 40 = dwell every half at 20, pick a pair, park at 40
   int busy_dbm = -83;

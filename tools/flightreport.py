@@ -2645,7 +2645,11 @@ def print_hop_report(scanlog, ctllog):
     # windows read `starved` (no own frame on any valid card, evidence 0x40).
     escapes = sum(1 for h in H if _strip_would(h["kind"]) == "escape")
     starved = sum(1 for v in V if v["evidence"] & 0x40)
-    print(f"escapes: {escapes}  starved windows: {starved} (evidence & 0x40)")
+    # 2026-10-11: sustained unexplained loss (hop.verdict.sustained_*), the
+    # term that lets an `unknown`-only channel hop.
+    sustained = sum(1 for v in V if v["evidence"] & 0x80)
+    print(f"escapes: {escapes}  starved windows: {starved} (evidence & 0x40)  "
+          f"sustained-loss windows: {sustained} (evidence & 0x80)")
     # Task 12 (f): orders held past confirm_ms because the op read blocked,
     # and how many of those still never landed.
     extends = sum(1 for h in H if _strip_would(h["kind"]) == "confirm_extend")

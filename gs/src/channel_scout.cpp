@@ -50,7 +50,8 @@ ChannelScout::ChannelScout(ScoutCfg cfg, ScoutRadio& radio, NowFn now_ms, SleepF
       now_(std::move(now_ms)),
       sleep_(std::move(sleep_ms)),
       sched_(plan_for(cfg_)),
-      ranker_(dwell_channels(cfg_), cfg_.min_rounds, cfg_.pick_margin, cfg_.blocked_pct),
+      ranker_(dwell_channels(cfg_), cfg_.min_rounds, cfg_.pick_margin, cfg_.blocked_pct,
+              cfg_.pick_busy_margin_pct),
       proposal_(cfg_.channels.empty() ? 0 : cfg_.channels.front()),
       op_(cfg_.channels.empty() ? 0 : cfg_.channels.front()) {
   prelude_done_.store(!(cfg_.one_card && cfg_.measure), std::memory_order_release);
@@ -297,7 +298,7 @@ void ChannelScout::publish_() {
   const int mr = eff_min_rounds_();
   const uint8_t p = cfg_.link_width_mhz == 40
                         ? pair_proposal(ranker_.all(), op, cfg_.channels, mr, cfg_.pick_margin,
-                                        cfg_.blocked_pct)
+                                        cfg_.blocked_pct, cfg_.pick_busy_margin_pct)
                         : ranker_.proposal(op, mr);
   proposal_.store(p, std::memory_order_release);
 }

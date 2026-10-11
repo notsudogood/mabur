@@ -28,6 +28,7 @@ struct PairScore {
   uint32_t score;
   bool blocked;
   double busy;
+  bool busy_valid;   // both halves carry an NHM busy reading
 };
 
 // Tier first (an unblocked pair beats any blocked one; among blocked the
@@ -48,6 +49,7 @@ std::optional<PairScore> score_pair(const std::vector<RankEntry>& all, uint8_t p
   uint32_t worst = 0;
   bool blocked = false;
   double busy = 0.0;
+  bool busy_valid = true;
   int seen = 0;
   for (const RankEntry& e : all) {
     if (e.ch != primary && e.ch != other) continue;
@@ -55,16 +57,17 @@ std::optional<PairScore> score_pair(const std::vector<RankEntry>& all, uint8_t p
     worst = std::max(worst, e.worst_busy);
     blocked = blocked || (e.busy_valid && e.worst_busy_pct >= blocked_pct);
     busy = std::max(busy, e.busy_valid ? e.worst_busy_pct : 0.0);
+    busy_valid = busy_valid && e.busy_valid;
     ++seen;
   }
   if (seen != 2) return std::nullopt;
-  return PairScore{primary, worst, blocked, busy};
+  return PairScore{primary, worst, blocked, busy, busy_valid};
 }
 }  // namespace
 
 uint8_t pair_proposal(const std::vector<RankEntry>& all, uint8_t current,
                       const std::vector<uint8_t>& set, int min_rounds,
-                      uint32_t margin, double blocked_pct) {
+                      uint32_t margin, double blocked_pct, double busy_margin_pct) {
   const std::optional<PairScore> h = score_pair(all, current, min_rounds, blocked_pct);
   std::optional<PairScore> best;
   for (uint8_t c : set) {
@@ -75,6 +78,17 @@ uint8_t pair_proposal(const std::vector<RankEntry>& all, uint8_t current,
   if (!best) return current;
   if (!h) return best->primary;                                  // current unranked: best ranked candidate
   if (h->blocked && !best->blocked) return best->primary;         // margin applies within a tier
+  // Airtime decides when there is a reading to decide on (header).
+  if (busy_margin_pct > 0 && !h->blocked && h->busy_valid) {
+    std::optional<PairScore> calm;
+    for (uint8_t c : set) {
+      if (c == current) continue;
+      const std::optional<PairScore> s = score_pair(all, c, min_rounds, blocked_pct);
+      if (!s || s->blocked || !s->busy_valid) continue;
+      if (!calm || s->busy < calm->busy || (s->busy == calm->busy && s->score < calm->score)) calm = s;
+    }
+    if (calm) return calm->busy + busy_margin_pct <= h->busy ? calm->primary : current;
+  }
   if (!better(*best, *h)) return current;                         // ties -> current
   // best->blocked != h->blocked is unreachable here: the (current blocked,
   // best unblocked) case already returned above, and the reverse (current

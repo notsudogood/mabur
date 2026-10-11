@@ -253,6 +253,31 @@ TEST(recalibrates_after_a_drone_restart) {
   CHECK(t.cmd_mfps == 0u);
 }
 
+TEST(a_calibration_disturbed_midway_starts_over_from_native) {
+  Genlock g;
+  const double P = 1e6 / 60.0;
+  const double T = 1e6 / 59.990;
+  uint64_t frame = 0;
+  auto second = [&](int s) {
+    for (int i = 0; i < 60; ++i, ++frame) {
+      const uint64_t pts = 1'000'000 + static_cast<uint64_t>(frame * T);
+      g.on_frame(pts, pts + 3000, pts + 13000, 1'000'000 + static_cast<uint64_t>(frame * P), P, 6000);
+    }
+    return g.tick(true, 1'000'000 + static_cast<uint64_t>((s + 1) * 1e6));
+  };
+  CHECK(!g.restart_calibration());   // nothing to restart before steering starts
+  int s = 0;
+  auto t = second(s++);
+  for (; s < 40 && t.stage != Genlock::kCalProbe; ++s) t = second(s);
+  REQUIRE(t.stage == Genlock::kCalProbe);
+  CHECK(g.calibrating());
+  CHECK(g.restart_calibration());
+  t = second(s++);
+  CHECK(t.stage == Genlock::kCalNative);
+  CHECK(t.send);
+  CHECK(t.cmd_mfps == 0u);           // the camera goes back to its own rate first
+}
+
 TEST(locked_is_faster_on_average_than_free_running) {
   auto free_run = simulate(false, 240, 60, 2, 0);
   auto locked = simulate(true, 240, 60, 2, 0);

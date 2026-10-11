@@ -38,6 +38,7 @@
 #include "ring_client.h"
 #include "video_backend.h"
 #include "genlock_client.h"   // camera-rate setpoint to maburgs (genlock.h)
+#include "async_raw_dvr.h"    // raw recording on a writer thread (SD writes off this loop)
 #include "osd_recorder.h"     // dvr.osd_file: .osd/.srt next to a raw recording
 #include "genlock_control.h"  // maburgs::kGenlockControlPort
 #include "vtx_rec_client.h"  // sends the button's VTX wish to maburgs (Task 8)
@@ -647,6 +648,9 @@ int main(int argc, char** argv) {
   maburplay::Genlock::Params genlock_params;
   genlock_params.miss_frac = cfg.display.genlock_miss_pct / 100.0;
   maburplay::Genlock genlock(genlock_params);
+#ifdef MABUR_PLAYER_HW
+  bool rec_writing_prev = false;   // recording-started edge for genlock (below)
+#endif
   if (cfg.display.vsync_lock) regulator.set_genlock(&genlock);
   maburplay::GenlockClient genlock_cli;
   if (cfg.display.genlock && !genlock_cli.open(maburgs::kGenlockControlPort))
@@ -881,6 +885,7 @@ int main(int argc, char** argv) {
   const bool rec_gs = cfg.dvr.target != "vtx";
   const bool rec_vtx = cfg.dvr.target != "gs";
   maburplay::VtxRecClient vtx_rec;
+  bool rec_idr_logged = false;   // one "waiting for a keyframe" line per recording
   if (!vtx_rec.open(maburgs::kRecControlPort))
     std::fprintf(stderr, "maburplay: rec: VTX wish socket failed -- the drone recorder will not follow the button\n");
   // dvr.mode "burned": the recording is produced by re-encoding decoded
@@ -1094,9 +1099,11 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  // Raw-mode recorder (common/raw_dvr.h): sync gate + params + mux. Its
-  // Error state is what the GS overlay's REC "broken" reads.
-  mabur::RawDvr dvr;
+  // Raw-mode recorder (common/raw_dvr.h): sync gate + params + mux, run on
+  // a writer thread behind a bounded queue (async_raw_dvr.h) so the SD
+  // card never stalls this loop. Its Error state is what the GS overlay's
+  // REC "broken" reads.
+  maburplay::AsyncRawDvr dvr;
   // OSD sidecars for raw recordings (osd_recorder.h): armed with each raw
   // start, begun when the video file gets its first frame, fed every
   // complete OSD screen, flushed and subtitled in the 1 Hz idle slot.
@@ -1332,7 +1339,7 @@ int main(int argc, char** argv) {
 
   if (oneshot) {
     ring.oneshot_drain();
-    dvr.stop();
+    dvr.stop(/*wait=*/true);   // the report below reads the sealed file's counts
     std::printf(
         "{\"delivered\":%llu,\"dropped_enhance_incomplete\":%llu,"
         "\"truncated_base\":%llu,\"salvaged_base\":%llu,\"salvaged_enhance\":%llu,"
@@ -1550,6 +1557,17 @@ int main(int argc, char** argv) {
     }
     // Every iteration: sends on change, re-sends each second (VtxRecClient).
     vtx_rec.tick(rec_on && rec_vtx, mono_ms());
+    // Raw recording armed but no file yet: the recorder waits for a real
+    // IRAP, which the drone's GDR encoder sends almost never on its own --
+    // ask for one (vtx_rec_client.h), paced, for as long as the wait lasts.
+    if (rec_on && rec_gs && !burned_mode && dvr.state() == mabur::RawDvr::State::WaitSync) {
+      if (vtx_rec.request_idr(mono_ms()) && !rec_idr_logged) {
+        std::fprintf(stderr, "maburplay: rec: waiting for a keyframe -- asked the drone for one\n");
+        rec_idr_logged = true;
+      }
+    } else {
+      rec_idr_logged = false;
+    }
     // Idle window: true when no release is due within the next 8 ms, so
     // the heavy 1 Hz blocks below (stats/statvfs, lat flush, OSD compose)
     // run clear of a release deadline. This REDUCES misses, it does not
@@ -1927,6 +1945,19 @@ int main(int argc, char** argv) {
       // parsers match "lat:" only), so a flight shows the camera/screen
       // phase whether or not the loop was steering.
       if (cfg.display.vsync_lock) {
+        // A recording that starts writing inside genlock's calibration
+        // disturbs what it measures: start that calibration over. Edge-
+        // triggered on the file actually being written (raw: the first
+        // IRAP, which with "press record before arming" lands at the arm,
+        // just as calibration begins; burned: the recorder existing).
+        const bool rec_writing =
+            rec_on && rec_gs && (burned_mode ? burn != nullptr : dvr.opened());
+        if (rec_writing && !rec_writing_prev && genlock.restart_calibration()) {
+          std::fprintf(stderr, "maburplay: genlock: recording started during calibration -- "
+                               "calibrating again\n");
+          lat_log.write(mono_us(), "genlock-cal: restarted (recording started)");
+        }
+        rec_writing_prev = rec_writing;
         const auto gt = genlock.tick(cfg.display.genlock, mono_us());
         if (gt.send) genlock_cli.send(gt.cmd_mfps);
         if (gt.valid) {
@@ -2184,6 +2215,6 @@ int main(int argc, char** argv) {
           L.anchor_ok ? "ok" : "warm");
   }
 #endif
-  dvr.stop();
+  dvr.stop(/*wait=*/true);
   return 0;
 }

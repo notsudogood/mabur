@@ -5,8 +5,9 @@
 namespace maburgs {
 
 ChannelRanker::ChannelRanker(std::vector<uint8_t> channels, int min_rounds, uint32_t margin,
-                             double blocked_pct)
-    : min_rounds_(min_rounds), margin_(margin), blocked_pct_(blocked_pct) {
+                             double blocked_pct, double busy_margin_pct)
+    : min_rounds_(min_rounds), margin_(margin), blocked_pct_(blocked_pct),
+      busy_margin_pct_(busy_margin_pct) {
   for (uint8_t c : channels) {
     bool dup = false;
     for (const RankEntry& e : entries_) dup = dup || e.ch == c;
@@ -58,6 +59,18 @@ std::vector<RankEntry> ChannelRanker::ranked(int min_rounds) const {
 uint8_t ChannelRanker::proposal(uint8_t current, int min_rounds) const {
   auto k = ranked(min_rounds);
   if (k.empty()) return current;
+  // Airtime decides when there is a reading to decide on (header).
+  if (busy_margin_pct_ > 0) {
+    const RankEntry* cur = nullptr;
+    const RankEntry* calm = nullptr;
+    for (const RankEntry& e : k) {
+      if (e.ch == current) { cur = &e; continue; }
+      if (is_blocked(e) || !e.busy_valid) continue;
+      if (!calm || e.worst_busy_pct < calm->worst_busy_pct) calm = &e;   // k order breaks ties
+    }
+    if (cur && !is_blocked(*cur) && cur->busy_valid && calm)
+      return calm->worst_busy_pct + busy_margin_pct_ <= cur->worst_busy_pct ? calm->ch : current;
+  }
   const RankEntry& best = k.front();
   if (best.ch == current || margin_ == 0) return best.ch;
   for (const RankEntry& e : k)

@@ -12,11 +12,57 @@ tools made for Walksnail goggle recordings.
 it is also decoding and displaying the live picture. On the 2026-10-10
 flight that cost latency: with burned recording on, **58 % of seconds** had
 an e2e p99 of 70 ms or more, against **5 %** with it off (same flight,
-genlock on). Raw recording only copies the received bitstream into the
-file. It has not flown yet, so its own cost in flight is unmeasured.
-`lat.log` now carries `rec=off|raw|burned` on every 1 Hz `lat:` line, and
-`flightreport`'s GS RECORDING section splits latency by it, so the next
-flight measures it.
+genlock on). `lat.log` carries `rec=off|raw|burned` on every 1 Hz `lat:`
+line, and `flightreport`'s GS RECORDING section splits latency by it.
+
+## Raw recording's cost, and the writer thread (2026-10-11)
+
+Raw recording first flew on 2026-10-11 and was **not** free. Armed
+seconds, grouped by the encoder's bitrate so the comparison is like for
+like (three sessions: two flights and a bench run):
+
+| encoder | recorder | seconds | decode p99 | e2e p99 | seconds with e2e p99 ≥ 70 ms |
+|---|---|---|---|---|---|
+| 24 Mbps | off | 132 | 14 ms | 55 ms | 11 % |
+| 24 Mbps | raw | 185 | 41 ms | 82 ms | 91 % |
+| 13.8 Mbps | off | 62 | 16 ms | 58 ms | 34 % |
+| 13.8 Mbps | raw | 21 | 25 ms | 66 ms | 38 % |
+
+The typical frame decoded as fast either way (p50 8–9 ms); only the worst
+frame or two of each second slowed, and the cost grew with bitrate. The
+cause was in the code, not the card: the recorder writes each 1 s
+fragment (about 3 MB at 24 Mbps) and `fflush()`es it inside `feed()`, which
+ran on the player loop that also feeds the decoder. *Against it:* most of
+the 24 Mbps "off" seconds come from a different flight and channel, and
+no log times individual frames, so the once-a-second stall is inferred
+from the code and the per-second pattern; the radio link can't explain
+it, though (0.06 % loss while recording, and the stage that grew was
+decoding, not waiting for repairs).
+
+Since then maburplay runs the recorder on a **writer thread**
+(`gs/player/src/async_raw_dvr.h`): the loop only copies each complete
+frame into a queue, and the thread does the sync gate, the muxing and all
+file I/O at a lower priority. The file is byte-identical to before
+(`tests/test_async_raw_dvr.cpp`). If the card falls more than 16 MB
+(about 5 s at 24 Mbps) behind, the recording **stops with an error**
+(the OSD's REC turns to a fault, the file so far is kept, the log says
+`the SD card fell N MB behind`) rather than stalling the picture.
+Unflown: the next flight's GS RECORDING section is the check.
+
+## Pressing record
+
+The recorder starts a file only at a real keyframe (IRAP), and the
+drone's GDR encoder sends one almost only at session start and at arming.
+Since 2026-10-11, while a raw recording waits for one the player asks the
+drone for one every 500 ms (`maburplay: rec: waiting for a keyframe --
+asked the drone for one`): maburplay sends `idr` to maburgs (UDP 8401,
+`rec_control.h`), maburgs bumps the RCF's `idr_epoch`, and the drone
+serves one paced IDR per change -- the web GS's request path. A press
+mid-flight should now start recording within well under a second (design
+estimate: the next RCF, the drone's 100 ms IDR floor, one frame); unflown. If a recording starts while genlock is calibrating, the
+calibration starts over (`genlock-cal: restarted` in lat.log): on
+2026-10-11 a recording that began 6 s into calibration was the likely
+reason it measured the camera at 60.274 fps instead of 60.08.
 
 Existing installs keep their saved config: `/config/maburplay.toml` from an
 older image still says `mode = "burned"` until you change it.

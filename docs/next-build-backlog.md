@@ -84,14 +84,55 @@ Changes:
 Bench-check before shipping: re-run on the same pair and compare EVM per
 rate against `power_mode = "none"`.
 
-## 3. 80 MHz top rung
+## 3. Drone: CPU headroom for 40+ Mb/s
+
+Evidence (bench 2026-10-12, Test A: 35 Mb/s at MCS5/40, SoC at its stock
+800 MHz): cpu0 83 % busy, cpu1 35–40 %. cpu0 carries everything but the
+producer: mbr-fecw 19, mbr-usb 4 × 7.3 (8 senders: 8 × 3.7, the same
+total), venc-enc 8, mbr-txw 8, maburd 8, mbr-msp 3, the rest kernel/SDK;
+cpu1 carries mbr-hot alone (25). Extrapolating the per-Mb/s part puts cpu0
+at 100 % near 42–45 Mb/s -- an estimate, not measured. The operator keeps
+the SoC at 800 MHz (no overclock), so the levers are placement and code.
+
+Levers, cheapest first:
+1. Rebalance the cores. The placement (`drone/src/main.cpp` kHotCore /
+   kRestCore, dq-spike findings §19, 2026-09-01) predates the 2026-09-22
+   frame-end-join deletion that took mbr-hot from ~70 % to ~20–25 % of its
+   core; its own comment says to revisit it. Move mbr-fecw (or two USB
+   senders) to cpu1: on paper both cores land near 60 % at 35 Mb/s. Bench
+   it first with `taskset` by thread name, no build, watching drone `dq`
+   and GS `fec` for the producer-preemption cost §19 measured.
+2. Fewer USB transfers. The 8822E parses at most 3 descriptors per bulk
+   transfer (devourer `TxAggPlan.h`, HalMAC BLK_DESC_NUM), and with
+   `fec.feed_batch = 1` the senders often carry fewer. Read the batch mix
+   from the drone's `usb_urb` gauge (`/tmp/mabur.log`), then A/B
+   `feed_batch = 3`. Counterpart: 7a4faec went to `feed_batch = 1` because
+   grouped bodies make bigger loss units (a lost aggregate took 12–16 enh
+   symbols, past what 0.25 overhead repairs).
+3. Cheaper repair building: `gf::lincomb` runs ~9.4 ns/B on the A7
+   (bitrate-ceiling findings, lever 2); a two-rows-per-pass NEON kernel is
+   the next term for mbr-fecw. Drone only, wire unchanged.
+4. Less FEC on the top rung (the trim the flight logs are deciding): fewer
+   repairs to build, fewer bodies to send, less air.
+5. Check which core takes the USB controller's interrupt
+   (`/proc/interrupts`); if cpu0, move it with `smp_affinity`.
+6. Last: an async bulk-OUT data path for Jaguar3 in devourer (one thread,
+   N transfers in flight) instead of N blocking senders. Larger change;
+   devourer keeps J3 sends synchronous on purpose (bring-up NAK backoff),
+   so data path only, after bring-up, with a bench A/B.
+
+Bench gate: step test 35 / 40 / 45 / 50 Mb/s at MCS5/40 with item 1 in,
+drone and GS CPU probes, GS `fec` flat. 50 Mb/s also needs item 4 for the
+air: at 40 MHz it is ~85 % of what MCS5 delivers.
+
+## 4. 80 MHz top rung
 
 Plan, constraints and go/no-go measurements: `docs/bw80-research-2026-10-12.md`.
 First step is `linkbench --bw 80` plus a bench drone build carrying it; flight
-code only after the bench says go. Blocked on item 1: the GS core thread
-already saturates at 35 Mb/s.
+code only after the bench says go. Blocked on items 1 and 3: the GS core
+thread already saturates at 35 Mb/s, and the drone's cpu0 is the next wall.
 
-## 4. Raw-recording `.srt` that walksnail-osd-tool renders
+## 5. Raw-recording `.srt` that walksnail-osd-tool renders
 
 walksnail-osd-tool parses only Walksnail's exact subtitle line
 (`Signal:N CH:N FlightTime:N SBat:N.NV GBat:N.NV Delay:Nms Bitrate:N.NMbps
@@ -108,7 +149,7 @@ frame rate (it decodes at the rate of the file's start, 30 fps while
 disarmed). The workaround is converting to constant 60 fps with ffmpeg
 before loading.
 
-## 5. Gilang's RTL8812CU 40 MHz TX fix, for a Wyvern drone build (untested)
+## 6. Gilang's RTL8812CU 40 MHz TX fix, for a Wyvern drone build (untested)
 
 The Wyvern air unit's RTL8812CU (8822C die) stalls on 40 MHz injection.
 Gilang's fix is in gilankpam/devourer master (`7c10751`, `ccb45ce`,

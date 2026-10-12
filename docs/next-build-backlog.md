@@ -39,6 +39,16 @@ Plan (GS only, no wire or drone change):
 
 Bench gate: the GS CPU probe at 35 Mb/s shows the busiest thread well under
 80 %, `fec` flat, no hops. Until it ships, fly MCS5/40 at 25–30 Mb/s.
+
+Status (2026-10-12): the host replay profile put ~80 % of the core path's
+instructions in `gf::lincomb` reducing repairs that taught nothing (fully
+known windows, and the second card's copy), and most of the rest in
+`crc16_ccitt`. Committed: the repair skip (6e5e297; replay user time
+3.22 -> 1.14 s, AU output byte-identical) and split 1 (bdb5142). The host GF
+path is scalar where the GS's is NEON, so neither share transfers as is: a
+GS-side profile of old / fix / split1 static aarch64 builds
+(`tools/bench/pcsample`, `symbolize_bin.py`) decides whether step 3 is
+needed. No GS image until that bench says so.
 Item 3 (80 MHz, 50 Mb/s) depends on this: at 50 Mb/s the current core
 thread would need ~140 % of a core.
 

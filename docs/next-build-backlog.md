@@ -3,7 +3,46 @@
 What the operator has agreed goes into the next GS (and drone) build, in
 order. Each item names its evidence. Remove an item when it ships.
 
-## 1. maburcal: stop calibrating rates to full power
+## 1. GS: spread the per-packet work off the core thread
+
+Evidence (bench 2026-10-12, d4 drone + gs4 GS, GS pinned at MCS5/40 with
+the flight FEC pair 0.5/0.25, drone `max_kbps` 35000, low power off):
+GS `fec` p50 swung 16–540 ms and climbed steadily on each channel until a
+hop flushed it. Per-thread CPU over 30 s (6000 ticks = one core):
+
+| side | busiest threads (% of one core) | cores busy |
+|---|---|---|
+| drone, 4 USB senders | mbr-hot 25, mbr-fecw 19, venc 8, txw 8, usb 4 × 7 | cpu0 83, cpu1 35 |
+| drone, 8 USB senders | same; usb 8 × 3.7 | cpu0 83, cpu1 38 |
+| GS `maburgs` | **one thread 95–97**, two at 17, rest ≤ 5 | 59–69 / 46–53 / 48–52 / 45–49 |
+| GS `maburplay` | 41.5 (+ mpp 7.6) | — |
+
+The drone has headroom and more USB senders changed nothing; one GS thread
+(the core loop, `gs/src/main.cpp` `while (!g_stop)`) is saturated while
+three of the RK3566's four cores sit half idle. Flight 2026-10-12 showed the
+same signature milder (`fec` 35–44 ms at 35 Mb/s, 9 ms at 25) because the
+ladder kept dropping to the 25 Mb/s rung. Caveat: one bench session, two
+readings per point, and the hot thread was not yet identified by TID.
+
+Why it is one thread: both cards' RX threads push every raw body into
+`BodyQueue`; the core loop runs `sbi_unpack` (sub-block CRC16 + split +
+copies) on EVERY copy, and only then does `SwDecoder::add_symbol` drop the
+second card's copy as known — the per-byte work is done twice, serially.
+
+Plan (GS only, no wire or drone change):
+1. Profile the core path on the host replay (`maburgs --dry-run --in`, two virtual
+   cards, ~35 Mb/s) to rank unpack/CRC vs FEC vs assembly.
+2. Split 1: run `sbi_unpack` on each card's own RX thread and hand the core
+   pre-checked symbols; the duplicate becomes a set lookup.
+3. Only if needed: FEC repair on a worker (as the drone's `FecWorker`), then
+   frame assembly/output on its own thread behind a queue.
+
+Bench gate: the GS CPU probe at 35 Mb/s shows the busiest thread well under
+80 %, `fec` flat, no hops. Until it ships, fly MCS5/40 at 25–30 Mb/s.
+Item 3 (80 MHz, 50 Mb/s) depends on this: at 50 Mb/s the current core
+thread would need ~140 % of a core.
+
+## 2. maburcal: stop calibrating rates to full power
 
 Evidence (flight 2026-10-12, d4 drone + gs4 GS, calibrated on the bench the
 same morning): the calibration wrote `rate_walls_rel = [63, 63, 63, 63, 40,
@@ -35,13 +74,14 @@ Changes:
 Bench-check before shipping: re-run on the same pair and compare EVM per
 rate against `power_mode = "none"`.
 
-## 2. 80 MHz top rung
+## 3. 80 MHz top rung
 
 Plan, constraints and go/no-go measurements: `docs/bw80-research-2026-10-12.md`.
 First step is `linkbench --bw 80` plus a bench drone build carrying it; flight
-code only after the bench says go.
+code only after the bench says go. Blocked on item 1: the GS core thread
+already saturates at 35 Mb/s.
 
-## 3. Raw-recording `.srt` that walksnail-osd-tool renders
+## 4. Raw-recording `.srt` that walksnail-osd-tool renders
 
 walksnail-osd-tool parses only Walksnail's exact subtitle line
 (`Signal:N CH:N FlightTime:N SBat:N.NV GBat:N.NV Delay:Nms Bitrate:N.NMbps
@@ -58,7 +98,7 @@ frame rate (it decodes at the rate of the file's start, 30 fps while
 disarmed). The workaround is converting to constant 60 fps with ffmpeg
 before loading.
 
-## 4. Gilang's RTL8812CU 40 MHz TX fix, for a Wyvern drone build (untested)
+## 5. Gilang's RTL8812CU 40 MHz TX fix, for a Wyvern drone build (untested)
 
 The Wyvern air unit's RTL8812CU (8822C die) stalls on 40 MHz injection.
 Gilang's fix is in gilankpam/devourer master (`7c10751`, `ccb45ce`,

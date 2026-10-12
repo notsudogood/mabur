@@ -15,6 +15,14 @@
 #include <time.h>
 #include <unistd.h>
 
+// Lowest kernel text address: the 3G/1G split on 32-bit ARM (the drone),
+// the top of the address space on 64-bit targets (the aarch64 GS, a host).
+#if UINTPTR_MAX > 0xffffffffu
+#define KERNEL_IP_MIN 0xffff000000000000ULL
+#else
+#define KERNEL_IP_MIN 0xc0000000ULL
+#endif
+
 typedef struct { uint64_t lo, hi, off; char name[256]; } Map;
 static Map maps[512]; static int nmaps;
 static void load_maps(pid_t tid) {
@@ -63,7 +71,7 @@ int main(int argc, char** argv) {
       for (size_t i = 0; i < sizeof h; ++i) ((char*)&h)[i] = data[(tail + i) & mask];
       if (h.type == PERF_RECORD_SAMPLE) {
         uint64_t ip = 0; for (size_t i = 0; i < 8; ++i) ((char*)&ip)[i] = data[(tail + sizeof h + i) & mask];
-        total++; if (ip >= 0xc0000000ULL) kern++; else bump(ip);
+        total++; if (ip >= KERNEL_IP_MIN) kern++; else bump(ip);
       }
       tail += h.size;
     }

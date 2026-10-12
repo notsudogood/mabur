@@ -102,6 +102,50 @@ TEST(duplicate_sources_and_repairs_idempotent) {
   CHECK(d.symbols_dropped_stale() >= 10);  // dup sources counted
 }
 
+TEST(redundant_and_duplicate_repairs_are_skipped) {
+  // Two cards, clean channel: every repair's window is already known when it
+  // lands, and the second card's copy is the same repair again. Both must be
+  // dropped (no GF work, no row) without changing what is delivered.
+  SwConfig cfg{64, 8, 1.0};
+  std::vector<std::vector<uint8_t>> pkts;
+  auto envs = encode_stream(cfg, 20, &pkts);
+  SwDecoder d(cfg);
+  std::vector<std::vector<uint8_t>> got;
+  uint64_t repairs = 0;
+  for (auto& env : envs) {
+    sw::SwHeader h;
+    CHECK(sw::parse_header(env.data(), env.size(), &h));
+    if (h.repair) ++repairs;
+    for (int copy = 0; copy < 2; ++copy)
+      for (auto& p : d.add_symbol(env.data(), env.size(), 1000)) got.push_back(std::move(p));
+  }
+  CHECK(repairs > 0);
+  CHECK(got.size() == pkts.size());
+  CHECK(to_set(got) == to_set(pkts));
+  CHECK(d.repairs_redundant() == repairs);
+  CHECK(d.repairs_dup() == repairs);
+  CHECK(d.rows_in_flight() == 0);
+}
+
+TEST(duplicate_repair_copies_still_recover_a_loss) {
+  // The source both cards missed is rebuilt from the first copy of a repair;
+  // the second copy is skipped as a duplicate and must not cost the recovery.
+  SwConfig cfg{64, 8, 1.0};
+  std::vector<std::vector<uint8_t>> pkts;
+  auto envs = encode_stream(cfg, 10, &pkts);
+  SwDecoder d(cfg);
+  std::vector<std::vector<uint8_t>> got;
+  for (size_t i = 0; i < envs.size(); ++i) {
+    if (i == 2) continue;  // lost on both cards
+    for (int copy = 0; copy < 2; ++copy)
+      for (auto& p : d.add_symbol(envs[i].data(), envs[i].size(), 1000)) got.push_back(std::move(p));
+  }
+  CHECK(got.size() == pkts.size());
+  CHECK(to_set(got) == to_set(pkts));
+  CHECK(d.syms_recovered() == 1);
+  CHECK(d.repairs_dup() > 0);
+}
+
 TEST(late_source_copy_of_recovered_symbol_counted_arrived) {
   // Repair-vs-arrival race (bench 2026-07-27): a repair processed before a
   // reordered source symbol solves it ("recovered"); the direct copy landing

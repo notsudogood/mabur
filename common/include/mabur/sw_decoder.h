@@ -143,6 +143,11 @@ class SwDecoder {
   int repair_window() const { return repair_window_hwm_; }
   uint64_t symbols_dropped_bad_cfg() const { return symbols_dropped_bad_cfg_; }
   uint64_t symbols_dropped_stale() const { return symbols_dropped_stale_; }
+  // Repairs dropped before any GF work because they could teach nothing: a
+  // second copy of an admitted repair (the other card), or one whose whole
+  // window is already known (the usual case at low loss).
+  uint64_t repairs_dup() const { return repairs_dup_; }
+  uint64_t repairs_redundant() const { return repairs_redundant_; }
   uint64_t packets_out() const { return packets_out_; }
   uint64_t resets() const { return resets_; }
   size_t rows_in_flight() const { return rows_.size(); }
@@ -224,6 +229,7 @@ class SwDecoder {
   uint64_t syms_retx_ = 0, syms_retx_arrived_ = 0;
   uint64_t symbols_in_ = 0, symbols_dropped_bad_cfg_ = 0;
   uint64_t symbols_dropped_stale_ = 0, packets_out_ = 0, resets_ = 0;
+  uint64_t repairs_dup_ = 0, repairs_redundant_ = 0;
   int repair_window_hwm_ = 0;
   // Highest repair window START seen (virtual seq; 0 = none since reset).
   // fec_final()'s "the encoder has moved past it" watermark.
@@ -244,7 +250,8 @@ class SwDecoder {
   bool ep_open_ = false;
   std::vector<LossEpisode> episodes_;    // closed, awaiting take_episodes()
   uint64_t episode_window() const;
-  void note_repair(uint64_t ws, uint64_t we, uint32_t key);
+  // False when (ws, key) was already admitted: a second-card copy.
+  bool note_repair(uint64_t ws, uint64_t we, uint32_t key);
   // Per evicted seq: books it into the open episode (or opens one).
   // known_via: kRepair = recovered, kRetx = retx, kSource = never known
   // (abandoned).

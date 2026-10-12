@@ -351,7 +351,27 @@ std::vector<std::vector<uint8_t>> SwDecoder::add_symbol(const uint8_t* env, size
     return out;
   }
 
-  note_repair(ws, wend, h.repair_key);
+  // Repairs that can teach nothing are dropped before any GF work -- each
+  // would cost up to window x symbol_size of lincomb only to reduce to a
+  // linearly dependent row (bench 2026-10-12: ~80 % of the host replay's
+  // instructions at 35 Mb/s, two cards). A second-card copy of an admitted
+  // repair is the same row again.
+  if (!note_repair(ws, wend, h.repair_key)) {
+    ++repairs_dup_;
+    return out;
+  }
+  // A window whose sources are all known yields no row either (the usual
+  // case at low loss). known_ is ordered: one walk from ws.
+  {
+    auto kit = known_.lower_bound(ws);
+    int i = 0;
+    for (; i < wl; ++i, ++kit)
+      if (kit == known_.end() || kit->first != ws + static_cast<uint64_t>(i)) break;
+    if (i == wl) {
+      ++repairs_redundant_;
+      return out;
+    }
+  }
 
   Row r;
   r.payload.assign(payload, payload + ss);
@@ -380,12 +400,13 @@ uint64_t SwDecoder::episode_window() const {
                                 : static_cast<uint64_t>(cfg_.window);
 }
 
-void SwDecoder::note_repair(uint64_t ws, uint64_t we, uint32_t key) {
+bool SwDecoder::note_repair(uint64_t ws, uint64_t we, uint32_t key) {
   // A second-card copy of the same repair arrives within a few ms, so a
   // backward scan finds it near the tail.
   for (auto it = repairs_seen_.rbegin(); it != repairs_seen_.rend(); ++it)
-    if (it->ws == ws && it->key == key) return;
+    if (it->ws == ws && it->key == key) return false;
   repairs_seen_.push_back(RepairSpan{ws, we, key});
+  return true;
 }
 
 void SwDecoder::note_missing(uint64_t v, Origin known_via, bool stale) {

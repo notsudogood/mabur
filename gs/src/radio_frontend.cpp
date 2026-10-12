@@ -19,6 +19,7 @@
 #include "logger.h"
 #include "mabur/ht40.h"
 #include "mabur/node.h"
+#include "mabur/sbi.h"
 
 namespace maburgs {
 namespace {
@@ -219,6 +220,17 @@ void RadioFrontend::on_packet(const Packet& pkt) {
   // the moment the frame is lifted off this card -- so no amount of
   // queueing between here and the core loop can change it (mabur/node.h).
   m.rx_channel = rx_channel_.load(std::memory_order_acquire);
+  // Split 1 (bench 2026-10-12): the sub-block CRCs + split of a video body
+  // run here, on this card's own RX thread, instead of serially on the core
+  // loop for both cards' copies. Same routing as the decoder: stream 0/1.
+  const int sbi_sid = mabur::sbi_peek_stream_id(m.body.data(), m.body.size());
+  if (sbi_sid == 0 || sbi_sid == 1) {
+    const int bp = cfg_.sbi_block_payload[static_cast<size_t>(sbi_sid)];
+    if (bp > 0) {
+      m.sbi = mabur::sbi_unpack(m.body.data(), m.body.size(), bp);
+      m.sbi_block_payload = bp;
+    }
+  }
   const uint64_t mono = m.mono_us;
   const uint32_t tsfl = m.tsfl;
   out_.push(std::move(m));

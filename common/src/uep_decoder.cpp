@@ -37,7 +37,9 @@ std::vector<DecodedFrag> UepDecoder::add_body(const uint8_t* body, size_t len,
                                               uint64_t now_ms,
                                               uint8_t rx_mcs,
                                               uint64_t body_mono_us,
-                                              bool body_crc_ok) {
+                                              bool body_crc_ok,
+                                              const SbiUnpackResult* pre,
+                                              int pre_block_payload) {
   const int sid = sbi_peek_stream_id(body, len);
   if (sid < 0 || sid > 1) {
     ++bodies_misrouted_;
@@ -64,7 +66,12 @@ std::vector<DecodedFrag> UepDecoder::add_body(const uint8_t* body, size_t len,
     if (L.bnd_arm_ms <= now_ms)
       L.bnd_close_ms = static_cast<double>(now_ms - L.bnd_arm_ms);
   }
-  const SbiUnpackResult r = sbi_unpack(body, len, L.env_size);
+  SbiUnpackResult own;
+  if (!pre || pre_block_payload != L.env_size) {
+    own = sbi_unpack(body, len, L.env_size);
+    pre = &own;
+  }
+  const SbiUnpackResult& r = *pre;
   L.subblocks_failed += static_cast<uint64_t>(r.n_failed);
   if (!body_crc_ok) {
     ++L.bodies_corrupt;

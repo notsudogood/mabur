@@ -115,6 +115,46 @@ static void feed_and_check(bool duplicate_bodies) {
 TEST(decodes_uep_encoder_bodies_to_fixture) { feed_and_check(false); }
 TEST(duplicate_bodies_are_idempotent) { feed_and_check(true); }
 
+TEST(pre_unpacked_bodies_decode_identically) {
+  // The GS RX threads unpack video bodies before the core loop sees them
+  // (split 1, bench 2026-10-12). Fed that result, the decoder must emit
+  // exactly what it emits when it unpacks itself -- including for an
+  // FCS-corrupt body with a broken sub-block -- and must ignore a result
+  // made with the wrong block payload rather than trust it.
+  auto bodies = encode_fixture_bodies();
+  REQUIRE(bodies.size() > 4);
+  // Break sub-block 1's payload (header, then [crc16 | payload] per block).
+  const size_t stride = 2 + static_cast<size_t>(UepDecoder::block_payload(vec_layers()[0]));
+  bodies[3].body[static_cast<size_t>(SBI_HDR_LEN) + stride + 2 + 5] ^= 0xFF;
+  UepDecoder plain(vec_layers()), fed(vec_layers());
+  for (size_t i = 0; i < bodies.size(); ++i) {
+    const auto& b = bodies[i].body;
+    const bool crc_ok = i != 3;
+    const int sid = sbi_peek_stream_id(b.data(), b.size());
+    REQUIRE(sid == 0 || sid == 1);
+    const int bp = UepDecoder::block_payload(vec_layers()[static_cast<size_t>(sid)]);
+    const int used = i % 5 == 4 ? bp + 1 : bp;  // every 5th: a stale result
+    const SbiUnpackResult pre = sbi_unpack(b.data(), b.size(), used);
+    auto want = plain.add_body(b.data(), b.size(), 0, UepDecoder::kMcsUnknown, 7, crc_ok);
+    auto got = fed.add_body(b.data(), b.size(), 0, UepDecoder::kMcsUnknown, 7, crc_ok, &pre, used);
+    REQUIRE(got.size() == want.size());
+    for (size_t k = 0; k < got.size(); ++k) {
+      CHECK(got[k].stream_id == want[k].stream_id);
+      CHECK(got[k].frag == want[k].frag);
+      CHECK(got[k].sw_seq == want[k].sw_seq);
+      CHECK(got[k].q_ms == want[k].q_ms);
+    }
+  }
+  for (int s = 0; s < 2; ++s) {
+    const auto a = plain.stats(s), b = fed.stats(s);
+    CHECK(a.bodies == b.bodies);
+    CHECK(a.subblocks_failed == b.subblocks_failed);
+    CHECK(a.syms_delivered == b.syms_delivered);
+    CHECK(a.packets_out == b.packets_out);
+  }
+  CHECK(plain.stats(0).subblocks_failed + plain.stats(1).subblocks_failed == 1);
+}
+
 TEST(garbage_body_is_misrouted_not_fatal) {
   UepDecoder dec(vec_layers());
   std::vector<uint8_t> junk(40, 0x5A);

@@ -4,6 +4,8 @@
 #include <optional>
 #include <vector>
 
+#include "mabur/sbi.h"
+
 namespace mabur::node {
 
 // Card <-> aggregator messages, wire format v0. In-process in v1; the same
@@ -63,6 +65,15 @@ struct RxBody {
   // instead stamped bodies received on the OLD channel with the NEW one
   // and confirmed a hop the drone had not made.
   uint8_t rx_channel = 0;
+  // Video bodies (SBI stream 0/1) only: the sub-blocks already unpacked and
+  // CRC-checked by the producer on its own RX thread, with the block
+  // payload it used, so the core loop does not run sbi_unpack serially for
+  // every card's copy (bench 2026-10-12: the core thread saturated at
+  // 35 Mb/s with two cards). Empty = not pre-unpacked (relays, frame-file
+  // replay, non-video): UepDecoder::add_body unpacks itself. In-process
+  // only, not serialized.
+  std::optional<mabur::SbiUnpackResult> sbi;
+  int sbi_block_payload = 0;
 };
 
 struct CardStatus {

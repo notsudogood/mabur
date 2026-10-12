@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "mabur/frag.h"
+#include "mabur/sbi.h"
 #include "mabur/sw_decoder.h"
 #include "mabur/uep_encoder.h"
 
@@ -66,11 +67,23 @@ class UepDecoder {
   // corrupt body they are untrustworthy and degrade to 0 = unknown — the
   // latency accounting's snap-down anchor consumes them and one corrupt
   // duration must never drag its floor.
+  //
+  // pre: this body's sbi_unpack result computed elsewhere (the GS RX
+  // threads) with block payload pre_block_payload. Used only when that
+  // matches this layer's; otherwise, or when null, the body is unpacked
+  // here. Identical results either way -- same function, same bytes.
   std::vector<DecodedFrag> add_body(const uint8_t* body, size_t len,
                                     uint64_t now_ms,
                                     uint8_t rx_mcs = kMcsUnknown,
                                     uint64_t body_mono_us = 0,
-                                    bool body_crc_ok = true);
+                                    bool body_crc_ok = true,
+                                    const SbiUnpackResult* pre = nullptr,
+                                    int pre_block_payload = 0);
+
+  // The SBI block payload a layer unpacks with: one SW envelope.
+  static int block_payload(const UepLayerCfg& cfg) {
+    return static_cast<int>(sw::kSwHeaderLen) + cfg.fec.symbol_size;
+  }
 
   // Open->close latency (ms) of layer sid's last CLOSED boundary; -1 if a
   // boundary never closed on this layer. Observability only.
@@ -145,7 +158,7 @@ class UepDecoder {
  private:
   struct Layer {
     Layer(const UepLayerCfg& cfg, uint32_t seq_horizon, uint32_t arrival_guard)
-        : env_size(static_cast<int>(sw::kSwHeaderLen) + cfg.fec.symbol_size),
+        : env_size(block_payload(cfg)),
           sw(cfg.fec, seq_horizon, arrival_guard) {}
     int env_size;
     SwDecoder sw;

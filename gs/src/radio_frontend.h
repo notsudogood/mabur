@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -62,6 +63,11 @@ class RadioFrontend : public LinkCard {
     // mutexed push per CRC-good frame on the RX thread the GS has no
     // consumer for.
     bool usb_late_gauge = false;
+    // > 0: unpack + CRC-check video bodies of that SBI stream (0 base,
+    // 1 enhance) on this card's RX thread with this block payload
+    // (UepDecoder::block_payload), so the core loop does not do it for
+    // every card's copy in series. 0 = leave it to the decoder.
+    std::array<int, 2> sbi_block_payload{0, 0};
   };
 
   RadioFrontend(Cfg cfg, BodyQueue& out);

@@ -289,7 +289,8 @@ void Aggregator::on_rx_body(const mabur::node::RxBody& m) {
     video_hook_(stream_id, m.mono_us);
   for (const auto& r :
        dec_.add_body(m.body.data(), m.body.size(), m.mono_us / 1000, m.mcs,
-                     m.mono_us, m.crc_ok))
+                     m.mono_us, m.crc_ok, m.sbi ? &*m.sbi : nullptr,
+                     m.sbi_block_payload))
     if (frag_sink_) frag_sink_(r);
 }
 

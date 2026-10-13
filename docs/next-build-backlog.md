@@ -49,6 +49,21 @@ path is scalar where the GS's is NEON, so neither share transfers as is: a
 GS-side profile of old / fix / split1 static aarch64 builds
 (`tools/bench/pcsample`, `symbolize_bin.py`) decides whether step 3 is
 needed. No GS image until that bench says so.
+
+GS bench 2026-10-13 on efficient-link-nack-gs5 (cabcf43), 35 Mb/s MCS5/40:
+the core thread fell from 95-97 % (pegged, backlog growing) to 84-85 %,
+the two RX threads rose 17 -> 31 % each (split 1 doing its job), and with
+a still scene `fec` held 9-10 ms p50 at 35 Mb/s (the 25 Mb/s level). The
+same 85 % with motion in front of the camera (83.7 vs 84.6 %): GS load
+follows bitrate, not scene content. pcsample of the gs5-equivalent build
+(30 s, 25k samples): memory alloc/free ~23 %, std::map tree ops ~23 %
+(SwDecoder known_/rows_, FrameStream chunk maps), kernel ~14 %, FEC
+decoder logic 7 %, S1LossWindow::sample 6 % (re-sums its deque per
+call), memcpy 4.5 %, slice_assembler find_codes 3.5 % (byte-wise
+start-code scan). Next step if more GS headroom is wanted (50 Mb/s at
+80 MHz needs it): ring-indexed symbol storage instead of std::map +
+per-symbol vectors, pooled body buffers, running sums in S1LossWindow,
+memchr-based start-code scan. Not started.
 Item 3 (80 MHz, 50 Mb/s) depends on this: at 50 Mb/s the current core
 thread would need ~140 % of a core.
 

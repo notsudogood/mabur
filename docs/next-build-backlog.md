@@ -63,9 +63,30 @@ call), memcpy 4.5 %, slice_assembler find_codes 3.5 % (byte-wise
 start-code scan). Next step if more GS headroom is wanted (50 Mb/s at
 80 MHz needs it): ring-indexed symbol storage instead of std::map +
 per-symbol vectors, pooled body buffers, running sums in S1LossWindow,
-memchr-based start-code scan. Not started.
-Item 3 (80 MHz, 50 Mb/s) depends on this: at 50 Mb/s the current core
-thread would need ~140 % of a core.
+memchr-based start-code scan.
+
+Status 2026-10-13 (3b1d509, GS image gs6): that list is done, except
+pooled body buffers. Changes:
+- Ring-indexed symbol store in SwDecoder.
+- Fragments moved, not copied, decoder -> FrameStream, with a chunk table
+  in place of the per-fragment std::map.
+- An O(1) repair-dedup index with an exact fallback.
+- S1LossWindow running sums.
+- memchr start-code scan.
+
+Results on the host replay (20 s at 35 Mb/s, 2 cards):
+- AU output and stats are byte-identical to gs5 at 0/7/15 % drop.
+- Core-thread instructions (excluding the RX-thread unpack): 2.29 G ->
+  1.39 G (-39 %).
+- The aarch64 static build gives the same output under qemu.
+
+Counter-evidence: x86 instruction counts, not RK3566 time. The bench
+gate is the GS CPU probe at 35 Mb/s on gs6. If the 84-85 % falls in
+proportion it would land near 55 %, but allocator and cache effects can
+move that either way.
+
+Item 4 (80 MHz, 50 Mb/s) depends on this: at 50 Mb/s the gs5 core thread
+would need ~120 % of a core.
 
 ## 2. maburcal: stop calibrating rates to full power
 
@@ -117,6 +138,10 @@ Levers, cheapest first:
    senders) to cpu1: on paper both cores land near 60 % at 35 Mb/s. Bench
    it first with `taskset` by thread name, no build, watching drone `dq`
    and GS `fec` for the producer-preemption cost §19 measured.
+   Since dac43df (drone d5) it is config, not taskset: `fec.worker_core =
+   "hot"` and/or `radio.tx_threads_hot = 2` in /etc/mabur.toml, restart
+   maburd; the startup line in /tmp/mabur.log prints the placement. Both
+   default to the old policy.
 2. Fewer USB transfers. The 8822E parses at most 3 descriptors per bulk
    transfer (devourer `TxAggPlan.h`, HalMAC BLK_DESC_NUM), and with
    `fec.feed_batch = 1` the senders often carry fewer. Read the batch mix

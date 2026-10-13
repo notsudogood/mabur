@@ -193,7 +193,11 @@ Bench 2026-10-13 (d6 + gs6, 35 Mb/s, MCS5/40, ch 64, 8 USB senders):
   It is real work, not waiting.
 - Moving work to cpu1 also makes mbr-txw and maburd use more (8 -> 11,
   6.5 -> 10.9), and total CPU rises (avg 54.5 -> 61 %).
-- The balanced layout costs the TX queue, so defaults stay at 35 Mb/s.
+- The balanced layout costs the TX queue: with motion in front of the
+  camera, txq jumps to 15-17 ms and e2e to 70-80 ms, with no loss. At
+  defaults, txq holds 4-6 ms and e2e 37-38 / 54 under the same motion.
+  Big motion frames hit the video thread and the senders on cpu1 at the
+  same moment, so keep USB senders off cpu1. Defaults stay.
 - For 40+ Mb/s, try worker_core = "hot" alone; its txq is unmeasured.
 - GS gs6: busiest maburgs thread 61.7 % (gs5 84-85, gs4 95-97).
 

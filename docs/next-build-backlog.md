@@ -161,6 +161,23 @@ Levers, cheapest first:
    devourer keeps J3 sends synchronous on purpose (bring-up NAK backoff),
    so data path only, after bring-up, with a bench A/B.
 
+Status 2026-10-13 (2ed0441, drone image d6):
+- Code cut on the hot thread (cpu1): memchr start-code scan and
+  slicing-by-8 CRC16. Host dry-run: -59 % of its non-FEC instructions;
+  the scans use 8x fewer on real encoder frames; same output.
+- Three placement/idle knobs, all defaulting to the old behaviour:
+  `fec.worker_core`, `radio.tx_threads_hot` and `fec.worker_spin`.
+  `fec.worker_spin` is new lever 7: at 35 Mb/s repairs arrive ~70 us
+  apart mid-frame against a ~50-100 us spin budget, so mbr-fecw's 19 % on
+  cpu0 is probably mostly spinning (an estimate from rates, not a
+  measurement). `worker_spin = 0` trades the spin for a futex wake per
+  repair.
+
+Counter-evidence: host instruction counts, not A7 time. The hot-thread
+cut lands on cpu1, which already had room, so on its own it lowers
+latency (dq) more than it frees cpu0. cpu0 only gains through the knobs:
+bench each one against the drone CPU probe.
+
 Bench gate: step test 35 / 40 / 45 / 50 Mb/s at MCS5/40 with item 1 in,
 drone and GS CPU probes, GS `fec` flat. 50 Mb/s also needs item 4 for the
 air: at 40 MHz it is ~85 % of what MCS5 delivers.

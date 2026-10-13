@@ -178,6 +178,28 @@ cut lands on cpu1, which already had room, so on its own it lowers
 latency (dq) more than it frees cpu0. cpu0 only gains through the knobs:
 bench each one against the drone CPU probe.
 
+Bench 2026-10-13 (d6 + gs6, 35 Mb/s, MCS5/40, ch 64, 8 USB senders):
+
+| layout | cpu0 | cpu1 | txq | e2e p50 | fec p50 |
+|---|---|---|---|---|---|
+| defaults | 81.0 | 28.0 | 4-5 ms | 39-42 | 7-8 |
+| worker_spin = 0 | 80.7 | 26.1 | - | - | - |
+| worker_core = "hot" | 72.1 | 41.5 | - | - | - |
+| tx_threads_hot = 2 | 75.5 | 34.5 | - | - | - |
+| worker_core hot + tx_threads_hot = 4 | 60.0 | 61.9 | 7-17 ms, rising | 38-41 | 8-9 |
+
+- d6's code cut works: mbr-hot 25 -> 17.2 %.
+- The spin estimate was wrong: with worker_spin = 0, mbr-fecw stays at 18 %.
+  It is real work, not waiting.
+- Moving work to cpu1 also makes mbr-txw and maburd use more (8 -> 11,
+  6.5 -> 10.9), and total CPU rises (avg 54.5 -> 61 %).
+- The balanced layout costs the TX queue, so defaults stay at 35 Mb/s.
+- For 40+ Mb/s, try worker_core = "hot" alone; its txq is unmeasured.
+- GS gs6: busiest maburgs thread 61.7 % (gs5 84-85, gs4 95-97).
+
+Counter-evidence: 30 s readings, one bench session, 4-6 status lines per
+layout.
+
 Bench gate: step test 35 / 40 / 45 / 50 Mb/s at MCS5/40 with item 1 in,
 drone and GS CPU probes, GS `fec` flat. 50 Mb/s also needs item 4 for the
 air: at 40 MHz it is ~85 % of what MCS5 delivers.

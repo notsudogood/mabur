@@ -94,6 +94,11 @@ struct FecCfg {
   // was before the 2026-09-22 change took mbr-hot from ~70 % of its core to
   // ~25 %; re-measure before trusting either. Two-core targets only.
   std::string worker_core = "rest";
+  // Idle polls the FEC worker makes before it sleeps (FecWorker::kSpinIters
+  // = 16384, ~50-100 us on the A7). 0 = sleep as soon as the queue is
+  // empty: no spin on the busy core, but a futex wake per repair burst
+  // instead. Bench lever (backlog item 3); measure, do not assume.
+  int worker_spin = 16384;
 };
 
 // One [[encoder.rung]] entry (2026-10-11): the bitrate policy's budget and

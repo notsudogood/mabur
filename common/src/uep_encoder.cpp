@@ -94,6 +94,12 @@ std::vector<UepBody> UepEncoder::add_frame(int stream_id, const uint8_t* data,
   return out;
 }
 
+bool UepEncoder::repairs_outstanding() const {
+  for (const auto& L : layers_)
+    if (L.sw.repairs_outstanding()) return true;
+  return false;
+}
+
 void UepEncoder::collect(const UepBodySink& sink) {
   for (int sid = 0; sid < kNumStreams; ++sid) {
     Layer& layer = layers_[static_cast<size_t>(sid)];

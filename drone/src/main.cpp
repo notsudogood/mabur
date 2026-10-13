@@ -1149,9 +1149,9 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   if (two_core_target()) {
     pin_self_to(kRestCore);
     std::fprintf(stderr, "maburd: core policy = producer on cpu%d, rest on cpu%d"
-                 " (fec worker cpu%d, %d of %d usb senders cpu%d)\n",
+                 " (fec worker cpu%d spin %d, %d of %d usb senders cpu%d)\n",
                  kHotCore, kRestCore,
-                 cfg.fec.worker_core == "hot" ? kHotCore : kRestCore,
+                 cfg.fec.worker_core == "hot" ? kHotCore : kRestCore, cfg.fec.worker_spin,
                  cfg.radio.tx_threads - cfg.radio.tx_threads_hot, cfg.radio.tx_threads, kRestCore);
   }
   std::signal(SIGUSR1, handle_sigusr1);
@@ -1923,7 +1923,8 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     // (re-measuring the above after the 2026-09-22 change); the default
     // keeps it on kRestCore.
     FecWorker fec_worker(!two_core_target() ? -1
-                         : cfg.fec.worker_core == "hot" ? kHotCore : kRestCore);
+                         : cfg.fec.worker_core == "hot" ? kHotCore : kRestCore,
+                         512, cfg.fec.worker_spin);
     UepEncoder uep(cfg.uep_layers(), cfg.fec.flush_ms, &fec_worker);
     const bool enh_retx = cfg.nack.enh;
     uep.set_source_tap([&retx, &retx1, enh_retx](uint8_t sid, uint32_t seq, const uint8_t* env, size_t n) {

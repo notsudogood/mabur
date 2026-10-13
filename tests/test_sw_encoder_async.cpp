@@ -22,10 +22,11 @@
 using namespace mabur;
 
 static void set_equality(int symbol_size, int window, double ov, int n_pkts,
-                         int flush_every, uint32_t queue_slots) {
+                         int flush_every, uint32_t queue_slots,
+                         long spin_iters = FecWorker::kSpinIters) {
   SwConfig cfg{symbol_size, window, ov};
   SwEncoder sync_enc(cfg, 777);
-  FecWorker worker(-1, queue_slots);
+  FecWorker worker(-1, queue_slots, spin_iters);
   SwEncoder async_enc(cfg, 777, &worker);
   std::vector<std::vector<uint8_t>> ea, eb;
   auto sink = [](std::vector<std::vector<uint8_t>> envs,
@@ -66,6 +67,11 @@ static void set_equality(int symbol_size, int window, double ov, int n_pkts,
 
 TEST(async_set_equals_sync_scalar_geometry) {
   set_equality(164, 64, 0.375, 2000, 97, 256);
+}
+// fec.worker_spin = 0: the worker sleeps whenever the queue empties, so
+// nearly every job goes through the futex wake path. Same output set.
+TEST(async_no_spin_worker_still_exact) {
+  set_equality(332, 32, 0.5, 3000, 53, 512, 0);
 }
 TEST(async_set_equals_sync_big_symbols) {
   set_equality(1312, 128, 1.0, 1200, 61, 256);

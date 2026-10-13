@@ -65,8 +65,16 @@ std::array<UepLayerCfg, 2> layers_for(int symbol_size, int bpb_base, int window)
   return layers;
 }
 
+// paced (async only): after each frame, wait for the worker to finish that
+// frame's repairs and harvest them before the next frame -- the drone's
+// timing at 60 fps, where a frame's repairs take well under a millisecond
+// and frames are 16.7 ms apart. Unpaced, the producer races the worker and
+// how far repairs trail their frame (and so which bodies the simulated
+// loss hits) depends on host speed: a faster CRC alone flipped the
+// async-vs-sync comparison below (2026-10-13).
 SimResult run_sim(int symbol_size, int bpb_base, int window, int n_pkts,
-                  double drop_pct, int burst_len, FecWorker* worker = nullptr) {
+                  double drop_pct, int burst_len, FecWorker* worker = nullptr,
+                  bool paced = false) {
   auto layers = layers_for(symbol_size, bpb_base, window);
   UepEncoder enc(layers, /*flush_ms=*/15, worker);
   UepDecoder dec(layers);
@@ -100,6 +108,12 @@ SimResult run_sim(int symbol_size, int bpb_base, int window, int n_pkts,
     ++r.sent;
     auto bodies = enc.add_frame(1, unit.data(), unit.size(), now);
     consume(bodies);
+    if (paced && worker) {
+      while (enc.repairs_outstanding()) std::this_thread::yield();
+      std::vector<UepBody> late;
+      enc.collect([&](UepBody&& b) { late.push_back(std::move(b)); });
+      consume(late);
+    }
     if (i % 30 == 29) {
       now += 15;
       auto flushed = enc.poll(now);
@@ -337,7 +351,7 @@ TEST(uep_async_no_loss_delivers_everything) {
 TEST(uep_async_recovers_under_loss_like_sync) {
   SimResult sync_r = run_sim(164, 8, 64, 4000, 5.0, 3);
   FecWorker worker;
-  SimResult async_r = run_sim(164, 8, 64, 4000, 5.0, 3, &worker);
+  SimResult async_r = run_sim(164, 8, 64, 4000, 5.0, 3, &worker, /*paced=*/true);
   CHECK(pct(async_r) >= pct(sync_r) - 1.0);
 }
 

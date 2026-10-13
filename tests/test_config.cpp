@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "mabur/fec_worker.h"
 #include "mtest.h"
 #include "config.h"
 #include "mabur/link_key.h"
@@ -1745,6 +1746,18 @@ TEST(core_placement_keys_default_to_the_2026_09_01_policy) {
   CHECK(cfg.fec.worker_core == "hot");
   CHECK(cfg.radio.tx_threads_hot == 2);
   std::filesystem::remove(path);
+}
+
+TEST(fec_worker_spin_defaults_to_the_worker_constant_and_validates) {
+  Config def;
+  CHECK(def.fec.worker_spin == mabur::FecWorker::kSpinIters);
+  auto p1 = write_temp_toml("[fec]\nworker_spin = 0\n");
+  CHECK(load_config(p1.string()).fec.worker_spin == 0);
+  std::filesystem::remove(p1);
+  auto p2 = write_temp_toml("[fec]\nworker_spin = -5\n");
+  std::string m2 = what_of([&] { (void)load_config(p2.string()); });
+  CHECK(m2.find("fec.worker_spin") != std::string::npos);
+  std::filesystem::remove(p2);
 }
 
 TEST(core_placement_keys_reject_bad_values_naming_field) {

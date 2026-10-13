@@ -168,7 +168,7 @@ void parse_radio(const Value& j, RadioCfg& r) {
 }
 
 void parse_fec(const Value& j, FecCfg& f) {
-  check_known_keys(j, {"symbol_size", "window", "blocks_per_body", "base_overhead", "flush_ms", "feed_batch", "worker_core"}, "fec");
+  check_known_keys(j, {"symbol_size", "window", "blocks_per_body", "base_overhead", "flush_ms", "feed_batch", "worker_core", "worker_spin"}, "fec");
   if (j.contains("symbol_size")) {
     auto& s = j.at("symbol_size");
     g_line = s.line();
@@ -210,6 +210,9 @@ void parse_fec(const Value& j, FecCfg& f) {
   assign_if_present(j, "worker_core", f.worker_core, "fec");
   if (f.worker_core != "rest" && f.worker_core != "hot")
     fail("fec.worker_core", "must be \"rest\" or \"hot\"");
+  assign_if_present(j, "worker_spin", f.worker_spin, "fec");
+  if (f.worker_spin < 0 || f.worker_spin > 1000000)
+    fail("fec.worker_spin", "must be in [0,1000000]");
 
   for (int s : f.symbol_size)
     if (s < 32 || s > 1500) fail("fec.symbol_size", "must be in [32,1500]");

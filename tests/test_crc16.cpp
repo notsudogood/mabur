@@ -59,4 +59,16 @@ TEST(crc16_init_chains_across_a_split) {
   }
 }
 
+TEST(crc16_every_short_length_and_offset_matches_reference) {
+  // The slicing-by-8 body and the per-byte tail meet at every length mod 8;
+  // walk all of them from several start offsets (alignment) and inits.
+  std::vector<uint8_t> buf(96);
+  for (size_t i = 0; i < buf.size(); ++i) buf[i] = static_cast<uint8_t>(i * 151 + 17);
+  for (size_t off = 0; off < 8; ++off)
+    for (size_t len = 0; off + len <= buf.size(); ++len)
+      for (uint16_t init : {uint16_t{0xFFFF}, uint16_t{0}, uint16_t{0x1D0F}, uint16_t{0x8000}})
+        CHECK(mabur::crc16_ccitt(buf.data() + off, len, init) ==
+              crc16_bitwise(buf.data() + off, len, init));
+}
+
 MTEST_MAIN

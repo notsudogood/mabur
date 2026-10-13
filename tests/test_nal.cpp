@@ -1,5 +1,6 @@
 #include <vector>
 #include <cstdint>
+#include <random>
 #include "mtest.h"
 #include "vectors.h"
 #include "mabur/nal.h"
@@ -177,6 +178,68 @@ TEST(count_au_nals_counts_slices_and_sees_parameter_sets) {
   CHECK(count_au_nals(pps.data(), pps.size()).param_set);
   CHECK(count_au_nals(nullptr, 0).vcl == 0);
   CHECK(!count_au_nals(nullptr, 0).param_set);
+}
+
+namespace {
+// The byte-per-iteration walks nal.cpp used before the memchr scan
+// (2026-10-13), kept verbatim as the reference.
+int ref_classify(const uint8_t* annexb, size_t len) {
+  if (!annexb || len < 5) return 0;
+  int sid = -1;
+  for (size_t i = 0; i + 4 < len; ++i) {
+    if (annexb[i] != 0x00 || annexb[i + 1] != 0x00 || annexb[i + 2] != 0x01) continue;
+    mabur::NalInfo n = mabur::parse_hevc_nal(annexb + i + 3, len - (i + 3));
+    if (n.critical) return 0;
+    if (sid < 0 && n.type < 16) sid = n.type == 0 ? 1 : 0;
+    i += 2;
+  }
+  return sid < 0 ? 0 : sid;
+}
+bool ref_trail_n(const uint8_t* annexb, size_t len) {
+  if (!annexb || len < 5) return false;
+  for (size_t i = 0; i + 4 < len; ++i) {
+    if (annexb[i] != 0x00 || annexb[i + 1] != 0x00 || annexb[i + 2] != 0x01) continue;
+    mabur::NalInfo n = mabur::parse_hevc_nal(annexb + i + 3, len - (i + 3));
+    if (n.critical) return false;
+    if (n.type < 16) return n.type == 0;
+    i += 2;
+  }
+  return false;
+}
+mabur::AuNalCount ref_count(const uint8_t* annexb, size_t len) {
+  mabur::AuNalCount c;
+  if (!annexb || len < 5) return c;
+  for (size_t i = 0; i + 4 < len; ++i) {
+    if (annexb[i] != 0x00 || annexb[i + 1] != 0x00 || annexb[i + 2] != 0x01) continue;
+    const uint8_t type = (annexb[i + 3] >> 1) & 0x3F;
+    if (type < 32) ++c.vcl;
+    else if (type <= 34) c.param_set = true;
+    i += 2;
+  }
+  return c;
+}
+}  // namespace
+
+TEST(start_code_scans_match_the_byte_loops) {
+  // Byte soup dense in 00 and 01 (runs of zeros, codes overlapping codes,
+  // codes in the last five bytes), plus real-looking NAL headers.
+  std::mt19937 gen(20261013);
+  std::uniform_int_distribution<int> pick(0, 99), any(0, 255), len_d(0, 160);
+  const uint8_t hdr0[] = {0x02, 0x01, 0x40, 0x01, 0x42, 0x01, 0x44, 0x01,
+                          0x26, 0x01, 0x00, 0x01, 0x00, 0x02, 0x4E, 0x01};
+  for (int it = 0; it < 200000; ++it) {
+    std::vector<uint8_t> b(static_cast<size_t>(len_d(gen)));
+    for (auto& x : b) {
+      const int p = pick(gen);
+      x = p < 40 ? 0x00 : p < 55 ? 0x01 : p < 75 ? hdr0[any(gen) % 16] : static_cast<uint8_t>(any(gen));
+    }
+    const uint8_t* d = b.empty() ? nullptr : b.data();
+    CHECK(mabur::classify_frame(d, b.size()) == ref_classify(d, b.size()));
+    CHECK(mabur::frame_is_trail_n(d, b.size()) == ref_trail_n(d, b.size()));
+    const auto c = mabur::count_au_nals(d, b.size()), r = ref_count(d, b.size());
+    CHECK(c.vcl == r.vcl);
+    CHECK(c.param_set == r.param_set);
+  }
 }
 
 MTEST_MAIN

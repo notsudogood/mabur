@@ -115,6 +115,12 @@ class UepEncoder {
   // every venc-ring read timeout (≤5 ms apart).
   void collect(const UepBodySink& sink);
 
+  // True while any layer's worker still has repairs in flight (async only;
+  // always false in sync mode). Read-only; lets a test model frame pacing
+  // (the worker finishes a frame's repairs before the next frame arrives)
+  // instead of racing an unpaced producer against the worker.
+  bool repairs_outstanding() const;
+
   // Sets both layers' FEC overhead to ov, literal — no scaling, no clamp
   // beyond SwEncoder's own.
   void set_overhead(double ov);

@@ -12,8 +12,9 @@
 
 namespace mabur {
 
-FecWorker::FecWorker(int cpu, uint32_t queue_slots)
-    : cpu_(cpu), q_(queue_slots), th_([this] { loop(); }) {
+FecWorker::FecWorker(int cpu, uint32_t queue_slots, long spin_iters)
+    : cpu_(cpu), spin_iters_(spin_iters < 0 ? 0 : spin_iters), q_(queue_slots),
+      th_([this] { loop(); }) {
   // Free-running u32 head/tail indices with % q_.size() require a
   // power-of-two slot count to stay collision-free across index wrap.
   assert(queue_slots > 0 && (queue_slots & (queue_slots - 1)) == 0);
@@ -61,7 +62,7 @@ void FecWorker::loop() {
     long spins = 0;
     while (tail_.load(std::memory_order_relaxed) == seen) {
       if (quit_.load(std::memory_order_relaxed)) return;
-      if (++spins >= kSpinIters) {
+      if (++spins >= spin_iters_) {
         std::unique_lock<std::mutex> l(m_);
         sleeping_.store(true, std::memory_order_seq_cst);
         // Predicate loads are seq_cst: they pair with try_enqueue's seq_cst

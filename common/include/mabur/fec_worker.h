@@ -34,12 +34,20 @@ struct FecRepairJob {
 //    the scheduler migrating the hot thread and erases the offload gain.
 class FecWorker {
  public:
+  // Default idle spin, ~50-100 us @ 800 MHz A7. At 35 Mb/s repairs arrive
+  // every ~70 us while the producer is mid-frame (estimate, 2026-10-13), so
+  // the worker never sleeps then: most of its CPU may be the spin itself,
+  // on the drone's busy core. fec.worker_spin lets the bench measure that.
+  static constexpr long kSpinIters = 16384;
+
   // cpu >= 0 pins the worker thread to that core (Linux; no-op elsewhere).
   // queue_slots is a test surface — a tiny queue forces the caller's
   // inline-fallback path; production uses the default, which sits above
   // SwEncoder::kMaxBacklogJobs so the backlog cap (skip) always fires
   // before queue-full (inline on the hot thread) does.
-  explicit FecWorker(int cpu = -1, uint32_t queue_slots = 512);
+  // spin_iters: idle polls before the worker sleeps (kSpinIters by default;
+  // 0 = sleep as soon as the queue is empty). maburd: fec.worker_spin.
+  explicit FecWorker(int cpu = -1, uint32_t queue_slots = 512, long spin_iters = kSpinIters);
   ~FecWorker();
   FecWorker(const FecWorker&) = delete;
   FecWorker& operator=(const FecWorker&) = delete;
@@ -62,11 +70,10 @@ class FecWorker {
   void set_held(bool held) { held_.store(held, std::memory_order_relaxed); }
 
  private:
-  static constexpr long kSpinIters = 16384;  // ~50-100 us @ 800 MHz A7
-
   void loop();
 
   const int cpu_;
+  const long spin_iters_;  // before th_: loop() reads it
   std::vector<FecRepairJob> q_;
   std::atomic<uint32_t> head_{0}, tail_{0};
   std::atomic<bool> quit_{false}, sleeping_{false}, held_{false};

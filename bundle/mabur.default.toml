@@ -36,6 +36,8 @@ feed_batch      = 1        # blocks handed to the radio together (1 = send each 
 flush_ms        = 25       # send out a partly filled block after this many ms without new video
 worker_core     = "rest"   # CPU of the repair builder: "rest" = CPU 0 (default), "hot" = CPU 1 beside the video packer.
                            # A bench setting for high bitrates: see docs/next-build-backlog.md item 3
+worker_spin     = 16384    # how long the repair builder busy-waits for more work before sleeping (16384 = ~50-100 us);
+                           # 0 = sleep at once. A bench setting for high bitrates, as above
 
 [encoder]
 bitrate_min_kbps   = 300   # lowest the link may push the encoder (the encoder's own floor is 300)

@@ -42,12 +42,15 @@ class UsbTxPool {
   using SendBatch =
       std::function<size_t(const std::vector<std::vector<uint8_t>>&)>;
 
-  UsbTxPool(SendBatch send, int threads, size_t cap_frames)
-      : send_(std::move(send)), cap_(cap_frames) {
+  // thread_init, if set, runs first on each sender thread with its index
+  // 0..threads-1 (maburd pins the first radio.tx_threads_hot of them).
+  UsbTxPool(SendBatch send, int threads, size_t cap_frames,
+            std::function<void(int)> thread_init = {})
+      : send_(std::move(send)), cap_(cap_frames), thread_init_(std::move(thread_init)) {
     if (threads < 1) threads = 1;
     threads_.reserve(static_cast<size_t>(threads));
     for (int i = 0; i < threads; ++i)
-      threads_.emplace_back([this] { run(); });
+      threads_.emplace_back([this, i] { run(i); });
   }
 
   ~UsbTxPool() { stop(); }
@@ -122,10 +125,11 @@ class UsbTxPool {
             .count());
   }
 
-  void run() {
+  void run(int index) {
 #if defined(__linux__)
     pthread_setname_np(pthread_self(), "mbr-usb");
 #endif
+    if (thread_init_) thread_init_(index);
     std::vector<std::vector<uint8_t>> batch;
     for (;;) {
       {
@@ -230,6 +234,7 @@ class UsbTxPool {
 
   SendBatch send_;
   const size_t cap_;
+  std::function<void(int)> thread_init_;
   mutable std::mutex m_;
   std::condition_variable fill_, space_;
   std::deque<std::vector<uint8_t>> q_;

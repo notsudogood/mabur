@@ -103,4 +103,21 @@ TEST(pool_submit_after_stop_returns_false) {
   CHECK(!pool.submit(frame, sizeof frame));
 }
 
+
+// The per-thread init hook runs once on every sender, with indices
+// 0..threads-1 (maburd pins the first radio.tx_threads_hot to the
+// producer's core through it).
+TEST(pool_thread_init_runs_once_per_sender_with_its_index) {
+  std::mutex m;
+  std::multiset<int> idx;
+  {
+    UsbTxPool pool([](const std::vector<std::vector<uint8_t>>& b) { return b.size(); }, 4, 24,
+                   [&](int i) { std::lock_guard<std::mutex> l(m); idx.insert(i); });
+    uint8_t f[8] = {0};
+    CHECK(pool.submit(f, sizeof f));
+    pool.stop();
+  }
+  CHECK(idx == (std::multiset<int>{0, 1, 2, 3}));
+}
+
 MTEST_MAIN

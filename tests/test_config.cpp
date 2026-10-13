@@ -1722,7 +1722,6 @@ TEST(venc_slices_parses_and_rejects_unachievable_counts) {
   CHECK(bad("17").empty());
 }
 
-MTEST_MAIN
 
 // "Every knob is in the bundle": the loader reports each known key the file
 // did not set, so an empty report IS the completeness gate. Adding a config
@@ -1736,3 +1735,31 @@ TEST(bundle_default_sets_every_known_key) {
     std::fprintf(stderr, "  bundle leaves defaulted: %s\n", d.c_str());
   CHECK(defaulted.empty());
 }
+
+TEST(core_placement_keys_default_to_the_2026_09_01_policy) {
+  Config def;
+  CHECK(def.fec.worker_core == "rest");
+  CHECK(def.radio.tx_threads_hot == 0);
+  auto path = write_temp_toml("[radio]\ntx_threads = 4\ntx_threads_hot = 2\n[fec]\nworker_core = \"hot\"\n");
+  Config cfg = load_config(path.string());
+  CHECK(cfg.fec.worker_core == "hot");
+  CHECK(cfg.radio.tx_threads_hot == 2);
+  std::filesystem::remove(path);
+}
+
+TEST(core_placement_keys_reject_bad_values_naming_field) {
+  auto p1 = write_temp_toml("[fec]\nworker_core = \"cpu1\"\n");
+  std::string m1 = what_of([&] { (void)load_config(p1.string()); });
+  CHECK(m1.find("fec.worker_core") != std::string::npos);
+  std::filesystem::remove(p1);
+  auto p2 = write_temp_toml("[radio]\ntx_threads = 2\ntx_threads_hot = 3\n");
+  std::string m2 = what_of([&] { (void)load_config(p2.string()); });
+  CHECK(m2.find("radio.tx_threads_hot") != std::string::npos);
+  std::filesystem::remove(p2);
+  auto p3 = write_temp_toml("[radio]\ntx_threads_hot = -1\n");
+  std::string m3 = what_of([&] { (void)load_config(p3.string()); });
+  CHECK(m3.find("radio.tx_threads_hot") != std::string::npos);
+  std::filesystem::remove(p3);
+}
+
+MTEST_MAIN

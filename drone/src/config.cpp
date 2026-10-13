@@ -84,7 +84,7 @@ void assign_if_present(const Value& j, const char* key, T& out,
 
 void parse_radio(const Value& j, RadioCfg& r) {
   check_known_keys(j, {"usb_vid", "usb_pid", "channels", "width",
-                        "power_mode", "tx_threads", "rate_walls_rel",
+                        "power_mode", "tx_threads", "tx_threads_hot", "rate_walls_rel",
                         "legacy_wall_rel", "wall_margin_db", "ldpc"},
                    "radio");
   assign_if_present(j, "usb_vid", r.usb_vid, "radio");
@@ -110,6 +110,7 @@ void parse_radio(const Value& j, RadioCfg& r) {
   assign_if_present(j, "ldpc", r.ldpc, "radio");
   assign_if_present(j, "power_mode", r.power_mode, "radio");
   assign_if_present(j, "tx_threads", r.tx_threads, "radio");
+  assign_if_present(j, "tx_threads_hot", r.tx_threads_hot, "radio");
 
   bool rate_walls_rel_present = j.contains("rate_walls_rel");
   if (rate_walls_rel_present) {
@@ -130,6 +131,8 @@ void parse_radio(const Value& j, RadioCfg& r) {
 
   if (r.tx_threads < 1 || r.tx_threads > 8)
     fail("radio.tx_threads", "must be in [1,8]");
+  if (r.tx_threads_hot < 0 || r.tx_threads_hot > r.tx_threads)
+    fail("radio.tx_threads_hot", "must be in [0, radio.tx_threads]");
   if (r.power_mode != "offset" && r.power_mode != "none")
     fail("radio.power_mode", "must be \"offset\" or \"none\"");
 
@@ -165,7 +168,7 @@ void parse_radio(const Value& j, RadioCfg& r) {
 }
 
 void parse_fec(const Value& j, FecCfg& f) {
-  check_known_keys(j, {"symbol_size", "window", "blocks_per_body", "base_overhead", "flush_ms", "feed_batch"}, "fec");
+  check_known_keys(j, {"symbol_size", "window", "blocks_per_body", "base_overhead", "flush_ms", "feed_batch", "worker_core"}, "fec");
   if (j.contains("symbol_size")) {
     auto& s = j.at("symbol_size");
     g_line = s.line();
@@ -204,6 +207,9 @@ void parse_fec(const Value& j, FecCfg& f) {
   assign_if_present(j, "feed_batch", f.feed_batch, "fec");
   if (f.feed_batch < 0 || f.feed_batch > 8)
     fail("fec.feed_batch", "must be in [0,8] (0 = streaming push)");
+  assign_if_present(j, "worker_core", f.worker_core, "fec");
+  if (f.worker_core != "rest" && f.worker_core != "hot")
+    fail("fec.worker_core", "must be \"rest\" or \"hot\"");
 
   for (int s : f.symbol_size)
     if (s < 32 || s > 1500) fail("fec.symbol_size", "must be in [32,1500]");

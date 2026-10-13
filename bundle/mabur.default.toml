@@ -13,6 +13,8 @@ channels   = [40, 64, 112, 144]   # the channel set, same as the ground station'
 width      = 40        # HT40 on each member's standard pair; per-rung width comes from the GS ladder (docs/bw40.md)
 power_mode = "none"      # "none" = card's default TX power; "offset" = use the calibrated walls below
 tx_threads = 4           # parallel USB senders; 4 is needed to reach full link speed
+tx_threads_hot = 0       # how many of those senders run on CPU 1 (beside the video packer) instead of CPU 0.
+                         # 0 = all on CPU 0. A bench setting for high bitrates: see docs/next-build-backlog.md item 3
 ldpc       = true        # LDPC coding on every frame. false only for an RTL8821AU ground card (it can't decode LDPC); costs ~2-3 dB of range
 
 # TX-power calibration ("walls"). These numbers belong to ONE card: the
@@ -32,6 +34,8 @@ blocks_per_body = [4, 4]   # base layer, enhance layer
 base_overhead   = 0.5      # extra repair data on the base layer (0.5 = +50 %)
 feed_batch      = 1        # blocks handed to the radio together (1 = send each as soon as it is ready)
 flush_ms        = 25       # send out a partly filled block after this many ms without new video
+worker_core     = "rest"   # CPU of the repair builder: "rest" = CPU 0 (default), "hot" = CPU 1 beside the video packer.
+                           # A bench setting for high bitrates: see docs/next-build-backlog.md item 3
 
 [encoder]
 bitrate_min_kbps   = 300   # lowest the link may push the encoder (the encoder's own floor is 300)

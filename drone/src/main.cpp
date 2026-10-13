@@ -1148,8 +1148,11 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   // library spawns inherits core 0; the hot thread claims core 1 itself.
   if (two_core_target()) {
     pin_self_to(kRestCore);
-    std::fprintf(stderr, "maburd: core policy = producer on cpu%d, rest on cpu%d\n",
-                 kHotCore, kRestCore);
+    std::fprintf(stderr, "maburd: core policy = producer on cpu%d, rest on cpu%d"
+                 " (fec worker cpu%d, %d of %d usb senders cpu%d)\n",
+                 kHotCore, kRestCore,
+                 cfg.fec.worker_core == "hot" ? kHotCore : kRestCore,
+                 cfg.radio.tx_threads - cfg.radio.tx_threads_hot, cfg.radio.tx_threads, kRestCore);
   }
   std::signal(SIGUSR1, handle_sigusr1);
   // Installs the SIGINT/SIGTERM handlers that set g_devourer_should_stop —
@@ -1375,7 +1378,12 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
         return dev->send_packets(v.data(), v.size());
       },
       cfg.radio.tx_threads,
-      static_cast<size_t>(cfg.radio.tx_threads) * 6);
+      static_cast<size_t>(cfg.radio.tx_threads) * 6,
+      // radio.tx_threads_hot: the first N senders leave cpu0 (inherited from
+      // the process pin above) for the producer's core.
+      [hot = cfg.radio.tx_threads_hot](int i) {
+        if (two_core_target() && i < hot) pin_self_to(kHotCore);
+      });
   if (cfg.radio.tx_threads > 1) dev_sink.pool = &tx_pool;
 
   // fec-nack re-sends ride their own hardware queue ([nack] queue).
@@ -1911,7 +1919,11 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     // is strictly worse than no policy at all (measured 2026-09-01:
     // cpu_us 11.5 ms and flush-join 3.2-3.7 ms, vs 9 ms / 0.4 ms
     // unpinned). Sending it to kRestCore is what makes the policy a win.
-    FecWorker fec_worker(two_core_target() ? kRestCore : -1);
+    // fec.worker_core = "hot" puts it beside the producer on purpose
+    // (re-measuring the above after the 2026-09-22 change); the default
+    // keeps it on kRestCore.
+    FecWorker fec_worker(!two_core_target() ? -1
+                         : cfg.fec.worker_core == "hot" ? kHotCore : kRestCore);
     UepEncoder uep(cfg.uep_layers(), cfg.fec.flush_ms, &fec_worker);
     const bool enh_retx = cfg.nack.enh;
     uep.set_source_tap([&retx, &retx1, enh_retx](uint8_t sid, uint32_t seq, const uint8_t* env, size_t n) {

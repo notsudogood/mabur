@@ -44,6 +44,12 @@ struct RadioCfg {
   // ≤3-frame URB batches, which the seq-addressed FEC datapath and
   // the GS max-seq delivery accounting both tolerate).
   int tx_threads = 4;
+  // How many of the tx_threads USB senders run on the producer's core
+  // (cpu1, beside mbr-hot) instead of cpu0 with venc and the rest. 0 =
+  // all on cpu0, the 2026-09-01 placement. Bench lever for drone CPU
+  // headroom (backlog item 3, lever 1): at 35 Mb/s cpu0 ran 83 % busy and
+  // cpu1 35-40 %. Two-core targets only; ignored elsewhere.
+  int tx_threads_hot = 0;
   // LDPC on video, probe and control frames. false = BCC, for a GS card
   // that cannot decode HT-LDPC (RTL8821AU, bench 2026-10-02: 1/1000 LDPC vs
   // 900+/1000 BCC). Costs every GS the LDPC coding gain while off.
@@ -82,6 +88,12 @@ struct FecCfg {
   // compound is accepted end-to-end (watch arrival-jitter EMA: coarser
   // quanta, the 656-rollback lesson).
   int feed_batch = 0;
+  // Core of the async FEC worker (mbr-fecw): "rest" = cpu0 (the 2026-09-01
+  // placement), "hot" = cpu1 beside the producer. The 2026-09-01 bench
+  // measured "hot" strictly worse (flush-join 3.2-3.7 ms vs 0.4), but that
+  // was before the 2026-09-22 change took mbr-hot from ~70 % of its core to
+  // ~25 %; re-measure before trusting either. Two-core targets only.
+  std::string worker_core = "rest";
 };
 
 // One [[encoder.rung]] entry (2026-10-11): the bitrate policy's budget and

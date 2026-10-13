@@ -180,3 +180,37 @@ untouched, and his doc says a ground station never arms it.
   RX sensitivity while tuned wide (unmeasured). On the drone that is the
   uplink (RCF and NACK reception).
 - Untested by us; needs a Wyvern bench run at 40 MHz before a flight.
+
+## 7. Auto channel mode: stop costing the link at high rates
+
+Evidence: on the 2026-10-13 bench (gs5, 35 Mb/s, MCS5/40) the channel was
+pinned (`channel = 64`) and 4.5 min stayed clean -- `fec` 9-10 ms p50, drone
+`txq` 4-11 ms, loss 0-0.9 %, EVM -25 to -27 dB -- including movement in
+front of the camera. The operator saw the movement-related latency only
+with `channel = "auto"`. Not yet A/B'd under equal conditions.
+
+Two auto-only behaviours plausibly cause it:
+1. **False hops.** The sustained-loss rule (`[hop.verdict] sustained_*`,
+   0.5 % mean over 10 s at SNR >= 20 dB) fires on the link's own loss at
+   35 Mb/s: flight 2026-10-12 hopped 112 -> 64 at 122.8 s with zero
+   foreign traffic, own pre-FEC loss 0.34 % mean at 35 Mb/s against
+   0.04-0.09 % at 25. FEC repaired all of it. Each hop costs ~130 ms of
+   video, and the drone's `txq` read 70 ms at a bench hop.
+2. **In-session scouting.** Two-card auto mode starts the in-flight scout
+   (`channel_core.cpp` step_drains_), which takes a card off the link
+   channel for ~7.5-8 ms dwells (flight 2026-10-12: 172 + 364 dwells in
+   ~5 min). The cards are not equal: card 1 lost ~3x what card 0 did over
+   that session (mean 2.6 % vs 0.9 %, p90 7.3 vs 4.2), so a dwell by the
+   better card leaves the link on the worse one.
+
+Changes:
+1. The sustained-loss verdict counts only loss that cost video (residual
+   after FEC / abandoned), not loss the repair data covered.
+2. Pause the in-session scout while on the fast rungs (or whenever the
+   link's FEC margin is thin); scout freely at low rates and while the link
+   is down.
+3. When it does scout, send the card with the worse recent loss / SNR and
+   keep the better one on the link.
+
+Bench gate: auto vs pinned at 35 Mb/s, 3 min each, same setup: `fec` p99,
+loss, hop count and dwell count must match within noise. GS only.

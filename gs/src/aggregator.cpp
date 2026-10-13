@@ -287,7 +287,7 @@ void Aggregator::on_rx_body(const mabur::node::RxBody& m) {
   last_video_us_ = m.mono_us;
   if (video_hook_ && m.crc_ok && stream_id >= 0 && stream_id < 2)
     video_hook_(stream_id, m.mono_us);
-  for (const auto& r :
+  for (auto& r :
        dec_.add_body(m.body.data(), m.body.size(), m.mono_us / 1000, m.mcs,
                      m.mono_us, m.crc_ok, m.sbi ? &*m.sbi : nullptr,
                      m.sbi_block_payload))

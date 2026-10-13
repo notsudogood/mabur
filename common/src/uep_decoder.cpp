@@ -2,6 +2,8 @@
 
 #include "mabur/sbi.h"
 
+#include <utility>
+
 namespace mabur {
 
 namespace {
@@ -80,15 +82,15 @@ std::vector<DecodedFrag> UepDecoder::add_body(const uint8_t* body, size_t len,
   std::vector<DecodedFrag> out;
   const bool retx = r.retx;  // kSbiRetxMark: a NACK retransmit body
   for (const auto& env : r.survivors) {
-    const auto pkts =
+    auto pkts =
         L.sw.add_symbol(env.data(), env.size(), now_ms, hint, body_crc_ok, retx);
     const auto& seqs = L.sw.last_out_seqs();
     for (size_t k = 0; k < pkts.size(); ++k) {
-      const auto& pkt = pkts[k];
+      auto& pkt = pkts[k];
       if (pkt.size() < Fragmenter::kHdrLen) continue;
       // q_ms/enc_us are outside the per-block CRCs: only an FCS-clean body
       // may vouch for them (0 = unknown downstream, header comment).
-      out.push_back(DecodedFrag{static_cast<uint8_t>(sid), pkt, body_mono_us,
+      out.push_back(DecodedFrag{static_cast<uint8_t>(sid), std::move(pkt), body_mono_us,
                                 body_crc_ok ? r.q_ms : static_cast<uint16_t>(0),
                                 body_crc_ok ? r.enc_us : static_cast<uint16_t>(0),
                                 body_crc_ok ? r.air_ms : static_cast<uint16_t>(0),

@@ -1,4 +1,7 @@
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <deque>
 
 #include "s1_loss.h"
 #include "mtest.h"
@@ -310,6 +313,80 @@ TEST(expected_in_window_counts_window_only) {
   w.add(250, 240, 400.0);    // 150 more
   CHECK(w.expected_in_window(400.0) == 250);
   CHECK(w.expected_in_window(2000.0) == 0);   // everything aged out
+}
+
+
+namespace {
+// The pre-2026-10-13 window, verbatim in behaviour: a full scan per sample.
+// The running-total implementation must agree with it exactly.
+class RefWindow {
+ public:
+  explicit RefWindow(int window_ms) : window_ms_(window_ms) {}
+  void blank_until(double t) { w_.clear(); blank_ = t; }
+  void add(uint64_t e, uint64_t a, double now) {
+    bool reset = now < blank_;
+    if (have_ && (e < pe_ || a < pa_)) { w_.clear(); reset = true; }
+    if (reset) { pe_ = e; pa_ = a; have_ = true; return; }
+    const uint64_t de = e - pe_, da = a - pa_;
+    if (de > 0 || da > 0) w_.push_back({now, de, da});
+    while (!w_.empty() && w_.front().t < now - window_ms_) w_.pop_front();
+    pe_ = e; pa_ = a; have_ = true;
+  }
+  void totals(double now, uint64_t* te, uint64_t* ta) const {
+    *te = *ta = 0;
+    for (const auto& x : w_) {
+      if (x.t < now - window_ms_ || x.t > now) continue;
+      *te += x.de; *ta += x.da;
+    }
+  }
+ private:
+  struct E { double t; uint64_t de, da; };
+  int window_ms_;
+  std::deque<E> w_;
+  uint64_t pe_ = 0, pa_ = 0;
+  bool have_ = false;
+  double blank_ = -1.0;
+};
+}  // namespace
+
+TEST(running_totals_match_the_full_scan) {
+  // Random adds (mostly monotonic time, some out of order), counter resets,
+  // blanks, and samples at, before and after the latest add -- every sample
+  // and expected_in_window must equal the reference full scan exactly.
+  uint32_t rng = 12345;
+  auto next = [&]() { rng = rng * 1664525u + 1013904223u; return rng >> 8; };
+  for (int run = 0; run < 40; ++run) {
+    const int win = 100 + static_cast<int>(next() % 900);
+    S1LossWindow w(win);
+    RefWindow ref(win);
+    double t = 0;
+    uint64_t e = 0, a = 0;
+    for (int i = 0; i < 3000; ++i) {
+      const uint32_t r = next() % 1000;
+      if (r < 3) {                       // counter reset
+        e = next() % 50; a = e / 2;
+      } else {
+        const uint64_t de = next() % 40;
+        e += de; a += de - (next() % 5 == 0 ? std::min<uint64_t>(de, next() % 4) : 0);
+      }
+      if (r < 5 && run % 3 == 0) t -= static_cast<double>(next() % 30);  // out of order
+      else t += static_cast<double>(next() % 20) * 0.5;
+      if (r >= 995) { const double b = t + static_cast<double>(next() % 50); w.blank_until(b); ref.blank_until(b); }
+      w.add(e, a, t);
+      ref.add(e, a, t);
+      const double st = t + static_cast<double>(static_cast<int>(next() % 400) - 100);
+      uint64_t te, ta;
+      ref.totals(st, &te, &ta);
+      const auto s = w.sample(st);
+      CHECK(s.valid == (te > 0));
+      if (te > 0) {
+        double want = (static_cast<double>(te) - static_cast<double>(ta)) / static_cast<double>(te);
+        want = std::max(0.0, std::min(1.0, want));
+        CHECK(s.loss == want);
+      }
+      CHECK(w.expected_in_window(st) == te);
+    }
+  }
 }
 
 MTEST_MAIN

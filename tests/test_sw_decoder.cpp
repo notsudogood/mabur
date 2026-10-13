@@ -127,6 +127,46 @@ TEST(redundant_and_duplicate_repairs_are_skipped) {
   CHECK(d.rows_in_flight() == 0);
 }
 
+TEST(repair_dedup_stays_exact_past_its_index) {
+  // The dedup index has 1024 slots (key mod 1024). Long stream, copies
+  // back to back: slots are freed as repairs age out and reused. Then a
+  // stream whose repairs all stay live (horizon 4096) replayed whole: the
+  // second copy of every repair lands >1024 repairs after the first, so the
+  // index has lost most of them and the exact fallback must catch each one.
+  {
+    SwConfig cfg{64, 8, 1.0};
+    auto envs = encode_stream(cfg, 3000, nullptr);
+    SwDecoder d(cfg);
+    uint64_t repairs = 0;
+    for (auto& env : envs) {
+      sw::SwHeader h;
+      CHECK(sw::parse_header(env.data(), env.size(), &h));
+      if (h.repair) ++repairs;
+      for (int copy = 0; copy < 2; ++copy) d.add_symbol(env.data(), env.size(), 1000);
+    }
+    CHECK(repairs > 2048);
+    CHECK(d.repairs_dup() == repairs);
+  }
+  {
+    SwConfig cfg{64, 8, 3.0};
+    std::vector<std::vector<uint8_t>> pkts;
+    auto envs = encode_stream(cfg, 600, &pkts);
+    SwDecoder d(cfg, /*seq_horizon=*/4096);
+    std::vector<std::vector<uint8_t>> got;
+    uint64_t repairs = 0;
+    for (int pass = 0; pass < 2; ++pass)
+      for (auto& env : envs) {
+        sw::SwHeader h;
+        CHECK(sw::parse_header(env.data(), env.size(), &h));
+        if (pass == 0 && h.repair) ++repairs;
+        for (auto& p : d.add_symbol(env.data(), env.size(), 1000)) got.push_back(std::move(p));
+      }
+    CHECK(repairs > 1500);
+    CHECK(d.repairs_dup() == repairs);
+    CHECK(got.size() == pkts.size());
+  }
+}
+
 TEST(duplicate_repair_copies_still_recover_a_loss) {
   // The source both cards missed is rebuilt from the first copy of a repair;
   // the second copy is skipped as a duplicate and must not cost the recovery.

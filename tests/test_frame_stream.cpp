@@ -622,3 +622,47 @@ TEST(no_early_give_up_without_the_fragment_symbol_map) {
 }
 
 MTEST_MAIN
+
+TEST(moved_fragments_emit_the_same_as_copied) {
+  // The core path hands FrameStream the decoder's buffer (move overload);
+  // tests and the copy overload pass a pointer. Same fragments, same order
+  // -- reordered, duplicated, one lost -- must give the same frames.
+  mabur::Fragmenter frag;
+  std::vector<std::vector<uint8_t>> all;
+  for (uint16_t id = 0; id < 12; ++id) {
+    std::vector<uint8_t> pay(700 + 37 * id);
+    for (size_t i = 0; i < pay.size(); ++i) pay[i] = static_cast<uint8_t>(id * 31 + i);
+    for (auto& p : frag_frame(frag, id, pay)) all.push_back(p);
+  }
+  uint32_t r = 12345;
+  auto rnd = [&r] { r = r * 1103515245u + 12345u; return r >> 16; };
+  for (size_t i = all.size() - 1; i > 0; --i)  // local reorder only
+    if (rnd() % 3 == 0) std::swap(all[i], all[i - 1]);
+  all.push_back(all[5]);              // a second-card copy
+  all.erase(all.begin() + 20);        // a fragment nothing recovers
+  Capture ca, cb;
+  FrameStream a({50, 4}, ca.cbs()), b({50, 4}, cb.cbs());
+  uint64_t t = 10;
+  for (auto& p : all) {
+    a.push_fragment(1, p.data(), p.size(), t);
+    std::vector<uint8_t> copy = p;
+    b.push_fragment(1, std::move(copy), t);
+    t += 1;
+  }
+  a.poll(t + 1000);
+  b.poll(t + 1000);
+  REQUIRE(ca.evs.size() == cb.evs.size());
+  CHECK(ca.evs.size() >= 20);
+  for (size_t i = 0; i < ca.evs.size(); ++i) {
+    CHECK(ca.evs[i].kind == cb.evs[i].kind);
+    CHECK(ca.evs[i].hdr.frame_id == cb.evs[i].hdr.frame_id);
+    CHECK(ca.evs[i].bytes == cb.evs[i].bytes);
+    CHECK(ca.evs[i].complete == cb.evs[i].complete);
+  }
+  CHECK(a.frames_clean() == b.frames_clean());
+  CHECK(a.frames_truncated() == b.frames_truncated());
+  CHECK(a.frames_truncated() + a.frames_dropped() > 0);  // the loss showed
+  std::vector<uint8_t> runt(5, 0);
+  b.push_fragment(1, std::move(runt), t);  // shorter than a FRAG header
+  CHECK(b.bad_fragments() == 1);
+}

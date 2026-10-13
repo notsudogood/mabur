@@ -1,8 +1,8 @@
 #pragma once
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <map>
 #include <vector>
 
 #include "au_ring.h"
@@ -10,8 +10,49 @@
 
 namespace maburgs {
 
-using ChunkMap = std::map<uint16_t, std::vector<uint8_t>>;
 using ByteSink = std::function<void(const uint8_t*, size_t)>;
+
+// One AU's fragment payloads, by fragment index. A decoded fragment is moved
+// in whole and its FRAG header skipped in place (`off`), so storing one costs
+// no copy and no allocation: the GS core thread used to spend a map node and
+// a fresh vector per fragment here (profile 2026-10-13, 35 Mb/s replay).
+class ChunkTable {
+ public:
+  bool has(uint16_t i) const { return i < c_.size() && c_[i].present; }
+  const uint8_t* data(uint16_t i) const { return c_[i].buf.data() + c_[i].off; }
+  size_t size(uint16_t i) const { return c_[i].buf.size() - c_[i].off; }
+  bool empty() const { return n_ == 0; }
+  size_t count() const { return n_; }  // fragments present
+  // Sizing hint from the fragment header's count. Capped: the table grows
+  // on demand anyway, and a corrupt count must not buy a large block.
+  void reserve(uint16_t count) { c_.reserve(std::min<size_t>(count, kReserveCap)); }
+  // Stores `buf` (bytes [off, end) are the payload), replacing any earlier
+  // copy of fragment i. `off` must not exceed buf.size().
+  void put(uint16_t i, std::vector<uint8_t>&& buf, size_t off) {
+    if (i >= c_.size()) c_.resize(static_cast<size_t>(i) + 1);
+    Chunk& c = c_[i];
+    if (!c.present) ++n_;
+    c.buf = std::move(buf);
+    c.off = off;
+    c.present = true;
+  }
+  void put(uint16_t i, const uint8_t* p, size_t n) { put(i, std::vector<uint8_t>(p, p + n), 0); }
+  void erase(uint16_t i) {
+    if (!has(i)) return;
+    c_[i] = Chunk{};
+    --n_;
+  }
+
+ private:
+  static constexpr size_t kReserveCap = 1024;
+  struct Chunk {
+    std::vector<uint8_t> buf;
+    size_t off = 0;
+    bool present = false;
+  };
+  std::vector<Chunk> c_;
+  size_t n_ = 0;
+};
 
 // One access unit of a row-sliced H.265 picture, rebuilt from FrameStream's
 // fragment chunks (spec 2026-10-10-h265-slices §5.2).
@@ -33,17 +74,17 @@ class SliceAssembler {
   SliceAssembler(const mabur::hevc::Sps& sps, const mabur::hevc::Pps& pps, uint8_t slice_rows,
                  uint16_t count, size_t hdr_len);
 
-  void drain(const ChunkMap& chunks, const ByteSink& out);
-  void finish(const ChunkMap& chunks, const ByteSink& out);
+  void drain(const ChunkTable& chunks, const ByteSink& out);
+  void finish(const ChunkTable& chunks, const ByteSink& out);
 
   const SliceSalvage& result() const { return result_; }
   uint8_t slices() const { return n_; }
 
  private:
   struct Sc { size_t pos, len; };
-  void extend_prefix(const ChunkMap& chunks);
+  void extend_prefix(const ChunkTable& chunks);
   void scan_prefix();
-  SliceFallback plan(const ChunkMap& chunks, std::vector<std::vector<uint8_t>>* pieces,
+  SliceFallback plan(const ChunkTable& chunks, std::vector<std::vector<uint8_t>>* pieces,
                      SliceSalvage* res);
 
   mabur::hevc::Sps sps_;

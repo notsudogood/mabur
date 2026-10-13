@@ -100,7 +100,9 @@ struct CardTrack {
 // (core thread only).
 class Aggregator {
  public:
-  using FragSink = std::function<void(const mabur::DecodedFrag&)>;
+  // Non-const so the sink may take the fragment's buffer (FrameStream's
+  // move overload); a sink taking const& still binds.
+  using FragSink = std::function<void(mabur::DecodedFrag&)>;
   using RcSink = std::function<void(uint8_t card_id,
                                     const std::vector<uint8_t>& frame,
                                     uint64_t mono_us)>;

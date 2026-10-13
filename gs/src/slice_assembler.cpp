@@ -5,6 +5,7 @@
 
 #include "mabur/hevc_skip_slice.h"
 #include "mabur/hevc_slice.h"
+#include "start_codes.h"
 
 namespace maburgs {
 namespace {
@@ -12,19 +13,11 @@ namespace {
 using mabur::hevc::SliceHeader;
 using mabur::hevc::SliceParse;
 
-struct Code { size_t pos, len; };
+using Code = StartCode;
 
 constexpr uint32_t kCtbLog2 = 6;          // FrameHdr.slice_rows unit: 64-px CTU rows
 constexpr uint32_t kMaxSlices = 64;
 constexpr size_t kReserveCap = 1u << 20;  // prefix buffer pre-size, bytes
-
-void find_codes(const uint8_t* b, size_t n, size_t from, std::vector<Code>* out) {
-  for (size_t j = from; j + 3 <= n; ++j) {
-    if (b[j] != 0 || b[j + 1] != 0) continue;
-    if (b[j + 2] == 1) { out->push_back({j, 3}); j += 2; continue; }
-    if (b[j + 2] == 0 && j + 4 <= n && b[j + 3] == 1) { out->push_back({j, 4}); j += 3; }
-  }
-}
 
 }  // namespace
 
@@ -40,17 +33,17 @@ SliceAssembler::SliceAssembler(const mabur::hevc::Sps& sps, const mabur::hevc::P
   n_ = n <= kMaxSlices ? static_cast<uint8_t>(n) : 0;
 }
 
-void SliceAssembler::extend_prefix(const ChunkMap& chunks) {
+void SliceAssembler::extend_prefix(const ChunkTable& chunks) {
   for (;;) {
-    const auto it = chunks.find(prefix_chunks_);
-    if (it == chunks.end()) break;
-    const auto& c = it->second;
+    if (!chunks.has(prefix_chunks_)) break;
+    const uint8_t* c = chunks.data(prefix_chunks_);
+    const size_t n = chunks.size(prefix_chunks_);
     if (prefix_chunks_ == 0) {
-      frag_ = c.size();
+      frag_ = n;
       buf_.reserve(std::min(static_cast<size_t>(count_) * frag_, kReserveCap));
-      if (c.size() > hdr_len_) buf_.insert(buf_.end(), c.begin() + static_cast<long>(hdr_len_), c.end());
+      if (n > hdr_len_) buf_.insert(buf_.end(), c + hdr_len_, c + n);
     } else {
-      buf_.insert(buf_.end(), c.begin(), c.end());
+      buf_.insert(buf_.end(), c, c + n);
     }
     ++prefix_chunks_;
   }
@@ -58,7 +51,7 @@ void SliceAssembler::extend_prefix(const ChunkMap& chunks) {
 
 void SliceAssembler::scan_prefix() {
   std::vector<Code> found;
-  find_codes(buf_.data(), buf_.size(), scanned_, &found);
+  find_start_codes(buf_.data(), buf_.size(), scanned_, &found);
   // The rescan window (last 3 bytes) can sit inside a 4-byte code the
   // previous scan already found whole -- its "00 00 01" tail would read as
   // a second, 3-byte code one byte later. Codes never overlap.
@@ -67,7 +60,7 @@ void SliceAssembler::scan_prefix() {
   scanned_ = buf_.size() >= 3 ? buf_.size() - 3 : 0;
 }
 
-void SliceAssembler::drain(const ChunkMap& chunks, const ByteSink& out) {
+void SliceAssembler::drain(const ChunkTable& chunks, const ByteSink& out) {
   extend_prefix(chunks);
   scan_prefix();
   if (!sc_.empty() && sc_.back().pos > emitted_) {
@@ -76,7 +69,7 @@ void SliceAssembler::drain(const ChunkMap& chunks, const ByteSink& out) {
   }
 }
 
-void SliceAssembler::finish(const ChunkMap& chunks, const ByteSink& out) {
+void SliceAssembler::finish(const ChunkTable& chunks, const ByteSink& out) {
   extend_prefix(chunks);
   if (prefix_chunks_ == count_) {             // complete
     out(buf_.data() + emitted_, buf_.size() - emitted_);
@@ -98,7 +91,7 @@ void SliceAssembler::finish(const ChunkMap& chunks, const ByteSink& out) {
   result_ = res;
 }
 
-SliceFallback SliceAssembler::plan(const ChunkMap& chunks,
+SliceFallback SliceAssembler::plan(const ChunkTable& chunks,
                                    std::vector<std::vector<uint8_t>>* pieces, SliceSalvage* res) {
   if (sps_.log2_ctb != kCtbLog2) return kSliceFbUnsupported;   // slice_rows is in 64-px rows
   if (n_ == 0 || frag_ <= hdr_len_) return kSliceFbGeometry;
@@ -109,19 +102,20 @@ SliceFallback SliceAssembler::plan(const ChunkMap& chunks,
   std::vector<Run> runs;
   runs.push_back({0, buf_});
   for (uint16_t i = static_cast<uint16_t>(prefix_chunks_ + 1); i < count_;) {
-    if (!chunks.count(i)) { ++i; continue; }
+    if (!chunks.has(i)) { ++i; continue; }
     Run r;
     r.off = static_cast<size_t>(i) * frag_ - hdr_len_;
-    for (; i < count_ && chunks.count(i); ++i) {
-      const auto& c = chunks.at(i);
-      if (i + 1 < count_ && c.size() != frag_) return kSliceFbGeometry;
-      r.b.insert(r.b.end(), c.begin(), c.end());
+    for (; i < count_ && chunks.has(i); ++i) {
+      const uint8_t* c = chunks.data(i);
+      const size_t n = chunks.size(i);
+      if (i + 1 < count_ && n != frag_) return kSliceFbGeometry;
+      r.b.insert(r.b.end(), c, c + n);
     }
     runs.push_back(std::move(r));
   }
-  const bool have_last = chunks.count(static_cast<uint16_t>(count_ - 1)) != 0;
+  const bool have_last = chunks.has(static_cast<uint16_t>(count_ - 1));
   const size_t au_end = have_last ? static_cast<size_t>(count_ - 1) * frag_ - hdr_len_ +
-                                        chunks.at(static_cast<uint16_t>(count_ - 1)).size()
+                                        chunks.size(static_cast<uint16_t>(count_ - 1))
                                   : SIZE_MAX;
 
   // 2. Complete NAL units of every run.
@@ -132,7 +126,7 @@ SliceFallback SliceAssembler::plan(const ChunkMap& chunks,
   bool seen_vcl = false;
   for (size_t r = 0; r < runs.size(); ++r) {
     std::vector<Code> codes;
-    find_codes(runs[r].b.data(), runs[r].b.size(), 0, &codes);
+    find_start_codes(runs[r].b.data(), runs[r].b.size(), 0, &codes);
     const bool reaches_end = have_last && runs[r].off + runs[r].b.size() == au_end;
     for (size_t k = 0; k < codes.size(); ++k) {
       const size_t s = codes[k].pos, body = s + codes[k].len;

@@ -7,6 +7,13 @@ namespace maburgs {
 void FrameStream::push_fragment(uint8_t sid, const uint8_t* pkt, size_t len,
                                 uint64_t now_ms, const FragArrival& arr) {
   if (!pkt || len < 6) { ++bad_frags_; return; }
+  push_fragment(sid, std::vector<uint8_t>(pkt, pkt + len), now_ms, arr);
+}
+
+void FrameStream::push_fragment(uint8_t sid, std::vector<uint8_t>&& frag,
+                                uint64_t now_ms, const FragArrival& arr) {
+  if (frag.size() < 6) { ++bad_frags_; return; }
+  const uint8_t* pkt = frag.data();
   // Stall watchdog: frames have been arriving for stall_reset_ms with nothing
   // emitted — the emit cursor is wedged above the incoming id64 space (e.g. a
   // producer restart whose discont signal never landed). A receiver must not
@@ -35,8 +42,9 @@ void FrameStream::push_fragment(uint8_t sid, const uint8_t* pkt, size_t len,
   uint32_t key = (static_cast<uint32_t>(sid) << 16) | fseq;
   Slot& s = slots_[key];
   if (s.chunks.empty()) { s.sid = sid; s.fseq = fseq; s.first_ms = now_ms;
-                          s.last_progress_ms = now_ms; s.count = count; }
-  s.chunks[idx].assign(pkt + 6, pkt + len);
+                          s.last_progress_ms = now_ms; s.count = count;
+                          s.chunks.reserve(count); }
+  s.chunks.put(idx, std::move(frag), 6);  // pkt dangles from here on
   if (arr.have_sw_seq && !s.have_seq0) {
     s.have_seq0 = true;
     s.idx0 = idx;
@@ -54,7 +62,7 @@ void FrameStream::push_fragment(uint8_t sid, const uint8_t* pkt, size_t len,
   if (arr.body_mono_us > s.lat.t_last_arr_us)
     s.lat.t_last_arr_us = arr.body_mono_us;
   if (idx == 0 && !s.have_hdr) {
-    auto h = mabur::framewire::parse_frame_hdr(s.chunks[0].data(), s.chunks[0].size());
+    auto h = mabur::framewire::parse_frame_hdr(s.chunks.data(0), s.chunks.size(0));
     if (!h) { ++bad_frags_; slots_.erase(key); return; }
     s.have_hdr = true;
     s.lat.drone_q_ms = arr.q_ms;
@@ -149,12 +157,12 @@ void FrameStream::try_emit(uint64_t now_ms) {
     // Stream the contiguous chunk prefix (fragment 0 minus the FrameHdr) --
     // through the slice assembler for a split AU, raw otherwise.
     while (true) {
-      auto it = head->chunks.find(head->emitted_upto);
-      if (it == head->chunks.end()) break;
+      if (!head->chunks.has(head->emitted_upto)) break;
       if (!head->sa) {
-        const auto& c = it->second;
+        const uint8_t* c = head->chunks.data(head->emitted_upto);
+        const size_t n = head->chunks.size(head->emitted_upto);
         size_t skip = head->emitted_upto == 0 ? mabur::framewire::kFrameHdrLen : 0;
-        if (c.size() > skip) cb_.frame_data(c.data() + skip, c.size() - skip);
+        if (n > skip) cb_.frame_data(c + skip, n - skip);
       }
       ++head->emitted_upto;
       head->last_progress_ms = now_ms;
@@ -207,21 +215,20 @@ void FrameStream::finish(Slot& s, bool complete) {
 // A complete AU that opens with a parameter set (refresh start, IDR) feeds
 // the slice-salvage tracker: one copy per such AU, 2 Hz at GOP 0.5 s.
 void FrameStream::feed_params(const Slot& s) {
-  const auto c0 = s.chunks.find(0);
-  if (c0 == s.chunks.end()) return;
-  const auto& b = c0->second;
+  if (!s.chunks.has(0)) return;
+  const uint8_t* b = s.chunks.data(0);
+  const size_t bn = s.chunks.size(0);
   const size_t h = mabur::framewire::kFrameHdrLen;
   size_t p = h;
-  if (b.size() >= h + 5 && b[h] == 0 && b[h + 1] == 0 && b[h + 2] == 0 && b[h + 3] == 1) p = h + 4;
-  else if (b.size() >= h + 4 && b[h] == 0 && b[h + 1] == 0 && b[h + 2] == 1) p = h + 3;
+  if (bn >= h + 5 && b[h] == 0 && b[h + 1] == 0 && b[h + 2] == 0 && b[h + 3] == 1) p = h + 4;
+  else if (bn >= h + 4 && b[h] == 0 && b[h + 1] == 0 && b[h + 2] == 1) p = h + 3;
   else return;
   const uint8_t type = static_cast<uint8_t>((b[p] >> 1) & 0x3F);
   if (type < 32 || type > 34) return;
-  std::vector<uint8_t> au(b.begin() + static_cast<long>(h), b.end());
+  std::vector<uint8_t> au(b + h, b + bn);
   for (uint16_t i = 1; i < s.count; ++i) {
-    const auto it = s.chunks.find(i);
-    if (it == s.chunks.end()) return;
-    au.insert(au.end(), it->second.begin(), it->second.end());
+    if (!s.chunks.has(i)) return;
+    au.insert(au.end(), s.chunks.data(i), s.chunks.data(i) + s.chunks.size(i));
   }
   params_.feed(au.data(), au.size());
 }

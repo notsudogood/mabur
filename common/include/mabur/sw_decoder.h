@@ -209,7 +209,7 @@ class SwDecoder {
   enum class Origin : uint8_t { kSource, kRepair, kRetx };
   // Deliver symbol v, register known, substitute into rows, cascade.
   // origin applies to v itself; cascades are always kRepair.
-  void ingest(uint64_t v, std::vector<uint8_t> sym, Origin origin,
+  void ingest(uint64_t v, const uint8_t* sym, Origin origin,
               std::vector<std::vector<uint8_t>>& out);
   void unpack_symbol(const uint8_t* sym, std::vector<std::vector<uint8_t>>& out);
 
@@ -218,7 +218,25 @@ class SwDecoder {
   bool have_seq_ = false;
   uint64_t newest_v_ = 0;  // highest virtual seq seen or implied
   uint64_t base_ = 0;      // state floor (inclusive)
-  std::map<uint64_t, std::vector<uint8_t>> known_;  // vseq -> payload
+  // Known symbols, ring-indexed by vseq (slot = vseq & ring_mask_). Every
+  // seq the decoder may still ask about lies in [live_floor, newest_v_], a
+  // span of horizon_ + 1, and the ring is larger than that, so live seqs
+  // never share a slot; a slot whose tag is not the asked vseq is unknown,
+  // and every lookup is behind a live_floor/base_ guard. Replaced a
+  // std::map<vseq, vector> (2026-10-13): a map node plus a payload vector
+  // per symbol were ~half the GS core thread at 35 Mb/s.
+  static constexpr uint64_t kNoSeq = ~0ull;  // vseqs start at 2^32: never a real seq
+  std::vector<uint64_t> known_tag_;
+  std::vector<uint8_t> known_buf_;  // ring size x symbol_size payload bytes
+  uint64_t ring_mask_ = 0;
+  bool is_known(uint64_t v) const { return known_tag_[v & ring_mask_] == v; }
+  const uint8_t* known_payload(uint64_t v) const {
+    return known_buf_.data() + (v & ring_mask_) * static_cast<size_t>(cfg_.symbol_size);
+  }
+  const uint8_t* store_known(uint64_t v, const uint8_t* payload);
+  void forget_known(uint64_t v) {
+    if (known_tag_[v & ring_mask_] == v) known_tag_[v & ring_mask_] = kNoSeq;
+  }
   std::map<uint64_t, Row> rows_;                    // pivot vseq -> row
   std::set<uint64_t> recovered_await_src_;  // recovered, direct copy not yet seen
   std::set<uint64_t> retx_await_src_;       // retx-filled, direct copy not yet seen
@@ -245,6 +263,21 @@ class SwDecoder {
     uint32_t key = 0;         // repair_key: (ws, key) identifies the repair
   };
   std::deque<RepairSpan> repairs_seen_;  // admitted repairs, oldest first
+  // Dedup index over repairs_seen_, slot = key mod kRepairTab. The drone
+  // numbers repairs consecutively, so the live ones rarely share a slot;
+  // a slot holds one live entry, and an entry pushed out of its slot while
+  // still live counts in repair_untracked_ -- while that is nonzero a table
+  // miss falls back to the full scan, so the answer stays exact. Replaces a
+  // scan of the whole deque per first-copy repair (~8% of the GS core
+  // thread at 35 Mb/s, replay profile 2026-10-13).
+  static constexpr size_t kRepairTab = 1024;  // power of two
+  struct RepairSlot {
+    uint64_t ws = 0;
+    uint32_t key = 0;
+    bool used = false;
+  };
+  std::vector<RepairSlot> repair_tab_ = std::vector<RepairSlot>(kRepairTab);
+  size_t repair_untracked_ = 0;
   LossEpisode ep_;                       // the open episode (ep_open_)
   uint64_t ep_last_ = 0;                 // its last missing seq
   bool ep_open_ = false;

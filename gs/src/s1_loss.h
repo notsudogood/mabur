@@ -26,7 +26,7 @@ class S1LossWindow {
   // settle tail has to be swallowed too (flight ctl-0160, 2026-09-02: one
   // residual event cascaded mcs5->mcs0 at one demote per 50 ms tick).
   void blank_until(double t_ms) {
-    window_.clear();
+    clear_window_();
     blank_until_ms_ = t_ms;
   }
 
@@ -38,7 +38,7 @@ class S1LossWindow {
     bool reset_detected = now_ms < blank_until_ms_;
     if (have_first_sample_ &&
         (expected_total < prev_expected_ || arrived_total < prev_arrived_)) {
-      window_.clear();
+      clear_window_();
       reset_detected = true;
     }
 
@@ -56,12 +56,17 @@ class S1LossWindow {
 
     // Only add entries with positive deltas.
     if (d_expected > 0 || d_arrived > 0) {
+      if (!window_.empty() && now_ms < window_.back().t) sorted_ = false;
       window_.push_back({now_ms, d_expected, d_arrived});
+      sum_expected_ += d_expected;
+      sum_arrived_ += d_arrived;
     }
 
     // Prune entries older than window_ms to keep deque bounded.
     const double cutoff_time = now_ms - window_ms_;
     while (!window_.empty() && window_.front().t < cutoff_time) {
+      sum_expected_ -= window_.front().d_expected;
+      sum_arrived_ -= window_.front().d_arrived;
       window_.pop_front();
     }
 
@@ -78,20 +83,10 @@ class S1LossWindow {
   };
 
   Sample sample(double now_ms) const {
-    // Prune entries outside the window: older than window_ms AND in the future.
-    const double cutoff_time = now_ms - window_ms_;
-
-    // Compute totals from entries within [cutoff_time, now_ms].
+    // Totals over entries within [now_ms - window_ms, now_ms].
     uint64_t total_expected = 0;
     uint64_t total_arrived = 0;
-    for (const auto& entry : window_) {
-      // Skip entries older than the window cutoff or after the sample time.
-      if (entry.t < cutoff_time || entry.t > now_ms) {
-        continue;
-      }
-      total_expected += entry.d_expected;
-      total_arrived += entry.d_arrived;
-    }
+    totals_in_window_(now_ms, &total_expected, &total_arrived);
 
     // Return invalid if no traffic in the window.
     // Valid iff dExpected > 0.
@@ -111,12 +106,8 @@ class S1LossWindow {
   // Sum of d_expected over entries in [now_ms - window_ms, now_ms].
   // Used for the s3 availability floor (LadderCfg::s3_min_syms).
   uint64_t expected_in_window(double now_ms) const {
-    const double cutoff_time = now_ms - window_ms_;
-    uint64_t total = 0;
-    for (const auto& e : window_) {
-      if (e.t < cutoff_time || e.t > now_ms) continue;
-      total += e.d_expected;
-    }
+    uint64_t total = 0, arrived = 0;
+    totals_in_window_(now_ms, &total, &arrived);
     return total;
   }
 
@@ -136,6 +127,55 @@ class S1LossWindow {
   bool have_first_sample_;
   double blank_until_ms_ = -1.0;  // adds before this instant are baseline-only
   std::deque<Entry> window_;
+  // Running totals over every entry in window_, kept by add()'s push and
+  // prune, so a sample costs only the few entries outside [now - window,
+  // now] instead of the whole deque. The GS reads several windows per core
+  // loop pass, and at 35 Mb/s the loop passes often enough that re-summing
+  // thousands of entries each time was 6 % of the core thread (GS profile,
+  // bench 2026-10-13). sorted_: every entry was pushed at a t no earlier
+  // than the one before it, so the outside entries are a prefix and a
+  // suffix; an out-of-order add falls back to the full scan.
+  uint64_t sum_expected_ = 0;
+  uint64_t sum_arrived_ = 0;
+  bool sorted_ = true;
+
+  void clear_window_() {
+    window_.clear();
+    sum_expected_ = 0;
+    sum_arrived_ = 0;
+    sorted_ = true;
+  }
+
+  // Sum of d_expected / d_arrived over entries with t in [now_ms - window_ms,
+  // now_ms] -- exactly the entries the original full scan counted.
+  void totals_in_window_(double now_ms, uint64_t* expected, uint64_t* arrived) const {
+    const double cutoff_time = now_ms - window_ms_;
+    if (!sorted_ || window_ms_ < 0) {
+      uint64_t te = 0, ta = 0;
+      for (const auto& e : window_) {
+        if (e.t < cutoff_time || e.t > now_ms) continue;
+        te += e.d_expected;
+        ta += e.d_arrived;
+      }
+      *expected = te;
+      *arrived = ta;
+      return;
+    }
+    uint64_t te = sum_expected_, ta = sum_arrived_;
+    auto front = window_.begin();
+    for (; front != window_.end() && front->t < cutoff_time; ++front) {
+      te -= front->d_expected;
+      ta -= front->d_arrived;
+    }
+    for (auto back = window_.end(); back != front;) {
+      --back;
+      if (back->t <= now_ms) break;
+      te -= back->d_expected;
+      ta -= back->d_arrived;
+    }
+    *expected = te;
+    *arrived = ta;
+  }
 };
 
 }  // namespace maburgs

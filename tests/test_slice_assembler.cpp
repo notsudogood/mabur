@@ -1,10 +1,12 @@
 #include <algorithm>
 #include <cstring>
+#include <map>
 #include <vector>
 #include "mabur/hevc_ps.h"
 #include "mabur/hevc_skip_slice.h"
 #include "mabur/hevc_slice.h"
 #include "mtest.h"
+#include "start_codes.h"
 #include "slice_assembler.h"
 #include "slice_fixture.h"
 using namespace maburgs;
@@ -17,7 +19,7 @@ struct Au {
   ParamTracker t;
   std::vector<uint8_t> bytes;                 // the original Annex-B AU
   std::vector<std::vector<uint8_t>> slices;   // its slice NALs
-  ChunkMap chunks;                            // all fragments
+  std::map<uint16_t, std::vector<uint8_t>> chunks;  // all fragments
   uint16_t count = 0;
   size_t frag = 0;
 };
@@ -51,6 +53,12 @@ uint16_t inner_chunk(const Au& a, size_t k) {
   const uint16_t c = static_cast<uint16_t>(chunk_of(a, offset_of(a, k)) + 1);
   if (k + 1 < a.slices.size()) REQUIRE(c < chunk_of(a, offset_of(a, k + 1)));
   return c;
+}
+
+ChunkTable table_of(const std::map<uint16_t, std::vector<uint8_t>>& m) {
+  ChunkTable t;
+  for (const auto& [i, c] : m) t.put(i, c.data(), c.size());
+  return t;
 }
 
 struct Out {
@@ -88,7 +96,7 @@ void check_salvaged_picture(const Au& a, const std::vector<uint8_t>& out, const 
 SliceSalvage run(Au& a, std::vector<uint8_t>* out, uint8_t slice_rows = 5) {
   SliceAssembler sa(a.t.sps(), a.t.pps(), slice_rows, a.count, kHdr);
   Out o;
-  sa.finish(a.chunks, o.sink());
+  sa.finish(table_of(a.chunks), o.sink());
   *out = o.b;
   return sa.result();
 }
@@ -98,8 +106,8 @@ TEST(complete_au_streams_identical_bytes) {
   Au a = au(5);
   SliceAssembler sa(a.t.sps(), a.t.pps(), 5, a.count, kHdr);
   Out o;
-  ChunkMap partial;
-  for (auto& [i, c] : a.chunks) { partial[i] = c; sa.drain(partial, o.sink()); }
+  ChunkTable partial;
+  for (auto& [i, c] : a.chunks) { partial.put(i, c.data(), c.size()); sa.drain(partial, o.sink()); }
   sa.finish(partial, o.sink());
   CHECK(o.b == a.bytes);
   CHECK(!sa.result().salvaged);
@@ -228,8 +236,8 @@ TEST(start_code_straddling_drains_is_recorded_once) {
     a.chunks.erase(inner_chunk(a, 3));
     SliceAssembler s1(a.t.sps(), a.t.pps(), 5, a.count, kHdr);
     Out o1;
-    ChunkMap partial;
-    for (auto& [i, c] : a.chunks) { partial[i] = c; s1.drain(partial, o1.sink()); }
+    ChunkTable partial;
+    for (auto& [i, c] : a.chunks) { partial.put(i, c.data(), c.size()); s1.drain(partial, o1.sink()); }
     s1.finish(partial, o1.sink());
     REQUIRE(s1.result().salvaged);
     check_salvaged_picture(a, o1.b, {true, true, true, false});
@@ -254,8 +262,8 @@ TEST(drained_prefix_plus_finish_equals_one_shot_finish) {
   a.chunks.erase(inner_chunk(a, 2));
   SliceAssembler s1(a.t.sps(), a.t.pps(), 5, a.count, kHdr);
   Out o1;
-  ChunkMap partial;
-  for (auto& [i, c] : a.chunks) { partial[i] = c; s1.drain(partial, o1.sink()); }
+  ChunkTable partial;
+  for (auto& [i, c] : a.chunks) { partial.put(i, c.data(), c.size()); s1.drain(partial, o1.sink()); }
   s1.finish(partial, o1.sink());
   std::vector<uint8_t> o2;
   run(a, &o2);
@@ -317,8 +325,8 @@ TEST(non_64px_ctb_passes_through_unsupported) {
   sps.log2_ctb = 5;
   SliceAssembler sa(sps, a.t.pps(), 5, a.count, kHdr);
   Out o;
-  ChunkMap partial;
-  for (auto& [i, ch] : a.chunks) { partial[i] = ch; sa.drain(partial, o.sink()); }
+  ChunkTable partial;
+  for (auto& [i, ch] : a.chunks) { partial.put(i, ch.data(), ch.size()); sa.drain(partial, o.sink()); }
   sa.finish(partial, o.sink());
   CHECK(!sa.result().salvaged);
   CHECK(sa.result().fallback == kSliceFbUnsupported);
@@ -337,4 +345,67 @@ TEST(slice_count_over_64_is_rejected_before_narrowing) {
   CHECK(sa.slices() == 0);
 }
 
+namespace {
+// The byte-at-a-time scan slice_assembler.cpp used before 2026-10-13.
+void ref_find_codes(const uint8_t* b, size_t n, size_t from, std::vector<maburgs::StartCode>* out) {
+  for (size_t j = from; j + 3 <= n; ++j) {
+    if (b[j] != 0 || b[j + 1] != 0) continue;
+    if (b[j + 2] == 1) { out->push_back({j, 3}); j += 2; continue; }
+    if (b[j + 2] == 0 && j + 4 <= n && b[j + 3] == 1) { out->push_back({j, 4}); j += 3; }
+  }
+}
+}  // namespace
+
+TEST(memchr_start_code_scan_matches_the_byte_loop) {
+  // Zero-heavy random buffers (runs of 00, 01 tails, codes at both ends),
+  // every start offset: identical codes, positions and lengths.
+  uint32_t rng = 7;
+  auto next = [&]() { rng = rng * 1664525u + 1013904223u; return rng >> 8; };
+  for (int run = 0; run < 400; ++run) {
+    const size_t n = next() % 64;
+    std::vector<uint8_t> b(n);
+    for (auto& x : b) {
+      const uint32_t r = next() % 8;
+      x = r < 4 ? 0 : r < 6 ? 1 : static_cast<uint8_t>(next());
+    }
+    for (size_t from = 0; from <= n; ++from) {
+      std::vector<maburgs::StartCode> want, got;
+      ref_find_codes(b.data(), n, from, &want);
+      maburgs::find_start_codes(b.data(), n, from, &got);
+      REQUIRE(got.size() == want.size());
+      for (size_t k = 0; k < got.size(); ++k) {
+        CHECK(got[k].pos == want[k].pos);
+        CHECK(got[k].len == want[k].len);
+      }
+    }
+  }
+}
+
 MTEST_MAIN
+
+TEST(chunk_table_reads_moved_buffers_past_their_header) {
+  ChunkTable t;
+  CHECK(t.empty());
+  CHECK(!t.has(0) && !t.has(500));
+  t.reserve(60000);  // a corrupt count: capped, and nothing is present
+  CHECK(t.empty() && !t.has(59999));
+  std::vector<uint8_t> f = {9, 9, 9, 9, 9, 9, 1, 2, 3};
+  t.put(3, std::move(f), 6);
+  CHECK(t.has(3) && !t.has(2) && !t.has(4));
+  CHECK(t.count() == 1);
+  REQUIRE(t.size(3) == 3);
+  CHECK(t.data(3)[0] == 1 && t.data(3)[2] == 3);
+  const uint8_t g[] = {7, 8};
+  t.put(3, g, 2);  // a second copy replaces, and is not counted twice
+  CHECK(t.count() == 1);
+  REQUIRE(t.size(3) == 2);
+  CHECK(t.data(3)[1] == 8);
+  t.put(0, std::vector<uint8_t>(6, 0), 6);  // header only: present, empty
+  CHECK(t.has(0) && t.size(0) == 0 && t.count() == 2);
+  t.erase(3);
+  t.erase(3);
+  t.erase(400);
+  CHECK(!t.has(3) && t.count() == 1 && !t.empty());
+  t.erase(0);
+  CHECK(t.empty());
+}

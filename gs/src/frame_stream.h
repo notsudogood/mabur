@@ -65,6 +65,10 @@ class FrameStream {
 
   void push_fragment(uint8_t stream_id, const uint8_t* pkt, size_t len, uint64_t now_ms,
                      const FragArrival& arr = {});
+  // Same, taking the decoded fragment (FRAG header included) by move: the
+  // GS core path hands over the decoder's buffer instead of copying it.
+  void push_fragment(uint8_t stream_id, std::vector<uint8_t>&& frag, uint64_t now_ms,
+                     const FragArrival& arr = {});
   void poll(uint64_t now_ms);  // drives timeouts; call every loop tick
   void reset();                // session change
 
@@ -121,7 +125,7 @@ class FrameStream {
   struct Slot {
     uint8_t sid = 0;
     uint16_t fseq = 0;
-    std::map<uint16_t, std::vector<uint8_t>> chunks;  // idx -> payload
+    ChunkTable chunks;              // idx -> payload (FRAG header skipped)
     uint16_t count = 0;
     bool have_hdr = false;          // fragment 0 seen
     mabur::framewire::FrameHdr hdr;

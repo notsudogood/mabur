@@ -862,9 +862,9 @@ static int run_radio(const maburgs::Config& cfg) {
   bool frame_wire = false;
   bool refused_peer = false;  // one loud line per run, not per tick
 
-  agg.set_frag_sink([&](const mabur::DecodedFrag& f) {
+  agg.set_frag_sink([&](mabur::DecodedFrag& f) {
     if (frame_wire)
-      fstream.push_fragment(f.stream_id, f.frag.data(), f.frag.size(), mono_ms(),
+      fstream.push_fragment(f.stream_id, std::move(f.frag), mono_ms(),
                             {f.body_mono_us, f.q_ms, f.enc_us, f.air_ms, f.sw_seq, true, f.retx});
   });
   // Early give-up (frame_stream.h set_doom_check): a gap no repair still on
@@ -2157,8 +2157,8 @@ int main(int argc, char** argv) {
          file_out.finish(c);
        }});
   uint64_t replay_ms = 0;  // clock of the body being fed, for gap timeouts
-  agg.set_frag_sink([&](const mabur::DecodedFrag& f) {
-    fstream.push_fragment(f.stream_id, f.frag.data(), f.frag.size(), replay_ms);
+  agg.set_frag_sink([&](mabur::DecodedFrag& f) {
+    fstream.push_fragment(f.stream_id, std::move(f.frag), replay_ms);
   });
   uint64_t rc_frames = 0;
   agg.set_rc_sink([&](uint8_t, const std::vector<uint8_t>&, uint64_t) { ++rc_frames; });

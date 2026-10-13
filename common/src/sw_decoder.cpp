@@ -1,6 +1,7 @@
 #include "mabur/sw_decoder.h"
 
 #include <algorithm>
+#include <cstring>
 #include <iterator>
 
 #include "mabur/gf256.h"
@@ -20,7 +21,25 @@ SwDecoder::SwDecoder(const SwConfig& cfg, uint32_t seq_horizon, uint32_t arrival
     : cfg_(cfg),
       horizon_(seq_horizon ? seq_horizon : 4ull * static_cast<uint64_t>(cfg.window)),
       arr_guard_(arrival_guard ? arrival_guard : ArrivalTracker::kDefaultGuard),
-      arr_(arr_guard_) {}
+      arr_(arr_guard_) {
+  // Power of two above the live span (horizon_ + 1 seqs): 1024 slots at the
+  // default seq_horizon 512, ~340 kB of payload at symbol_size 332.
+  uint64_t ring = 64;
+  while (ring < horizon_ + 2) ring <<= 1;
+  ring_mask_ = ring - 1;
+  known_tag_.assign(static_cast<size_t>(ring), kNoSeq);
+  known_buf_.assign(static_cast<size_t>(ring) *
+                        static_cast<size_t>(cfg_.symbol_size > 0 ? cfg_.symbol_size : 0),
+                    0);
+}
+
+const uint8_t* SwDecoder::store_known(uint64_t v, const uint8_t* payload) {
+  const size_t ss = static_cast<size_t>(cfg_.symbol_size);
+  uint8_t* slot = known_buf_.data() + (v & ring_mask_) * ss;
+  std::memcpy(slot, payload, ss);
+  known_tag_[v & ring_mask_] = v;
+  return slot;
+}
 
 uint64_t SwDecoder::unwrap(uint32_t s) const {
   const int64_t d = static_cast<int32_t>(s - static_cast<uint32_t>(newest_v_));
@@ -28,7 +47,7 @@ uint64_t SwDecoder::unwrap(uint32_t s) const {
 }
 
 void SwDecoder::reset_state(uint64_t v) {
-  known_.clear();
+  std::fill(known_tag_.begin(), known_tag_.end(), kNoSeq);
   rows_.clear();
   recovered_await_src_.clear();
   retx_await_src_.clear();
@@ -39,6 +58,8 @@ void SwDecoder::reset_state(uint64_t v) {
   wm_open_ = false;
   wm_valid_ = false;
   repairs_seen_.clear();
+  std::fill(repair_tab_.begin(), repair_tab_.end(), RepairSlot{});
+  repair_untracked_ = 0;
   max_repair_ws_ = 0;
   ep_open_ = false;  // a half-built episode from the old seq space is meaningless
 }
@@ -75,7 +96,7 @@ std::vector<uint32_t> SwDecoder::missing_sources(uint32_t lookback) const {
   if (from < floor) from = floor;
   if (from < base_) from = base_;
   for (uint64_t v = from; v < newest_v_; ++v)
-    if (!known_.count(v)) out.push_back(static_cast<uint32_t>(v));
+    if (!is_known(v)) out.push_back(static_cast<uint32_t>(v));
   return out;
 }
 
@@ -83,7 +104,7 @@ SwDecoder::SourceState SwDecoder::source_state(uint32_t wire_seq) const {
   if (!have_seq_) return SourceState::kUnknown;
   const uint64_t v = unwrap(wire_seq);
   if (v < live_floor() || v < base_) return SourceState::kBelowFloor;
-  if (!known_.count(v)) return SourceState::kUnknown;
+  if (!is_known(v)) return SourceState::kUnknown;
   if (retx_await_src_.count(v)) return SourceState::kRetx;
   return recovered_await_src_.count(v) ? SourceState::kRecovered : SourceState::kDirect;
 }
@@ -91,7 +112,7 @@ SwDecoder::SourceState SwDecoder::source_state(uint32_t wire_seq) const {
 bool SwDecoder::fec_final(uint32_t wire_seq) const {
   if (!have_seq_ || max_repair_ws_ == 0) return false;
   const uint64_t v = unwrap(wire_seq);
-  if (v < live_floor() || v < base_ || known_.count(v)) return false;
+  if (v < live_floor() || v < base_ || is_known(v)) return false;
   // Strictly past v, plus a one-symbol guard: the async FEC worker can
   // surface a repair a few positions out of order, never a whole window.
   return max_repair_ws_ > v + 1;
@@ -100,7 +121,7 @@ bool SwDecoder::fec_final(uint32_t wire_seq) const {
 bool SwDecoder::source_covered(uint32_t wire_seq) const {
   if (!have_seq_) return false;
   const uint64_t v = unwrap(wire_seq);
-  if (v < live_floor() || v < base_ || known_.count(v)) return false;
+  if (v < live_floor() || v < base_ || is_known(v)) return false;
   return rows_.count(v) != 0;
 }
 
@@ -123,8 +144,19 @@ void SwDecoder::advance(uint64_t newest_candidate) {
   // Loss episodes: every evicted seq the channel never delivered directly
   // (unknown, or recovered with no direct copy ever heard) is booked before
   // the state below is torn down. One seq per iteration in steady state.
+  //
+  // Eviction rides the same walk: a known seq in [base_, nb) is counted and
+  // its slot freed. Known seqs below base_ (the reordered-earlier ones
+  // above) need no walk: they are below nb = the new live floor, and every
+  // lookup sits behind a live_floor guard, so their slots are already inert
+  // and the next live seq that maps there overwrites them.
   for (uint64_t s = base_; s < nb; ++s) {
-    const bool known = known_.count(s) != 0;
+    const bool known = is_known(s);
+    if (known) {
+      ++known_in_range;
+      if (s < stale_end) ++known_stale;
+      forget_known(s);
+    }
     const bool rec = known && recovered_await_src_.count(s);
     const bool rtx = known && retx_await_src_.count(s);
     if (known && !rec && !rtx) continue;  // heard directly
@@ -132,13 +164,6 @@ void SwDecoder::advance(uint64_t newest_candidate) {
                  s < stale_end);
   }
   settle_episodes(nb);
-  for (auto it = known_.begin(); it != known_.end() && it->first < nb;) {
-    if (it->first >= base_) {
-      ++known_in_range;
-      if (it->first < stale_end) ++known_stale;
-    }
-    it = known_.erase(it);
-  }
   syms_abandoned_ += (nb - base_) - known_in_range;
   if (stale_end > base_)
     syms_abandoned_stale_ += (stale_end - base_) - known_stale;
@@ -204,14 +229,23 @@ void SwDecoder::insert_row(Row r, std::vector<std::pair<uint64_t, std::vector<ui
   }
 }
 
-void SwDecoder::ingest(uint64_t v, std::vector<uint8_t> sym, Origin origin,
+void SwDecoder::ingest(uint64_t v, const uint8_t* sym, Origin origin,
                        std::vector<std::vector<uint8_t>>& out) {
+  // The first symbol is read in place (no copy until store_known); only
+  // repair cascades, rare, carry their own payload vectors.
   std::vector<std::pair<uint64_t, std::vector<uint8_t>>> queue;
-  queue.emplace_back(v, std::move(sym));
   bool first = true;
-  while (!queue.empty()) {
-    auto [s, payload] = std::move(queue.back());
-    queue.pop_back();
+  for (;;) {
+    uint64_t s = v;
+    const uint8_t* payload = sym;
+    std::vector<uint8_t> held;
+    if (!first) {
+      if (queue.empty()) break;
+      s = queue.back().first;
+      held = std::move(queue.back().second);
+      queue.pop_back();
+      payload = held.data();
+    }
     // Cascades are repair-recovered -- unless the symbol that set them off
     // was a retx: without it none of them would be known, so they inherit
     // the retx class (R20; retx_await_src_ then holds them, and a late
@@ -219,8 +253,8 @@ void SwDecoder::ingest(uint64_t v, std::vector<uint8_t> sym, Origin origin,
     const Origin o =
         first ? origin : (origin == Origin::kRetx ? Origin::kRetx : Origin::kRepair);
     first = false;
-    if (s < live_floor() || known_.count(s)) continue;
-    unpack_symbol(payload.data(), out);
+    if (s < live_floor() || is_known(s)) continue;
+    unpack_symbol(payload, out);
     for (size_t k = last_out_seqs_.size(); k < out.size(); ++k)
       last_out_seqs_.push_back(static_cast<uint32_t>(s));
     if (o == Origin::kSource) {
@@ -232,8 +266,7 @@ void SwDecoder::ingest(uint64_t v, std::vector<uint8_t> sym, Origin origin,
       ++syms_recovered_;
       recovered_await_src_.insert(s);
     }
-    auto [kit, ok] = known_.emplace(s, std::move(payload));
-    (void)ok;
+    const uint8_t* kp = store_known(s, payload);
     // Pull every row referencing s, reduce, re-insert (rows only ever
     // reference unknown seqs — this keeps that invariant).
     std::vector<Row> affected;
@@ -247,7 +280,7 @@ void SwDecoder::ingest(uint64_t v, std::vector<uint8_t> sym, Origin origin,
     }
     for (auto& r : affected) {
       const uint8_t c = r.coeffs[s];
-      gf::lincomb(r.payload.data(), kit->second.data(), c, static_cast<size_t>(cfg_.symbol_size));
+      gf::lincomb(r.payload.data(), kp, c, static_cast<size_t>(cfg_.symbol_size));
       r.coeffs.erase(s);
       std::vector<std::pair<uint64_t, std::vector<uint8_t>>> solved;
       insert_row(std::move(r), solved);
@@ -302,7 +335,7 @@ std::vector<std::vector<uint8_t>> SwDecoder::add_symbol(const uint8_t* env, size
       arr_.on_source(v, arr_stale_end(), clean);
       arr_.advance(v, arr_stale_end());
     }
-    if (v < live_floor() || known_.count(v)) {
+    if (v < live_floor() || is_known(v)) {
       // A retx of something we already have: nothing to learn.
       if (retx) {
         ++symbols_dropped_stale_;
@@ -320,8 +353,7 @@ std::vector<std::vector<uint8_t>> SwDecoder::add_symbol(const uint8_t* env, size
       return out;
     }
     advance(v);
-    ingest(v, std::vector<uint8_t>(payload, payload + ss),
-           retx ? Origin::kRetx : Origin::kSource, out);
+    ingest(v, payload, retx ? Origin::kRetx : Origin::kSource, out);
     return out;
   }
 
@@ -361,12 +393,10 @@ std::vector<std::vector<uint8_t>> SwDecoder::add_symbol(const uint8_t* env, size
     return out;
   }
   // A window whose sources are all known yields no row either (the usual
-  // case at low loss). known_ is ordered: one walk from ws.
+  // case at low loss).
   {
-    auto kit = known_.lower_bound(ws);
     int i = 0;
-    for (; i < wl; ++i, ++kit)
-      if (kit == known_.end() || kit->first != ws + static_cast<uint64_t>(i)) break;
+    while (i < wl && is_known(ws + static_cast<uint64_t>(i))) ++i;
     if (i == wl) {
       ++repairs_redundant_;
       return out;
@@ -380,15 +410,14 @@ std::vector<std::vector<uint8_t>> SwDecoder::add_symbol(const uint8_t* env, size
   sw::repair_coeffs(h.repair_key, wl, coeffs);
   for (int i = 0; i < wl; ++i) {
     const uint64_t s = ws + static_cast<uint64_t>(i);
-    const auto kit = known_.find(s);
-    if (kit != known_.end())
-      gf::lincomb(r.payload.data(), kit->second.data(), coeffs[i], ss);
+    if (is_known(s))
+      gf::lincomb(r.payload.data(), known_payload(s), coeffs[i], ss);
     else
       r.coeffs.emplace(s, coeffs[i]);
   }
   std::vector<std::pair<uint64_t, std::vector<uint8_t>>> solved;
   insert_row(std::move(r), solved);
-  for (auto& [sv, sym] : solved) ingest(sv, std::move(sym), Origin::kRepair, out);
+  for (auto& [sv, sym] : solved) ingest(sv, sym.data(), Origin::kRepair, out);
   return out;
 }
 
@@ -401,10 +430,16 @@ uint64_t SwDecoder::episode_window() const {
 }
 
 bool SwDecoder::note_repair(uint64_t ws, uint64_t we, uint32_t key) {
-  // A second-card copy of the same repair arrives within a few ms, so a
-  // backward scan finds it near the tail.
-  for (auto it = repairs_seen_.rbegin(); it != repairs_seen_.rend(); ++it)
-    if (it->ws == ws && it->key == key) return false;
+  RepairSlot& t = repair_tab_[key & (kRepairTab - 1)];
+  if (t.used && t.ws == ws && t.key == key) return false;
+  if (repair_untracked_ > 0) {
+    // A live entry lost its slot: only the scan is exact. A second-card copy
+    // arrives within a few ms, so scanning backward finds it near the tail.
+    for (auto it = repairs_seen_.rbegin(); it != repairs_seen_.rend(); ++it)
+      if (it->ws == ws && it->key == key) return false;
+  }
+  if (t.used) ++repair_untracked_;  // the live entry there loses its slot
+  t = RepairSlot{ws, key, true};
   repairs_seen_.push_back(RepairSpan{ws, we, key});
   return true;
 }
@@ -446,8 +481,15 @@ void SwDecoder::settle_episodes(uint64_t evict_end) {
   // open episode's first seq is the oldest such seq, else nothing below
   // the eviction line can ever be booked again.
   const uint64_t keep_from = ep_open_ ? ep_.first_seq : evict_end;
-  while (!repairs_seen_.empty() && repairs_seen_.front().we <= keep_from)
+  while (!repairs_seen_.empty() && repairs_seen_.front().we <= keep_from) {
+    const RepairSpan& r = repairs_seen_.front();
+    RepairSlot& t = repair_tab_[r.key & (kRepairTab - 1)];
+    if (t.used && t.ws == r.ws && t.key == r.key)
+      t.used = false;
+    else
+      --repair_untracked_;
     repairs_seen_.pop_front();
+  }
 }
 
 std::vector<LossEpisode> SwDecoder::take_episodes() {
@@ -459,11 +501,12 @@ std::vector<LossEpisode> SwDecoder::take_episodes() {
 uint64_t SwDecoder::deficit() const {
   if (!have_seq_ || newest_v_ < base_) return 0;
   // Below base_ everything is already booked (delivered/recovered/abandoned);
-  // during the opening horizon known_ may hold reordered seqs below base_,
-  // which lower_bound excludes. Rows never reference an evicted seq.
+  // during the opening horizon the ring may hold reordered seqs below base_,
+  // which the walk from base_ excludes. Rows never reference an evicted seq.
   const uint64_t span = newest_v_ - base_ + 1;
-  const uint64_t known_live = static_cast<uint64_t>(
-      std::distance(known_.lower_bound(base_), known_.end()));
+  uint64_t known_live = 0;
+  for (uint64_t s = base_; s <= newest_v_; ++s)
+    if (is_known(s)) ++known_live;
   const uint64_t unknown = span > known_live ? span - known_live : 0;
   const uint64_t rows = rows_.size();
   return unknown > rows ? unknown - rows : 0;

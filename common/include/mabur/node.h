@@ -50,6 +50,13 @@ struct RxBody {
   // metadata, valid independent of the body CRC. Consumed by the
   // transition-attribution boundary (UepDecoder::add_body).
   uint8_t mcs = 255;
+  // The raw RX rate code and PPDU width the descriptor reported, unmapped
+  // (Jaguar: 0x0C + n = HT MCSn, 0x2C + n = VHT 1SS MCSn; bw 0 = 20,
+  // 1 = 40, 2 = 80 MHz). `mcs` above folds everything but HT-1SS to 255;
+  // these keep what actually aired visible (linkbench-rx --rate-hist at
+  // 80 MHz). In-process only, not serialized.
+  uint16_t rate_code = 0xFFFF;
+  uint8_t rx_bw = 255;
   // The radio channel this body was actually received on, stamped by the
   // producer (RadioFrontend::on_packet) at the instant the frame was
   // lifted off the card -- 0 = unknown, which is also what a card that was

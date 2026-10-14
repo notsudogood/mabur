@@ -39,6 +39,7 @@ struct RxMeta {
   int8_t evm[2] = {0, 0};
   bool physt = false;
   uint32_t tsfl = 0;
+  uint8_t bw = 0;  // RxAtrib::bw: 0 = 20, 1 = 40, 2 = 80 MHz
 };
 
 enum class RxVerdict { Body, Short, Foreign };

@@ -41,4 +41,17 @@ constexpr uint8_t ht40_pair_other(uint8_t ch) {
 static_assert(ht40_pair_other(136) == 132 && ht40_pair_other(132) == 136, "132+136");
 static_assert(ht40_pair_other(149) == 153 && ht40_pair_other(165) == 0, "149+153 / no pair");
 
+// True when ch can be tuned at 80 MHz as devourer tunes it: the LOWEST 20 MHz
+// of a standard 80 MHz block (36-48, 52-64, 100-112, 116-128, 132-144,
+// 149-161). devourer's Jaguar3 central_and_pri() hardcodes the 80 MHz
+// primary to the lowest 20 (centre = ch + 6), so any other ch lands off-grid
+// (docs/bw80-research-2026-10-12.md). Bench-only today: no flight path tunes
+// 80 MHz.
+constexpr bool vht80_block_lowest(uint8_t ch) {
+  return ch == 36 || ch == 52 || ch == 100 || ch == 116 || ch == 132 || ch == 149;
+}
+
+static_assert(vht80_block_lowest(36) && vht80_block_lowest(132) && vht80_block_lowest(149), "blocks");
+static_assert(!vht80_block_lowest(40) && !vht80_block_lowest(144) && !vht80_block_lowest(165), "not lowest");
+
 }  // namespace mabur

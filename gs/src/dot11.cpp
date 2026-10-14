@@ -82,6 +82,8 @@ RxVerdict fill_rx_body(const uint8_t* d, size_t len, const RxMeta& meta,
   m.mcs = (dr >= 0x0C && dr <= 0x13) ? static_cast<uint8_t>(dr - 0x0C)
           : (dr >= 0x80 && dr <= 0x87) ? static_cast<uint8_t>(dr - 0x80)
                                        : 255;
+  m.rate_code = dr;
+  m.rx_bw = meta.bw;
   m.mac_seq = static_cast<uint16_t>(static_cast<uint16_t>(d[22] | (d[23] << 8)) >> 4);
   m.body.assign(d + body_off, d + len);
   m.tsfl = meta.tsfl;

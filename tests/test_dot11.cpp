@@ -47,6 +47,18 @@ TEST(kestrel_rate_code_maps_to_mcs) {
   CHECK(b.mcs == 255);
 }
 
+TEST(vht80_frame_keeps_raw_rate_code_and_width) {
+  auto f = frame(0x88, true, 2, 1);
+  RxMeta m;
+  m.data_rate = 0x2C + 4;  // jaguar DESC_RATEVHTSS1MCS4
+  m.bw = 2;                // 80 MHz
+  mabur::node::RxBody b;
+  REQUIRE(fill_rx_body(f.data(), f.size(), m, b) == RxVerdict::Body);
+  CHECK(b.mcs == 255);     // attribution stays HT-only
+  CHECK(b.rate_code == 0x30);
+  CHECK(b.rx_bw == 2);
+}
+
 TEST(foreign_sa_dropped_only_when_crc_good) {
   auto f = frame(0x88, false, 1, 4);
   RxMeta m;

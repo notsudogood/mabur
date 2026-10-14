@@ -33,6 +33,17 @@ uint64_t mono_us_now() {
 
 // --- device management (mirrors drone/src/main.cpp bring-up) ----------------
 
+namespace {
+// 20 | 40 (HT40 pair per mabur::ht40_offset) | 80 (bench only: ch must be
+// the block-lowest 20, mabur::vht80_block_lowest -- devourer puts the 80 MHz
+// primary there).
+SelectedChannel tune_for(uint8_t ch, uint8_t width_mhz) {
+  if (width_mhz == 80) return SelectedChannel{ch, 0, CHANNEL_WIDTH_80};
+  if (width_mhz == 40) return SelectedChannel{ch, mabur::ht40_offset(ch), CHANNEL_WIDTH_40};
+  return SelectedChannel{ch, 0, CHANNEL_WIDTH_20};
+}
+}  // namespace
+
 RadioFrontend::RadioFrontend(Cfg cfg, BodyQueue& out)
     : cfg_(cfg), out_(out), width_(cfg.width_mhz) {}
 RadioFrontend::~RadioFrontend() { stop(); }
@@ -131,9 +142,7 @@ bool RadioFrontend::open_and_start() {
   // width_, not the constructor's cfg_.width_mhz: a set_width() that landed
   // while the card was down (the boot scout card dying mid-scan) is the
   // width a revive must come up at.
-  device_->InitWrite(width() == 40
-                         ? SelectedChannel{cfg_.channel, mabur::ht40_offset(cfg_.channel), CHANNEL_WIDTH_40}
-                         : SelectedChannel{cfg_.channel, 0, CHANNEL_WIDTH_20});
+  device_->InitWrite(tune_for(cfg_.channel, width()));
   channel_.store(cfg_.channel, std::memory_order_release);
   rx_channel_.store(cfg_.channel, std::memory_order_release);
   {
@@ -192,6 +201,7 @@ void RadioFrontend::on_packet(const Packet& pkt) {
   meta.evm[0] = a.evm[0];   meta.evm[1] = a.evm[1];
   meta.physt = a.physt;
   meta.tsfl = a.tsfl;
+  meta.bw = a.bw;
   mabur::node::RxBody m;
   const RxVerdict v = fill_rx_body(pkt.Data.data(), pkt.Data.size(), meta, m);
   if (v == RxVerdict::Short) return;
@@ -317,6 +327,7 @@ bool RadioFrontend::retune(uint8_t ch) {
 
 bool RadioFrontend::set_width(uint8_t ch, uint8_t width_mhz) {
   if (width_mhz == 40 && mabur::ht40_offset(ch) == 0) return false;
+  if (width_mhz == 80 && !mabur::vht80_block_lowest(ch)) return false;
   const uint8_t was = width();
   // Desired state, like the channel: recorded even when the card is down so
   // the next open_and_start() (a revive) InitWrites at it. The caller still
@@ -324,9 +335,7 @@ bool RadioFrontend::set_width(uint8_t ch, uint8_t width_mhz) {
   width_.store(width_mhz, std::memory_order_release);
   if (!ready_.load(std::memory_order_acquire) || !device_) return false;
   rx_channel_.store(0, std::memory_order_release);   // same blinding as retune()
-  device_->SetMonitorChannel(width_mhz == 40
-                                 ? SelectedChannel{ch, mabur::ht40_offset(ch), CHANNEL_WIDTH_40}
-                                 : SelectedChannel{ch, 0, CHANNEL_WIDTH_20});
+  device_->SetMonitorChannel(tune_for(ch, width_mhz));
   channel_.store(ch, std::memory_order_release);
   rx_channel_.store(ch, std::memory_order_release);
   std::fprintf(stderr, "maburgs radio: card %u width %u -> %u MHz on ch %u\n",

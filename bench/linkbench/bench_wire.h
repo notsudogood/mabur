@@ -110,7 +110,8 @@ inline bool parse_range_payload(const uint8_t* p, size_t len,
   if (len < kRangeHeaderLen + 4 || std::memcmp(p, kRangeMagic, 4) != 0)
     return false;
   const uint8_t bw = p[4], mcs = p[5];
-  if ((bw != 20 && bw != 40) || mcs > 7) return false;
+  // 20/40 rows are HT (MCS 0..7); 80 MHz rows are VHT 1SS (MCS 0..9).
+  if ((bw != 20 && bw != 40 && bw != 80) || mcs > (bw == 80 ? 9 : 7)) return false;
   const uint8_t fill = static_cast<uint8_t>(0x3C ^ p[6] ^ mcs ^ bw);
   for (size_t i = kRangeHeaderLen; i + 4 < len; ++i)
     if (p[i] != fill) return false;

@@ -45,8 +45,14 @@ using namespace linkbench;
 
 struct Args {
   int channel = 149;
-  int bw = 20;  // 20, or 40 (channel = primary; secondary per mabur::ht40_offset)
-  int mcs = 5;
+  // 20, 40 (channel = primary; secondary per mabur::ht40_offset), or 80
+  // (channel = the block-lowest 20, mabur::vht80_block_lowest).
+  int bw = 20;
+  int mcs = 5;  // HT 0..7; 0..9 when every frame is VHT (80 MHz or --vht)
+  // --vht: VHT 1SS radiotap for 20/40 MHz frames too. 80 MHz frames are
+  // always VHT (HT has no 80 MHz); without --vht the 20/40 frames of an
+  // 80-tuned run are HT, as the ladder's 20/40 rungs fly.
+  bool vht = false;
   uint64_t bitrate_bps = 8'000'000;
   int time_s = 0;  // 0 = until SIGINT
   FecParams fec;   // overhead/symbol_size/window/bpb defaults
@@ -76,10 +82,12 @@ struct Args {
   // --foreign-sa: flip the SA/BSSID so a GS books these frames as foreign
   // traffic (interferer role), not own.
   bool foreign_sa = false;
-  // --frame-bw 20|40|mix: per-frame radiotap width, independent of the
-  // tuning width --bw (0 = same as --bw). mix alternates 20/40 per frame.
-  // 20-in-40 tests that a 40-tuned radio airs 20 MHz PPDUs on the primary.
-  int frame_bw = 0;  // 0 = --bw, 20, 40, -1 = mix
+  // --frame-bw 20|40|80|mix: per-frame radiotap width, independent of the
+  // tuning width --bw (0 = same as --bw), never wider than it. mix
+  // alternates 20/40 per frame at --bw 40 and cycles 20/40/80 at --bw 80.
+  // 20-in-40 tests that a 40-tuned radio airs 20 MHz PPDUs on the primary;
+  // 20/40-in-80 are bench item B2 of docs/bw80-research-2026-10-12.md.
+  int frame_bw = 0;  // 0 = --bw, 20, 40, 80, -1 = mix
   // --mcs-mix M2: alternate --mcs / M2 per frame (even mac_seq = --mcs, odd =
   // M2; linkbench-rx --rate-hist checks what actually aired).
   int mcs_mix = -1;
@@ -99,8 +107,9 @@ struct Args {
   // --range-sweep: loop forever (or --time) over TX power (rel index, outer)
   // x width x MCS (inner), --range-frames self-attributing range payloads
   // per cell (bench_wire.h), so a drone parked out of ssh reach can be
-  // measured entirely from the GS (linkbench-rx --range). Needs --bw 40
-  // tuning to air both widths (20 MHz frames ride the primary).
+  // measured entirely from the GS (linkbench-rx --range). 40 MHz rows need
+  // --bw 40 or 80 tuning, 80 MHz rows --bw 80 (narrower frames ride the
+  // primary). 80 MHz rows are VHT and take MCS 8/9 from the mask (0x3ff).
   bool range_sweep = false;
   int range_lo = -39, range_hi = 41, range_step = 2;
   int range_frames = 40;
@@ -108,18 +117,18 @@ struct Args {
   int range_gap_us = 2500;
   int range_settle_ms = 20;
   int range_mcs_mask = 0xFF;
-  int range_bw_mask = 3;  // bit0 = 20 MHz, bit1 = 40 MHz
+  int range_bw_mask = 3;  // bit0 = 20 MHz, bit1 = 40 MHz, bit2 = 80 MHz
 };
 
 void usage(const char* argv0) {
   std::fprintf(stderr,
-    "usage: %s --channel N [--bw 20|40] --mcs 0..7 --bitrate 8M [--time S]\n"
+    "usage: %s --channel N [--bw 20|40|80] --mcs 0..9 [--vht] --bitrate 8M [--time S]\n"
     "  [--overhead 0.5] [--symbol-size 64] [--window 128] [--bpb 16]\n"
     "  [--size B] [--ldpc] [--stbc]\n"
     "  [--pwr-mode override|none|offset] [--pwr 0..63] [--pwr-offset-qdb Q]\n"
     "  [--usb-vid 0x0bda] [--usb-pid 0] [--tx-threads 4]\n"
     "  [--ampdu N (max_num, 0=off)] [--ampdu-max-time 32]\n"
-    "  [--no-cca] [--foreign-sa] [--frame-bw 20|40|mix] [--mcs-mix M2] [--no-agg-even] [--duty ON_MS:OFF_MS] [--wall-sweep [--wall-lo -41] [--wall-hi 63] [--wall-frames 100]\n"
+    "  [--no-cca] [--foreign-sa] [--frame-bw 20|40|80|mix] [--mcs-mix M2] [--no-agg-even] [--duty ON_MS:OFF_MS] [--wall-sweep [--wall-lo -41] [--wall-hi 63] [--wall-frames 100]\n"
     "   [--wall-gap-us 1000] [--wall-settle-ms 20] [--wall-mcs-mask 0xff]]\n"
     "  [--range-sweep [--range-lo -39] [--range-hi 41] [--range-step 2]\n"
     "   [--range-frames 40] [--range-size 1400] [--range-gap-us 2500]\n"
@@ -135,7 +144,8 @@ bool parse_args(int argc, char** argv, Args* a) {
       return true;
     };
     if (k == "--channel") { if (!next(&a->channel)) return false; }
-    else if (k == "--bw") { if (!next(&a->bw) || (a->bw != 20 && a->bw != 40)) return false; }
+    else if (k == "--bw") { if (!next(&a->bw) || (a->bw != 20 && a->bw != 40 && a->bw != 80)) return false; }
+    else if (k == "--vht") { a->vht = true; }
     else if (k == "--mcs") { if (!next(&a->mcs)) return false; }
     else if (k == "--bitrate") {
       if (i + 1 >= argc) return false;
@@ -175,13 +185,14 @@ bool parse_args(int argc, char** argv, Args* a) {
       if (std::sscanf(argv[++i], "%d:%d", &a->duty_on_ms, &a->duty_off_ms) != 2 ||
           a->duty_on_ms <= 0 || a->duty_off_ms <= 0) return false;
     }
-    else if (k == "--mcs-mix") { if (!next(&a->mcs_mix) || a->mcs_mix < 0 || a->mcs_mix > 7) return false; }
+    else if (k == "--mcs-mix") { if (!next(&a->mcs_mix) || a->mcs_mix < 0 || a->mcs_mix > 9) return false; }
     else if (k == "--frame-bw") {
       if (i + 1 >= argc) return false;
       const std::string v = argv[++i];
       if (v == "mix") a->frame_bw = -1;
       else if (v == "20") a->frame_bw = 20;
       else if (v == "40") a->frame_bw = 40;
+      else if (v == "80") a->frame_bw = 80;
       else return false;
     }
     else if (k == "--wall-sweep") { a->wall_sweep = true; }
@@ -210,21 +221,36 @@ bool parse_args(int argc, char** argv, Args* a) {
                  kBenchPktHeader, maxp, a->fec.symbol_size);
     return false;
   }
-  if (a->mcs < 0 || a->mcs > 7) return false;
+  // Widest frame this run airs; any HT frame (narrower than 80 without
+  // --vht) caps the MCS at 7.
+  const int widest = a->frame_bw > 0 ? a->frame_bw : a->bw;
+  const bool any_ht = !a->vht && (widest < 80 || a->frame_bw == -1);
+  const int mcs_max = any_ht ? 7 : 9;
+  if (a->mcs < 0 || a->mcs > mcs_max || a->mcs_mix > mcs_max) {
+    std::fprintf(stderr, "error: --mcs/--mcs-mix must be 0..%d (%s frames)\n",
+                 mcs_max, any_ht ? "HT" : "VHT");
+    return false;
+  }
   if (a->range_sweep &&
       (a->range_lo < -64 || a->range_hi > 63 || a->range_lo > a->range_hi ||
        a->range_step < 1 || a->range_frames < 1 || a->range_size < 16 ||
-       a->range_size > 2000 || (a->range_bw_mask & ~3) || !a->range_bw_mask ||
-       ((a->range_bw_mask & 2) && a->bw != 40))) {
-    std::fprintf(stderr, "error: bad --range-* (40 MHz rows need --bw 40)\n");
+       a->range_size > 2000 || (a->range_bw_mask & ~7) || !a->range_bw_mask ||
+       (a->range_mcs_mask & ~0x3FF) ||
+       ((a->range_bw_mask & 2) && a->bw < 40) || ((a->range_bw_mask & 4) && a->bw != 80))) {
+    std::fprintf(stderr, "error: bad --range-* (40 MHz rows need --bw 40|80, 80 MHz rows --bw 80)\n");
     return false;
   }
   if (a->mcs_mix >= 0 && a->frame_bw != 0) {
     std::fprintf(stderr, "error: --mcs-mix and --frame-bw are exclusive\n");
     return false;
   }
-  if (a->frame_bw != 0 && a->frame_bw != 20 && a->bw != 40) {
-    std::fprintf(stderr, "error: --frame-bw 40/mix needs --bw 40 tuning\n");
+  if (a->frame_bw > a->bw || (a->frame_bw == -1 && a->bw == 20)) {
+    std::fprintf(stderr, "error: --frame-bw wider than the --bw tuning\n");
+    return false;
+  }
+  if (a->bw == 80 && !mabur::vht80_block_lowest(static_cast<uint8_t>(a->channel))) {
+    std::fprintf(stderr, "error: --bw 80 needs the lowest channel of an 80 MHz block "
+                         "(36 52 100 116 132 149)\n");
     return false;
   }
   if (a->bw == 40 && mabur::ht40_offset(static_cast<uint8_t>(a->channel)) == 0) {
@@ -283,20 +309,28 @@ int main(int argc, char** argv) {
   }
   install_devourer_signal_handlers();
 
-  devourer::TxMode mode;
-  mode.mode = devourer::TxMode::Mode::HT;
-  mode.ht_mcs = static_cast<uint8_t>(a.mcs);
-  mode.bw_mhz = static_cast<uint8_t>(a.bw);
-  mode.ldpc = a.ldpc;
-  mode.stbc = a.stbc;
+  // One frame's TxMode: VHT 1SS for 80 MHz frames (HT has no 80 MHz) and
+  // for every width under --vht, HT otherwise.
+  auto make_mode = [&](int bw, int mcs) {
+    devourer::TxMode m;
+    const bool vht = bw == 80 || a.vht;
+    m.mode = vht ? devourer::TxMode::Mode::VHT : devourer::TxMode::Mode::HT;
+    if (vht) { m.vht_mcs = static_cast<uint8_t>(mcs); m.vht_nss = 1; }
+    else m.ht_mcs = static_cast<uint8_t>(mcs);
+    m.bw_mhz = static_cast<uint8_t>(bw);
+    m.ldpc = a.ldpc;
+    m.stbc = a.stbc;
+    return m;
+  };
+  const int run_bw = a.frame_bw > 0 ? a.frame_bw : a.bw;
+  devourer::TxMode mode = make_mode(run_bw, a.mcs);
   const std::vector<uint8_t> radiotap = devourer::build_stream_radiotap(mode);
-  devourer::TxMode mode20 = mode, mode40 = mode;
-  mode20.bw_mhz = 20;
-  mode40.bw_mhz = 40;
+  devourer::TxMode mode20 = make_mode(20, a.mcs), mode40 = make_mode(40, a.mcs);
   const std::vector<uint8_t> rt20 = devourer::build_stream_radiotap(mode20);
   const std::vector<uint8_t> rt40 = devourer::build_stream_radiotap(mode40);
-  devourer::TxMode mode_m2 = mode;
-  if (a.mcs_mix >= 0) mode_m2.ht_mcs = static_cast<uint8_t>(a.mcs_mix);
+  const std::vector<uint8_t> rt80 =
+      a.bw == 80 ? devourer::build_stream_radiotap(make_mode(80, a.mcs)) : std::vector<uint8_t>{};
+  devourer::TxMode mode_m2 = make_mode(run_bw, a.mcs_mix >= 0 ? a.mcs_mix : a.mcs);
   const std::vector<uint8_t> rt_m2 = devourer::build_stream_radiotap(mode_m2);
   devourer::TxMode even_base = mode, even_20 = mode20;
   even_base.no_agg = even_20.no_agg = a.no_agg_even;
@@ -307,13 +341,18 @@ int main(int argc, char** argv) {
     const uint64_t n = frame_ctr++;
     if (a.frame_bw == 20) return rt20;
     if (a.frame_bw == 40) return rt40;
+    if (a.frame_bw == 80) return rt80;
+    if (a.frame_bw == -1 && a.bw == 80)
+      return n % 3 == 0 ? rt_even_20 : n % 3 == 1 ? rt40 : rt80;
     if (a.frame_bw == -1) return (n & 1) ? rt40 : rt_even_20;
     if (a.mcs_mix >= 0) return (n & 1) ? rt_m2 : rt_even_base;
     return radiotap;
   };
   if (a.frame_bw != 0)
     std::fprintf(stderr, "  frame-bw %s (tuned %d)\n",
-                 a.frame_bw < 0 ? "mix" : a.frame_bw == 20 ? "20" : "40", a.bw);
+                 a.frame_bw < 0 ? "mix" : std::to_string(a.frame_bw).c_str(), a.bw);
+  if (mode.mode == devourer::TxMode::Mode::VHT || a.bw == 80)
+    std::fprintf(stderr, "  VHT 1SS for %s frames\n", a.vht ? "all" : "80 MHz");
 
   const double afac = air_factor(a.fec, a.size, radiotap.size());
   std::fprintf(stderr,
@@ -382,8 +421,10 @@ int main(int argc, char** argv) {
 
   std::fprintf(stderr, "bringing up TX on channel %d\n", a.channel);
   const uint8_t ch = static_cast<uint8_t>(a.channel);
-  dev->InitWrite(a.bw == 40 ? SelectedChannel{ch, mabur::ht40_offset(ch), CHANNEL_WIDTH_40}
-                            : SelectedChannel{ch, 0, CHANNEL_WIDTH_20});
+  // 80 MHz: ch is the block-lowest 20, which devourer makes the primary.
+  dev->InitWrite(a.bw == 80   ? SelectedChannel{ch, 0, CHANNEL_WIDTH_80}
+                 : a.bw == 40 ? SelectedChannel{ch, mabur::ht40_offset(ch), CHANNEL_WIDTH_40}
+                              : SelectedChannel{ch, 0, CHANNEL_WIDTH_20});
   if (a.pwr_mode == "override") dev->SetTxPowerIndexOverride(a.pwr);
   else if (a.pwr_mode == "offset") dev->SetTxPowerOffsetQdb(a.pwr_offset_qdb);
   // "none": leave the efuse per-rate (per-MCS) calibration untouched.
@@ -427,11 +468,10 @@ int main(int argc, char** argv) {
   auto wall_sweep = [&] {
     uint16_t mac_seq = 0;
     const uint64_t t0 = mono_us();
-    for (int m = 0; m < 8 && !g_devourer_should_stop; ++m) {
+    const int wall_mcs_n = mode.mode == devourer::TxMode::Mode::VHT ? 10 : 8;
+    for (int m = 0; m < wall_mcs_n && !g_devourer_should_stop; ++m) {
       if (!(a.wall_mcs_mask & (1 << m))) continue;
-      devourer::TxMode wm = mode;
-      wm.ht_mcs = static_cast<uint8_t>(m);
-      const std::vector<uint8_t> rt = devourer::build_stream_radiotap(wm);
+      const std::vector<uint8_t> rt = devourer::build_stream_radiotap(make_mode(run_bw, m));
       int sent_row = 0, fail_row = 0;
       for (int rel = a.wall_lo; rel <= a.wall_hi && !g_devourer_should_stop; ++rel) {
         dev->SetTxPowerIndexOverride(std::clamp(anchor + rel, 0, 127));
@@ -465,14 +505,14 @@ int main(int argc, char** argv) {
 
   auto range_sweep = [&] {
     uint16_t mac_seq = 0;
-    std::vector<uint8_t> rts[2][8];
-    for (int w = 0; w < 2; ++w)
-      for (int m = 0; m < 8; ++m) {
-        devourer::TxMode rm = mode;
-        rm.bw_mhz = static_cast<uint8_t>(w ? 40 : 20);
-        rm.ht_mcs = static_cast<uint8_t>(m);
-        rts[w][m] = devourer::build_stream_radiotap(rm);
-      }
+    // Row w: 0 = 20, 1 = 40, 2 = 80 MHz. HT rows stop at MCS7 (an empty
+    // radiotap marks the cell skipped); 80 MHz / --vht rows run to MCS9.
+    constexpr int kRowBw[3] = {20, 40, 80};
+    std::vector<uint8_t> rts[3][10];
+    for (int w = 0; w < 3; ++w)
+      for (int m = 0; m < 10; ++m)
+        if (m < 8 || kRowBw[w] == 80 || a.vht)
+          rts[w][m] = devourer::build_stream_radiotap(make_mode(kRowBw[w], m));
     const uint64_t t0 = mono_us();
     const uint64_t deadline =
         a.time_s > 0 ? t0 + static_cast<uint64_t>(a.time_s) * 1'000'000 : 0;
@@ -484,13 +524,13 @@ int main(int argc, char** argv) {
         dev->SetTxPowerIndexOverride(std::clamp(anchor + rel, 0, 127));
         std::this_thread::sleep_for(std::chrono::milliseconds(a.range_settle_ms));
         uint64_t due = mono_us();
-        for (int w = 0; w < 2; ++w) {
+        for (int w = 0; w < 3; ++w) {
           if (!(a.range_bw_mask & (1 << w))) continue;
-          for (int m = 0; m < 8; ++m) {
-            if (!(a.range_mcs_mask & (1 << m))) continue;
+          for (int m = 0; m < 10; ++m) {
+            if (!(a.range_mcs_mask & (1 << m)) || rts[w][m].empty()) continue;
             for (int k = 0; k < a.range_frames; ++k) {
               RangeFrameInfo ri;
-              ri.bw = static_cast<uint8_t>(w ? 40 : 20);
+              ri.bw = static_cast<uint8_t>(kRowBw[w]);
               ri.mcs = static_cast<uint8_t>(m);
               ri.rel = static_cast<int8_t>(rel);
               ri.cycle = cycle;

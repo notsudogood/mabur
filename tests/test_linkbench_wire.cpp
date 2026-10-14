@@ -64,6 +64,17 @@ TEST(range_payload_roundtrip_with_and_without_fcs) {
   CHECK(out.rel == -17);
 }
 
+TEST(range_payload_80mhz_rows_take_vht_mcs) {
+  RangeFrameInfo in, out;
+  in.bw = 80; in.mcs = 9; in.rel = 2;
+  auto p = build_range_payload(in, 300);
+  REQUIRE(parse_range_payload(p.data(), p.size(), &out));
+  CHECK(out.bw == 80 && out.mcs == 9);
+  in.bw = 40; in.mcs = 8;                        // HT row: MCS8 is not 1SS HT
+  p = build_range_payload(in, 300);
+  CHECK(!parse_range_payload(p.data(), p.size(), &out));
+}
+
 TEST(range_payload_rejects_corruption_and_foreign) {
   RangeFrameInfo in;
   in.bw = 20; in.mcs = 0; in.rel = 3;

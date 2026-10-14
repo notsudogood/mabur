@@ -22,6 +22,7 @@
 
 #include "SignalStop.h"
 #include "mabur/cal_wire.h"
+#include "mabur/ht40.h"
 #include <map>
 #include <tuple>
 #include <utility>
@@ -32,7 +33,9 @@ using namespace linkbench;
 
 struct Args {
   int channel = 149;
-  int bw = 20;  // 20, or 40 (channel = primary; secondary per mabur::ht40_offset)
+  // 20, 40 (channel = primary; secondary per mabur::ht40_offset), or 80
+  // (channel = the block-lowest 20, mabur::vht80_block_lowest).
+  int bw = 20;
   int card = 0;
   uint16_t usb_vid = 0x0bda, usb_pid = 0;
   int index = 0;
@@ -56,6 +59,9 @@ struct Args {
   int retune_n = 10;
   // --rate-hist: tally (mac_seq parity, received HT MCS) for CRC-clean
   // canonical frames; printed as "H parity mcs count" at exit (stdout).
+  // Also "B parity rate_code bw count": the raw descriptor rate code and
+  // PPDU width (0x0C+n = HT MCSn, 0x2C+n = VHT 1SS MCSn; bw 0/1/2 =
+  // 20/40/80 MHz), so an 80 MHz run proves what actually aired.
   bool rate_hist = false;
   // --range FILE: tally linkbench-tx --range-sweep frames per (cycle, bw,
   // mcs, rel) and append each finished cycle to FILE as
@@ -66,7 +72,7 @@ struct Args {
 
 void usage(const char* argv0) {
   std::fprintf(stderr,
-    "usage: %s --channel N [--bw 20|40] [--card 0] [--usb-vid 0x0bda] [--usb-pid 0]\n"
+    "usage: %s --channel N [--bw 20|40|80] [--card 0] [--usb-vid 0x0bda] [--usb-pid 0]\n"
     "  [--index 0] [--overhead 0.5] [--symbol-size 64] [--window 128] "
     "[--bpb 16]\n"
     "  [--json FILE] [--time S] [--wall] [--energy-ms N] [--nhm-busy-ms N] [--nhm-reset] [--rate-hist] [--range FILE]\n"
@@ -82,7 +88,7 @@ bool parse_args(int argc, char** argv, Args* a) {
       return true;
     };
     if (k == "--channel") { if (!next(&a->channel)) return false; }
-    else if (k == "--bw") { if (!next(&a->bw) || (a->bw != 20 && a->bw != 40)) return false; }
+    else if (k == "--bw") { if (!next(&a->bw) || (a->bw != 20 && a->bw != 40 && a->bw != 80)) return false; }
     else if (k == "--card") { if (!next(&a->card)) return false; }
     else if (k == "--index") { if (!next(&a->index)) return false; }
     else if (k == "--overhead") {
@@ -123,6 +129,11 @@ bool parse_args(int argc, char** argv, Args* a) {
     else if (k == "--usb-vid") { int v; if (!next(&v)) return false; a->usb_vid = static_cast<uint16_t>(v); }
     else if (k == "--usb-pid") { int v; if (!next(&v)) return false; a->usb_pid = static_cast<uint16_t>(v); }
     else { return false; }
+  }
+  if (a->bw == 80 && !mabur::vht80_block_lowest(static_cast<uint8_t>(a->channel))) {
+    std::fprintf(stderr, "error: --bw 80 needs the lowest channel of an 80 MHz block "
+                         "(36 52 100 116 132 149)\n");
+    return false;
   }
   return true;
 }
@@ -222,6 +233,7 @@ int main(int argc, char** argv) {
   std::map<std::pair<int, int>, WallCell> wall_cells;
   uint64_t wall_corrupt = 0;
   std::map<std::pair<int, int>, uint64_t> rate_hist;
+  std::map<std::tuple<int, int, int>, uint64_t> rate_bw_hist;
   struct RangeCell { uint32_t rx = 0; double r0 = 0, r1 = 0, s0 = 0, s1 = 0; };
   std::map<std::tuple<int, int, int>, RangeCell> range_cur;
   int range_cycle = -1;
@@ -263,7 +275,10 @@ int main(int argc, char** argv) {
     batch.clear();
     queue.drain(batch, /*timeout_ms=*/100);
     for (auto& m : batch) {
-      if (a.rate_hist && m.crc_ok) ++rate_hist[{m.mac_seq & 1, m.mcs}];
+      if (a.rate_hist && m.crc_ok) {
+        ++rate_hist[{m.mac_seq & 1, m.mcs}];
+        ++rate_bw_hist[{m.mac_seq & 1, m.rate_code, m.rx_bw}];
+      }
       if (rf) {
         if (!m.crc_ok) { ++range_crc_bad; continue; }
         RangeFrameInfo ri;
@@ -412,6 +427,9 @@ int main(int argc, char** argv) {
   if (rf) std::fclose(rf);  // the running (unfinished) cycle is dropped
   for (const auto& [k, n] : rate_hist)
     std::printf("H %d %d %llu\n", k.first, k.second, static_cast<unsigned long long>(n));
+  for (const auto& [k, n] : rate_bw_hist)
+    std::printf("B %d 0x%02x %d %llu\n", std::get<0>(k), std::get<1>(k), std::get<2>(k),
+                static_cast<unsigned long long>(n));
   if (a.wall) {
     for (const auto& [k, c] : wall_cells)
       std::printf("cell mcs %d rel %d rx %u rssi %.1f %.1f\n", k.first, k.second,

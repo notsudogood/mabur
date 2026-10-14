@@ -90,7 +90,8 @@ class RadioFrontend : public LinkCard {
 
   // ScoutRadio interface: the scout thread's control plane on this card.
   bool retune(uint8_t ch) override;                 // FastRetune; false pre-ready
-  // Full SetMonitorChannel to `ch` at `width_mhz` (20|40): the boot scout
+  // Full SetMonitorChannel to `ch` at `width_mhz` (20|40; 80 is bench-only,
+  // ch the block-lowest 20, for linkbench-rx --bw 80): the boot scout
   // card joining the 40 MHz link once the pick freezes (docs/bw40.md "Boot scan scores every half").
   // Tens of ms, once per process. False when 40 has no pair (nothing
   // recorded) or pre-ready -- the width is then still recorded as desired,

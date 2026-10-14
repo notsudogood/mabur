@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Upstream libusb with the Emscripten WebUSB backend, into a repo-local
 # EM_CACHE sysroot (emcmake overrides PKG_CONFIG_LIBDIR and -L to the
-# sysroot, so it has to live there). Pinned to the commit the 2026-09-27
+# sysroot, so it has to live there). Pinned to the commit the WASM WebUSB
 # spike validated. Run inside: nix-shell -p emscripten autoconf automake libtool pkg-config
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)

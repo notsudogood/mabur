@@ -40,13 +40,17 @@ def main():
     for s in sizes:
         # Codepoints ascending and unique -- GsFont binary-searches them.
         assert list(s["cps"]) == sorted(set(s["cps"])), s["cps"][:8]
-        # The subset the overlay needs. Every non-ASCII codepoint named in
-        # gs_overlay.h belongs here -- U+2014 was missing from SUBSET for a
+        # The subset gen_gsfont.py bakes. Every non-ASCII codepoint the OSD
+        # draws belongs here -- U+2014 was missing from SUBSET for a
         # while and nothing noticed, because draw_text advances the pen for
         # a glyph the atlas lacks, so the never-received "——" rendered as
         # empty space of exactly the right width.
+        # The bar's item icons (gs_compact.h gs_icon) sit in the
+        # supplementary private use area, above anything 16-bit.
         for cp in [0x20, 0x30, 0x39, 0x41, 0x5A, 0x25, 0x2F, 0x3A, 0x2E,
-                   0x2014, 0x2212, 0x2192, 0x25CF, 0x25CB]:
+                   0x2014, 0x2212, 0x2192, 0x25CF, 0x25CB,
+                   0xF05A9, 0xF066A, 0xF07AF, 0xF04A2, 0xF147D, 0xF050F,
+                   0xF04C5, 0xF0A24, 0xF0230, 0xF0430, 0xF051B, 0xF033A]:
             assert cp in s["cps"], (hex(cp), s["px"])
         # Two bytes per pixel, exact size, no truncation.
         assert len(s["pix"]) == s["n"] * s["gw"] * s["gh"] * 2, s["px"]

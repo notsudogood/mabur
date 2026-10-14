@@ -119,8 +119,8 @@ bool parse_gs_snapshot(const char* data, size_t n, GsSnapshot* out) {
       out->pts_off_us = integer64(*rtt, "pts_off_us");
     }
     // The LOSS row's pre-FEC half: link.pre_fec_loss, the always-exported
-    // link-level gauge, which since 2026-09-23 pools BOTH video layers
-    // (base + enh arrival-tracker counts over one window). The controller's
+    // link-level gauge, which pools BOTH video layers (base + enh
+    // arrival-tracker counts over one window). The controller's
     // link.ctl.pre_fec_loss is base-only -- the ladder decides on the base
     // layer -- and is read below only as the fallback for a null window.
     if (const std::optional<double> p = num(*link, "pre_fec_loss"))
@@ -129,13 +129,13 @@ bool parse_gs_snapshot(const char* data, size_t n, GsSnapshot* out) {
       if (const json* rung = obj(*ctl, "rung")) {
         out->mcs = integer(*rung, "mcs");
         out->bw = integer(*rung, "bw");
-        // link.ctl.rung.ov_base (Task 5, same-rate-fixed-pairs): the rung's
+        // link.ctl.rung.ov_base (same-rate fixed pairs): the rung's
         // overhead split into a base/enh pair; the OSD shows the base
         // figure (the pilot-facing budget number -- base is the layer that
         // must survive). Key renamed from "ov"; value semantics unchanged
-        // -- since 2026-08-29 (airtime-balance-uep) this is the LITERAL FEC
-        // command overhead for the ladder's current rung, so the *100 below
-        // still lands on the right on-screen percentage.
+        // -- this is the LITERAL FEC command overhead for the ladder's current
+        // rung, so the *100 below still lands on the right on-screen
+        // percentage.
         if (const std::optional<double> ov = num(*rung, "ov_base"))
           out->fec_pct = *ov * 100.0;
       }

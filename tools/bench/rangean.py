@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Analyse linkbench-rx --range files (linkbench-tx --range-sweep; method and
-results in docs/bw40-sweep-findings-2026-09-23.md "Range test").
+results in docs/findings/2026-09-23-bw40-sweep.md "Range test").
 
 Per (file = one GS card at one tuning, bw, mcs): delivery vs drone TX power
 index (rel to the TXAGC anchor), averaged over completed cycles (each file's

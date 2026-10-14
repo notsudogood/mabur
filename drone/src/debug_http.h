@@ -1,9 +1,8 @@
-// drone/src/debug_http.h — thin localhost debug endpoint (spec
-// 2026-08-28-venc-foldin, Task B7). Three routes: GET /snapshot.jpg,
-// GET /venc (stats), POST /venc/set?k=v (whitelisted bitrate/qp_delta/
-// roi_qp). Global namespace on purpose — this header is exercised by a
-// pure host-tested parse function with no socket dependency, matching the
-// task brief's test code verbatim.
+// drone/src/debug_http.h — thin localhost debug endpoint. Three routes:
+// GET /snapshot.jpg, GET /venc (stats), POST /venc/set?k=v (whitelisted
+// bitrate/qp_delta/roi_qp). Global namespace on purpose — this header is
+// exercised by a pure host-tested parse function with no socket
+// dependency.
 #pragma once
 #include <string>
 

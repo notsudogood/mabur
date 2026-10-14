@@ -80,7 +80,7 @@ TEST(unknown_and_empty_commands_are_errors_not_crashes) {
 }
 
 TEST(binds_loopback_only) {
-  // The GS answers on 10.18.0.1; this port must never be reachable from the
+  // The GS is reachable on its LAN address; this port must never be reachable from the
   // drone or a bench laptop.
   CalControl c;
   REQUIRE(c.open(18400));

@@ -336,14 +336,14 @@ TEST(flush_all_resets_anchor_warmup) {
 }
 
 // Pins the exact ingredients an OSD caller (maburplay/src/main.cpp's 1 Hz
-// fill, Task 12 fix round 1) MUST AND together: p99_frame() alone is not
-// enough to tell a fresh frame from a stale one, because p99_frame_ is a
-// member that survives flush_all() -- flush_all() only clears map_/
-// anchor_/completed_/the chk+dsp accumulators, not p99_frame_ itself (see
-// its own comment). So immediately after a reset, p99_frame().valid can
-// still read true from BEFORE the reset while flush_line().anchor_ok
-// (same call) correctly reads false. A caller that reads bd.valid alone
-// would keep showing the pre-reset breakdown as current.
+// fill) MUST AND together: p99_frame() alone is not enough to tell a fresh
+// frame from a stale one, because p99_frame_ is a member that survives
+// flush_all() -- flush_all() only clears map_/anchor_/completed_/the chk+dsp
+// accumulators, not p99_frame_ itself (see its own comment). So immediately
+// after a reset, p99_frame().valid can still read true from BEFORE the reset
+// while flush_line().anchor_ok (same call) correctly reads false. A caller
+// that reads bd.valid alone would keep showing the pre-reset breakdown as
+// current.
 TEST(p99_frame_stays_stale_after_reset_while_anchor_ok_goes_false) {
   LatTracker lat;
   warm(lat);

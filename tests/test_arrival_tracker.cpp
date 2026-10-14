@@ -1,6 +1,5 @@
 // ArrivalTracker (common/include/mabur/arrival_tracker.h): pre-FEC loss
-// booked at arrival time in the decoder's virtual-seq space. Spec
-// docs/superpowers/specs/2026-09-05-arrival-loss-design.md §3.
+// booked at arrival time in the decoder's virtual-seq space.
 #include "mabur/arrival_tracker.h"
 #include "mtest.h"
 using mabur::ArrivalTracker;
@@ -129,12 +128,13 @@ TEST(jump_beyond_ring_settles_forward_without_aliasing) {
 
 MTEST_MAIN
 
-// --- salvage_only (2026-09-09) ---------------------------------------------
+// --- salvage_only ---------------------------------------------------------
 // A seq whose ONLY arrival was a sub-block salvaged out of an FCS-corrupt
 // body. The salvaged/corrupt counters in UepDecoder cannot say whether a
 // salvaged sub-block was needed: the other card usually delivers a clean
-// copy of the same body (flights 0043/0044, docs/sbi-salvage-flights-
-// 2026-09-09.md). Booked at settle time like expected/arrived; a clean copy
+// copy of the same body (flights 0043/0044,
+// docs/findings/2026-09-09-sbi-salvage-flights.md). Booked at settle time like
+// expected/arrived; a clean copy
 // arriving before OR after the corrupt one inside the guard clears it.
 TEST(salvage_only_counts_seqs_heard_only_through_corrupt_copies) {
   ArrivalTracker t(32);

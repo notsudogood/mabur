@@ -1,4 +1,4 @@
-// Validation sim for the encoder-shed-lag hypothesis (ctl-0020, 2026-08-09).
+// Validation sim for the encoder-shed-lag hypothesis (ctl-0020).
 //
 // Replays episode B of /media/dvr ctl-0020 (demote cascade rung 5->0 at
 // t=598.9..600.1s) into the REAL RcAgent at the real 100ms RCF cadence and
@@ -16,7 +16,7 @@
 //
 // Model assumptions (coarse, stated so the output can be judged):
 //  - air bytes = video * (1 + eff1) with eff1 = ov (literal air overhead —
-//    Task 3 airtime-balance-uep deleted the uep_layer_overhead ladder
+//    airtime-balance-uep deleted the uep_layer_overhead ladder
 //    translation, so eff1 is the identity now, not a per-layer rescale)
 //    of the APPLIED op; the enhancement stream is ignored (it is shed by
 //    the congestion guard early in a real overload), so offered load here
@@ -48,9 +48,9 @@ namespace {
 
 struct RungDef { int mcs; double ov; };
 // ctl-0020 header: ladder=0/100,2/50,4/25,5/25,6/25,7/10 — those were
-// cmd-overhead values (pre-Task-3 uep_layer_overhead ladder scaling);
+// cmd-overhead values (the old uep_layer_overhead ladder scaling);
 // doubled here to the literal air overhead the ×2 rule says they meant
-// (fec_overhead is a plain literal value on the wire since Task 1).
+// (fec_overhead is a plain literal value on the wire now).
 const RungDef kLadder[6] = {{0, 2.00}, {2, 1.00}, {4, 0.50},
                             {5, 0.50}, {6, 0.50}, {7, 0.20}};
 
@@ -85,7 +85,8 @@ struct TimedActuator : Actuator {
       mcs_changes.push_back({now, last_mcs});
     }
   }
-  void send_control(const std::vector<uint8_t>&) override {}
+  std::vector<uint8_t> last_control;  // the newest frame the drone sent (DISC_ACK)
+  void send_control(const std::vector<uint8_t>& f) override { last_control = f; }
   bool set_bitrate_kbps(int kbps) override { bitrates.push_back({now, kbps}); return true; }
   bool set_roi_qp(int) override { return true; }
   bool set_fps(int) override { return true; }
@@ -109,13 +110,18 @@ Config make_cfg() {
   return cfg;
 }
 
-std::vector<uint8_t> rcf_wire(uint16_t seq, int rung) {
+// The drone accepts an RCF only under the session pair: tagged with the
+// GS's vrx_nonce, the vtx_nonce from the drone's DISC_ACK, and seq32 (no
+// wrap here, so the wire seq).
+constexpr uint32_t kVrx = 0x1234;
+
+std::vector<uint8_t> rcf_wire(uint16_t seq, int rung, uint32_t vtx_nonce) {
   Rcf r;
   r.seq = seq;
   r.profile = encode_profile(PhyMode::HT, static_cast<uint8_t>(kLadder[rung].mcs), 20);
   r.fec_overhead_base = kLadder[rung].ov;
   r.fec_overhead_enh = kLadder[rung].ov;
-  return pack_rcf(r);
+  return pack_rcf(r, kDefaultLinkKey, TagCtx{kVrx, vtx_nonce, seq});
 }
 
 // Drives the real RcAgent through link-up, 8s of steady rung 5, then the
@@ -131,19 +137,22 @@ TimedActuator replay_real_agent() {
   agent.tick(t_link, RadioHealth{});  // BOOT -> RENDEZVOUS
 
   Disc d;
-  d.vrx_nonce = 0x1234;
+  d.vrx_nonce = kVrx;
   d.op_channel = 149;
   d.op_width = 20;
   d.init_profile = encode_profile(PhyMode::HT, 7, 20);
   d.seq = 1;
   auto disc = pack_disc(d);
-  agent.on_rc_frame(disc.data(), disc.size(), t_link);  // -> LINKED
+  agent.on_rc_frame(disc.data(), disc.size(), t_link);  // -> DISC_ACK
+  auto ack = parse_disc_ack(act.last_control.data(), act.last_control.size());
+  REQUIRE(ack.has_value() && ack->flags == 0);
+  const uint32_t vtx = ack->vtx_nonce;  // the first tagged RCF -> LINKED
 
   uint16_t seq = 2;
   for (uint64_t t = t_link + 100; t <= 605000; t += 100) {
     act.now = t;
     agent.tick(t, RadioHealth{});
-    auto wire = rcf_wire(seq++, rung_at(static_cast<double>(t)));
+    auto wire = rcf_wire(seq++, rung_at(static_cast<double>(t)), vtx);
     agent.on_rc_frame(wire.data(), wire.size(), t);
   }
   return act;
@@ -233,22 +242,41 @@ TEST(shed_lag_replay_and_model) {
     else enc.push_back({static_cast<double>(b.t) + 50.0, b.kbps});  // +waybeam
   }
 
-  // Fix pins (shed-sync design 2026-08-09): every decreased target goes
-  // out with the rung change — the floor value within one RCF+tick of the
-  // rung-0 commit, and the walk's intermediate sheds (19300, 14500, 5100)
-  // no longer swallowed by the throttle/hysteresis.
-  uint64_t t_1400 = 0;
-  int calls_in_cascade = 0;
+  // Fix pins (shed-sync fix): every decreased target goes out with the
+  // rung change — the floor value within one RCF+tick of the rung-0 commit,
+  // and the walk's intermediate sheds are not swallowed by the
+  // throttle/hysteresis. The top rungs' targets sit above
+  // bitrate_max_kbps, so their rung changes rightly send nothing; from the
+  // first shed below the clamp on, every MCS change must carry its call.
+  const int kMax = make_cfg().encoder.bitrate_max_kbps;
+  uint64_t t_1400 = 0, t_first_shed = 0;
+  int prev_kbps = kMax;
+  bool all_decreases = true;
   for (const auto& b : act.bitrates) {
-    if (b.t >= 598900 && b.kbps == 1400 && !t_1400) t_1400 = b.t;
-    if (b.t >= 598900 && b.t <= 600300) ++calls_in_cascade;
+    if (b.t < 598900 || b.t > 600300) continue;
+    if (b.kbps == 1400 && !t_1400) t_1400 = b.t;
+    if (b.kbps < kMax && !t_first_shed) t_first_shed = b.t;
+    if (b.kbps >= prev_kbps) all_decreases = false;
+    prev_kbps = b.kbps;
+  }
+  REQUIRE(t_first_shed != 0);
+  int covered = 0;
+  bool every_change_carries_a_call = true;
+  for (const auto& m : act.mcs_changes) {
+    if (m.t < t_first_shed || m.t > 600300) continue;
+    bool hit = false;
+    for (const auto& b : act.bitrates)
+      if (b.t >= m.t && b.t <= m.t + 150) hit = true;
+    if (hit) ++covered; else every_change_carries_a_call = false;
   }
   REQUIRE(t_1400 != 0);
   std::printf("\nfloor shed (1400) landed at t=%.2fs: %+.0fms after cascade "
               "start, %+.0fms after rung-0 commit\n",
               t_1400 / 1000.0, t_1400 - 598931.0, t_1400 - 600107.0);
   CHECK(t_1400 - 600107 <= 150);   // floor shed rides the rung-0 RCF
-  CHECK(calls_in_cascade >= 4);    // 19300, 14500, 5100, 1400 all applied
+  CHECK(all_decreases);                 // each call is a strict shed
+  CHECK(every_change_carries_a_call);   // no shed swallowed below the clamp
+  CHECK(covered >= 2);                  // an intermediate shed, not just the floor
 
   // ---- part 2: queue/air model on the measured encoder timeline ------
   QueueVerdict real_v;

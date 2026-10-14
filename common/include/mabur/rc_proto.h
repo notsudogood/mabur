@@ -18,61 +18,54 @@ namespace mabur::rc {
 // CRC16-CCITT (mabur::crc16_ccitt) over every byte before it.
 
 constexpr uint16_t RC_MAGIC = 0x5243;  // "RC"
-// Bumped 1 -> 2 on 2026-08-12: the RCF power byte and the T_TELEM
+// Bumped 1 -> 2: the RCF power byte and the T_TELEM
 // applied_off_qdb/derate_qdb fields were removed when runtime TX-power
-// control was deleted. Spec 2026-08-12-constant-txpower-design.md.
-// Bumped 2 -> 3 on 2026-08-15: RCF lost ack_seq, score and the
-// n_layers + layer_delivery tail. maburd read none of the three (rc_agent.cpp
-// uses seq/profile/fec_overhead/probe and nothing else), so they were
-// write-only ballast; the RCF head is fixed-length now.
-// Bumped 3 -> 4 on 2026-08-29: fec_overhead is now the literal air overhead
-// in x100 encoding (was a x16 'cmd' scalar the drone scaled 2x); Telem
-// applied_ov split per stream; probe flag renamed — the fixed base=mcs−1
-// rule means both ends of v4 agree on the split with no extra bytes. Spec
-// 2026-08-29-airtime-balance-uep.
-// Bumped 4 -> 5 on 2026-08-30: fec_overhead split into per-stream
+// control was deleted.
+// Bumped 2 -> 3: RCF lost ack_seq, score and the n_layers + layer_delivery
+// tail. maburd read none of the three (rc_agent.cpp uses
+// seq/profile/fec_overhead/probe and nothing else), so they were write-only
+// ballast; the RCF head is fixed-length now.
+// Bumped 3 -> 4: fec_overhead is now the literal air overhead in x100
+// encoding (was a x16 'cmd' scalar the drone scaled 2x); Telem applied_ov
+// split per stream; probe flag renamed — the fixed base=mcs−1 rule means
+// both ends of v4 agree on the split with no extra bytes.
+// Bumped 4 -> 5: fec_overhead split into per-stream
 // fec_overhead_base/fec_overhead_enh (fixed per-rung pairs replace the
-// balancer; base rides the scored mcs — same-rate). Spec
-// 2026-08-30-same-rate-fixed-pairs-design.md.
-// Bumped 5 -> 6 on 2026-09-04: probe_profile is a FIXED head byte (0xFF =
-// no probe stream); the RCF_F_PROBE_ENH flag + optional tail and
-// CAP_ENH_PROBE are gone. Spec 2026-09-04-probe-stream-design.md.
+// balancer; base rides the scored mcs — same-rate).
+// Bumped 5 -> 6: probe_profile is a FIXED head byte (0xFF = no probe
+// stream); the RCF_F_PROBE_ENH flag + optional tail and CAP_ENH_PROBE are
+// gone.
 // Old and new peers reject each other in BOTH directions -- a half-deployed
 // pair has no control link and, because DISC_ACK carries CAP_FRAME_WIRE, no
 // video either. Recovery is to finish the deploy.
-// Bumped 6 -> 7 on 2026-09-10: T_CAL_CMD / T_CAL_RESULT carry the TX-power
-// wall calibration session; Telem gained cal_base_ref_idx and flags bit6
-// (cal_active). Spec 2026-09-10-tx-power-calibration-design.md.
-// Bumped 7 -> 8 on 2026-09-13: calibration indices are SIGNED and RELATIVE
-// to the chip's efuse anchor (CalWindow int8, CalResult walls in [-64,63],
-// sentinel -128); Telem drops cal_base_ref_idx. Spec
-// 2026-09-13-relative-walls-design.md.
-// Bumped 8 -> 9 on 2026-09-14: RCF gains hop_ch/hop_epoch (in-flight channel
-// hop order, present in every RCF), Telem gains channel/hop_epoch (readback).
-// Spec docs/superpowers/specs/2026-09-14-inflight-channel-hop-design.md §1.
-// Bumped 10 -> 11 on 2026-09-26: RCF gains `rec` (VTX recorder wish), Telem
-// gains `rec_status`. Spec 2026-09-26-vtx-recorder-design.md.
-// Bumped 11 -> 12 on 2026-09-28: RCF gains `idr_epoch` (GS-requested IDR),
-// Telem gains `idr_gs`. Spec 2026-09-28-web-idr-request-design.md.
-// Bumped 12 -> 13 on 2026-09-30: Telem drops 25 fields no GS consumer
-// needs (generation, encoder/vanish/venc-ring counters, txq depth/cap,
-// radio sent/drops, air clock, thermal_delta, channel/hop_epoch, the
-// applied profile/overhead echo, idr_gs) and flag bits 1/2/5 -- 98 -> 48
-// bytes.
-// Bumped 13 -> 14 on 2026-10-01: vtx_id deleted from every frame (the link
-// key is the identity, spec 2026-10-01-link-pairing-design.md §2); the same
-// bump carries the per-frame auth tag, DISC_ACK's vtx_nonce + flags and
-// Telem flags bit1 (Task 3 of the plan). Flag day.
-// Bumped 14 -> 15 on 2026-10-06: T_NACK's final layout (GS->drone
-// selective-repeat request, counter + sid + repeat flag + up to
-// kMaxNackEntries runs) replaces the 2026-10-05 spike's wire; Telem gains
-// nack_rx/retx_syms/retx_refused. Spec 2026-10-05-fec-nack-design.md §5.
+// Bumped 6 -> 7: T_CAL_CMD / T_CAL_RESULT carry the TX-power wall
+// calibration session; Telem gained cal_base_ref_idx and flags bit6
+// (cal_active).
+// Bumped 7 -> 8: calibration indices are SIGNED and RELATIVE to the chip's
+// efuse anchor (CalWindow int8, CalResult walls in [-64,63], sentinel
+// -128); Telem drops cal_base_ref_idx.
+// Bumped 8 -> 9: RCF gains hop_ch/hop_epoch (in-flight channel hop order,
+// present in every RCF), Telem gains channel/hop_epoch (readback).
+// Bumped 10 -> 11: RCF gains `rec` (VTX recorder wish), Telem gains
+// `rec_status`.
+// Bumped 11 -> 12: RCF gains `idr_epoch` (GS-requested IDR), Telem gains
+// `idr_gs`.
+// Bumped 12 -> 13: Telem drops 25 fields no GS consumer needs (generation,
+// encoder/vanish/venc-ring counters, txq depth/cap, radio sent/drops, air
+// clock, thermal_delta, channel/hop_epoch, the applied profile/overhead
+// echo, idr_gs) and flag bits 1/2/5 -- 98 -> 48 bytes.
+// Bumped 13 -> 14: vtx_id deleted from every frame (the link key is the
+// identity); the same bump carries the per-frame auth tag, DISC_ACK's
+// vtx_nonce + flags and Telem flags bit1. Flag day.
+// Bumped 14 -> 15: T_NACK's final layout (GS->drone selective-repeat
+// request, counter + sid + repeat flag + up to kMaxNackEntries runs)
+// replaces the spike's wire; Telem gains nack_rx/retx_syms/retx_refused.
 constexpr uint8_t RC_VERSION = 15;
 
 // RCF probe_profile sentinel: the drone runs no probe stream.
 constexpr uint8_t kNoProbeProfile = 0xFF;
 
-// Rcf::rec bits (VTX onboard recorder, spec 2026-09-26).
+// Rcf::rec bits (VTX onboard recorder).
 constexpr uint8_t kRecOn = 0x01;     // the operator wants the VTX recording
 constexpr uint8_t kRecKnown = 0x02;  // the GS knows the wish; 0 = unknown, drone keeps its state
 
@@ -82,7 +75,7 @@ constexpr uint8_t T_DISC_ACK = 3;
 constexpr uint8_t T_TELEM = 4;
 constexpr uint8_t T_CAL_CMD = 5;
 constexpr uint8_t T_CAL_RESULT = 6;
-// T_NACK (spec 2026-10-05 fec-nack §5): GS -> drone selective-repeat
+// T_NACK (fec-nack): GS -> drone selective-repeat
 // request. Lists source symbols the sliding-window decoder could not
 // recover; the drone re-sends them from its retransmit ring at the head of
 // the TxQueue.
@@ -96,7 +89,7 @@ constexpr uint8_t T_GENLOCK = 8;
 
 constexpr uint8_t F_DISCOVERY = 0x04;
 
-// SipHash-24 auth tag (spec 2026-10-01 link-pairing §3): the 8 bytes
+// SipHash-24 auth tag (link pairing): the 8 bytes
 // immediately before the CRC on every DISC/RCF/CAL_CMD/CAL_RESULT frame.
 constexpr size_t kTagLen = 8;
 
@@ -104,7 +97,7 @@ constexpr uint8_t kAckKeyMismatch = 0x01;   // DiscAck::flags bit0
 constexpr uint8_t kTelemAuthReject = 0x02;  // Telem::flags bit1
 
 // Values hashed into a control frame's tag but never sent on the wire
-// (spec 2026-10-01 link-pairing §5): the VRX/VTX nonces from the completed
+// (link pairing): the VRX/VTX nonces from the completed
 // rendezvous plus a 32-bit sequence (RCF's seq, widened; 0 for DISC/CAL
 // frames, which carry no seq of their own).
 struct TagCtx {
@@ -115,12 +108,12 @@ struct TagCtx {
 
 // DiscAck.chip_caps bit: VTX's video bodies use the frame wire format
 // (8-byte FrameHdr units + 6-byte wide FRAG headers) instead of pre-built
-// RTP packets + 4-byte FRAG headers. Spec 2026-07-22 frame-shm ingest.
+// RTP packets + 4-byte FRAG headers.
 constexpr uint16_t CAP_FRAME_WIRE = 0x0001;
 
 // DiscAck.chip_caps bit: drone sends T_TELEM frames on its RC uplink.
 // Display-grade only (not a safety gate): a GS lacking this bit just never
-// sees a T_TELEM frame from an old drone. Spec 2026-07-26 drone-telemetry.
+// sees a T_TELEM frame from an old drone.
 constexpr uint16_t CAP_TELEMETRY = 0x0002;
 
 // DiscAck.chip_caps bit: VTX understands T_CAL_CMD / T_CAL_RESULT and can run
@@ -143,23 +136,23 @@ struct Rcf {
   double fec_overhead_base = 0.5;
   double fec_overhead_enh = 0.5;
 
-  // Probe stream MCS (spec 2026-09-04): encode_profile of the rung the GS
+  // Probe stream MCS: encode_profile of the rung the GS
   // wants probed, or kNoProbeProfile. Always present in the head.
   uint8_t probe_profile = kNoProbeProfile;
 
-  // In-flight hop (spec 2026-09-14 §1): the channel the drone must be on,
+  // In-flight hop: the channel the drone must be on,
   // in EVERY RCF (the standing truth, not an event), and the epoch the GS
   // bumps on each order/withdrawal so repeats are idempotent. 0 = no order
   // ever issued (a pre-hop GS); the drone ignores hop_ch 0.
   uint8_t hop_ch = 0;
   uint8_t hop_epoch = 0;
 
-  // VTX recorder wish (spec 2026-09-26): kRecKnown | (kRecOn if recording).
+  // VTX recorder wish: kRecKnown | (kRecOn if recording).
   // 0 = unknown (maburgs just started, no player message yet): the drone
   // leaves the recorder alone. Level-triggered, in EVERY RCF; no decay.
   uint8_t rec = 0;
 
-  // GS-requested IDR (spec 2026-09-28): the requester bumps this on every
+  // GS-requested IDR: the requester bumps this on every
   // request; the drone serves one paced IDR per CHANGE. In EVERY RCF, so a
   // lost RCF loses nothing. 0 from a GS that never requests (maburgs).
   uint8_t idr_epoch = 0;
@@ -184,7 +177,7 @@ struct DiscAck {
   uint8_t agreed_channel = 0;
   uint8_t agreed_width = 20;
   uint8_t flags = 0;  // bit0 kAckKeyMismatch: VTX's DISC tag did not verify
-                      // against the VTX's own key (spec 2026-10-01 §4) --
+                      // against the VTX's own key --
                       // the rendezvous still completes (no tag to check the
                       // ack itself against yet, pre-rendezvous), but the
                       // VRX now knows the pair is running mismatched keys.
@@ -193,8 +186,8 @@ struct DiscAck {
 
 // VTX -> VRX drone telemetry: RcAgent/queue/radio state for the GS
 // DRONE display region. Sent unconditionally, unconditioned on peer caps;
-// an old GS ignores the unknown type. Spec 2026-07-26 drone-telemetry.
-// Trimmed 2026-09-30 (RC_VERSION 13) to the fields a GS consumer reads --
+// an old GS ignores the unknown type.
+// Trimmed (RC_VERSION 13) to the fields a GS consumer reads --
 // link control, OSD, web UI, flightreport/flightjitter; the maburtop-only
 // encoder/queue/air/channel counters, the applied-op echo (a spotter takes
 // its width from config) and idr_gs are gone (list in
@@ -208,25 +201,25 @@ struct Telem {
                       //      shed_level >= 1: TxQueue pressure / USB failure;
                       //      distinct from bit0 so a bench can count sheds
                       //      and flightreport can attribute an enh gap to
-                      //      congestion rather than RF — 2026-09-03),
+                      //      congestion rather than RF),
                       // bit6 cal_active (drone accepted a calibration command; set on the
                       //      ack Telem for each accepted PHASE -- coarse, then fine -- sent
                       //      BEFORE that phase's first sweep frame, and re-sent on every exact
                       //      retransmission of the phase already running (the GS resends its
                       //      CalCmd every 200 ms into a 30-50%-lossy uplink; CalSession::on_ack
                       //      is a no-op once already out of AwaitAck, so answering a repeat is
-                      //      harmless — Task 11 review). Telem is suppressed only WHILE a phase
+                      //      harmless). Telem is suppressed only WHILE a phase
                       //      is actively sweeping, so the ack(s) and the suppression do not
                       //      conflict. The verify pass has no command and therefore no ack: the
-                      //      drone self-initiates it after applying the result — spec 2026-09-10)
-                      // bit7 low_power (RcAgent::low_power(): pre-arm 1 Mb/s / 15 fps operating point, spec 2026-09-20)
+                      //      drone self-initiates it after applying the result)
+                      // bit7 low_power (RcAgent::low_power(): pre-arm 1 Mb/s / 15 fps operating point)
                       // bit1 auth_reject: >= 1 GS->drone control frame failed tag/seq
-                      //      verification this telemetry period (spec 2026-10-01
-                      //      link-pairing §4). One period around a drone restart is
-                      //      the expected transient; sustained = bug or two controllers.
-                      // bits 2, 5 unused (probe_on / air_shed until 2026-09-30).
+                      //      verification this telemetry period. One period around a
+                      //      drone restart is the expected transient; sustained = bug or
+                      //      two controllers.
+                      // bits 2, 5 unused.
   uint16_t rcf_age_ms = 0;  // saturating
-  // link-rtt (2026-09-02): seq of the RCF rcf_age_ms is aging against, so
+  // link-rtt: seq of the RCF rcf_age_ms is aging against, so
   // the GS can subtract the send time of the RIGHT frame (repeats are 10 ms
   // apart — closer than the RTT being measured). Meaningless while
   // rcf_age_ms holds its 65535 never-sentinel.
@@ -248,12 +241,11 @@ struct Telem {
   int8_t soc_temp_c = -128;  // -128 = unavailable
   // CPU busy percent x100 over the last telemetry tick, from a /proc/stat
   // delta (user+nice+system+irq+softirq+steal over everything). 65535 =
-  // unavailable (first tick, unreadable). Replaced loadavg (`load_x100`)
-  // 2026-09-21 in the SAME 16-bit slot: on this SoC loadavg counts the
-  // SigmaStar SDK's parked D-state workers and read a flat ~13 idle or
-  // pegged (docs/dq-spike-findings-2026-08-31.md).
+  // unavailable (first tick, unreadable). Not loadavg: on this SoC loadavg
+  // counts the SigmaStar SDK's parked D-state workers and reads a flat ~13
+  // idle or pegged (docs/findings/2026-08-31-dq-spike.md).
   uint16_t cpu_busy_x100 = 65535;
-  // Drone RX-side channel view, per telemetry period (cca-on 2026-09-23):
+  // Drone RX-side channel view, per telemetry period (cca-on):
   // every frame the monitor-mode receiver handed the RX callback, split
   // into RC frames from the GS (own), CRC-clean frames that were not ours
   // (foreign -- other 802.11 on our channel) and CRC-failed frames
@@ -266,11 +258,11 @@ struct Telem {
   // a second (795 TxQueue drops in 20 min on the bench). Saturating.
   uint16_t rx_own = 0, rx_foreign = 0, rx_crcfail = 0;
 
-  // VTX recorder (spec 2026-09-26): bits 0-1 RecState (0 off, 1 recording,
+  // VTX recorder: bits 0-1 RecState (0 off, 1 recording,
   // 2 error), bits 2-7 RecErr (drone/src/vtx_recorder.h).
   uint8_t rec_status = 0;
 
-  // Software NACK (spec 2026-10-05 fec-nack §5), per Telem period, saturating:
+  // Software NACK, per Telem period, saturating:
   // requests verified, source symbols re-sent, symbols refused by the air bucket.
   uint16_t nack_rx = 0, retx_syms = 0, retx_refused = 0;
 };
@@ -348,8 +340,7 @@ std::optional<Genlock> parse_genlock(const uint8_t* buf, size_t len);
 // (kTagLen) right before the CRC. pack_* always writes a tag -- keyed by
 // `key`, defaulting to kDefaultLinkKey, hashed over the frame's bytes plus
 // `ctx` (never sent; see TagCtx). parse_* stays structural and never checks
-// it; verify_control is the one place a tag is checked (Task 6 wires it up
-// on the drone).
+// it; verify_control is the one place a tag is checked.
 std::vector<uint8_t> pack_rcf(const Rcf& r, const LinkKey& key = kDefaultLinkKey,
                               const TagCtx& ctx = {});
 std::optional<Rcf> parse_rcf(const uint8_t* buf, size_t len);
@@ -367,7 +358,7 @@ std::vector<uint8_t> pack_cal_cmd(const CalCmd& c, const LinkKey& key = kDefault
                                   const TagCtx& ctx = {});
 std::optional<CalCmd> parse_cal_cmd(const uint8_t* buf, size_t len);
 
-// T_NACK (spec 2026-10-05 fec-nack §5): GS -> drone selective-repeat
+// T_NACK: GS -> drone selective-repeat
 // request for base-layer source symbols. counter is the GS's per-session
 // request counter and the tag ctx seq32; the drone accepts only a counter
 // greater than the last one it verified this session.

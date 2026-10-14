@@ -12,8 +12,8 @@ static std::string write_tmp_play(const char* text) {
   return path;
 }
 
-// dvr.target (spec 2026-09-26-vtx-recorder): which recorders the record
-// button drives. Default "gs" (identical to pre-feature behaviour).
+// dvr.target (VTX recorder): which recorders the record button drives. Default
+// "gs" (identical to pre-feature behaviour).
 TEST(dvr_target_values_and_strictness) {
   auto c = maburplay::load_config(write_tmp_play("[dvr]\ntarget = \"both\"\n"));
   CHECK(c.dvr.target == "both");
@@ -151,8 +151,6 @@ TEST(gs_osd_defaults_are_off_on_8302) {
   // 3 s = 6 missed samples at the sideport's 500 ms cadence.
   CHECK(c.osd.gs.stale_ms == 3000);
   CHECK(c.osd.gs.font == "/usr/local/share/mabur/gs_osd.gfont");
-  // The one-line bottom bar is the default layout, not the corner blocks.
-  CHECK(c.osd.gs.style == "compact");
 }
 
 // An empty osd block must leave the gs defaults alone: parsing "osd" and
@@ -171,26 +169,22 @@ TEST(gs_osd_defaults_survive_an_osd_block_without_gs) {
 TEST(gs_osd_keys_parse) {
   auto c = maburplay::load_config(write_tmp_play(
       "[osd.gs]\nenable = true\nport = 9000\nfont = \"/x.gfont\"\n"
-      "style = \"essential\"\nstale_ms = 1500\n"));
+      "stale_ms = 1500\n"));
   CHECK(c.osd.gs.enable == true);
   CHECK(c.osd.gs.port == 9000);
   CHECK(c.osd.gs.font == "/x.gfont");
-  CHECK(c.osd.gs.style == "essential");
   CHECK(c.osd.gs.stale_ms == 1500);
 }
 
-// Both layouts are expressible, and nothing else is. A typo'd style must
-// fail the load rather than silently pick one: the two look nothing alike,
-// so "whichever the default was" is not a recoverable outcome in flight.
-TEST(gs_osd_style_accepts_both_layouts_and_rejects_anything_else) {
-  auto c = maburplay::load_config(write_tmp_play(
-      "[osd.gs]\nstyle = \"compact\"\n"));
-  CHECK(c.osd.gs.style == "compact");
-  for (const char* bad : {"Compact", "bar", "", "essentail"}) {
+// There is one GS layout, so there is no style key: a config still
+// carrying one must refuse to boot like any other unknown key, not be
+// quietly accepted.
+TEST(gs_osd_style_key_is_gone) {
+  for (const char* v : {"compact", "essential"}) {
     bool threw = false;
     try {
       maburplay::load_config(write_tmp_play(
-          (std::string("[osd.gs]\nstyle = \"") + bad + "\"\n").c_str()));
+          (std::string("[osd.gs]\nstyle = \"") + v + "\"\n").c_str()));
     } catch (const std::exception&) { threw = true; }
     CHECK(threw == true);
   }
@@ -323,7 +317,7 @@ TEST(display_vsync_lead_range_enforced) {
   CHECK(threw == true);
 }
 
-// display.lat_log_dir went with the 2026-09-06 consolidation: maburplay holds
+// display.lat_log_dir went with the debug-log consolidation: maburplay holds
 // no logging config at all now, it follows /tmp/mabur-session.
 TEST(removed_lat_log_dir_is_rejected) {
   bool threw = false;
@@ -392,8 +386,8 @@ MTEST_MAIN
 
 TEST(display_chain_budget_key) {
   // display.chain_budget: frames a sequential-slot chain may run before
-  // the regulator cuts it with one drop. Default 3 (bench A/B
-  // 2026-09-02, operator choice); 0 = unbounded; range [0, 60].
+  // the regulator cuts it with one drop. Default 3 (bench A/B,
+  // operator choice); 0 = unbounded; range [0, 60].
   const auto bare = maburplay::load_config(write_tmp_play(""));
   CHECK(bare.display.chain_budget == 3);
   const auto cfg = maburplay::load_config(
@@ -443,11 +437,31 @@ TEST(colortrans_enable_key) {
   bool noted = false;
   for (const auto& d : defaulted) if (d.find("colortrans") != std::string::npos) noted = true;
   CHECK(noted);
-  // Only `enable` exists: the constants live in code (spec section 1).
+  // Only `enable` exists: the constants live in code.
   bool threw = false;
   try { maburplay::load_config(write_tmp_play("[colortrans]\ngain = 2.0\n")); }
   catch (const std::exception& e) {
     threw = std::string(e.what()).find("colortrans.gain") != std::string::npos;
   }
   CHECK(threw);
+}
+
+TEST(decoder_stream_key) {
+  // [decoder] stream: A/B and kill switch for the streamed decode. Default on;
+  // the bundle sets it.
+  CHECK(maburplay::load_config(write_tmp_play("")).decoder.stream);
+  CHECK(!maburplay::load_config(write_tmp_play("[decoder]\nstream = false\n")).decoder.stream);
+  std::vector<std::string> defaulted;
+  maburplay::load_config(write_tmp_play("backend = \"null\"\n"), &defaulted);
+  bool noted = false;
+  for (const auto& d : defaulted) if (d.find("decoder") != std::string::npos) noted = true;
+  CHECK(noted);                               // absent section is reported
+  std::string msg;
+  try { maburplay::load_config(write_tmp_play("[decoder]\nstreams = true\n")); }
+  catch (const std::exception& e) { msg = e.what(); }
+  CHECK(msg.find("decoder.streams") != std::string::npos);
+  msg.clear();
+  try { maburplay::load_config(write_tmp_play("[decoder]\nstream = 1\n")); }
+  catch (const std::exception& e) { msg = e.what(); }
+  CHECK(msg.find("decoder.stream") != std::string::npos);
 }

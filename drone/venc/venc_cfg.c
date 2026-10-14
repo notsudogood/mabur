@@ -1,13 +1,13 @@
 /* ported-from/derived-from waybeam_venc f956a52:src/venc_config.c — by now
  * only the absent-key defaults and two pure helpers survive; every cJSON
- * parse/save/load and live-apply grouping went with the venc fold-in
- * (spec 2026-08-28 §3), and the resilience preset table went 2026-09-04
- * when its fields became config keys of their own. */
+ * parse/save/load and live-apply grouping went with the venc fold-in, and
+ * the resilience preset table went when its fields became config keys of
+ * their own. */
 #include "venc_cfg.h"
 
 #include <string.h>
 
-/* Absent-key defaults (spec 2026-08-28 venc-foldin §3).  See venc_cfg.h.
+/* Absent-key defaults.  See venc_cfg.h.
  *
  * These are the values the shipped bundle carries, so a config that omits
  * a venc key gets the flown configuration rather than a zero.  sensor_bin

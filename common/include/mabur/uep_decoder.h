@@ -19,8 +19,8 @@ struct DecodedFrag {
   std::vector<uint8_t> frag;
   uint64_t body_mono_us = 0;  // RX stamp of the body whose arrival emitted
                               // this fragment (repair-recovered fragments
-                              // carry the COMPLETING body's stamp — spec'd
-                              // approximation). 0 = unknown (tests).
+                              // carry the COMPLETING body's stamp — a
+                              // deliberate approximation). 0 = unknown (tests).
   uint16_t q_ms = 0;          // SBI q_ms of that body (0 = unknown)
   uint16_t enc_us = 0;        // SBI enc_us of that body (0 = unknown)
   uint16_t air_ms = 0;        // SBI air_ms of that body (0 = unknown)
@@ -46,7 +46,7 @@ class UepDecoder {
 
   static constexpr uint8_t kMcsUnknown = 255;
 
-  // Transition-attribution boundary (spec 2026-08-14). Call when the GS
+  // Transition-attribution boundary. Call when the GS
   // commands stream sid onto a new op: new_mcs is the PHY rate the stream
   // is expected at from now on (the op MCS for s0-s2, the probe
   // candidate's for s3 while a probe runs). Arms per-layer watermarks in
@@ -98,11 +98,10 @@ class UepDecoder {
   // Layer sid's repair-symbol shortfall (SwDecoder::deficit): what a
   // feedback-repair request would ask for right now. 0 on bad sid.
   uint64_t deficit(int sid) const;
-  // Layer sid's ArrivalTracker guard (spec 2026-09-23 tx-windows §5.2). 0 on
-  // bad sid.
+  // Layer sid's ArrivalTracker guard. 0 on bad sid.
   uint32_t arrival_guard(int sid) const;
 
-  // SPIKE 2026-10-05 (fec-nack): per-layer erasure view (SwDecoder).
+  // fec-nack: per-layer erasure view (SwDecoder).
   std::vector<uint32_t> missing_sources(int sid, uint32_t lookback) const;
   SwDecoder::SourceState source_state(int sid, uint32_t wire_seq) const;
   bool source_covered(int sid, uint32_t wire_seq) const;  // SwDecoder::source_covered
@@ -124,18 +123,18 @@ class UepDecoder {
     uint64_t symbols_in = 0, symbols_stale = 0, symbols_bad_cfg = 0;
     size_t rows_in_flight = 0;
     uint64_t syms_abandoned_stale = 0;
-    // ArrivalTracker (spec 2026-09-05): arrival-time pre-FEC accounting.
+    // ArrivalTracker: arrival-time pre-FEC accounting.
     uint64_t arr_expected = 0, arr_arrived = 0, arr_expected_stale = 0,
              arr_arrived_stale = 0, arr_late = 0;
-    // FCS-corrupt bodies the radio still delivered (rx.keep_corrupted,
-    // 2026-09-08) and the sub-blocks of those bodies whose own CRC16 passed
+    // FCS-corrupt bodies the radio still delivered (rx.keep_corrupted)
+    // and the sub-blocks of those bodies whose own CRC16 passed
     // and were fed to the decoder -- what salvage actually recovered.
     // subblocks_failed above counts the misses from any body.
     uint64_t bodies_corrupt = 0, subblocks_salvaged = 0;
     // Of those salvaged sub-blocks, the seqs no clean copy ever delivered
-    // inside the arrival guard (2026-09-09): the measured value of salvage.
+    // inside the arrival guard: the measured value of salvage.
     // subblocks_salvaged is its upper bound -- the other card's clean copy
-    // shadows most of it (docs/sbi-salvage-flights-2026-09-09.md).
+    // shadows most of it (docs/findings/2026-09-09-sbi-salvage-flights.md).
     uint64_t arr_salvage_only = 0;
     // Symbols first made known by a NACK retransmit body (fec-nack,
     // SwDecoder::syms_retx): neither delivered nor recovered.
@@ -144,16 +143,15 @@ class UepDecoder {
   LayerStats stats(int sid) const;
   uint64_t bodies_misrouted() const { return bodies_misrouted_; }
 
-  // NOTE: the packet-level delivery window (window_counts/window_counts_cur/
-  // window_delivery_pct/reset_window) was DELETED 2026-09-02. It inferred
-  // loss from FRAG-seq gaps, which cannot distinguish a lost unit from one
-  // that has not completed yet, so a late sliding-window repair read as
-  // 25-33% loss and demoted the ladder ~200 times an hour on a clean bench.
-  // Post-FEC loss now comes from syms_abandoned/syms_abandoned_stale below
-  // (order-independent), via gs/src/ladder_residual.cpp. That measure
-  // strictly dominates: the packet one shared this decoder's join blind spot
-  // AND under-reported real loss (a unit missing a MIDDLE fragment but
-  // keeping its tail counted as delivered).
+  // NOTE: there is deliberately no packet-level delivery window
+  // (window_counts/window_delivery_pct). One inferred loss from FRAG-seq gaps,
+  // which cannot distinguish a lost unit from one that has not completed yet,
+  // so a late sliding-window repair read as 25-33% loss and demoted the ladder
+  // ~200 times an hour on a clean bench. Post-FEC loss comes from
+  // syms_abandoned/syms_abandoned_stale below (order-independent), via
+  // gs/src/ladder_residual.cpp. That measure strictly dominates: the packet one
+  // shared this decoder's join blind spot AND under-reported real loss (a unit
+  // missing a MIDDLE fragment but keeping its tail counted as delivered).
 
  private:
   struct Layer {
@@ -164,10 +162,10 @@ class UepDecoder {
     SwDecoder sw;
     uint64_t bodies = 0, subblocks_failed = 0;
     uint64_t bodies_corrupt = 0, subblocks_salvaged = 0;
-    // --- transition-attribution boundary (spec 2026-08-14) ---
-    // Kept after the 2026-09-02 delivery-window deletion: these drive the
-    // kPre/kPost hint handed to SwDecoder::add_symbol (which is what splits
-    // syms_abandoned into stale/current) and the shipped close_ms metric.
+    // --- transition-attribution boundary ---
+    // These drive the kPre/kPost hint handed to SwDecoder::add_symbol (which is
+    // what splits syms_abandoned into stale/current) and the shipped close_ms
+    // metric.
     uint8_t cur_mcs = kMcsUnknown;  // expected PHY rate; kMcsUnknown = never set
     bool bnd_armed = false;         // watermark comparisons live
     bool bnd_open = false;          // boundary not yet closed by a kPost body

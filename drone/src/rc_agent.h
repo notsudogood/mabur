@@ -15,11 +15,10 @@
 namespace mabur {
 
 // The resolved operating point: the 2-slot ladder ([0]=BASE at profile_mcs
-// -1, [1]=ENH at profile_mcs — spec 2026-08-29-airtime-balance-uep §2), the
-// per-stream literal FEC air overhead PAIR (Task 6, RC_VERSION 5: the
-// single fec_overhead scalar split into fec_ov_base/fec_ov_enh — fixed
-// per-rung pairs, spec 2026-08-30-same-rate-fixed-pairs; applied directly
-// to the UEP layers via apply_op_to_uep, no ladder translation), per-layer
+// -1, [1]=ENH at profile_mcs), the per-stream literal FEC air overhead PAIR
+// (RC_VERSION 5: the single fec_overhead scalar split into
+// fec_ov_base/fec_ov_enh — fixed per-rung pairs; applied directly to the
+// UEP layers via apply_op_to_uep, no ladder translation), per-layer
 // shed flags (failsafe-forced OR local congestion-directed; shed[1] is the
 // enh shed, the old shed[3] — the old reserved layer and its shed[2] slot
 // are gone), and
@@ -39,7 +38,7 @@ struct AppliedOp {
   std::array<bool, 2> shed = {false, false};
   uint64_t generation = 0;
 
-  // Probe stream (spec 2026-09-04): the RCF's probe_profile byte as received
+  // Probe stream: the RCF's probe_profile byte as received
   // (kNoProbeProfile = no stream) and the resolved TX spec for it — same
   // mode as the op, but the probe rung's OWN bw (a 20/4 op probes 40/3),
   // LDPC+STBC like the video slots. RadioTx slot 2.
@@ -60,9 +59,8 @@ struct AppliedOp {
 // target. May be null (tests), in which case no override is ever armed.
 //
 // This struct is all that survives of AirFeedOut. AirFeed itself — the
-// measurement half of the deleted AirBalancer — was removed on 2026-09-01
-// along with the bitrate blend that was its only consumer; see
-// run_bitrate_policy.
+// measurement half of the deleted AirBalancer — was removed along with the
+// bitrate blend that was its only consumer; see run_bitrate_policy.
 struct OvOverride {
   std::atomic<int> ovr_base_pct{-1};
   std::atomic<int> ovr_enh_pct{-1};
@@ -84,7 +82,7 @@ class Actuator {
   // edition — memory: waybeam-bitrate-wedge).
   virtual bool set_bitrate_kbps(int) = 0;
   virtual bool set_roi_qp(int) = 0;
-  // Low-power mode (spec 2026-09-20): the encoder's frame rate. Same
+  // Low-power mode: the encoder's frame rate. Same
   // contract as set_bitrate_kbps -- true iff the encoder took it; RcAgent
   // latches commanded_fps_ only on true and retries otherwise.
   virtual bool set_fps(int fps) = 0;
@@ -93,23 +91,21 @@ class Actuator {
   // re-raised by whatever produced it (the next chain break, or the next
   // RCF that re-enters LINKED).
   virtual void request_idr() = 0;
-  // Requests a retune to the given channel (spec 2026-09-13
-  // auto-channel-select §6: FastRetune). Called from the agent thread only,
-  // same as every other verb on this interface. No return: a retune that
-  // fails to take leaves the radio on its previous channel, which the
-  // move-confirm/fallback-home machinery in RcAgent::tick already treats as
-  // "nothing heard on the new channel" and recovers from on its own.
+  // Requests a retune to the given channel (FastRetune). Called from the agent
+  // thread only, same as every other verb on this interface. No return: a
+  // retune that fails to take leaves the radio on its previous channel, which
+  // the move-confirm/fallback-home machinery in RcAgent::tick already treats
+  // as "nothing heard on the new channel" and recovers from on its own.
   //
   // `reason` is a stable, short literal naming WHY the move is happening --
   // "disc" (a DISC proposed a channel we agreed to), "hop" (an RCF carried
   // a new hop order), "move_unconfirmed" (the post-move confirm window
   // expired, so the drone returned to the channel it came from). It is
-  // spec §7 observability only: the real
-  // actuator prints it on the retune line so a stderr/serial capture says
-  // which of the three fired. Never null, never freed -- always a string
-  // literal.
+  // observability only: the real actuator prints it on the retune line so a
+  // stderr/serial capture says which of the three fired. Never null, never
+  // freed -- always a string literal.
   virtual void retune(uint8_t ch, const char* reason) = 0;
-  // VTX onboard recorder (spec 2026-09-26): hand the operator's wish to the
+  // VTX onboard recorder: hand the operator's wish to the
   // recorder. true = handed over (the recorder reports its own outcome in
   // Telem::rec_status); RcAgent latches the wish only on true.
   virtual bool set_record(bool on) = 0;
@@ -120,8 +116,8 @@ class Actuator {
   // Default: no sensor to steer (tests, replay harnesses).
   virtual bool set_sensor_mfps(uint32_t mfps) { (void)mfps; return false; }
   // A move the GS has confirmed (the first accepted RCF on the new channel):
-  // persist it so the next boot parks there (spec 2026-10-03 §2 state
-  // files). Default no-op: tests and dry-run have nowhere to write.
+  // persist it to the state file so the next boot parks there. Default
+  // no-op: tests and dry-run have nowhere to write.
   virtual void remember_channel(uint8_t ch) { (void)ch; }
 };
 
@@ -150,9 +146,9 @@ class RcAgent {
   // ovr is the debug-HTTP per-layer overhead override (bench sweeps); may
   // be null (tests), in which case no override is ever armed and the
   // bitrate policy always builds its target from the commanded pair.
-  // start_ch is the channel to park on (spec 2026-10-03-auto-channel-set
-  // §2: the remembered member from the state file, read by main.cpp); 0 (or
-  // a non-member) means cfg.radio.channels.front().
+  // start_ch is the channel to park on (the remembered member from the
+  // state file, read by main.cpp); 0 (or a non-member) means
+  // cfg.radio.channels.front().
   RcAgent(const Config& cfg, Actuator& act, OvOverride* ovr = nullptr, uint8_t start_ch = 0);
 
   // Parses `body` as an RC frame (RCF or DISC; anything else, or a frame
@@ -168,8 +164,8 @@ class RcAgent {
   // producer.
   void note_chain_break();
 
-  // The FC's arm state as decoded from an MSP_STATUS reply (spec
-  // 2026-09-20 §1), stamped with the MSP thread's clock. The second
+  // The FC's arm state as decoded from an MSP_STATUS reply, stamped with
+  // the MSP thread's clock. The second
   // cross-thread entry point after note_chain_break(), and like it a bare
   // atomic store; consumed at the top of tick() on the agent thread.
   void note_arm_state(bool armed, uint64_t now_ms);
@@ -182,20 +178,18 @@ class RcAgent {
   State state() const { return state_; }
   const AppliedOp& current() const { return applied_; }
 
-  // The channel the agent last commanded (requested, not radio-confirmed)
-  // (spec 2026-10-03-auto-channel-set §2/§3).
+  // The channel the agent last commanded (requested, not radio-confirmed).
   uint8_t channel() const { return channel_; }
 
-  // The epoch of the last in-flight hop order applied from an RCF (spec
-  // 2026-09-14 §1). 0 before any hop order has ever been heard.
+  // The epoch of the last in-flight hop order applied from an RCF. 0 before
+  // any hop order has ever been heard.
   uint8_t hop_epoch() const { return hop_epoch_; }
 
-  // GS-requested IDRs actually issued (spec 2026-09-28), lifetime. Left the
-  // wire with Telem.idr_gs (2026-09-30); kept as the observable the
-  // request/pacer tests pin.
+  // GS-requested IDRs actually issued, lifetime. Left the wire with
+  // Telem.idr_gs; kept as the observable the request/pacer tests pin.
   uint64_t idr_gs_total() const { return idr_gs_total_; }
 
-  // Telemetry accessors (spec 2026-07-26 drone-telemetry): read-only
+  // Telemetry accessors: read-only
   // snapshots of RcAgent-internal state the T_TELEM collector needs but
   // that isn't otherwise exposed. All same-thread reads (the agent thread
   // owns both RcAgent and the telemetry collector call site in main.cpp).
@@ -215,7 +209,7 @@ class RcAgent {
   uint64_t genlock_applied() const { return genlock_applied_; }
   uint64_t genlock_refused() const { return genlock_refused_; }
   uint32_t genlock_mfps() const { return genlock_mfps_; }
-  // Session bookkeeping (link pairing, spec 2026-10-01 §6/§7). All RAM,
+  // Session bookkeeping (link pairing). All RAM,
   // nothing persisted. A DISC from vrx_nonce gets a vtx_nonce (a PENDING
   // pair); the first RCF that verifies under it makes it CURRENT.
   // last_seq32 is the extended RCF seq the tag is computed over; a frame is
@@ -262,7 +256,7 @@ class RcAgent {
   // the sweep closes, even after failsafe clears current_ -- which happens
   // in every run, because the GS is radio-silent while each phase airs.
   // Without it the CAL_RESULT, sent into the silent verify window, never
-  // verifies and nothing is ever applied (bench repro 2026-10-03). Passing
+  // verifies and nothing is ever applied (bench repro). Passing
   // false drops the latch, so it cannot outlive the sweep.
   //
   // Cal frames are tagged with seq32 = 0, so freshness is the cal nonce: a
@@ -274,7 +268,7 @@ class RcAgent {
   // Owned by verify_cal_frame's caller thread (the TX writer); not
   // thread-safe against concurrent verify_cal_frame calls.
   bool verify_cal_frame(const uint8_t* body, size_t len, bool sweep_running = false);
-  // fec-nack (spec 2026-10-05 §4.2): verify a T_NACK's tag against the
+  // fec-nack: verify a T_NACK's tag against the
   // published session with the frame's own counter as seq32 ctx. Any
   // thread. On success, *session (if given) is the published pair the tag
   // verified under -- hand it to accept_nack_counter so a session change
@@ -312,11 +306,11 @@ class RcAgent {
     return state_ == State::LINKED && applied_.probe_profile != rc::kNoProbeProfile;
   }
 
-  // True while the low-power operating point is in force (spec 2026-09-20
-  // §2): mode enabled, the last arm report says DISARMED, and that report is
-  // fresher than low_power.stale_ms. Telem flags bit7. Follows the FC's
-  // current state both ways -- a DISARMED report after an arm re-enters, so
-  // a downed-but-powered aircraft falls back to the thin stream.
+  // True while the low-power operating point is in force: mode enabled, the
+  // last arm report says DISARMED, and that report is fresher than
+  // low_power.stale_ms. Telem flags bit7. Follows the FC's current state both
+  // ways -- a DISARMED report after an arm re-enters, so a downed-but-powered
+  // aircraft falls back to the thin stream.
   bool low_power() const { return low_power_active_; }
   // Latched by the first ARMED report; never clears. Observability only
   // (the drone stats line's armed=): "has this process ever seen the FC
@@ -358,15 +352,15 @@ class RcAgent {
   // The channel a move (a DISC move OR a hop order) moved us FROM, while
   // that move is unconfirmed (0 = none: the revert already spent). The
   // move-confirm fallback returns here and stays -- there is no home to
-  // fall through to. This is also where a withdrawing GS goes (spec
-  // 2026-09-14 §1 step 4). Bench 2026-09-26: with the hop target == home,
-  // going "home" was a no-op and the pair split 60 s.
+  // fall through to. This is also where a withdrawing GS goes. Bench: with
+  // the hop target == home, going "home" was a no-op and the pair split
+  // 60 s.
   uint8_t move_from_ch_ = 0;
 
-  // In-flight hop order (spec 2026-09-14 §1). have_hop_ is false until the
-  // first RCF carrying a nonzero hop_ch is accepted; hop_epoch_/hop_ch_ then
-  // track the (epoch, ch) PAIR of the last applied order (spec §1: "an RCF
-  // whose (hop_epoch, hop_ch) differs from the last pair applied") so a
+  // In-flight hop order. have_hop_ is false until the first RCF carrying a
+  // nonzero hop_ch is accepted; hop_epoch_/hop_ch_ then track the (epoch,
+  // ch) PAIR of the last applied order (an RCF whose (hop_epoch, hop_ch)
+  // differs from the last pair applied is a new order) so a
   // repeat of the same pair is idempotent but a same-epoch new channel is
   // still applied. Reset at every session boundary (session promotion,
   // unconfirmed-move fallback, FAILSAFE entry) so a restarted GS's hop epoch
@@ -419,7 +413,7 @@ class RcAgent {
   uint64_t genlock_session_ = 0;
   uint32_t genlock_counter_ = 0;
 
-  // IDR policy state (spec 2026-08-28 venc-foldin §4). Every IDR producer
+  // IDR policy state. Every IDR producer
   // — the GS-driven RCF-after-failsafe path, the encoder's chain-break
   // signal, and RCF idr_epoch requests — funnels through idr_due();
   // nothing else may call act_.request_idr(). chain_break_pending_ is the
@@ -436,7 +430,7 @@ class RcAgent {
   bool have_last_chain_idr_ = false;
   bool idr_due(uint64_t now_ms, bool chain);
 
-  // Low-power (pre-arm) state, spec 2026-09-20. Everything below
+  // Low-power (pre-arm) state. Everything below
   // arm_report_ is agent-thread-only, unpacked from it once per tick by
   // intake_arm_state_().
   //
@@ -458,7 +452,7 @@ class RcAgent {
   int rec_applied_ = -1;
   void intake_arm_state_(uint64_t now_ms);
 
-  // GS-requested IDR (spec 2026-09-28 web-idr-request). The last RCF
+  // GS-requested IDR. The last RCF
   // idr_epoch seen this session (0 at every session edge) and whether a
   // request is waiting for the pacer. Agent-thread-only.
   uint8_t idr_epoch_seen_ = 0;

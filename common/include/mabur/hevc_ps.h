@@ -7,11 +7,10 @@
 
 namespace mabur::hevc {
 
-// What slice salvage needs from the SPS/PPS (spec 2026-10-10-h265-slices
-// §5.2): picture geometry and every field the slice-segment-header syntax
-// depends on. Streams using a feature outside the bench encoder's subset
-// parse as kUnsupported and switch salvage off rather than risk a wrong
-// header.
+// What slice salvage needs from the SPS/PPS: picture geometry and every
+// field the slice-segment-header syntax depends on. Streams using a
+// feature outside the bench encoder's subset parse as kUnsupported and
+// switch salvage off rather than risk a wrong header.
 enum class PsStatus { kNone, kOk, kMalformed, kUnsupported };
 
 struct Sps {

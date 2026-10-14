@@ -56,7 +56,7 @@ the request in every case.
 
 Encode latency = `MI_SYS_GetCurPts − pack pts` at the moment `GetStream`
 returned (same clock, no bridge). The baseline reproduces the 7.1 ms `enc`
-segment of docs/latency-budget-findings-2026-08-31.md exactly.
+segment of docs/findings/2026-08-31-latency-budget.md exactly.
 
 | case | mode | VCL NALs delivered / frame | first NAL (ms after pts, p50) | last NAL | spread p50 / p90 |
 |---|---|---|---|---|---|

@@ -19,7 +19,7 @@ struct CardLabelInput {
 // Picks the card whose RF labels (SNR/EVM/RSSI) go to the ladder
 // controller this window, or -1 for "no card measured s1 or s3 this window"
 // — the caller then NaNs all three labels, which leaves the predictive fade
-// trigger inert (spec 2026-08-14 fade-demote §3).
+// trigger inert.
 //
 // The freshness term is the point: ClassTrack's EMAs are never decayed, they
 // simply freeze at their last value when frames stop arriving — exactly what

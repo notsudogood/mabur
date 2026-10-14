@@ -30,7 +30,7 @@ HopAction HopController::tick(const HopTick& in) {
 // not survive that: ChannelPlan ignores link loss while a hop is in flight,
 // so an open order parked the lead card on the target and the trailing card
 // on the old op forever, while the drone, which never confirmed, had moved
-// on on move_confirm_ms (bench 2026-09-24, GS session 0207). Withdraw it
+// on on move_confirm_ms (bench, GS session 0207). Withdraw it
 // exactly like a confirm_ms timeout (target backed off, epoch bumped so the
 // RCF stops carrying the order), which clears the plan's hop and lets its
 // ordinary link-loss path release the scout card. A confirmed hop has
@@ -81,7 +81,7 @@ void HopController::idle_tick(const HopTick& in, HopAction& out) {
     return;
   }
   // Nothing ranked, but the channel we are on is BLOCKED:
-  // holding here is holding on a jammed channel (bench 2026-09-26: ~33 s
+  // holding here is holding on a jammed channel (bench: ~33 s
   // on the 98 %-blocked 136 while 112, which had carried video, sat backed
   // off as merely fled). The escape is an unblocked channel that did not
   // fail a verify; cooldown and the hop cap were both checked above.
@@ -113,10 +113,10 @@ void HopController::ordered_tick(const HopTick& in, HopAction& out) {
     return;
   }
   if (in.now_ms - order_ms_ >= cfg_.confirm_ms) {
-    // The confirm extension (Task 12 (f)): while the op channel reads
+    // The confirm extension: while the op channel reads
     // BLOCKED, the jam is probably on the uplink too -- the order rides
     // every RCF, and the drone cannot act on RCFs it never hears (bench
-    // 2026-09-26, session 0232: the jammer sat next to the drone, the order
+    // session 0232: the jammer sat next to the drone, the order
     // never arrived, the clean target was backed off as FAILED at
     // confirm_ms, the escape had nowhere to go and the link held 30 s on
     // the jammed op). Keep ordering until confirm_extend_ms; an order that
@@ -180,7 +180,7 @@ void HopController::verifying_tick(const HopTick& in, HopAction& out) {
   // for). The hop's own retune gap is still being repaired then, so a window
   // starting inside the settle carries that debris as "recovered" symbols:
   // 40 failed its verify on 85 then 32 of them with 0 % loss, in a window
-  // starting 27 ms after landing (bench 2026-09-24).
+  // starting 27 ms after landing (bench).
   const bool measured_after_landing =
       in.verdict.t_start_ms >= verify_start_ + kHopSettleBlankMs;
   if (in.verdict.v == Verdict::Interfered && measured_after_landing) {
@@ -193,8 +193,8 @@ void HopController::verifying_tick(const HopTick& in, HopAction& out) {
       // Without the persist delay: act on a raw Interfered window, not a
       // fresh multi-window trigger -- this path is "still on a bad
       // channel", not a new decision to hop. cooldown_ms is exempt for
-      // retries (spec 2026-09-14-inflight-channel-hop-design.md §5), but
-      // max_hops_per_min is NOT -- it counts retries, then holds.
+      // retries, but max_hops_per_min is NOT -- it counts retries, then
+      // holds.
       prune_hop_times(in.now_ms);
       if (static_cast<int>(hop_times_.size()) >= cfg_.max_hops_per_min) {
         enter_hold(in.now_ms, "hold_cap", failed_target, in.now_ms - verify_start_, out);
@@ -225,9 +225,9 @@ void HopController::verifying_tick(const HopTick& in, HopAction& out) {
     last_confirm_ms_ = in.now_ms;
     ++hops_;
     // The caller's cue to thaw the verdict engine's frozen references
-    // (spec section 2: "or after a hop's verify window ends"). Emitted
-    // only here, never on verify_fail/withdraw: those RE-ORDER, and spec
-    // section 5 has the retry reuse the pre-onset ref_rung. Thawing there
+    // (the second thaw rule: after a hop's verify window ends). Emitted
+    // only here, never on verify_fail/withdraw: those RE-ORDER, and the
+    // retry reuses the pre-onset ref_rung. Thawing there
     // would not damage the retry's own Order (its restore_rung is already
     // built from the cached verdict) -- the cost lands one window later,
     // when the next impaired window re-freezes ref_rung at the mid-hop
@@ -294,7 +294,7 @@ void HopController::leave_hold(double now, uint8_t cur_op) {
 // excluded and the fled channel stayed a retry candidate -- and the in-flight
 // ranker (event counts over 5 ms dwells) scores a long-frame jammer low, so
 // when the first target failed its verify the retry went straight back into
-// the jam (bench 2026-09-24, GS session 0207: 144 -> 128 -> 144). A withdraw
+// the jam (bench, GS session 0207: 144 -> 128 -> 144). A withdraw
 // still returns to it: that path restores the op, it does not consult the
 // ranker.
 void HopController::flee(uint8_t ch, double now) { back_off(ch, now, BackoffWhy::Fled); }
@@ -302,7 +302,7 @@ void HopController::flee(uint8_t ch, double now) { back_off(ch, now, BackoffWhy:
 // The escape is used only when (the callers have already established)
 // there is no ranked target: the caller supplied one, and the verdict in
 // hand says the channel we are on is blocked. A verify-failed channel is
-// excluded upstream (main.cpp skips backed_off_failed()) and again here,
+// excluded upstream (ChannelCore passes backed_off_failed() to the ranker) and again here,
 // so a stale tick can never order one.
 bool HopController::escape_allowed(const HopTick& in) const {
   if (!in.escape.has_value() || !(in.verdict.evidence & kEvBlocked)) return false;

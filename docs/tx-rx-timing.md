@@ -1,167 +1,194 @@
 # TX/RX timing: who transmits when, and what actually coordinates it
 
-Written 2026-09-05 after the probe-blanking fix
-(`docs/probe-blanking-fix-findings-2026-09-05.md`), because the question
-"does mabur orchestrate the half-duplex radio?" kept coming up with the
-answer spread across six findings docs. This page is the holistic view;
-each claim points at where it was measured. Numbers marked *bench* are
-from the 2026-09-05 rig (pinned mcs4, 60 AU/s, `feedback_ms` 50,
-agg 6, two GS cards) unless stated otherwise.
+The holistic view of mabur's half-duplex radio timing:
+- who keys up when;
+- the three local mechanisms that keep the uplink and the downlink apart;
+- how the variables interact;
+- where the gaps are.
+
+Each claim points at the code or at the bench record that measured it.
 
 ## 1. The physics that everything else follows from
 
-- **Every card is half-duplex.** A Realtek 8822E/Jaguar3 card cannot
-  receive while it transmits. The drone has one card. The GS has two,
-  both receiving video, one of them (the `TxSelector`'s pick) also
-  sending the uplink.
-- **Carrier sense is ON on both daemons** (since 2026-09-23,
+- **Every card is half-duplex.** A card cannot receive while it transmits.
+  The drone has one card. The GS has one or more receiving video, and one
+  of them (the `TxSelector`'s pick, `gs/src/tx_selector.h`) also sends the
+  uplink.
+- **Carrier sense is ON on both daemons.**
   `dev_cfg.tuning.disable_cca = false` in `drone/src/main.cpp` and
-  `gs/src/radio_frontend.cpp`; `docs/cca-on-findings-2026-09-23.md`).
-  Each radio defers to any decodable 802.11 preamble — the other end's
-  and anyone else's — then AIFS + backoff. From 2026-08-05 to 2026-09-23
-  both were OFF: neither deferred, and the only thing the chip did on its
-  own was refuse to *start* a TX while an RX PPDU was in progress, firing
-  the moment that PPDU ended
-  (`docs/gs-uplink-self-blanking-findings-2026-09-02.md` "Mechanism").
-  That era's self-collision (next bullet) is gone with carrier sense on:
-  measured 137 → 23 both-card holes per 97 s, 0 FEC repairs.
-- **A GS send blinds both GS cards** for ~180 µs: the transmitting card
-  is deaf by definition and the sibling is saturated at −4 dBm. Any
-  drone PPDU whose preamble starts inside that window is lost on both
-  cards, whole (one A-MPDU aggregate). Same doc, evidence 4–6.
-- **A drone burst deafens the drone** for its whole duration. An RCF
-  that lands inside a burst is gone; delivery to the drone tracks
-  `1 − air_pct` (`docs/rcf-uplink-loss-findings-2026-08-14.md` §3).
+  `gs/src/radio_frontend.cpp`. Each radio defers to any decodable 802.11
+  preamble (the other end's and anyone else's), then waits AIFS + backoff.
+  The two ends only ever flip CCA together: CCA on the GS alone keys the
+  drone up into an RCF already on air, which is worse than neither.
+  Record: `docs/findings/2026-09-23-cca-on.md` (mechanism of the CCA-off
+  era: `docs/findings/2026-09-02-gs-uplink-self-blanking.md`).
+- **A GS send blinds the GS cards** for about 180 µs. The transmitting card
+  is deaf by definition, and a sibling card is saturated at about −4 dBm.
+  A drone PPDU whose preamble starts inside that window is lost on every
+  card, whole (one A-MPDU aggregate). The chip holds a TX until the PPDU it
+  is receiving ends, so the damage is to the NEXT PPDU starting right
+  behind the blast.
+- **A drone burst deafens the drone** for its whole duration. An RCF that
+  lands inside a burst is gone, so delivery to the drone tracks
+  `1 − air duty` (`docs/findings/2026-08-14-rcf-uplink-loss.md` §3).
 - **The two clocks free-run.** The drone's sensor/encoder cadence and the
   GS's `feedback_ms` timer are independent oscillators. Nothing in mabur
-  syncs them (no TSF exchange, no beacon-derived schedule).
+  syncs them: there is no TSF exchange and no beacon-derived schedule.
 
-So on one channel there are two talkers, no listen-before-talk, and the
-only hardware arbitration is "finish receiving the current PPDU before
-keying up". Everything mabur does about timing is software on top of
-that.
+On one channel there are two talkers. The only arbitration is carrier
+sense plus "finish receiving the current PPDU before keying up". Everything
+else mabur does about timing is software on top of that.
 
 ## 2. Who transmits what
 
-Drone → GS (the downlink, ~99 % of airtime):
+Drone → GS (the downlink, nearly all of the airtime):
 
-| what | cadence | size / air (bench, mcs4) | shaped by |
+| what | cadence | size / air | shaped by |
 |---|---|---|---|
-| video bodies, base (sid 0) + enh (sid 1) | one AU per frame, 60 AU/s alternating base/enh at 30 fps each; each AU is one burst | AU ~29–37 kB p50 → 20–27 bodies of 1405 B → 5–7 aggregates of 4 (agg 6 fills 4 on this feed); burst 12.7 ms mean, max 21–28 | encoder bitrate (`run_bitrate_policy`), FEC overhead pair per rung, MCS, `feed_batch` 6 + `ampdu.max_num` 6 |
-| probe stream (sid 5) | one body after every ENH AU, 30/s | 1405 B, own PPDU right behind the burst's last aggregate; lands 0.9 ms p50 / 4 ms p99 after the AU's completion stamp | MCS of rung `current + 1`; ≈1 % of air at mcs4, 2.7 % at mcs1 (`docs/airtime-model.md` §6) |
-| MSP OSD (sid 4) | `msp.update_rate_hz` 3, ~5–8 bodies/s | 1343 B | not slotted; shares the chip's hardware seq counter with video (was the phantom-loss source, fixed) |
-| T_TELEM | 1 Hz | ~80 B | not slotted |
-| DISC_ACK / beacons | rendezvous only | small | not slotted |
+| video bodies, base (sid 0) + enh (sid 1) | one AU per frame; 60 AU/s at 60 fps SVC-T, alternating base/enh; each AU is one burst | 1405 B bodies (332/bpb 4), aggregated by `[ampdu]` (`max_num` 6, from `min_mcs_20`/`min_mcs_40`) | encoder bitrate (`run_bitrate_policy`), the per-rung FEC overhead pair, MCS, `fec.feed_batch` (bundle 1) |
+| probe stream (sid 5) | one body after every video AU while a probe is commanded, i.e. the AU rate | one 1405 B body, its own PPDU right behind the burst's last aggregate | MCS of rung `current + link.probe.rung_offset` (`docs/airtime-model.md` §6) |
+| NACK retransmits (sid 0 symbols) | on a verified `T_NACK` only | pushed at the TxQueue HEAD (`TxQueue::push_front`) | `[nack] air_pct`/`burst_ms` token bucket (`docs/fec-nack.md`) |
+| MSP OSD (sid 4) | `msp.update_rate_hz` 3 | `msp.symbol_size` 1312 B units | not slotted |
+| T_TELEM | 1 Hz | 54 B payload (`TELEM_LEN`) | not slotted |
+| DISC_ACK | rendezvous only | small | not slotted |
 
-GS → drone (the uplink, low duty cycle, but every send is a blast):
+GS → drone (the uplink: a low duty cycle, but every send is a blast):
 
-| what | cadence | notes |
+| what | cadence | path |
 |---|---|---|
-| RCF (rate-control feedback) | every `feedback_ms` (default 100; bench 50) → 10–20/s | ~20–27 B at HT MCS0, ~180 µs incl. preamble |
-| ~~RCF repeat burst~~ | REMOVED 2026-09-05 (was 3 copies 10 ms apart on an op-changing RCF) | the slotter batched the copies into one release, killing the next aggregate on both cards on 25–33 % of rung changes; single sends reach the drone ~90 % of the time — `docs/switch-loss-findings-2026-09-05.md` |
-| DISC keepalive | `beacon_keepalive_ms` 1000 | slotted like any RCF since 2026-09-03 |
+| RCF (rate-control feedback) | every `link.feedback_ms`: code default 100, bundle 50 | slotted (§3.2); about 180 µs on air incl. preamble |
+| DISC keepalive | `beacon_keepalive_ms` 1000 | slotted like any RCF |
+| T_NACK (base selective repeat) | at most one per poll, when `link.nack.enable` (bundle: off) | **not slotted**: `send_control_frame` directly, mid-burst (`docs/fec-nack.md` "Packing and send") |
+| T_CAL_CMD | `maburcal` sessions only | not slotted; gated by the calibration radio-silence plan |
 
-Bench totals: GS 20 sends/s, drone hears 18.5/s (93 %) *with the slotter
-on*; before slotting, delivery was 51–69 % depending on rung
-(`rcf-uplink-loss` §3, flight-confirmed §7).
+Every uplink send is also gated by `ChannelCore::may_send` and by the
+calibration radio-silence gate.
 
 ## 3. What mabur does orchestrate
 
-There is **no TDMA and no shared schedule**. There are three
-independent mechanisms, each on one side, each reacting to what it can
-observe locally.
+There is **no TDMA and no shared schedule**. There are three independent
+mechanisms, each on one side, each reacting to what it can observe
+locally.
 
 ### 3.1 Drone: keep the burst shorter than the period (open loop)
 
 `RcAgent::run_bitrate_policy()` commands the encoder at
 
-    kbps = phy_rate(op) × airtime_budget / [ f0·(1+ov_base) + (1−f0)·(1+ov_enh) ]
+    kbps = 1000 × airtime_budget / [ 0.60·(1+ov_base)/rate_b + 0.40·(1+ov_enh)/rate_e ]
 
-with `encoder.airtime_budget` 0.6, `f0` 0.60 fixed, clamped to
-`bitrate_min/max_kbps` (1000/16000). The intent is that video occupies
-≤ 60 % of each 16.7 ms period, leaving ~6.7 ms of idle per AU for the
-GS to talk in. It is **open loop**: nothing measures the burst and
-feeds it back. Measured duty runs above budget — bench `link.air_pct`
-66 % at a commanded 15.6 Mb/s, and the burst span (first body → last
-body) is 12.7 ms mean of 16.7, i.e. ~76 % including preambles and
-inter-aggregate gaps — because of framing excess (~5 %, deliberately
-uncompensated since 2026-09-01, `docs/airtime-model.md` §1), the
-encoder overshooting CBR by up to 40 % on scene bursts
-(`handover-venc-overshoot-2026-09-03.md`), and the probe's 1 %.
+The terms:
+- `rate_*` is each layer's DELIVERED rate: nominal PHY rate ×
+  `air_clock.efficiency_<bw>[mcs]` (`drone/src/air_rate.h`).
+- The result is clamped to `encoder.bitrate_min/max_kbps`.
+- Bundle values are `encoder.airtime_budget` 0.65 and 1000–24000 kbps.
 
-Two backstops when the burst does not fit the period:
+Full description: `docs/link-adaptation.md` "RcAgent owns the encoder".
 
-- **TxQueue** (`drone/src/tx_queue.h`, cap 256 bodies ≈ 150 ms):
-  drop-oldest, so an overrun becomes bounded latency plus
-  FEC-recoverable erasures rather than an ever-growing backlog. The GS
-  cannot tell a queue drop from an RF loss, which is why
-- **congestion shed** (`docs/link-adaptation.md` "Drone congestion
-  shed"): at half the queue cap the drone sheds the enh layer before it
-  is queued, which the GS scores as silence, not loss.
+The intent is that FEC-protected video occupies about `airtime_budget` of
+what the link can really move in each AU period. The rest is idle in which
+the GS can talk.
 
-Neither is a timing mechanism; they bound the damage when the open-loop
-budget is wrong. With carrier sense on (2026-09-23) the drone's MAC does
-gate its TX start against an RCF that is on air; with it off (2026-08-05
-to 2026-09-23) it keyed up into it, which is the aligned-collision mode
-that made GS-only CCA *worse* than nothing (`rcf-uplink-loss` §6) — the
-reason the two ends only ever flip together.
+It is **open loop**: nothing measures the burst and feeds it back. Duty
+can exceed the budget because:
+- framing excess is deliberately uncompensated (`docs/airtime-model.md`
+  §1);
+- the encoder overshoots CBR on scene bursts
+  (`docs/findings/2026-09-03-handover-venc-overshoot.md`);
+- the probe body is not a term in the formula.
+
+Three backstops when the burst does not fit the period. None of them is a
+timing mechanism; they bound the damage when the open-loop budget is wrong.
+
+- **TxQueue** (`drone/src/tx_queue.h`, `kTxQueueCap` 256 bodies, about
+  150 ms). It drops the oldest body on overflow, so an overrun becomes
+  bounded latency plus FEC-recoverable erasures rather than an
+  ever-growing backlog. The GS cannot tell a queue drop from an RF loss.
+- **Congestion shed.** At half the queue cap, the drone sheds the enh layer
+  before it is queued, which the GS scores as silence, not loss
+  (`docs/link-adaptation.md` "Drone congestion shed").
+- **Air clock.** This sheds enh AUs when the modelled air backlog reaches
+  `air_clock.shed_ms` (bundle 25) (`docs/link-adaptation.md` "Drone air
+  clock").
+
+With carrier sense on, the drone's MAC also defers its TX start to an RCF
+that is already on air.
 
 ### 3.2 GS: slot the uplink into the drone's idle (`RcfSlotter`)
 
-`gs/src/rcf_slot.h`, `docs/link-adaptation.md` "RCF slotting". Every
-control send is held until the GS believes the drone is idle:
+`gs/src/rcf_slot.h`, wired in `gs/src/main.cpp` and `web/src/web_gs.cpp`.
+Every RCF and DISC keepalive is offered to the slotter and held until the
+GS believes the drone is between bursts:
 
-- the **next burst is predicted** from the first-body cadence (EMA of
-  first-body intervals; flat to < 1 ms, unlike completions);
-- a **base-AU completion** releases at once if `now + lead_ms(3) <
-  next_first − guard_ms(1)`;
-- an **ENH completion releases nothing** — the probe body's arrival
-  does, because the probe is the last PPDU of the burst (2026-09-05);
-  a lost probe falls back to a learned deadline (`tail_ub_ms`, 4–6 ms
-  on the bench);
-- a frame offered within `grace_ms` 2 after a burst end goes out at once;
-- a hold older than `rcf_slot_hold_ms` 30 is released **regardless**
-  (timeout — a random-phase blast).
+- **Predicting the next burst.** The slotter predicts the next burst from
+  the first-body cadence: an EMA of first-body intervals
+  (`on_au_first`). First-body arrival is flat to under 1 ms, whereas
+  completion moves with frame size and FEC repair.
+- **Release at AU completion.** A completion (`on_au_complete`) releases
+  the hold at once if `now + lead_ms(3) < next_first − guard_ms(1)`. A
+  completion too close to the next burst is skipped, and the frame waits
+  for the next one.
+- **Probe arrival is the release while a probe is commanded.** Every video
+  AU is then trailed by a probe body, the last PPDU of the burst, which
+  lands up to a few ms after the completion stamp. A release at the
+  completion would put the blast exactly on the probe. So a completion
+  releases nothing by itself. The probe sink's `on_probe_tail` is the
+  release (`SlotReason::Probe`), with the idle-ahead check made at that
+  instant.
+- **Lost-probe fallback.** If the probe is lost, the release falls back to
+  a deadline at completion + `tail_ub_ms`. That value is a decaying max of
+  observed completion→probe offsets, floored at the probe body's airtime,
+  plus 1 ms.
+- **Grace.** A frame offered within `grace_ms` (2) after the burst end goes
+  out at once.
+- **Timeout.** A hold older than `link.rcf_slot_hold_ms` (default and
+  bundle 30; 0 = slotter off) is released **regardless**. That is a
+  random-phase blast.
+- **No video.** With no AU in the last 100 ms (`video_recent_ms`:
+  rendezvous, stalled video), everything passes through. DISC therefore
+  needs no bypass.
 
-What it achieves (bench, mcs5 park, `rcf-slot` A/B): video PPDU loss
-1.03 → 0.11 events/s, RCF delivery at the drone 51–69 % → ~93 %, at the
-cost of up to one AU period of control latency (`close_ms` 5 → 22 ms).
+`lead_ms`, `guard_ms`, `grace_ms` and `video_recent_ms` are compiled in
+(`RcfSlotCfg{hold, 100, 2, 3, 1}`). Only the hold is config.
 
-What it cannot do: manufacture idle. It needs `idle ≥ lead + guard`
-= 4 ms per period. At the bench's 76 % duty that margin is ~0, and
-**22–43 % of sends end as timeouts** (`probe-blanking-fix-findings` §2).
-The real send latency is 1–1.5 ms, so `lead_ms` 3 is ~2× conservative;
-retuning it is the cheapest lever and is not done yet.
+**Cost.** A commanded op change reaches the drone up to one AU period
+later (`link.attrib.close_ms`).
+
+**What it cannot do: manufacture idle.** It needs
+`idle ≥ lead + guard` = 4 ms per period. When the duty leaves less than
+that, sends end as timeouts. The real send latency is 1–1.5 ms, so
+`lead_ms` 3 is about 2× conservative.
+
+Sideport: `link.rcf_slot.{au,probe,timeout,passthru,tail_ub_ms}`. Grace
+sends count under `au`.
+
+Bench records:
+- `docs/findings/2026-09-02-gs-uplink-self-blanking.md` (the slotter A/B)
+- `docs/findings/2026-09-04-handover-probe-blanking.md`
+- `docs/findings/2026-09-05-probe-blanking-fix.md` (probe-arrival release,
+  timeout share)
 
 ### 3.3 Drone: hear the RCF at all
 
-The drone's RX thread runs continuously (`dev_cfg.rx.enable_with_tx`),
-but physically it hears nothing during its own bursts. Three things
-mitigate the resulting 30–50 % uplink loss:
+The drone's RX thread runs continuously (`dev_cfg.rx.enable_with_tx`), but
+physically it hears nothing during its own bursts. What mitigates the
+resulting uplink loss:
 
-1. the GS slotter (3.2) — sends now land in the drone's gaps, 93 %
-   delivery on the bench;
-2. ~~the repeat burst~~ — REMOVED 2026-09-05: an op-changing RCF went
-   out 3× 10 ms apart so a lost commit cost 10 ms instead of a
-   `feedback_ms`, but with the slotter the three copies were released as
-   one batch at an AU completion and killed the next aggregate; a lost
-   single send now costs one `feedback_ms` (~1 in 14 op changes at
-   flight-0023 range, `docs/switch-loss-findings-2026-09-05.md`);
-3. **failsafe timing** — `link.failsafe_ms` 3000 without any RCF drops
-   the drone to the max-range op, `rendezvous_ms` 30000 to
-   re-rendezvous. These are the only drone-side reactions to not hearing
-   the GS.
+1. **The GS slotter (3.2).** Sends land in the drone's gaps.
+2. **Carrier sense on both ends.** Neither end keys up into the other's
+   PPDU.
+3. **Failsafe timing.** After `link.failsafe_ms` with no RCF (code default
+   1000, bundle 3000), the drone drops to the max-range op. After
+   `link.rendezvous_ms` (30000) it re-rendezvouses. These are the only
+   drone-side reactions to not hearing the GS.
 
-Both-sides CCA was measured to add +15–22 delivery points on a clean
-channel (`rcf-uplink-loss` §6) and, on 2026-09-23, to remove the GS-send
-self-collision outright (RCF delivery 90.5 → 96.8 %, 0 FEC repairs); it
-is **shipped since 2026-09-23** (`docs/cca-on-findings-2026-09-23.md`).
-The co-channel deferral it re-exposes the downlink to is what the drone's
-new `rx_foreign`/`rx_crcfail` telemetry measures in flight.
+An op-changing RCF is sent once. A lost one costs one `feedback_ms`
+(`docs/findings/2026-09-05-switch-loss.md`). The co-channel deferral that
+carrier sense exposes the downlink to is measured in flight by the drone's
+`drone.radio.rx` (`own`/`foreign`/`crcfail`) telemetry.
 
 ## 4. How the variables interact
 
-Per AU period `T = 1/fps_AU` (16.7 ms at 60 AU/s):
+Per AU period, `T = 1/fps_AU` (16.7 ms at 60 AU/s):
 
     burst  = bodies × serialization(MCS) + (n_agg − 1) × inter-agg gap
            ≈ AU_bytes × (1 + ov) × (1 + framing) / phy_rate + ~0.5 ms × n_agg
@@ -171,60 +198,70 @@ Per AU period `T = 1/fps_AU` (16.7 ms at 60 AU/s):
 
 | variable | moves | effect on the idle |
 |---|---|---|
-| fps | `T` | 30 fps enh-only would double `T`; SVC-T alternation halves the per-AU period but halves each AU |
-| bitrate | AU_bytes | linear; open-loop budget targets 60 % but measured 66–76 % |
-| FEC overhead pair | ×(1+ov) per stream | base 1.0 / enh 0.5 → base bursts carry 2× payload air, enh 1.5× |
-| MCS | serialization | the ladder's whole point: each rung re-targets bitrate so `burst/T` stays ≈ budget; the *idle in ms* is therefore roughly rung-independent by design |
-| probe | +1 body/ENH AU | 0.3 ms at mcs4, 2 ms at mcs0 — always at the burst end, now the slotter's release signal |
-| `feedback_ms` | sends/s | more sends = more blasts; **50 = 3 × T phase-locks timeouts to the burst** |
-| ~~repeat burst~~ | REMOVED 2026-09-05 | three sends 10 ms apart inside one period could not be slotted individually — the slotter batched them and the batch overran the idle |
+| fps | `T` | SVC-T alternation halves the per-AU period but also halves each AU |
+| bitrate | AU_bytes | linear; the open-loop budget targets `airtime_budget` of delivered capacity |
+| FEC overhead pair | ×(1+ov) per stream | bundle base 0.5 / enh 0.25 → base bursts carry 1.5× payload air, enh 1.25× |
+| MCS / width | serialization | the ladder's whole point: each rung re-targets bitrate so `burst/T` stays near the budget, so the *idle in ms* is roughly rung-independent by design |
+| probe | +1 body per AU | always at the burst end; it is the slotter's release signal |
+| `feedback_ms` | sends/s | more sends = more blasts; a `feedback_ms` that is a small multiple of `T` (50 = 3 × T) phase-locks timeouts to the burst |
+| NACK | +1 unslotted send per poll, + retransmits at the TxQueue head | each T_NACK is a blast at a random phase; retransmits lengthen the burst |
 
-The design supports the variables **in the sense that the idle is
-re-targeted per rung** (bitrate policy) and the GS **re-learns the
-cadence continuously** (first-body EMA, probe-arrival release, learned
-`tail_ub`). It does not support them in the sense of a guarantee: when
-the encoder overshoots, or a rung's budget is mis-set, the idle simply
-disappears and the slotter degrades to timeouts (random-phase blasts,
-video and probe loss both rise), while the drone loses the RCFs that
-would have demoted it. That is a positive-feedback corner and the
-congestion shed is what currently breaks it.
+The design supports these variables **in the sense that the idle is
+re-targeted per rung** (the bitrate policy). The GS also **re-learns the
+cadence continuously**: the first-body EMA, the probe-arrival release and
+the learned `tail_ub`.
 
-## 5. Known gaps, ranked by measured cost
+It does not support them in the sense of a guarantee. When the encoder
+overshoots, or a rung's budget is mis-set, the idle disappears. The
+slotter then degrades to timeouts (random-phase blasts, so video and probe
+loss both rise), while the drone loses the RCFs that would have demoted
+it. That is a positive-feedback corner. The congestion shed and the air
+clock are what break it.
 
-1. **Timeouts at high duty** — 22–43 % of sends on the bench, each a
-   random-phase blast; phase-locked to the burst at `feedback_ms` 50.
-   Levers: `lead_ms` 3 → ~2 (measured latency + margin), `rcf_slot_hold_ms`
-   30 → 50, and/or a `feedback_ms` that is not a small multiple of `T`.
-   Not done. (`probe-blanking-fix-findings` §6.)
-2. **Open-loop airtime budget** — measured 66–76 % against a 60 %
-   target. A closed loop exists in pieces (`link.air_pct` on the GS,
-   `au_tail` span gauge) but nothing feeds it back into
-   `airtime_budget`. Lever: measure `burst/T` on the drone (it knows
-   every body's push→pop time) and trim the command; or lower the
-   config budget. Cost: bitrate.
-3. ~~**Drone TX start is unconditional**~~ — DONE 2026-09-23: carrier
-   sense on both ends, the drone waits for a GS send to finish and vice
-   versa; no video cost on the clean bench. The congested case is now
-   instrumented (`drone.radio.rx`) rather than assumed.
-4. **MSP/telemetry unslotted on the drone** — 6–9 PPDUs/s outside the
-   AU cadence. Measured not to correlate with losses (self-blanking
-   evidence list), so cosmetic today; they do consume the shared
-   hardware seq counter.
-5. **No clock sync** — the chip TSF is read (rx_pace `tsfl_d`) but never
-   used for scheduling. A TSF-anchored slot (drone publishes its burst
-   phase in T_TELEM; GS sends at phase + offset) would replace the
-   cadence predictor with a measurement and make mid-gap aiming
-   possible. Nothing built; the predictor is within 1 ms already.
+## 5. Known gaps
+
+1. **Timeouts at high duty.** Each timeout is a random-phase blast, and at
+   `feedback_ms` 50 they are phase-locked to the burst. The levers are
+   still unpulled:
+   - `lead_ms` 3 → about 2 (measured latency + margin);
+   - `rcf_slot_hold_ms` 30 → 50;
+   - a `feedback_ms` that is not a small multiple of `T`.
+
+   Record: `docs/findings/2026-09-05-probe-blanking-fix.md` §6.
+2. **Open-loop airtime budget.** Nothing feeds measured duty back into
+   `airtime_budget`. A closed loop exists only in pieces: the drone's air
+   clock (`au.log` `air_ms`), GS `link.air_pct`, and the `au_tail` span
+   gauge. One lever is to measure `burst/T` on the drone, which knows
+   every body's push→pop time, and trim the command. The other is to lower
+   the config budget, at a bitrate cost.
+3. **The NACK uplink is unslotted.** T_NACK goes out mid-burst by design,
+   because a slotted NACK arrived too late to help
+   (`docs/findings/2026-10-05-fec-nack-spike.md`). Each one is a blast
+   that can cost a downlink aggregate on every GS card. With
+   `link.nack.enable` on, its rate adds directly to the GS-inflicted loss.
+4. **MSP/telemetry unslotted on the drone.** Their PPDUs fall outside the
+   AU cadence. They were measured not to correlate with losses
+   (self-blanking evidence list), so this is cosmetic today.
+5. **No clock sync.** The chip TSF is read (`rx_pace` `tsfl_d`, gap log),
+   but never used for scheduling. A TSF-anchored slot would replace the
+   cadence predictor with a measurement and make mid-gap aiming possible:
+   the drone publishes its burst phase in T_TELEM, and the GS sends at
+   phase + offset. Nothing is built.
 
 ## 6. How to check the timing on a live pair
 
-- `link.rcf_slot.{au,probe,timeout,passthru,tail_ub_ms}` on the sideport
-  (grace sends count under `au`) — the timeout share is the single best
-  health number for "is there idle".
-- `link.air_pct` vs `encoder.airtime_budget` — the open-loop error.
-- `drone.rcf.rx_pps` vs `cards[].tx_pps` — uplink delivery; ≥ 90 % means
-  sends are landing in gaps.
-- `MABUR_GAPLOG=1` on the GS + `tools/bench/probesend.py` — every send
-  placed against every burst end; `tools/bench/ausniff.py` for the video
-  cost. `flightreport.py probe-NNNN.log` gives the completion→probe
-  offsets, i.e. how late the burst really ends.
+- **Is there idle?** `link.rcf_slot.{au,probe,timeout,passthru,tail_ub_ms}`
+  on the sideport (grace sends count under `au`). The timeout share is the
+  single best health number for this.
+- **Open-loop error.** Compare `link.air_pct` against
+  `encoder.airtime_budget × air_clock.efficiency_<bw>[mcs]`, not against
+  the budget alone. `link.air_pct` is injected rate over NOMINAL PHY rate
+  for streams 0/1 (`gs/src/stats_exporter.cpp`), while the budget is a
+  fraction of DELIVERED rate. `link.air_pct` does not include the probe.
+- **Uplink delivery.** Compare `drone.rcf.rx_pps` against the TX card's
+  `cards[].tx_pps`. At or above 90 %, sends are landing in gaps.
+- **Every send against every burst.** Run the GS with `MABUR_GAPLOG=1`
+  plus `tools/bench/probesend.py`; that places each send against each
+  burst end. Use `tools/bench/ausniff.py` for the video cost.
+- **How late the burst really ends.** `flightreport.py <session-dir>` (or
+  its `probe.log`) gives the completion→probe offsets.

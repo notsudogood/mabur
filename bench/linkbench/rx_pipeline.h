@@ -103,7 +103,7 @@ class RxPipeline {
       // snapshot(). Robust to the ≤3-frame URB swaps a multi-threaded TX
       // feed produces (a per-frame gap counter books those as phantom loss).
       //
-      // Seq baseline reset on idle (656 hole sweep 2026-09-01): a fresh TX
+      // Seq baseline reset on idle (656 hole sweep): a fresh TX
       // invocation restarts its 12-bit seq, and against a stale max the
       // estimator masks that cell's losses until seq re-crosses the old max
       // (up to a whole ~3600-frame cell in 4096 space). A >2 s bench-frame

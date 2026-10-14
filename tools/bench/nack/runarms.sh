@@ -2,7 +2,7 @@
 # loss-sim arms (secondary rig, docs/fec-nack.md "Bench"): one arm = fresh
 # maburgs.nack (a MABUR_LOSS_SIM build) on its config, loss dialed in after
 # link-up. The jammer runner (runjam.sh) is the primary rig.
-G=root@10.18.0.1
+G=${GS:?set GS=root@<gs-ip>}
 DUR=${DUR:-300}
 run_arm() {
   local name=$1

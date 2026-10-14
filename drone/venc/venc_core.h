@@ -46,7 +46,7 @@ typedef struct {
   uint32_t frames_encoded;  /* lifetime */
   int cur_bitrate_kbps;     /* last applied via venc_set_bitrate_kbps, -1 before first */
   /* No encoder QP: MI_VENC_Stream_t h265Info.startQual reads 0 on every
-   * frame this firmware emits and there is no GetChnStat QP (2026-09-03). */
+   * frame this firmware emits and there is no GetChnStat QP. */
 } VencStats;
 void venc_get_stats(VencStats *out);
 
@@ -61,10 +61,10 @@ uint64_t venc_cur_pts_us(void);
  * frees) and its size, or -1. Debug endpoint only. */
 int venc_snapshot_jpeg(uint8_t **out, size_t *out_len, int quality);
 
-/* VTX onboard recorder channel (spec 2026-09-26-vtx-recorder). A second
+/* VTX onboard recorder channel (docs/vtx-recorder.md). A second
  * H.265 CBR channel bound to the link's VPE port BEFORE the link channel:
  * the single-task H.265 engine serves the most recently bound peer first,
- * so the link keeps encoding ahead of it (docs/sd-record-findings-2026-09-26.md).
+ * so the link keeps encoding ahead of it (docs/findings/2026-09-26-sd-record.md).
  * Idle until venc_record_start(). */
 /* prefixed = 1: the AU is in MP4 layout (4-byte big-endian length before
  * each NAL) and is_key came from the encoder's NAL table. prefixed = 0: an

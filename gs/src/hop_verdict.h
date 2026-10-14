@@ -20,7 +20,7 @@ enum : uint8_t { kEvImpaired = 1, kEvWeak = 2, kEvFading = 4, kEvContended = 8, 
 // (the sideport's own conversion), SNR in half-dB (snr_units.h) -- so the
 // fill site converts HERE, never at the threshold, and scan.log V lines
 // and flightreport's per-card medians read in dBm/dB like ctl.log. Found
-// on the 2026-09-15 bench: unconverted, `weak` could never trip. A raw
+// on the bench: unconverted, `weak` could never trip. A raw
 // RSSI of exactly 0 means "no frame heard on this card yet" and stays 0,
 // which HopVerdict::window() already treats as its no-reference sentinel.
 inline double rssi_raw_to_dbm(double raw) { return raw > 0.0 ? raw - 110.0 : 0.0; }
@@ -34,7 +34,7 @@ struct VerdictCardIn {
   // CPE510 relay, whose SNR is RSSI above a calibrated floor: the weak test
   // then reads RSSI alone instead of demanding both.
   bool snr_valid = true;
-  // Busy airtime (spec 2026-09-25-nhm-airtime §6): NHM busy % of the window
+  // Busy airtime: NHM busy % of the window
   // and our own video's airtime %, valid only when the card's NHM window
   // covered this window on this channel.
   bool busy_valid = false;
@@ -83,17 +83,17 @@ struct VerdictOut {
   // True on the FIRST `interfered` window of a frozen-reference episode,
   // and never again until the references thaw (3 healthy windows, or
   // HopVerdict::reset() after a hop's verify window ends). This is the
-  // edge spec section 4 scopes the rung-store blank to -- see
-  // gs/src/hop_blank.h. It is deliberately NOT `ref_frozen`, which is
-  // keyed on `impaired`: Fade and Unknown are impaired too, and section 4
-  // ends "fade/unknown: unchanged ladder behaviour". One edge per episode
+  // edge the rung-store blank is scoped to -- see gs/src/hop_blank.h. It
+  // is deliberately NOT `ref_frozen`, which is keyed on `impaired`: Fade
+  // and Unknown are impaired too, and fade/unknown leave the ladder's
+  // behaviour unchanged. One edge per episode
   // is also what bounds the blank -- a jam that alternates interfered and
   // healthy windows stays inside ONE frozen episode and re-arms nothing.
   bool first_interfered = false;
 };
 
-// Per-window classifier: fade / interfered / unknown / healthy (spec
-// 2026-09-14-inflight-channel-hop). Pure: the caller passes the clock, no
+// Per-window classifier: fade / interfered / unknown / healthy. Pure: the
+// caller passes the clock, no
 // I/O, no threads, no hardware.
 class HopVerdict {
  public:
@@ -101,10 +101,10 @@ class HopVerdict {
   // One window. cards[i].valid=false = skipped (mid-dwell / dead); rung = ladder rung now.
   VerdictOut window(double now_ms, const std::vector<VerdictCardIn>& cards,
                     const VerdictLinkIn& link, int rung);
-  // After a hop's verify window ends (spec section 2's second thaw rule).
-  // Called from main.cpp on HopAction::VerifyPass -- see hop_controller.h.
+  // After a hop's verify window ends (the second thaw rule).
+  // Called from ChannelCore::apply_hop_action_ on HopAction::VerifyPass -- see hop_controller.h.
   void reset();
-  // A new in-session verdict run is starting (main.cpp: hop_active's
+  // A new in-session verdict run is starting (ChannelCore: hop_active's
   // rising edge, where the AU/recovered counter baselines are re-primed).
   // Drops the AU history and its frozen reference only: the frame rate
   // before an outage is no baseline for the one after it (a session that

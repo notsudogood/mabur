@@ -1,4 +1,4 @@
-// VTX recorder state from the core's stats (Telem.rec_status, spec §4.5).
+// VTX recorder state from the core's stats (Telem.rec_status).
 // drone/src/vtx_recorder.h RecErr codes.
 export const REC_ERR_TEXT = {
   1: 'Recorder disabled on the VTX', 2: 'No SD slot', 3: 'No SD card',

@@ -36,7 +36,7 @@ devourer::TxMode to_tx_mode(const rc::LayerTxSpec& s, uint8_t bw) {
 // Writes the 26-byte 802.11 QoS-Data header (frame control | duration | DA |
 // SA | BSSID | seq_ctl | QoS ctl) at `out`. QoS-Data (not the old probe-req)
 // because the MAC's A-MPDU engine aggregates ONLY QoS-Data on a data queue
-// (docs/dq-spike-findings-2026-08-31.md §11); the wire is QoS-Data
+// (docs/findings/2026-08-31-dq-spike.md §11); the wire is QoS-Data
 // unconditionally — aggregation on/off never changes the frame layout. QoS
 // ctl = TID 0, ack-policy No-Ack (no BlockAck peer exists; FEC covers loss).
 // seq_ctl carries `seq` in the sequence-number subfield (fragment 0) at the

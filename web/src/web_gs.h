@@ -1,6 +1,6 @@
 #pragma once
-// WebGs — the devourer-free core of the browser ground station (spec
-// 2026-09-27-web-gs). Composes the SAME units maburgs's core loop runs
+// WebGs — the devourer-free core of the browser ground station. Composes
+// the SAME units maburgs's core loop runs
 // (Aggregator with one card, FrameStream, GapTimeoutPolicy,
 // LinkHealthAssembler, VrxController, RcfSlotter, RttEstimator) so the web
 // GS decodes and drives the ladder exactly like maburgs.
@@ -17,8 +17,8 @@
 //    roster it runs `SpotterFollow` (spotter_follow.h): every CRC-good
 //    body's rx channel and every parsed T_RCF's (hop_ch, hop_epoch) feed
 //    it, tick() retunes card 0 toward desired() and reports
-//    on_card_channel once the card is ready() on it. No tag check (spec
-//    §6.2). Video is always decoded; a drone restart (Telem tlm_seq
+//    on_card_channel once the card is ready() on it. No tag check (the
+//    hop order rides the RCF in the clear). Video is always decoded; a drone restart (Telem tlm_seq
 //    stepping back, DroneRestartDetector) resets the decoder continuity +
 //    FrameStream; a channel move resets nothing (the FrameStream closes the
 //    gap as truncated AUs, the decoder re-arms on the next IRAP).
@@ -30,7 +30,7 @@
 // on_rc_body/on_session_opened in the rc sink, is_link_video/note_video in
 // on_rx, note_au_end at every AU end, disc_targets/may_send/disc_for_card/
 // note_sent around every send, snapshot() for stats. The scout thread is the
-// core's own (a pthread in the browser, spec §5.5/§8). Without a roster
+// core's own (a pthread in the browser). Without a roster
 // (replay/tests) Gs sends through Io::send and runs no core.
 //
 // Single-threaded API: on_rx/tick/stats from one thread, one clock (core
@@ -75,7 +75,7 @@ struct Au {
   uint8_t sid = 0;                 // 0 base, 1 enh
   uint8_t flags = 0;               // framewire: 0x01 IDR, 0x02 DISCONT
   bool complete = false;
-  // Slice salvage (spec 2026-10-10-h265-slices §5.5): rebuilt from its
+  // Slice salvage: rebuilt from its
   // complete slices plus skip-slice fills -- decodable, never a sync point.
   // Mutually exclusive with complete.
   bool salvaged = false;
@@ -120,7 +120,7 @@ struct Stats {
   std::optional<int64_t> pts_off_us;
   uint64_t bodies = 0, aus_complete = 0, aus_truncated = 0, sends = 0;
   uint64_t aus_truncated_base = 0;   // of aus_truncated: sid 0 (the layer the NACK protects)
-  // Slice salvage (spec 2026-10-10-h265-slices §5.5): of aus_truncated, the
+  // Slice salvage: of aus_truncated, the
   // ones FrameStream rebuilt into a decodable picture (kept slices + fills).
   uint64_t aus_salvaged = 0;
   // RCFs only (sends minus DISC beacons/keep-alives): the denominator for
@@ -133,7 +133,7 @@ struct Stats {
   std::optional<int> drone_temp_c;        // Telem.soc_temp_c; unset when -128 (unavailable)
   uint64_t osd_snaps = 0;     // MSP snapshots out of the FEC sink
   uint64_t osd_screens = 0;   // OSD screens published (Io::on_osd)
-  // Pairing key (spec 2026-10-01 link-pairing §8): the drone's rendezvous
+  // Pairing key: the drone's rendezvous
   // answer told us our key doesn't match its, and the fingerprint of the
   // key this core is configured with (for the page to show beside it).
   bool key_mismatch = false;
@@ -167,8 +167,7 @@ std::optional<std::string> channel_width_error(const maburgs::Config& cfg, Mode 
                                                int start_ch, int width);
 
 // The page's relay stats fields, appended to each STATS line (keys as the
-// 2026-09-29 web relay client emitted them; web/ui/src/lib/view.js
-// reads them).
+// web relay client emits them; web/ui/src/lib/view.js reads them).
 std::string relay_stats_fields(const maburgs::RelayStatsIn& r);
 
 // Capture -> AU complete, core clock, from the drone's u32 pts and the
@@ -186,7 +185,7 @@ struct Io {
   // a direct send plus slotter releases), nullptr when none went out.
   std::function<void(double now_ms, const maburgs::LinkHealth&, int rung,
                      const std::vector<uint8_t>* sent)> on_control_tick;
-  // Optional, both modes: one MSP OSD screen (spec 2026-09-27-web-msp-osd),
+  // Optional, both modes: one MSP OSD screen,
   // at most every 30 ms. rows x cols cells, row-major, char | page << 8.
   std::function<void(int rows, int cols, const uint16_t* cells)> on_osd;
   // Gs with a roster: the core's stderr-style lines ("maburgs channel: ...",
@@ -229,11 +228,11 @@ class WebGs {
   void on_rx(const mabur::node::RxBody& m);   // m.mono_us = core clock
   void tick(uint64_t now_us);                 // same clock as on_rx stamps
   Stats stats() const;
-  // VTX onboard recorder wish (spec 2026-09-27-web-ui §3.3), RecControl
+  // VTX onboard recorder wish, RecControl
   // semantics: the RCF byte stays 0 until the first call, then
   // kRecKnown | (on ? kRecOn : 0). Spotter: no-op (no VrxController).
   void set_vtx_rec(bool on);
-  // GS-requested IDR (spec 2026-09-28): the page's cumulative request count.
+  // GS-requested IDR: the page's cumulative request count.
   // Its low byte is the RCF idr_epoch; the drone serves one IDR per change.
   // Spotter: kept for stats only (no VrxController, nothing sent).
   void set_idr_requests(uint32_t n);

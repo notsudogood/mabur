@@ -19,8 +19,6 @@ inline double mode_period_us(int clock_khz, int htotal, int vtotal) {
 // the presenter already captures (DRM_CAP_TIMESTAMP_MONOTONIC). Pure
 // arithmetic: no clocks, no threads, no DRM types. Exact flips only --
 // an inexact timestamp is a poll-receipt stamp and would poison phase.
-//
-// Spec: docs/superpowers/specs/2026-08-31-vsync-locked-regulator-design.md §1.
 class VblankEstimator {
  public:
   static constexpr double kSeedPeriodUs = 16'667.0;

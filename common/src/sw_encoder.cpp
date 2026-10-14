@@ -273,7 +273,7 @@ std::vector<std::vector<uint8_t>> SwEncoder::flush() {
 void SwEncoder::flush(const SwEnvSink& sink) {
   seal_current(sink);
   if (tail_repair_pending_ && count_ > 0) emit_or_enqueue_repair(sink);
-  // No join here (fec-join-delete 2026-09-22): the frame-end spin-wait for
+  // No join here (fec-join-delete): the frame-end spin-wait for
   // the worker was 64 % of the hot thread's samples at 18 Mb/s. Repairs
   // still building surface at the next add_packet/flush/collect drain;
   // SwDecoder has no ordering contract and its horizon (~80 ms) dwarfs the

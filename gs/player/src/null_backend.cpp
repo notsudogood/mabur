@@ -20,8 +20,7 @@ void NullBackend::flush() { ++flushes_; }
 void NullBackend::release_frame(const DmaFrame&) {}
 
 // Factory: "null" is always available (host and cross). "mpp" is only
-// registered when MABUR_PLAYER_HW is compiled in (cross build, Task 7+;
-// MppBackend is a stub returning init()=false until Task 8 fills it in) --
+// registered when MABUR_PLAYER_HW is compiled in (cross build) --
 // on a plain host build this #ifdef is never defined, so "mpp" falls
 // through to nullptr there and main.cpp turns that into a clear exit(2)
 // error.

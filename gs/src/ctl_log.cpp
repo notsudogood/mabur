@@ -5,7 +5,7 @@
 namespace maburgs {
 
 namespace {
-// Mirrors StatsExporter's clamp_util() (Task 8): u3/u_pred are ratios that
+// Mirrors StatsExporter's clamp_util(): u3/u_pred are ratios that
 // carry a 1e9 zero-guard sentinel when the divisor budget is 0 (see
 // LadderController's u3_/u_pred computations in ladder_controller.cpp). A
 // degenerate config must not put that raw magnitude in the log.

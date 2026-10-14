@@ -1,4 +1,4 @@
-// Core 1 Hz stats + 200 ms page samples (spec §3.4/§4.2). Holds the rings the
+// Core 1 Hz stats + 200 ms page samples. Holds the rings the
 // old page kept (60 raw lines for Copy stats, 60 parsed ticks for the 10 s
 // RCF-heard window) and the 60-sample latency sparkline (12 s @ 200 ms).
 import { rcfHeardPctWindowed, copyStatsPayload, trimBefore } from './logic.mjs';

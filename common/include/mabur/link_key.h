@@ -4,8 +4,8 @@
 #include <optional>
 #include <string>
 namespace mabur {
-// The pairing key (spec 2026-10-01 link-pairing §2): 16 bytes shared by the
-// drone, the GS and the web page. Lives in a key FILE, never in the TOML.
+// The pairing key: 16 bytes shared by the drone, the GS and the web page.
+// Lives in a key FILE, never in the TOML.
 using LinkKey = std::array<uint8_t, 16>;
 // Compiled-in default used when the key file is absent so a fresh install
 // links out of the box. Offers no security: every default install pairs

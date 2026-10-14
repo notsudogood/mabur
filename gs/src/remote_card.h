@@ -1,7 +1,7 @@
 #pragma once
 // RemoteCard: a TP-Link CPE510 running mabur-relay (protocol v4) as a
 // maburgs radio card -- FRAMEs in over UDP, RCFs out as TX messages
-// (spec 2026-10-02-maburgs-remote-card §2). RelayClient holds the protocol
+// (see docs/cpe510-relay.md). RelayClient holds the protocol
 // state; this class gives it a socket, an RX thread, the LinkCard surface
 // and the daemon's never-give-up ownership policy.
 #include <atomic>
@@ -30,7 +30,7 @@ class RemoteCard final : public LinkCard {
     uint8_t card_id = 0;
     // maburgs (a daemon) restarts the client every kRefusedRestartMs while
     // another client owns the relay and never gives up. The web page is the
-    // relay's one client (spec 2026-10-04 §1): it sets this false so a
+    // relay's one client: it sets this false so a
     // refusal stays visible through health() as Refused/Taken instead of
     // being reset.
     bool restart_when_refused = true;

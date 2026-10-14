@@ -62,8 +62,8 @@ static int venc_core_running(void)
 
 /* Called on the encoder thread by star6e_output when a ring-full drop threw
  * away a REFERENCE frame.  Deliberately unpaced: this is a report of a
- * fact, and spec §4's 1 s chain-break holdoff is policy, which lives in
- * RcAgent (task B6).  A burst of drops therefore produces a burst of
+ * fact, and the 1 s chain-break holdoff is policy, which lives in
+ * RcAgent.  A burst of drops therefore produces a burst of
  * callbacks; the consumer coalesces. */
 void venc_core_signal_chain_break(void)
 {
@@ -315,7 +315,7 @@ void venc_core_stop(void)
 		/* waybeam's runner_teardown forked a child here that killed
 		 * the parent after ~3 s and wrote 'b' to /proc/sysrq-trigger
 		 * if it was stuck in D-state inside StopRecvPic.  NOT ported
-		 * — fold-in ruling 2026-08-29: an autonomous mid-flight
+		 * — fold-in ruling: an autonomous mid-flight
 		 * reboot takes the RC link with it, while a D-state-wedged
 		 * encoder thread leaves maburd's radio and control threads
 		 * alive (video lost, aircraft still commandable).  That is

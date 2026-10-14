@@ -5,7 +5,7 @@
 
 namespace maburgs {
 
-// Control-path RTT + pts-offset estimator (link-rtt, 2026-09-02).
+// Control-path RTT + pts-offset estimator (link-rtt).
 //
 // Clock-sync-free: both timestamps in every subtraction are GS-local
 // CLOCK_MONOTONIC µs; the drone contributes only a duration (rcf_age_ms)

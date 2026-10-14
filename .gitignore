@@ -7,3 +7,6 @@ tests/fixtures/*-fixture.jsonl
 
 # bench artifacts, never repo material
 logs/
+
+# secrets: link keys (mabur.key) and any other private key, never commit
+*.key

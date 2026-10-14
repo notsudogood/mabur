@@ -105,8 +105,8 @@ TEST(load_config_type_mismatch_fec_window_string_throws_runtime_error_with_dotte
 }
 
 TEST(load_config_unknown_radio_bw_set_key_throws) {
-  // radio.bw_set (bandwidth-probe schedule) was removed 2026-07-27 (SDD
-  // ladder-controller Task 5): the ladder controller never varies bw
+  // radio.bw_set (bandwidth-probe schedule) is removed: the ladder
+  // controller never varies bw
   // independently of the commanded rung, so the probe schedule and its
   // config key are dead. Strict-keys config load (PR #7) must reject it
   // like any other unknown key rather than silently ignoring it.
@@ -118,7 +118,7 @@ TEST(load_config_unknown_radio_bw_set_key_throws) {
   std::filesystem::remove(path);
 }
 
-// waybeam is retired (spec 2026-08-28 venc-foldin, Task B5): the section
+// waybeam is retired (venc fold-in): the section
 // and its host/port/idr_path keys are gone entirely, strict keys reject any
 // config that still carries it. See waybeam_section_is_now_unknown below.
 // The surviving bitrate/ROI policy fields moved to Config::encoder.
@@ -225,9 +225,9 @@ TEST(encoder_bitrate_min_300_loads) {
 }
 
 // ---- Task B5: venc section / waybeam retirement -------------------------
+// ---- venc section / waybeam retirement ---------------------------------
 
-// A full, valid venc block matching the brief's fixture (spec 2026-08-28
-// venc-foldin Task B5 Step 1), reused across the tests below.
+// A full, valid venc block, reused across the tests below.
 std::string valid_venc_block() {
   return "[venc]\n"
          "sensor_bin = \"/etc/sensors/imx415_greg_fpvXIX_colortrans.bin\"\n"
@@ -280,7 +280,7 @@ TEST(waybeam_section_is_now_unknown) {
 }
 
 TEST(venc_rejects_bitrate_key) {
-  // spec 2026-08-28 venc-foldin §3: no venc.bitrate key ever exists. It
+  // No venc.bitrate key ever exists. It
   // simply isn't in venc's known-key set, so this hits the same unknown-key
   // path as any other stale key.
   auto path = write_temp_toml(
@@ -306,7 +306,7 @@ TEST(venc_rejects_bitrate_key) {
   std::filesystem::remove(path);
 }
 
-// Absent venc keys fall back to the spec §3 values (venc_cfg_defaults(),
+// Absent venc keys fall back to the default values (venc_cfg_defaults(),
 // drone/venc/venc_cfg.c), NOT to the all-zero a plain `VencCfg core{}`
 // would give: a zeroed VencCfg is fps 0 / 0x0 / gop 0.0 / no stripe,
 // which is a malformed pipeline dressed up as a default.
@@ -324,8 +324,8 @@ TEST(venc_absent_keys_fall_back_to_spec_defaults) {
   CHECK(c.venc.core.qp_delta == -4);
   CHECK(c.venc.core.max_ipprop == 0);
   CHECK(c.venc.core.superframe_p_pct == 0);
-  // The decomposed resilience components (venc.resilience was deleted
-  // 2026-09-04): defaults reproduce the old "rally" preset at 1080p60 —
+  // The decomposed resilience components (venc.resilience is deleted):
+  // defaults reproduce the old "rally" preset at 1080p60 —
   // a 9-frame sweep (4 CTU rows/P at 1080p) at QP 36, 1:1 SVC-T with
   // enhance prediction on.
   CHECK(c.venc.core.intra_refresh_frames == 9);
@@ -404,7 +404,7 @@ TEST(venc_intra_refresh_frames_range_checked) {
   CHECK(!bad("255"));
 }
 
-// The raw rows key is gone (2026-09-27); a stale config fails boot naming it.
+// The raw rows key is gone; a stale config fails boot naming it.
 TEST(venc_intra_refresh_rows_key_removed) {
   auto path = write_temp_toml(
       "[venc]\n"
@@ -461,7 +461,7 @@ TEST(venc_ref_base_zero_disables_svct) {
   std::filesystem::remove(path);
 }
 
-// venc.resilience was deleted 2026-09-04 in favour of the six components
+// venc.resilience is deleted in favour of the six components
 // above. A stale config still naming it must fail boot on the ordinary
 // unknown-key path, not be silently ignored while the encoder runs
 // something else (config strict-keys policy, CLAUDE.md).
@@ -476,7 +476,7 @@ TEST(venc_stale_resilience_key_throws) {
   std::filesystem::remove(path);
 }
 
-// max_ipprop is optional: absent -> 0 (spec default, tested above), a
+// max_ipprop is optional: absent -> 0 (the default, tested above), a
 // legal in-range value lands verbatim in VencCfg.
 TEST(venc_max_ipprop_parses) {
   auto path = write_temp_toml(
@@ -490,7 +490,7 @@ TEST(venc_max_ipprop_parses) {
 
 // min_iqp: 0 (default) = leave the firmware I-QP floor; 1..51 = program
 // u32MinIQp at boot. The one direct IDR SIZE bound star6e honours
-// (bench 2026-09-06: 12/36/42/48 -> 11.6/5.0/2.6/1.4 kB, P untouched).
+// (bench: 12/36/42/48 -> 11.6/5.0/2.6/1.4 kB, P untouched).
 TEST(venc_min_iqp_parses) {
   auto path = write_temp_toml(
       "[venc]\n"
@@ -512,7 +512,7 @@ TEST(venc_min_iqp_absent_leaves_firmware_floor) {
 // superframe_p_pct: 0 (default) = off; 100..1000 = P-frame ceiling as a
 // percentage of the rung's per-frame budget via MI_VENC_SetSuperFrameCfg
 // REENCODE (I unlimited). Below 100 is rejected: a cap under the budget
-// makes CBR re-plan far under it (fork probe 2026-08-27: 6000 B cap -> 3.2 kB
+// makes CBR re-plan far under it (fork probe: 6000 B cap -> 3.2 kB
 // frames) and is a quality collapse, not a burst bound.
 TEST(venc_superframe_p_pct_parses) {
   auto path = write_temp_toml(
@@ -524,7 +524,7 @@ TEST(venc_superframe_p_pct_parses) {
   std::filesystem::remove(path);
 }
 
-// venc.min_qp was a one-day bench knob (2026-09-03) and is DELETED: the
+// venc.min_qp was a one-day bench knob and is DELETED: the
 // bench refuted the QP-floor hypothesis it existed for, and upstream
 // characterised u32MinQp as a bit ceiling that collapses the rate. The
 // key now fails boot like any other unknown key — the intended forcing
@@ -563,7 +563,7 @@ TEST(venc_size_malformed_throws) {
 
 TEST(venc_range_checks) {
   // Each case names the field its own out-of-range value should be
-  // reported against (review finding 2026-08-29: a loose "venc." find()
+  // reported against (a loose "venc." find()
   // let 10/14 cases silently pass on a DIFFERENT field's error message
   // — the venc.gop_s-validated-unconditionally bug masked here because
   // every case happened to also fail gop_s's range check first).
@@ -612,7 +612,7 @@ TEST(venc_range_checks) {
 }
 
 TEST(uep_layers_overhead_is_literal_base_overhead) {
-  Config cfg;  // defaults: base_overhead = 0.5, literal (Task 3)
+  Config cfg;  // defaults: base_overhead = 0.5, literal
   auto layers = cfg.uep_layers();
   CHECK(layers[0].fec.overhead == cfg.fec.base_overhead);
   CHECK(layers[1].fec.overhead == cfg.fec.base_overhead);
@@ -674,8 +674,8 @@ TEST(fec_symbol_size_rejects_wrong_len_array) {
 }
 
 TEST(fec_body_cap_is_the_ht_mpdu_limit) {
-  // 2026-09-08: the 2900 B cap was an empirical envelope from the July
-  // symbol-size sweep, not a chip limit (GS RX packet limit is 12 kB, an HT
+  // The old 2900 B cap was an empirical envelope from the symbol-size
+  // sweep, not a chip limit (GS RX packet limit is 12 kB, an HT
   // MPDU may be 3839 B). Raised to 3760 by the guard's formula so a 9- or
   // 10-block 332 B body (guard 3132 / 3480, ~3163 / 3513 B on air) loads;
   // 11 blocks (guard 3828, 3863 B on air > 3839 - 24 - 4) must still fail.
@@ -871,8 +871,8 @@ TEST(deleted_absolute_wall_keys_fail_boot) {
   }
 }
 
-// The transitional async gate was removed after hardware acceptance (plan
-// 2026-07-17 Task 7): async is the only mode. A stale config still carrying
+// The transitional async gate was removed after hardware acceptance: async
+// is the only mode. A stale config still carrying
 // the key must fail loudly, not be silently ignored.
 TEST(fec_stale_async_worker_key_throws) {
   auto p = write_temp_toml("[fec]\nasync_worker = true\n");
@@ -881,8 +881,7 @@ TEST(fec_stale_async_worker_key_throws) {
   std::filesystem::remove(p);
 }
 
-// frame_ring_name was deleted (spec 2026-08-28 venc-foldin, controller
-// ruling on Task B5): the ring name's single authority is now the
+// frame_ring_name was deleted (venc fold-in): the ring name's single authority is now the
 // compile-time VENC_RING_NAME in drone/venc/venc_cfg.h. A config that still
 // carries the key hits the ordinary unknown-key path — see
 // stale_video_input_and_ring_name_keys_throw below for the sibling
@@ -914,7 +913,7 @@ TEST(stale_video_input_and_ring_name_keys_throw) {
   std::filesystem::remove(path2);
 }
 
-// The flags block tuned per-rung LDPC/STBC policy. Removed 2026-07-26:
+// The flags block tuned per-rung LDPC/STBC policy. Removed:
 // LDPC+STBC are now hardcoded true on every rung in both ladder builders
 // (the deployed all-true config was the only shape ever flown; flags-off
 // T1/T2 measured 2-3 dB weaker on air). A stale block fails the boot.
@@ -926,9 +925,9 @@ TEST(stale_flags_key_throws) {
   std::filesystem::remove(path);
 }
 
-// radio.max_txagc was the legacy TXAGC-index ceiling; Task 11 moved the
-// power path to qdB offsets and nothing has read it since. The live config
-// was scrubbed 2026-07-26, so a stale key fails the boot loudly (note: the
+// radio.max_txagc was the legacy TXAGC-index ceiling; the power path moved
+// to qdB offsets and nothing has read it since. The live config was
+// scrubbed, so a stale key fails the boot loudly (note: the
 // pre-sym328 rollback config still carries it — edit before rolling back).
 TEST(stale_radio_max_txagc_key_throws) {
   auto path = write_temp_toml("[radio]\nmax_txagc = 40\n");
@@ -940,7 +939,7 @@ TEST(stale_radio_max_txagc_key_throws) {
 
 // power_offset_db fed the ladder's carried-but-never-emitted per-rung field
 // (radio_tx.h: no DBM_TX_POWER radiotap is ever written). Scrubbed from the
-// live config 2026-07-26; stale key fails the boot.
+// live config; stale key fails the boot.
 TEST(stale_power_offset_db_key_throws) {
   auto path = write_temp_toml("power_offset_db = [0, 0, 0, 0]\n");
   std::string msg = what_of([&] { (void)load_config(path.string()); });
@@ -985,8 +984,8 @@ TEST(config_rejects_power_mode_override) {
 }
 
 TEST(link_rc_drain_ms_default_and_bounds) {
-  // Absent: the agent loop wakes every 5 ms to drain RCFs (spec 2026-08-14
-  // fade-demote §3b). This is an optional key on a strict-keys config, so a
+  // Absent: the agent loop wakes every 5 ms to drain RCFs (fade-demote).
+  // This is an optional key on a strict-keys config, so a
   // deployed drone with no `link.rc_drain_ms` must still boot.
   {
     auto path = write_temp_toml("");
@@ -1014,9 +1013,8 @@ TEST(link_rc_drain_ms_default_and_bounds) {
   }
 }
 
-// Review finding 2026-08-14 (final whole-branch review, finding 4): tick_ms
-// was unvalidated, and the TickGate the agent loop now runs its housekeeping
-// behind turns a bad value from "spins hot" into "silently loses the
+// tick_ms must be validated: the TickGate the agent loop runs its
+// housekeeping behind turns a bad value from "spins hot" into "silently loses the
 // failsafe" — TickGate(now, -1) casts to a ~1.8e19 ms period, so the gate
 // fires once at startup and never again: no failsafe transition, no
 // rendezvous fallback, no watchdog, no telemetry, and nothing in the log to
@@ -1068,7 +1066,7 @@ TEST(link_rc_drain_ms_must_not_exceed_tick_ms) {
   }
 }
 
-// ---- Task 4: link.key_file (spec 2026-10-01-link-pairing §2) ------------
+// ---- link.key_file (link pairing) ---------------------------------------
 
 TEST(link_key_file_missing_uses_default_and_says_so) {
   auto path = write_temp_toml("[link]\nkey_file = \"" + std::string(MABUR_TEST_SCRATCH_DIR) +
@@ -1100,11 +1098,11 @@ TEST(link_vtx_id_is_an_unknown_key_now) {
   CHECK(msg.find("unknown key") != std::string::npos);
 }
 
-// ---- Task 3: ampdu block (spec 2026-09-01-ampdu-design.md) --------------
+// ---- ampdu block --------------------------------------------------------
 
 TEST(ampdu_defaults_when_absent) {
   // A config with no "ampdu" block gets the shipped defaults — aggregation
-  // OFF since the 2026-09-01 bench verdict (no fec win, RF-report damage).
+  // OFF per the bench verdict (no fec win, RF-report damage).
   auto path = write_temp_toml("");
   auto cfg = load_config(path.string());
   CHECK(cfg.ampdu.max_num == 0);
@@ -1124,8 +1122,7 @@ TEST(ampdu_block_parses) {
 
 TEST(ampdu_min_mcs_keys_default_to_zero) {
   // Absent min_mcs_20/min_mcs_40 = aggregate at every rung of that width,
-  // the pre-2026-09-17 behaviour, so a config written before the keys
-  // existed flies exactly as it did.
+  // so a config written without the keys aggregates everywhere.
   auto path = write_temp_toml("[ampdu]\nmax_num = 6\n");
   auto cfg = load_config(path.string());
   CHECK(cfg.ampdu.min_mcs_20 == 0);
@@ -1152,7 +1149,7 @@ TEST(ampdu_min_mcs_rejects_out_of_range) {
 }
 
 TEST(ampdu_old_min_mcs_key_fails_boot) {
-  // Renamed to min_mcs_20/min_mcs_40 with the 40 MHz rungs (2026-09-24);
+  // Renamed to min_mcs_20/min_mcs_40 with the 40 MHz rungs;
   // the old key is unknown, like every removed key (CLAUDE.md policy).
   auto path = write_temp_toml("[ampdu]\nmax_num = 6\nmin_mcs = 4\n");
   std::string msg = what_of([&] { (void)load_config(path.string()); });
@@ -1210,13 +1207,13 @@ TEST(ampdu_rejects_bad_values) {
   }
 }
 
-// air_clock (spec 2026-09-06): shed_ms 0 = observe only; efficiency_20/
+// air_clock: shed_ms 0 = observe only; efficiency_20/
 // efficiency_40 are the per-MCS fraction of nominal PHY rate the link
 // delivers at each width (8 entries, HT mcs0..7, measured --
-// docs/bandwidth-sweep-findings-2026-09-17.md,
-// docs/bw40-sweep-findings-2026-09-23.md), priced into both the bitrate
+// docs/findings/2026-09-17-bandwidth-sweep.md,
+// docs/findings/2026-09-23-bw40-sweep.md), priced into both the bitrate
 // policy and the air clock; body_us a fixed per-body cost. Absent = all
-// ones = nominal, the pre-2026-09-17 policy.
+// ones = nominal.
 TEST(air_clock_defaults_when_absent) {
   auto path = write_temp_toml("[link]\ntick_ms = 100\n");
   Config c = load_config(path.string());
@@ -1243,7 +1240,7 @@ TEST(air_clock_section_parses) {
 }
 
 TEST(air_clock_efficiency_must_be_eight_fractions) {
-  // A scalar (the pre-2026-09-17 shape), a short array, and an entry
+  // A scalar (the old shape), a short array, and an entry
   // outside (0,1] all fail boot naming the key -- no shim for the old shape
   // (CLAUDE.md: config keys are free to change).
   for (const char* body : {"[air_clock]\nefficiency_20 = 0.73\n",
@@ -1312,7 +1309,7 @@ TEST(air_clock_unknown_key_throws) {
   std::filesystem::remove(path);
 }
 
-// ---- Task 3: TOML swap (2026-09-07-toml-config) -------------------------
+// ---- TOML config --------------------------------------------------------
 
 TEST(load_config_reports_defaulted_keys) {
   auto path = write_temp_toml("[fec]\nwindow = 16\n");
@@ -1353,7 +1350,7 @@ TEST(load_config_accepts_int_for_a_float_key) {
   std::filesystem::remove(path);
 }
 
-// Fix round 1 finding: parse_venc wraps every key's assign_if_present in an
+// parse_venc wraps every key's assign_if_present in an
 // outer `if (j.contains(key))`, so the built-in absent-branch reporting
 // never fires there -- the [venc] section was silently missing from the
 // operator-facing defaulted-key log. Pins that every venc key still gets
@@ -1423,11 +1420,9 @@ TEST(radio_channels_validated_and_removed_keys_fail) {
   }
 }
 
-// Fix round 1 (reviewer): the replaced follow_gs_and_move_confirm_parse_with_
-// defaults test used to pin link.move_confirm_ms's [200,30000] bounds check
-// (parse_link, config.cpp) via a "= 10" throw case; that coverage was lost
-// when it was swapped for the two radio_channels_* tests above. Restored
-// here, plus the high end and both boundary values loading cleanly.
+// link.move_confirm_ms's [200,30000] bounds check (parse_link, config.cpp):
+// a "= 10" throw case, the high end, and both boundary values loading
+// cleanly.
 TEST(move_confirm_ms_out_of_range_throws) {
   for (const char* body : {"[link]\nmove_confirm_ms = 10\n", "[link]\nmove_confirm_ms = 40000\n"}) {
     std::string msg = what_of([&] { (void)load_config(write_temp_toml(body).string()); });
@@ -1585,7 +1580,7 @@ TEST(nack_section_defaults_and_bounds) {
   }
 }
 
-// ---- radio.width is real (2026-09-24, 40 MHz rungs) ----------------------
+// ---- radio.width is real (40 MHz rungs) ---------------------------------
 
 TEST(radio_width_accepts_20_and_40_only) {
   auto p20 = write_temp_toml("[radio]\nchannels = [136]\nwidth = 20\n");
@@ -1636,7 +1631,7 @@ TEST(record_defaults_are_disabled_and_parse) {
   }
 }
 
-// Final-review fix: record.dir is compared against /proc/mounts' mount
+// record.dir is compared against /proc/mounts' mount
 // point, which never carries a trailing slash -- "/mnt/sd/" would read
 // NotMounted forever. Strip it; "/" itself stays.
 TEST(record_dir_trailing_slash_is_stripped) {

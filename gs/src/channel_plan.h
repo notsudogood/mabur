@@ -25,7 +25,7 @@ struct ChannelPlanCfg {
   int search_after_ms = 5000;
 };
 
-// Where the link lives (spec 2026-10-03-auto-channel-set §4.1, GS side).
+// Where the link lives (GS side).
 // Pure: the caller passes the clock and the rendezvous state; the plan
 // answers "which channel should card i be on", and records the moves that
 // change where the link lives. There is no home channel any more -- the
@@ -34,7 +34,7 @@ struct ChannelPlanCfg {
 // go scout (release_scout()) and track op_, the channel the link (and the
 // non-scouting card) sits on.
 //
-// want_ (final review C1, 2026-10-04): the channel the link SHOULD live on
+// want_: the channel the link SHOULD live on
 // -- the pin, else the start channel, later the committed pick. A DISC only
 // finds the drone: when the ack that opens a session was heard on a member
 // X != op, link_found() moves op_ to X for every card (the link forms
@@ -90,8 +90,8 @@ class ChannelPlan {
   void hop_withdraw(double now_ms);
   // Does a video body received on rx_ch keep the session alive? Only where
   // the link lives: op, or the hop target while a hop is in flight (the lead
-  // card's confirming frames). Scout dwells elsewhere must not -- bench
-  // 2026-09-26: home-dwell frames held a split GS in SESSION for 60 s.
+  // card's confirming frames). Scout dwells elsewhere must not -- on the
+  // bench, home-dwell frames held a split GS in SESSION for 60 s.
   // rx_ch 0 = mid-retune or a replay source: unknown, counts.
   bool is_link_video(uint8_t rx_ch) const {
     return rx_ch == 0 || rx_ch == op_ || (hopping_ && rx_ch == hop_target_);

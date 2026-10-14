@@ -20,13 +20,12 @@ struct CardCfg {
   int index = 0;
 };
 
-/// Channel search + measurement over radio.channels (spec
-/// 2026-10-03-auto-channel-set §2). dwell/settle/min_rounds are the
-/// measurement; search_ms the DISC burst at the start of an unlinked dwell;
-/// op_window_ms the one-card beacon window on op; search_after_ms how long
-/// every card holds op after a loss before sweeping; pick_margin how much a
-/// candidate must beat the current channel by; one_card_ms the one-card
-/// silent measurement prelude; max_ms the ceiling on an open pick.
+/// Channel search + measurement over radio.channels. dwell/settle/min_rounds
+/// are the measurement; search_ms the DISC burst at the start of an unlinked
+/// dwell; op_window_ms the one-card beacon window on op; search_after_ms how
+/// long every card holds op after a loss before sweeping; pick_margin how
+/// much a candidate must beat the current channel by; one_card_ms the
+/// one-card silent measurement prelude; max_ms the ceiling on an open pick.
 /// What counts as busy air. Shared by every measurer -- the boot scout
 /// and its pair ranker, the in-flight scout and its ranker, the verdict
 /// engine -- so it lives under [radio.scan], not [hop]: a pinned GS with
@@ -54,14 +53,13 @@ struct ScanCfg {
   BusyCfg busy;
 };
 
-/// In-flight channel hop verdict thresholds (spec 2026-09-14-inflight-
-/// channel-hop, section 2: the verdict engine).
+/// In-flight channel hop verdict thresholds (the verdict engine).
 struct HopVerdictCfg {
   double loss_pct = 3.0;
   double recovered_x = 3.0;
   // Floor on the recovered-symbols impaired term: fewer recovered symbols
   // than this never mark a window impaired, whatever the trailing mean.
-  // 0 disables. Bench session 0232 (2026-09-26): 97 % of recovered-only
+  // 0 disables. Bench session 0232: 97 % of recovered-only
   // impaired windows at <= 3 % loss had 1-8 recovered.
   int recovered_min = 8;
   int weak_rssi_dbm = -78;
@@ -71,7 +69,7 @@ struct HopVerdictCfg {
   int fa_pps = 100;
   // AU rate below this fraction of the trailing per-window AU mean reads
   // `starved` even when a trickle of own frames still arrives (bench
-  // session 0232, 2026-09-26: 5-30 own frames/s under a long-frame jam).
+  // session 0232: 5-30 own frames/s under a long-frame jam).
   // 0 disables the AU term. 60->30 fps low-power is 0.5, so keep it below.
   double starved_frac = 0.25;
   // Sustained unexplained loss (flight 2026-10-11): an impaired window that
@@ -90,7 +88,7 @@ struct HopVerdictCfg {
   int sustained_min_snr_db = 20;
 };
 
-/// In-flight channel hop (spec 2026-09-14-inflight-channel-hop). Runs in
+/// In-flight channel hop (docs/inflight-channel-hop.md). Runs in
 /// auto mode only: radio.channel = N pins the link and the reactive layer
 /// is off (ChannelCore::reactive_). What counts as busy air is
 /// radio.scan.busy, shared with the boot scout.
@@ -105,7 +103,7 @@ struct HopCfg {
   // While the op channel reads blocked, an unconfirmed order is kept this
   // long (from the order) before it is withdrawn -- the jam that blocks the
   // op usually blocks the uplink carrying the order too (bench session
-  // 0232, 2026-09-26). <= confirm_ms disables the extension.
+  // 0232). <= confirm_ms disables the extension.
   int confirm_extend_ms = 3000;
   int verify_ms = 1000;
   int cooldown_ms = 2000;
@@ -114,21 +112,21 @@ struct HopCfg {
   int one_card_repeats = 5;
   // Freshness-burst pacing when the burst card is a relay: its sweep blanks
   // it for ~280 ms, so 333 ms (dwell_period_ms) in Hold would leave it ~85
-  // % deaf (spec 2026-10-05 §4).
+  // % deaf.
   int relay_burst_period_ms = 1000;
   HopVerdictCfg verdict;
 };
 
 /// Radio hardware: channel, bandwidth, cards, and transmit card selection.
 struct RadioCfg {
-  // The channel set (spec 2026-10-03 §2): the drone parks on a member, the
+  // The channel set: the drone parks on a member, the
   // GS picks among them. Both ends list the same set (the drone's may be a
   // superset). Validated by mabur::channel_set_issue.
   std::vector<uint8_t> channels{40, 64, 112, 144};
   // `channel = "auto"` -> nullopt (measure the set, boot hop); a member ->
   // pinned there, no measurement.
   std::optional<uint8_t> pin;
-  // HT20/HT40 (2026-09-24 HT40 top rungs): validated to 20 or 40 in
+  // HT20/HT40: validated to 20 or 40 in
   // config.cpp, and 40 additionally requires `channel` to sit on a standard
   // 5 GHz pair (mabur::ht40_offset) -- a 20-tuned receiver cannot hear a 40
   // MHz transmission at all (docs/bw40.md).
@@ -164,57 +162,56 @@ struct FecCfg {
 struct LinkCfg {
   int feedback_ms = 100;
   int beacon_keepalive_ms = 1000;
-  // RCF slotting (gs-uplink-self-blanking findings 2026-09-02): while video
+  // RCF slotting (gs-uplink-self-blanking findings): while video
   // flows, hold each control frame until the next AU completes so the send
   // lands in the drone's inter-AU idle instead of killing the next PPDU on
   // both RX cards. Max hold before sending anyway; 0 disables.
   int rcf_slot_hold_ms = 30;
-  // ArrivalTracker guard, symbols (cca-on 2026-09-23, from the tx-windows
-  // spec §5.2): a seq is booked missing -- and shows as link.pre_fec_loss,
-  // the OSD's LOSS row and the ladder's util input -- once a later seq
-  // arrives this far ahead of it; a symbol heard after that counts `late`
-  // and is never un-booked. The drone's parallel USB TX pool (tx_threads x
-  // 3-frame URBs, ~12 bodies = 48 symbols in flight) reorders bodies on
-  // air, so the old 32 (one FEC window) booked ~1 % of every burst as
-  // missing-then-late on a bench with 0.008 % real loss. Bench sweep
-  // 2026-09-23 at rung 5 (OSD pre-FEC loss / arr_late per s): 64 -> 0.67 %
-  // / 47, 96 -> 0.23 % / 16, 128 -> 0.09 % / 5, 192 -> 0.02 % / 0.2, real
-  // repairs flat at 0.1-0.6/s throughout. Cost of a bigger guard is booking
-  // delay on the ladder's util input: 192 symbols is ~60 ms at rung 5,
-  // ~165 ms at rung 0, both under the feedback period + probation.
+  // ArrivalTracker guard, symbols: a seq is booked missing -- and shows as
+  // link.pre_fec_loss, the OSD's LOSS row and the ladder's util input -- once
+  // a later seq arrives this far ahead of it; a symbol heard after that
+  // counts `late` and is never un-booked. The drone's parallel USB TX pool
+  // (tx_threads x 3-frame URBs, ~12 bodies = 48 symbols in flight) reorders
+  // bodies on air, so the old 32 (one FEC window) booked ~1 % of every burst
+  // as missing-then-late on a bench with 0.008 % real loss. Bench sweep at
+  // rung 5 (OSD pre-FEC loss / arr_late per s): 64 -> 0.67 % / 47,
+  // 96 -> 0.23 % / 16, 128 -> 0.09 % / 5, 192 -> 0.02 % / 0.2, real repairs
+  // flat at 0.1-0.6/s throughout. Cost of a bigger guard is booking delay on the
+  // ladder's util input: 192 symbols is ~60 ms at rung 5, ~165 ms at rung 0,
+  // both under the feedback period + probation.
   int arrival_guard_syms = 192;
-  // Software NACK, base layer (spec 2026-10-05 fec-nack §7). Optional
+  // Software NACK, base layer (docs/fec-nack.md). Optional
   // [link.nack]: absent = off. lookback < fec.seq_horizon (checked).
   mabur::NackCfg nack;
   // Static-link mode: when static_mcs >= 0 the adaptive controller is
   // bypassed entirely and every RCF commands exactly this MCS/FEC overhead
   // (HT, 20 MHz). Rendezvous/keep-alive/failsafe machinery is unaffected.
-  // For bench debugging with a fixed operating point (2026-07-12).
+  // For bench debugging with a fixed operating point.
   int static_mcs = -1;
   // Actual-air overhead (airtime-balance-uep): literal, not a scaled cmd
   // value. Default 0.5 is the old cmd-value default (0.25) x2 -- see the
-  // rule note in gs/src/config.cpp's load_config. Same-rate-fixed-pairs
-  // (Task 3): split into a base/enh pair, both defaulting to the old
-  // scalar's value -- Task 4 gives them independent semantics.
+  // rule note in gs/src/config.cpp's load_config. Same-rate fixed pairs:
+  // a base/enh pair, both defaulting to the old scalar's value, each
+  // applied to its own stream.
   double static_overhead_base = 0.5;
   double static_overhead_enh = 0.5;
   // Width of the static-pin op (link.static_mcs >= 0), 20 or 40; 40 needs
   // radio.width = 40. Lets the bench pin a 40 MHz rung.
   int static_bw = 20;
 
-  // Measured-loss ladder controller config (spec
-  // docs/superpowers/specs/2026-07-27-ladder-controller-design.md): rungs
+  // Measured-loss ladder controller config (docs/link-adaptation.md): rungs
   // (post-`max_mcs` filter) plus the util/timing thresholds LadderController
-  // decides on. Default ladder is the spec's static feasibility floor —
-  // rung 0 is the failsafe every controller starts and falls back to.
-  // mcs6 rides ov 0.5, i.e. cmd-value 0.25 (not the spec's cmd-value
-  // 0.15): with bpb=4 a dead body is a 4-symbol cluster, and 0.15 leaves
-  // the s3 window unable to absorb two dead bodies — see
-  // docs/mcs6-bench-anomaly.md ov0.25 experiment. Values are actual-air
-  // overhead (airtime-balance-uep, global rule: every cmd-value default
-  // this migration touches x2) — {0,1.0}->{0,2.0}, {2,0.5}->{2,1.0},
-  // {4,0.25}->{4,0.5}, {5,0.25}->{5,0.5}, {6,0.25}->{6,0.5}, {7,0.1}->{7,0.2}.
-  // Same-rate-fixed-pairs (Task 3): overhead is now a base/enh pair; the
+  // decides on. Default ladder is the static feasibility floor — rung 0 is
+  // the failsafe every controller starts and falls back to. mcs6 rides ov
+  // 0.5, i.e. cmd-value 0.25 (not the originally designed 0.15): with bpb=4
+  // a dead body is a 4-symbol cluster, and 0.15 leaves the s3 window unable
+  // to absorb two dead bodies — see
+  // docs/findings/2026-07-27-mcs6-bench-anomaly.md ov0.25 experiment.
+  // Values are actual-air overhead (airtime-balance-uep, global rule:
+  // every cmd-value default this migration touches x2) — {0,1.0}->{0,2.0},
+  // {2,0.5}->{2,1.0}, {4,0.25}->{4,0.5}, {5,0.25}->{5,0.5}, {6,0.25}->{6,0.5},
+  // {7,0.1}->{7,0.2}.
+  // Same-rate fixed pairs: overhead is a base/enh pair; the
   // struct default duplicates each rung's value into both fields.
   LadderCfg ladder_cfg{{{0, 2.0, 2.0},
                         {2, 1.0, 1.0},
@@ -223,7 +220,7 @@ struct LinkCfg {
                         {6, 0.5, 0.5},
                         {7, 0.2, 0.2}}};
 
-  // Pairing key (spec 2026-10-01 link-pairing §2): the key FILE path. The
+  // Pairing key (docs/link-pairing.md): the key FILE path. The
   // file is read at load; a missing file means the compiled-in default (and
   // a boot log line), a malformed one fails boot naming the file.
   std::string key_file = "/etc/mabur.key";
@@ -248,8 +245,7 @@ struct VideoCfg {
 };
 
 /// MSP DisplayPort OSD side-channel output: whole reassembled snapshots go
-/// out as UDP datagrams (maburplay renders them -- see
-/// docs/superpowers/specs/2026-08-03-maburplay-msp-osd-design.md).
+/// out as UDP datagrams (maburplay renders them).
 /// symbol_size/window must match the drone's msp config.
 struct MspCfg {
   bool enable = false;
@@ -266,7 +262,7 @@ struct StatsOut {
 };
 
 /// Stats sideport: periodic UDP JSON datagram with link/FEC/video stats
-/// (docs/superpowers/specs/2026-07-25-gs-stats-sideport-design.md).
+/// (docs/observability.md).
 ///
 /// `out` is the destination list and is ALWAYS non-empty after load: with
 /// no `out` key it holds the single legacy host/port pair. It exists
@@ -286,8 +282,7 @@ struct StatsCfg {
   std::vector<StatsOut> out{StatsOut{}};
 };
 
-/// Shared-memory AU ring for the native player / ausniff gate
-/// (docs/superpowers/specs/2026-08-02-gs-player-au-ring-design.md).
+/// Shared-memory AU ring for the native player / ausniff gate.
 struct AuRingOutCfg {
   bool enable = false;
   std::string path = "/dev/shm/mabur-au";
@@ -355,7 +350,7 @@ std::optional<ConfigIssue> link_width_issue(const LinkCfg& link, int width);
 /// other value (arrays included -- `[[link.ladder]]` replaces the whole
 /// ladder) replaces. Strict-key and range checks then run on the merged
 /// document exactly as for a single file. The web GS writes its config form
-/// as an overlay (spec 2026-09-27-web-ui §3.2); maburgs never passes one.
+/// as an overlay; maburgs never passes one.
 Config load_config(const std::string& path,
                    std::vector<std::string>* defaulted = nullptr,
                    const std::string& overlay_path = {});

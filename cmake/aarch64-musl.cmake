@@ -1,6 +1,6 @@
 # ARM (aarch64) musl cross-compilation toolchain file.
 #
-# Deviation from the original plan: instead of the Bootlin prebuilt toolchain
+# Instead of the Bootlin prebuilt toolchain
 # (which is dynamically linked against glibc's /lib64/ld-linux-x86-64.so.2 and
 # therefore cannot even exec on a NixOS host — there is no FHS loader path),
 # this file is toolchain-agnostic: it takes the compiler executables from
@@ -37,12 +37,12 @@ endif()
 
 # CMAKE_FIND_ROOT_PATH: where to look for target libraries (libusb's static
 # archive + headers), staged by build-arm64.sh under toolchain/staging via a
-# `nix-build` GC root — NOT the Bootlin buildroot --host-copied staging tree
-# the original plan assumed. libusb itself is not built from source in this
+# `nix-build` GC root — NOT a Bootlin buildroot --host-copied staging tree.
+# libusb itself is not built from source in this
 # environment; see build-arm64.sh for why (pkgsCross ... pkgsStatic.libusb1
 # already provides a static aarch64/musl libusb).
 #
-# LIBRARY/INCLUDE mode is BOTH rather than the original plan's ONLY: Nix
+# LIBRARY/INCLUDE mode is BOTH rather than ONLY: Nix
 # doesn't stage packages into a single FHS-shaped sysroot (each package is
 # its own /nix/store/<hash>-name path), so devourer's
 # pkg_check_modules(libusb ... IMPORTED_TARGET libusb-1.0) resolves

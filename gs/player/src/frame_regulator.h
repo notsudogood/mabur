@@ -15,7 +15,7 @@ namespace maburplay {
 // follows the encoder's capture cadence instead of arrival jitter — the
 // dejitter spike measured today's mailbox presenter at ~750–940 vsync
 // repeat+skip pairs/min and a D of 12–16 ms removing ~70% of them for
-// under 5 ms of added mean latency (docs/dejitter-findings-2026-08-30.md).
+// under 5 ms of added mean latency (docs/findings/2026-08-30-dejitter.md).
 //
 // Clock map: pts is the drone's 32-bit µs counter; it is unwrapped by
 // deltas and anchored by the FASTEST observed frame (min of mono − pts),
@@ -33,7 +33,7 @@ namespace maburplay {
 // time arrives — call it in a loop, since more than one can be due in
 // the same tick.
 //
-// Queue depth (bench A/B 2026-08-30, generalized 2026-09-02): the old
+// Queue depth (bench A/B): the old
 // single-slot mailbox meant that once D approached the spacing to the
 // next burst-decoded frame, displacement rate climbed and the dropped
 // frames judder more than the smoothing helps — 12 ms measured 2.94 ms
@@ -102,7 +102,7 @@ class FrameRegulator {
   uint64_t discont_count() const { return discont_count_; }
   double hold_ema_ms() const { return hold_ema_ms_; }
   uint64_t vsync_skips() const { return vsync_skips_; }
-  // Sequential-slot chain accounting (bench 2026-09-02): a frame whose
+  // Sequential-slot chain accounting (bench): a frame whose
   // natural vblank is held by its predecessor takes the next slot, and
   // every frame after it at source cadence then finds ITS natural slot
   // occupied too, so the whole stream runs one period late until an
@@ -115,7 +115,7 @@ class FrameRegulator {
   uint64_t chain_run() const { return chain_run_; }
   uint64_t chain_max() const { return chain_max_; }
   uint64_t chains_count() const { return chains_count_; }  // runs started
-  // display.chain_budget (bench 2026-09-02): a chain breaks on its own
+  // display.chain_budget (bench): a chain breaks on its own
   // only when an arrival gap exceeds a period plus the phase margin, so
   // it lives longest exactly when the margin (and hence its cost) is
   // largest. With a budget N, the frame that would extend a run past N
@@ -125,7 +125,7 @@ class FrameRegulator {
   uint64_t fallback_frames() const { return fallback_frames_; }
   bool servo_locked() const { return servo_now_; }
 
-  // Chain-break heal (hw 2026-08-31): a single missed latch puts the
+  // Chain-break heal (hw): a single missed latch puts the
   // display into a stable one-vsync-late mode -- every present then
   // arrives while the previous flip is in flight, parks in the
   // presenter's mailbox, and latches a period late, indefinitely. The
@@ -141,7 +141,7 @@ class FrameRegulator {
   // to schedule its heavy 1 Hz work (OSD compose, stats, statvfs) into
   // the gap between releases: a stall that overlaps a release deadline
   // makes the frame miss its latch and start a one-vsync-late chain
-  // (hw 2026-08-31), so heavy work defers when a release is imminent.
+  // (hw), so heavy work defers when a release is imminent.
   uint64_t next_release_us() const {
     return count_ ? held_[0].release_us : 0;
   }

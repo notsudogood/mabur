@@ -1,4 +1,4 @@
-// Pair pick for a 40 MHz boot scan (docs/bw40.md §3): halves are ranked
+// Pair pick for a 40 MHz boot scan (docs/bw40.md "Boot scan scores every half"): halves are ranked
 // as today's 20 MHz channels; a pair scores as its WORSE half and is only
 // ranked once both halves have min_rounds visits.
 #include <vector>

@@ -60,7 +60,7 @@ void LatTracker::on_submit(const maburgs::AuRecordMeta& m, uint64_t mono_us) {
   // anchor observe and the head-segment computation entirely; the frame
   // still entered the in-flight map above and tail stamps will retire it,
   // it just never contributes head segments or joins the window.
-  // Enc-excess air fix (2026-08-31): the anchor consumes the encode/queue-
+  // Enc-excess air fix: the anchor consumes the encode/queue-
   // CORRECTED arrival, so its floor means "best post-encoder, post-queue
   // transit" and per-frame enc/dq are no longer double-counted against a
   // floor that already contained the floor frame's encode time (which
@@ -135,7 +135,7 @@ void LatTracker::on_flip(uint32_t pts_us, uint64_t flip_mono_us, bool exact) {
   // the WHOLE frame is excluded from the window here, not just chk, so a
   // post-flush_all() warm-up run never blends fabricated zero head-segments
   // into the aggregates. Matches gs/src/main.cpp's own head-segment gate
-  // (Task 10's !obs.discont && lat_anchor.usable() condition). The frame
+  // (its !obs.discont && lat_anchor.usable() condition). The frame
   // still retires from the in-flight map below either way.
   if (e.anchor_ok_at_submit) {
     const int64_t ideal =

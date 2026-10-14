@@ -9,9 +9,9 @@ namespace maburgs {
 // {arrived, expected} for the ladder's block-4 instant-demote input --
 // post-FEC (residual) loss on the current rung. Extracted from the control
 // step in gs/src/main.cpp so the decoder -> LinkHealth wiring is testable:
-// test_vrx_controller.cpp hand-builds LinkHealth, so before 2026-09-02
-// nothing covered which of the decoder's two loss measures the demote path
-// actually reads. See tests/test_ladder_residual.cpp.
+// test_vrx_controller.cpp hand-builds LinkHealth, so it cannot cover which
+// of the decoder's two loss measures the demote path actually reads. See
+// tests/test_ladder_residual.cpp.
 struct ResidualCounts {
   uint64_t arrived = 0;
   uint64_t expected = 0;
@@ -33,7 +33,7 @@ int delivery_pct(ResidualCounts rc);
 
 // The ladder's block-4 instant-demote input: BASE, current rung. Named
 // separately from residual_counts(dec, 0, true) so the demote path's scope is
-// greppable -- picking the wrong measure here is exactly the 2026-09-02 bug.
+// greppable -- picking the wrong measure here is a bug this has had before.
 ResidualCounts ladder_residual_counts(const mabur::UepDecoder& dec);
 
 }  // namespace maburgs

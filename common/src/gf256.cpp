@@ -125,7 +125,7 @@ const NibbleTables& nibble_tables() {
 // entries); %e/%f address its d-halves so a vtbl.8 pair covers all 16 lanes
 // without leaving q registers (zfex technique, fresh implementation —
 // intrinsics-only compiled to 261 MB/s vs this 272 MB/s at symbol size 164
-// on the SSC338Q, and the spec gate is 270).
+// on the SSC338Q, and the required gate is 270).
 inline uint8x16_t mul16(uint8x16_t s, uint8x16_t tlo16, uint8x16_t thi16,
                         uint8x16_t mask) {
   uint8x16_t lo = vandq_u8(s, mask);
@@ -150,7 +150,7 @@ void lincomb(uint8_t* acc, const uint8_t* sym, uint8_t coeff, size_t len) {
 #if defined(__aarch64__)
   // Table-lookup SIMD, 16 bytes/iteration. The scalar log/exp loop is ~10
   // cycles/byte and made RS parity generation the drone pipeline bottleneck
-  // (bench 2026-07-13: SSC338Q hot thread saturated below the 60 fps
+  // (bench: SSC338Q hot thread saturated below the 60 fps
   // producer rate, venc ring pinned full, waybeam aborted slice tails).
   {
     const NibbleTables& nt = nibble_tables();
@@ -166,7 +166,7 @@ void lincomb(uint8_t* acc, const uint8_t* sym, uint8_t coeff, size_t len) {
   }
 #elif defined(__ARM_NEON) || defined(__ARM_NEON__)
   // ARMv7 NEON (Cortex-A7): 16 B/iteration ×4 unroll — see mul16 above.
-  // 2026-07-15 bench: the old 8 B vtbl2 loop ran 156 MB/s at symbol size
+  // Bench: the old 8 B vtbl2 loop ran 156 MB/s at symbol size
   // 164 and made SwEncoder repair generation the TX ceiling (w128 = 9.0M
   // app vs 21.4M RS); q16 closes most of the 2.1× gap to wfb-ng's zfex.
   {

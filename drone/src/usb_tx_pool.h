@@ -19,7 +19,7 @@ namespace mabur {
 // 8822E flow-controls synchronous bulk-OUT URBs (~0.4 ms acceptance
 // handshake + FIFO drain), so a single blocking sender idles the radio
 // during every host round-trip and caps air throughput at ~26 Mbps
-// regardless of MCS (linkbench bisect 2026-07-14); ~4 threads saturate
+// regardless of MCS (linkbench bisect); ~4 threads saturate
 // (devourer docs/aggregation.md — sync bulk from multiple threads is legal
 // and simply queues, giving ~N URBs in flight). Senders batch ≤3 frames
 // per call, the HalMAC per-transfer descriptor limit devourer's

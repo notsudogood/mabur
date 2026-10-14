@@ -191,7 +191,7 @@ static int run_radio(const maburgs::Config& cfg) {
     const auto spec = mabur::rc::ladder_from(mabur::rc::PhyMode::HT,
                                               static_cast<uint8_t>(rung.mcs),
                                               static_cast<uint8_t>(rung.bw));
-    // Same-rate-fixed-pairs (Task 4): both sids run the same PHY rate now,
+    // Same-rate fixed pairs: both sids run the same PHY rate,
     // so one `rate` covers the whole rung; only the per-sid overhead
     // (hence per-sid budget) still differs.
     const double rate = mabur::rc::phy_rate_mbps(spec[0]);
@@ -248,8 +248,8 @@ static int run_radio(const maburgs::Config& cfg) {
                    maburgs::port_name(scanned[i]).c_str());
   }
 
-  // Spec 2026-10-03-auto-channel-set §4.1: pinned -> the pin; auto -> the
-  // remembered member, else the first.
+  // Start channel: pinned -> the pin; auto -> the remembered member, else
+  // the first.
   const bool pinned = cfg.radio.pin.has_value();
   uint8_t start_ch = cfg.radio.channels.front();
   bool start_remembered = false;
@@ -270,7 +270,7 @@ static int run_radio(const maburgs::Config& cfg) {
   }
 
   // Roster: USB cards first (0..n_usb-1, possibly none), then radio.relays
-  // in config order (spec 2026-10-05 §5: a relay-only GS is supported).
+  // in config order (a relay-only GS is supported).
   const int n_usb = cfg.radio.auto_scan ? static_cast<int>(scanned.size())
                                         : static_cast<int>(cfg.radio.cards.size());
   const int n_relays = static_cast<int>(cfg.radio.relays.size());
@@ -352,11 +352,11 @@ static int run_radio(const maburgs::Config& cfg) {
     }
   }
 #endif
-  // TX-power wall calibration (2026-09-10-tx-power-calibration): the
-  // loopback command listener. Unlike loss_ctl above, this is compiled
+  // TX-power wall calibration: the loopback command listener. Unlike
+  // loss_ctl above, this is compiled
   // into every prod build -- calibration is a real operator workflow, not
   // a bench-only scaffold -- so there is no MABUR_LOSS_SIM-style guard
-  // (cal_control.h). Port 8400 is pinned by the design doc: the 830x
+  // (cal_control.h). Port 8400 is fixed, not 830x: that
   // block belongs to the stats sideport, its UDP sinks and the OSD feed.
   // CalSession itself is constructed further down, once cal_log exists --
   // it needs a CalLog* to write into.
@@ -396,7 +396,7 @@ static int run_radio(const maburgs::Config& cfg) {
   // this dedups by nonce, which is constant across a session and freshly
   // randomized per `maburcal start` (cal_control.h).
   std::optional<uint32_t> cal_log_run_nonce;
-  // Debug-log session (2026-09-06 consolidation): one directory for
+  // Debug-log session: one directory for
   // ctl.log/probe.log/au.log/flight.jsonl, one writer thread feeding all of
   // them. Declared here (ahead of the stats block and the FrameStream
   // construction below) so `log_writer` outlives every log object that binds
@@ -408,9 +408,9 @@ static int run_radio(const maburgs::Config& cfg) {
     std::fprintf(stderr, "debug-log: session %s%s\n", debug.dir().c_str(),
                  debug.rejoined() ? " (rejoined)" : "");
   }
-  // cal.log (callog 1): TX-power calibration's raw per-cell record (spec
-  // 2026-09-10-tx-power-calibration-design.md). Unlike ctl.log/probe.log/
-  // au.log below, this uses its own private LogWriter (cal_log.h) rather
+  // cal.log (callog 3): TX-power calibration's raw per-cell record. Unlike
+  // ctl.log/probe.log/au.log below, this uses its own private LogWriter
+  // (cal_log.h) rather
   // than the shared `log_writer` -- a calibration run is rare and
   // short-lived, so there is nothing to gain from the fixed-slot session
   // writer. header() writes the file's format marker at most once per
@@ -422,8 +422,8 @@ static int run_radio(const maburgs::Config& cfg) {
   // every flight. A calibration run is a different risk profile: a
   // bounded (~380-line) trace, once per unit, on a deliberate operator
   // action, and the sole record of a measurement written straight into
-  // the drone's config. Task 13 deleted bench/txagcbench's Python
-  // analyzer; cal.log + `maburcal report` is the ENTIRE replacement for
+  // the drone's config. bench/txagcbench's Python analyzer is gone;
+  // cal.log + `maburcal report` is the ENTIRE replacement for
   // examining a run's data after the fact -- shipping with debug_log off
   // (as gs/bundle/maburgs.default.toml does since 671c848) must not mean
   // every calibration runs silently and leaves no trace. When debug
@@ -468,8 +468,7 @@ static int run_radio(const maburgs::Config& cfg) {
   // &*cal_log unconditionally is safe even when the directory resolution
   // above failed.
   maburgs::CalSession cal_session(maburgs::CalSessionCfg{}, &*cal_log);
-  // Stats sideport (spec: docs/superpowers/specs/2026-07-25-gs-stats-sideport-design.md)
-  // and flight.jsonl (debug-log consolidation, 2026-09-06) share one
+  // Stats sideport and flight.jsonl share one
   // StatsExporter snapshot, so the snapshot builder runs whenever either
   // wants it: `cfg.stats.enable` gates the UDP sinks ONLY (:8302 feeds
   // maburplay's GS OSD, so debug logging must never blank it), `debug.ok()`
@@ -529,27 +528,26 @@ static int run_radio(const maburgs::Config& cfg) {
   // here for the DRONE display region rather than forwarded to the vrx
   // controller. Core-thread-owned, like everything else in this loop.
   // rx_ms is the GS-side mono stamp the aggregator carries on every rc frame.
-  // Spec 2026-07-26 drone-telemetry.
   struct { std::optional<mabur::rc::Telem> t; uint64_t rx_ms = 0; } latest_telem;
 
   bool last_key_mismatch = false;
 
-  // Control-path RTT + pts-offset estimator (link-rtt, 2026-09-02). Fed
+  // Control-path RTT + pts-offset estimator (link-rtt). Fed
   // from the same core thread as latest_telem: RCF send stamps below,
   // telem echoes in the rc sink.
   maburgs::RttEstimator rtt_est;
-  // RCF slotting (gs-uplink-self-blanking findings 2026-09-02): control
-  // frames wait for the end-of-AU callback (FrameStream sink below) so the
+  // RCF slotting (docs/findings/2026-09-02-gs-uplink-self-blanking.md):
+  // control frames wait for the end-of-AU callback (FrameStream sink below) so the
   // send lands in the drone's inter-AU idle. See rcf_slot.h.
   maburgs::RcfSlotter rcf_slot(
       maburgs::RcfSlotCfg{cfg.link.rcf_slot_hold_ms, 100, 2, 3, 1});
-  // Software NACK (spec 2026-10-05 fec-nack). Core-thread owned, like the
-  // decoder it reads. nack_interval_t0 = previous sideport export, for
-  // link.nack.fill_pps. Since 2026-10-10 a second tracker asks for the
-  // enhance layer ([link.nack] enh): flight 2026-10-10 lost 23 of 23 enh
-  // frames hit by a whole lost aggregate at the top rung, and the arq
-  // shadow scored every one of them saveable by one request. Both draw
-  // from ONE counter -- the drone accepts each counter once per session.
+  // Software NACK (docs/fec-nack.md). Core-thread owned, like the decoder it
+  // reads. nack_interval_t0 = previous sideport export, for
+  // link.nack.fill_pps. A second tracker asks for the enhance layer
+  // ([link.nack] enh): flight 2026-10-10 lost 23 of 23 enh frames hit by a
+  // whole lost aggregate at the top rung, and the arq shadow scored every one
+  // of them saveable by one request. Both draw from ONE counter -- the drone
+  // accepts each counter once per session.
   mabur::NackTracker nack(cfg.link.nack);
   mabur::NackCfg nack_cfg1 = cfg.link.nack;
   nack_cfg1.sid = 1;
@@ -562,7 +560,7 @@ static int run_radio(const maburgs::Config& cfg) {
   uint32_t nack_vtx_seen = 0;
   bool nack_on = false;  // [link.nack] enable, and the A/B's on arm when ab_s > 0
   uint64_t nack_interval_t0 = 0;
-  // Tail-trigger geometry (spec §3.1): the tail trigger maps fragment k of
+  // Tail-trigger geometry: the tail trigger maps fragment k of
   // the newest frame to wire seq seq_at_max + (k - max_idx), which holds
   // only while one sid-0 fragment == one FEC source symbol. Mirror the
   // drone's UepEncoder layer: fragments are cut to usable = max_packet_size
@@ -598,9 +596,8 @@ static int run_radio(const maburgs::Config& cfg) {
 
   // scan.log (scanlog 6): the channel-selection record -- card caps, scout
   // dwells (boot-time AND in-flight), the pick, every link move, and the
-  // in-flight hop verdict/hop-event lines (spec 2026-10-03-auto-channel-set
-  // section 7). Same session directory and writer as ctl.log, same
-  // debug_log.enable gate.
+  // in-flight hop verdict/hop-event lines. Same session directory and
+  // writer as ctl.log, same debug_log.enable gate.
   std::optional<maburgs::ScanLog> scan_log;
   if (debug.ok()) {
     const maburgs::ScanCfg& scfg = cfg.radio.scan;
@@ -690,8 +687,8 @@ static int run_radio(const maburgs::Config& cfg) {
                  "reassembled and discarded)\n");
   }
 
-  // Head-segment latency aggregates (sideport link.video.lat, spec
-  // 2026-08-30-latency-accounting Task 10): pts->mono anchor + rolling
+  // Head-segment latency aggregates (sideport link.video.lat): pts->mono
+  // anchor + rolling
   // percentile window, both core-loop-owned like everything else here.
   // cur_au_pts/cur_au_sid are set in begin_frame and read back in end_frame
   // -- legal because FrameStream's contract pairs begin/end for the SAME AU
@@ -700,8 +697,9 @@ static int run_radio(const maburgs::Config& cfg) {
   maburgs::LatWindow lat_win;
   uint32_t cur_au_pts = 0;
   uint8_t cur_au_sid = 0;
+  uint8_t cur_au_nslices = 1;  // ring v4: >= 2 = published slice by slice
 
-  // Probe stream (spec 2026-09-04 section 3): scored by ProbeTrack against
+  // Probe stream: scored by ProbeTrack against
   // the enh AU count; the ENH layer's geometry gives bpb/block_payload, so
   // the same array the Aggregator was built from decides how a probe body
   // is parsed. Core-thread-owned like every other window in this loop.
@@ -716,7 +714,7 @@ static int run_radio(const maburgs::Config& cfg) {
   std::vector<bool> snr_ok(static_cast<size_t>(n_cards));
   for (int i = 0; i < n_cards; ++i)
     snr_ok[static_cast<size_t>(i)] = fronts[static_cast<size_t>(i)]->caps().snr_ok;
-  // Ladder input (spec 2026-09-27-web-gs): every window/tracker feeding
+  // Ladder input: every window/tracker feeding
   // LinkHealth lives in LinkHealthAssembler (gs/src/link_health.h), shared
   // with the web GS. The hop verdict's own s1 loss window is ChannelCore's.
   maburgs::LinkHealthAssembler lha(
@@ -742,26 +740,33 @@ static int run_radio(const maburgs::Config& cfg) {
   maburgs::FrameStream fstream(
       {static_cast<uint64_t>(cfg.video.frame_gap_timeout_ms),
        cfg.video.frame_lookahead},
-      {[&](const mabur::framewire::FrameHdr& h, uint8_t sid) {
+      {[&](const mabur::framewire::FrameHdr& h, uint8_t sid, uint8_t nslices) {
          cur_au_pts = h.pts_us;
          cur_au_sid = sid;
-         if (au_on) au_ring.begin(h, sid);
+         cur_au_nslices = nslices;
+         if (au_on) au_ring.begin(h, sid, nslices);
          if (au_log) au_log->begin();
          rcf_slot.on_au_first(mono_ms());
          // One probe expectation per video access unit, base and enh alike
-         // (probe per AU, 2026-09-16): the probe body rides the AU's send
+         // (probe per AU): the probe body rides the AU's send
          // opportunity, so the AU count is what "expected" means
          // (probe_track.h explains why seq gaps cannot be).
          lha.on_au_begin(sid, h.frame_id, static_cast<double>(mono_ms()));
        },
        [&](const uint8_t* d, size_t n) {
-         if (au_on) au_ring.append(d, n);
+         if (au_on) {
+           au_ring.append(d, n);
+           // Ring v4: a split AU is readable while it fills; wake the player
+           // for every slice, not just the finished AU. Cheap:
+           // one 8-byte SEQPACKET datagram, ~4 per AU, best-effort.
+           if (cur_au_nslices >= 2) au_bell.notify(au_ring.published());
+         }
          if (au_log) au_log->payload(d, n);
        },
        [&](bool c, const maburgs::AuLatMeta& lat) {
-         // In-flight scout thread's AU-boundary alignment wait (spec
-         // 2026-09-14-inflight-channel-hop section 3): every AU end, clean
-         // or truncated, counts -- the scout only needs a boundary to start
+         // In-flight scout thread's AU-boundary alignment wait: every AU
+         // end, clean or truncated, counts -- the scout only needs a
+         // boundary to start
          // its dwell on, not a specific outcome.
          chan.note_au_end();
          if (au_on) {
@@ -771,7 +776,7 @@ static int run_radio(const maburgs::Config& cfg) {
              au_log->row(mono_us(), au_ring.last_record());
          }
          // Every video AU is trailed by a probe while one is commanded
-         // (probe per AU, 2026-09-16), so a base completion releases
+         // (probe per AU), so a base completion releases
          // nothing by itself either: the release is the probe's arrival,
          // or the learned tail deadline if it is lost (rcf_slot.h).
          rcf_slot.on_au_complete(
@@ -785,7 +790,7 @@ static int run_radio(const maburgs::Config& cfg) {
                           static_cast<unsigned long long>(mono_us()), c ? 1 : 0);
          }
          if (stats) stats->on_frame(mono_ms());
-         // au_tail gauge (usb-feed probe 2026-09-01): fec = arrival span
+         // au_tail gauge (usb-feed probe): fec = arrival span
          // (last body mono - first body mono) + publish tail (now - last
          // body: repair/decode/assembly/ring write). Core-thread-owned,
          // 5 s stderr windows. Names where the fec residual lives when the
@@ -823,7 +828,7 @@ static int run_radio(const maburgs::Config& cfg) {
          // == CLOCK_MONOTONIC on this glibc/Linux target, so the two are
          // directly subtractable with no clock-domain conversion.
          if (lat.t_first_us) {
-           // Enc-excess air fix (2026-08-31), mirrored in the player's
+           // Enc-excess air fix, mirrored in the player's
            // LatTracker::on_submit: the anchor consumes the encode/queue-
            // corrected arrival so its floor means "best post-encoder,
            // post-queue transit"; enc/dq report their full wire values and
@@ -834,7 +839,7 @@ static int run_radio(const maburgs::Config& cfg) {
            // snap-down floor.
            const int64_t adjust = static_cast<int64_t>(lat.enc_us) +
                                   static_cast<int64_t>(lat.drone_q_ms) * 1000;
-           // A retransmitted fragment 0 (hdr_retx, fec-nack spec §6) arrived
+           // A retransmitted fragment 0 (hdr_retx) arrived
            // a NACK round trip late: never let it feed the snap-down floor.
            if (!lat.hdr_retx && adjust <= maburgs::PtsAnchor::kMaxAnchorAdjustUs &&
                static_cast<int64_t>(lat.t_first_us) > adjust) {
@@ -854,6 +859,13 @@ static int run_radio(const maburgs::Config& cfg) {
              }
            }
          }
+       },
+       [&](const uint8_t* d, size_t n) {
+         // frame_tail: a passthrough remainder that may end mid-NAL. In the
+         // record (len), never published as valid_len, no doorbell: the
+         // player must never feed a partial NAL (ring v4 writer contract).
+         if (au_on) au_ring.append_unaligned(d, n);
+         if (au_log) au_log->payload(d, n);
        }});
   // Only fragments from a peer that advertised the frame wire format may reach
   // FrameStream: an older drone's bodies carry a mutually unparseable frag
@@ -881,17 +893,16 @@ static int run_radio(const maburgs::Config& cfg) {
     return !(asks && t.live(mono_ms()));
   });
 
-  // Dedicated adaptive-link log (spec 2026-08-05-s3-probe-promote-design.md
-  // section 5): maburgs' own compact S/E/P/N record of every rung decision,
-  // independent of the stats sideport so the learning dataset survives a
-  // dead/absent consumer (2026-08-04: statsrec wasn't running and the
-  // flight jsonl froze hours before the session).
+  // Dedicated adaptive-link log: maburgs' own compact S/E/P/N record of
+  // every rung decision, independent of the stats sideport so the learning
+  // dataset survives a dead/absent consumer (statsrec once wasn't running
+  // and the flight jsonl froze hours before the session).
   //
   // Opened whenever debug_log.enable is set, INCLUDING static-pin mode
   // (static_mcs >= 0). It used to be skipped there -- a pinned link never
   // ticks the adaptive controller, so there were no rung decisions to
-  // record -- but the probe stream changed that (spec 2026-09-04 section
-  // 8.3 steps 1-2): the pinned bench runs are exactly the ones whose
+  // record -- but the probe stream changed that: the pinned bench runs
+  // are exactly the ones whose
   // per-body probe.log matters, and it lives alongside ctl.log in the same
   // session directory so the two files from one boot always pair up.
   //
@@ -931,7 +942,7 @@ static int run_radio(const maburgs::Config& cfg) {
     arq_log.emplace(*log_writer, debug.dir());
     // Gated on au_on too (not just debug.ok()): with au_ring.enable=false
     // there are never any rows to write, and an emplace here would leave
-    // au.log containing only its "# aulog 4" header -- reads as "the
+    // au.log containing only its "# aulog 5" header -- reads as "the
     // logger is broken" rather than "the ring is off".
     if (au_on) au_log.emplace(*log_writer, debug.dir());
   }
@@ -944,7 +955,7 @@ static int run_radio(const maburgs::Config& cfg) {
   double last_probe_t_ms = vrx.ctl().last_probe_edge().t_ms;
   double last_penalty_t_ms = vrx.ctl().last_penalty().t_ms;
   double last_rung_log_ms = 0;
-  // R-line snapshot of every rung with any data (spec 2026-08-13).
+  // R-line snapshot of every rung with any data.
   auto emit_rung_lines = [&](double t_ms) {
     if (!ctl_log) return;
     const maburgs::RungStore& st = vrx.ctl().rungs();
@@ -1000,14 +1011,14 @@ static int run_radio(const maburgs::Config& cfg) {
         latest_telem.t = t;
         latest_telem.rx_ms = us / 1000;
         // LINKED telem = our first RCF verified and the drone is moving:
-        // fires the controller's move edge (link-pairing spec §6 step 5).
+        // fires the controller's move edge.
         vrx.note_drone_state(t->state);
         // link-rtt: every telem is a sync sample. `us` is the radio
         // frontend's steady_clock stamp — same base as the mono_us() send
         // stamps below, so the subtraction is one clock throughout.
         rtt_est.on_telem(t->rcf_seq_echo, (t->flags & 0x08) != 0,
                          t->rcf_age_ms, t->pts_at_build, us);
-        // Calibration ack (spec: Telem flags bit6 cal_active) -- the only
+        // Calibration ack (Telem flags bit6 cal_active) -- the only
         // acknowledgment signal the wire carries for a T_CAL_CMD. Telem has
         // no nonce field, so cal_pending_nonce (stashed from the CalCmd the
         // last due_cmd() call sent) is what on_ack() checks against; a
@@ -1027,7 +1038,7 @@ static int run_radio(const maburgs::Config& cfg) {
     }
     const bool was_session = vrx.link_state() == maburgs::VrxState::SESSION;
     vrx.on_rc_frame(f.data(), f.size(), static_cast<double>(us) / 1000.0);
-    // Final review C1: the link forms where the drone is found. Only the
+    // The link forms where the drone is found. Only the
     // ack that OPENED the session inside this very call -- our nonce, not
     // key-mismatch flagged, so a stranger's drone cannot drag the cards --
     // and only on the rx_channel of this body (RxBody::rx_channel, handed
@@ -1101,7 +1112,7 @@ static int run_radio(const maburgs::Config& cfg) {
   // scan.log C record: once per card, the first time it reports ready.
   std::vector<bool> caps_logged(static_cast<size_t>(n_cards), false);
   uint64_t last_stats_ms = 0;
-  // Separate from last_stats_ms since 2026-08-15: the ctl log runs on
+  // Separate from last_stats_ms: the ctl log runs on
   // debug_log.ctl_period_ms, the stderr line stays at 1 Hz.
   uint64_t last_ctl_sample_ms = 0;
   // Foreign-RC_VERSION warning throttle. Separate `logged` flag rather than a
@@ -1227,10 +1238,10 @@ static int run_radio(const maburgs::Config& cfg) {
           sid_peek != mabur::kMspStreamId && sid_peek != mabur::kProbeStreamId) {
         // Only video heard where the link lives refreshes the silence timer
         // (ChannelPlan::is_link_video): a scout dwell catching the drone on
-        // another member must not hold the GS in SESSION (bench 2026-09-26: 60 s).
+        // another member must not hold the GS in SESSION (bench: 60 s).
         if (chan.is_link_video(m.rx_channel))
           vrx.on_video(static_cast<double>(m.mono_us) / 1000.0);
-        // In-flight hop confirmation (spec section 4): the channel THIS
+        // In-flight hop confirmation: the channel THIS
         // video body was actually received on, stamped by the producing
         // RadioFrontend at the instant it lifted the frame off the card
         // (mabur/node.h's RxBody::rx_channel).
@@ -1292,9 +1303,9 @@ static int run_radio(const maburgs::Config& cfg) {
 #ifdef MABUR_LOSS_SIM
     if (loss_ctl.ok()) loss_ctl.poll(agg.loss_sim());
 #endif
-    // Software NACK (spec 2026-10-05 fec-nack §3): base-layer selective
-    // repeat. Direct send, mid-burst -- never the RcfSlotter (bench: slotted
-    // fill p50 44 ms, past the gap timeout). Option A: the retransmit fixes
+    // Software NACK: base-layer selective repeat. Direct send, mid-burst --
+    // never the RcfSlotter (bench: slotted
+    // fill p50 44 ms, past the gap timeout). By design the retransmit fixes
     // the video only; every ladder input still books the loss.
     // [link.nack] ab_s: on for ab_s seconds, off for ab_s, so one flight
     // carries both arms. Off clears the tracked seqs (the counter is kept).
@@ -1430,7 +1441,7 @@ static int run_radio(const maburgs::Config& cfg) {
     // pairing the rendezvous started in SESSION, so gating on in_session
     // alone printed this at every
     // startup — telling the operator to upgrade a maburd that was fine, seconds
-    // before the tail came up anyway (caught on the rig 2026-07-25).
+    // before the tail came up anyway (caught on the rig).
     if (vrx.peer_acked() && !fw && !refused_peer) {
       refused_peer = true;  // once per run: this cannot fix itself mid-session
       std::fprintf(stderr,
@@ -1494,7 +1505,7 @@ static int run_radio(const maburgs::Config& cfg) {
       // construction (the scout thread always picks the NON-TX
       // card), so it could only ever become a challenger here -- and
       // sel.update() is what would act on a challenger and switch onto it
-      // mid-dwell, which is exactly what must not happen (spec section 6).
+      // mid-dwell, which is exactly what must not happen.
       // Simplest correct fix: skip the update entirely and keep the last
       // selection for this tick. The same hold covers a hop in flight
       // (tx_selection_frozen, hop_burst_gate.h): the lead card is on the
@@ -1528,8 +1539,8 @@ static int run_radio(const maburgs::Config& cfg) {
         maburgs::SlotFrame sf{
             k + 1 == targets.size() ? std::move(out->frame) : out->frame,
             vrx.rcf_seq(), targets[k], !out->is_disc};
-        // A DISC proposes the channel it is sent on (final review C1
-        // addendum A): the TX card's copy proposes op, a search burst's copy
+        // A DISC proposes the channel it is sent on: the TX card's copy
+        // proposes op, a search burst's copy
         // on the scout card proposes the burst member -- so a drone found
         // there agrees to stay, links there (on_session_opened) and is moved
         // only by a relocate order, never by retuning itself on promotion.
@@ -1607,8 +1618,8 @@ static int run_radio(const maburgs::Config& cfg) {
                        static_cast<unsigned>(gl.mfps));
       }
     }
-    // ctl: rung transition line — load-bearing for post-mortems (Task 6
-    // adds the sideport link.ctl block; this stderr line is independent of
+    // ctl: rung transition line — load-bearing for post-mortems (the
+    // sideport has its own link.ctl block; this stderr line is independent of
     // it and persists in /tmp/maburgs.log even when no sideport consumer is
     // listening).
     if (const auto& e = vrx.ctl().last_event(); e.t_ms != last_ctl_event_ms) {
@@ -1645,7 +1656,7 @@ static int run_radio(const maburgs::Config& cfg) {
     const bool dump_now = g_dump.exchange(false);
 
     // Adaptive-link log, on its OWN cadence (debug_log.ctl_period_ms, default
-    // 1000). Split from the stderr block below on 2026-08-15: the ctl log is
+    // 1000). Split from the stderr block below: the ctl log is
     // the instrument the ladder is tuned from and wants to run as fast as
     // 50 ms, while the stderr line is human-readable and lands in /tmp, which
     // is tmpfs — running that at 20 Hz would fill RAM for no one's benefit.
@@ -1748,8 +1759,8 @@ static int run_radio(const maburgs::Config& cfg) {
 
     if (stats) {
       maburgs::StatsInput sin;
-      // Live channel of the TX card, not the configured home (spec
-      // section 7): with a pick committed they differ. Straight off the
+      // Live channel of the TX card, not the configured home: with a pick
+      // committed they differ. Straight off the
       // front-end's atomic -- the core's per-card channel is untracked for the
       // scout card while the scout owns it.
       const maburgs::ChannelSnapshot chs = chan.snapshot(sel.selected());
@@ -2138,15 +2149,20 @@ int main(int argc, char** argv) {
   // shortcut. --out-aus captures each reassembled AU as an LP record for
   // the e2e's NAL-exact comparison (tests/integration/verify_aus.py). No
   // session negotiation here: the input file IS the drone's own output.
+  uint8_t dry_nslices = 1;  // ring v4, as run_radio's cur_au_nslices
   maburgs::FrameStream fstream(
       {static_cast<uint64_t>(cfg.video.frame_gap_timeout_ms),
        cfg.video.frame_lookahead},
-      {[&](const mabur::framewire::FrameHdr& h, uint8_t sid) {
-         if (au_on) au_ring.begin(h, sid);
+      {[&](const mabur::framewire::FrameHdr& h, uint8_t sid, uint8_t nslices) {
+         dry_nslices = nslices;
+         if (au_on) au_ring.begin(h, sid, nslices);
          file_out.begin(h, sid);
        },
        [&](const uint8_t* d, size_t n) {
-         if (au_on) au_ring.append(d, n);
+         if (au_on) {
+           au_ring.append(d, n);
+           if (dry_nslices >= 2) au_bell.notify(au_ring.published());  // as run_radio
+         }
          file_out.append(d, n);
        },
        [&](bool c, const maburgs::AuLatMeta& lat) {
@@ -2155,6 +2171,10 @@ int main(int argc, char** argv) {
            if (rec != UINT64_MAX) au_bell.notify(rec);
          }
          file_out.finish(c);
+       },
+       [&](const uint8_t* d, size_t n) {  // frame_tail, as run_radio
+         if (au_on) au_ring.append_unaligned(d, n);
+         file_out.append(d, n);
        }});
   uint64_t replay_ms = 0;  // clock of the body being fed, for gap timeouts
   agg.set_frag_sink([&](mabur::DecodedFrag& f) {

@@ -68,7 +68,7 @@ TEST(ctl_log_nan_snr_prints_nan) {
 }
 
 TEST(ctl_log_v2_sample_carries_resid_cur) {
-  // resid_cur (2026-08-14 attribution) still sits at the same position in
+  // resid_cur (the attribution field) still sits at the same position in
   // the S line under ctllog 3 -- only drssi/dsnr were appended after it.
   std::string dir = "build_ctl_log_test_v2";
   reset_dir(dir);

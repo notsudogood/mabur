@@ -2,10 +2,9 @@
 // sequenced test stream, encodes it with mabur's sliding-window+SBI FEC
 // (single stream, id 0xB0), and injects it via devourer at the chosen
 // channel/MCS/power.
-// Spec: docs/superpowers/specs/2026-07-13-linkbench-design.md. Bring-up
-// order mirrors maburd run_real_mode (drone/src/main.cpp): InitWrite must
-// complete before the first send or the bulk-OUT FIFO fills mid-DLFW and
-// bricks TX for the session.
+// Bring-up order mirrors maburd run_real_mode (drone/src/main.cpp):
+// InitWrite must complete before the first send or the bulk-OUT FIFO fills
+// mid-DLFW and bricks TX for the session.
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -72,7 +71,7 @@ struct Args {
   // this tool's --bw/--ldpc/--stbc. Every frame is a mabur::cal payload
   // stamped (mcs, rel idx); absolute index = the chip's anchor (mcs7 ref
   // with rate diffs zeroed, as maburd reads it) + rel. linkbench-rx --wall
-  // tallies per cell (docs/bw40-sweep-findings-2026-09-23.md).
+  // tallies per cell (docs/findings/2026-09-23-bw40-sweep.md).
   bool no_cca = false;
   // --foreign-sa: flip the SA/BSSID so a GS books these frames as foreign
   // traffic (interferer role), not own.

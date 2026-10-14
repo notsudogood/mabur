@@ -5,9 +5,9 @@
 
 namespace mabur::probe {
 
-// SBI magic for probe stream bodies (spec 2026-09-04). One 9-byte probe header
-// repeats in every sub-block of a probe body, each aligned after a 2-byte CRC
-// for FEC symbol recovery. The magic distinguishes probe stream patterns (seed,
+// SBI magic for probe stream bodies. One 9-byte probe header repeats in
+// every sub-block of a probe body, each aligned after a 2-byte CRC for FEC
+// symbol recovery. The magic distinguishes probe stream patterns (seed,
 // profile, enh_fid) from unrelated payload and validates block integrity.
 constexpr uint16_t kProbeMagic = 0xF5A5;
 

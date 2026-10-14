@@ -49,7 +49,7 @@ inline void pin_to_cpu(int cpu) {
 }
 
 // One shared worker with BOUNDED spin-then-sleep pickup and optional core
-// pinning. Two drone lessons are baked in (encoder runs, 2026-07-17):
+// pinning. Two drone lessons are baked in (from encoder runs):
 //   1. Spin bodies use RELAXED loads (plain LDR on a cached line) with one
 //      acquire fence after the change is seen — an acquire load in the loop
 //      is LDR+DMB on ARMv7 and the barrier storm from an idle spinner slowed

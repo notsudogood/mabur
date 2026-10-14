@@ -1,5 +1,5 @@
-// SpotterFollow (web/src/spotter_follow.h): the spotter's channel follower,
-// spec 2026-10-04 web-gs-channel-core §6. Pure: every test drives the clock.
+// SpotterFollow (web/src/spotter_follow.h): the spotter's channel follower.
+// Pure: every test drives the clock.
 #include <string>
 #include "mtest.h"
 #include "spotter_follow.h"

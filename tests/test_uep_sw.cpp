@@ -2,8 +2,7 @@
 // pipeline (UepEncoder -> lossy channel -> UepDecoder). Replaces the retired
 // block-FEC time-diversity buffer matrix: time diversity now comes from
 // overlapping repair windows, so sources never wait — the checks here pin
-// delivery under the same random/burst loss the old scheme was built for
-// (bench 2026-07-13, docs/handover-video-delivery.md §2).
+// delivery under the same random/burst loss the old scheme was built for.
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -220,8 +219,7 @@ TEST(survives_heavier_random_loss) {
 
 TEST(survives_burst_loss) {
   // 1% loss events x 4-body bursts (T0: 32 consecutive symbols lost;
-  // window 128 at overhead 0.50 tolerates bursts up to ~42, since the
-  // 2026-08-29 UEP flatten -- was overhead 0.75 / ~54).
+  // window 128 at overhead 0.50 tolerates bursts up to ~42).
   auto r = run_sim(164, 8, 128, 20000, 1.0, 4);
   CHECK(pct(r) >= 99.0);
 }
@@ -254,7 +252,7 @@ TEST(mixed_symbol_sizes_burst_within_budget) {
   // means those bodies interleave source/repair envelopes for whichever
   // layer they land on, so 8 consecutive bodies costs a given layer well
   // under its worst-case symbol loss. Layer 1 (sym 1312/bpb1/window 64,
-  // overhead 0.50 since the 2026-08-29 UEP flatten, was 0.25) has the
+  // overhead 0.50 since the UEP flatten, was 0.25) has the
   // tightest guarantee band: burst_sim.cpp's self-check gate proves this
   // exact geometry lossless up to B<=30 (was B<=14 pre-flatten)
   // consecutive bodies on single-layer stream-1 traffic, so 8 is comfortably
@@ -355,7 +353,7 @@ TEST(uep_async_recovers_under_loss_like_sync) {
   CHECK(pct(async_r) >= pct(sync_r) - 1.0);
 }
 
-// fec-join-delete (2026-09-22): the frame-end flush no longer waits for
+// fec-join-delete: the frame-end flush no longer waits for
 // the worker, so add_frame ships sources (plus whatever repairs are already
 // built) and collect() harvests the rest once the worker finishes — as
 // bodies of the right stream, with the packer's partial group flushed so

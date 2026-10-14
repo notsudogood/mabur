@@ -1,5 +1,5 @@
 // RcfSlotter: hold GS control frames until the drone's inter-AU idle
-// (gs-uplink-self-blanking findings 2026-09-02). Time is ms.
+// (docs/findings/2026-09-02-gs-uplink-self-blanking.md). Time is ms.
 #include "mtest.h"
 #include "rcf_slot.h"
 
@@ -142,8 +142,8 @@ TEST(hold_timer_counts_from_oldest_pending) {
   CHECK(s.take_due(1025).size() == 2);         // 1005 + 20
 }
 
-// --- probe-tail (spec 2026-09-04 slotter-tail): the probe body trails every
-// enh AU, so a release armed at completion must wait out its airtime.
+// --- probe-tail: the probe body trails every enh AU, so a release armed at
+// completion must wait out its airtime.
 // (No on_au_first() history here except where the test is specifically about
 // cadence -- with no first-body history idle_ahead() is trivially true,
 // which is what isolates the tail mechanic under test, same as the existing
@@ -151,7 +151,7 @@ TEST(hold_timer_counts_from_oldest_pending) {
 
 TEST(enh_completion_does_not_release_until_the_probe_is_seen) {
   // The probe body is the last PPDU of every ENH burst, and a send issued
-  // at the completion goes on air right where it lands (bench 2026-09-05:
+  // at the completion goes on air right where it lands (bench:
   // the probe arrives 0.9 ms p50 / 4 ms p99 after the completion stamp,
   // the send's USB+chip latency is 1-1.5 ms). So an ENH completion arms
   // nothing by itself; the probe's own arrival is the release.

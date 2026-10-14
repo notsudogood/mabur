@@ -32,7 +32,7 @@ std::vector<std::string> cal_log_lines(const std::string& dir) {
 }
 
 // The real TXAGC transfer curve is a flat floor below idx ~28, a ~0.3 dB/idx
-// ramp to ~91, then a flat ceiling to 127 (docs/txagc-calibration.md). A
+// ramp to ~91, then a flat ceiling to 127 (docs/findings/2026-07-16-txagc-calibration.md). A
 // CONSTANT curve is not a simplification of that, it is a different physical
 // claim -- power that never rises -- whose knee correctly sits at the bottom
 // of the sweep. Feeding one here made this test assert against a degenerate
@@ -177,8 +177,8 @@ TEST(coarse_then_fine_then_result) {
   // constant rail, kRailRel -- the drone's own anchor never enters this
   // computation. The result carries that RAW wall verbatim -- no margin
   // subtracted here. margin_db is applied exactly once, on the drone, by
-  // power_plan.h's diff[r] = walls[r] - m (spec: two independently
-  // configured margins in one derivation is the bug this shape avoids).
+  // power_plan.h's diff[r] = walls[r] - m (two independently configured
+  // margins in one derivation is the bug this shape avoids).
   for (int r = 0; r < 8; ++r) CHECK(res->walls[r] == kRailRel);
 }
 
@@ -245,7 +245,7 @@ TEST(undetermined_rate_reaches_the_result_as_minus_one) {
 }
 
 TEST(verify_phase_tallies_by_rate_despite_a_margin_mismatch) {
-  // Review fix (Important 4): the GS seeds verify cells at wall - m_gs; the
+  // The GS seeds verify cells at wall - m_gs; the
   // drone independently derives wall - m_drone. If the two configs'
   // margin_db values ever disagree (nothing enforces they match -- both
   // default to 1.0, hand-set on each end separately), an exact-index match
@@ -783,7 +783,7 @@ TEST(no_dip_rows_park_at_the_constant_rail_without_any_ack) {
 // run's frames against the pair the run opened under (RcAgent's sweep
 // latch). So every command and result of one run carries the tag context
 // set_peer() reported at start(), whatever set_peer() says later. Bench
-// 2026-10-03: a mid-run re-pair re-tagged the result, all 15 rejected.
+// repro: a mid-run re-pair re-tagged the result, all 15 rejected.
 TEST(the_tag_context_is_frozen_at_start_for_the_whole_run) {
   CalSessionCfg cfg;
   cfg.phase_slack_ms = 0;

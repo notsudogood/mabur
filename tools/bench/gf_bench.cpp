@@ -78,7 +78,7 @@ int main() {
   // repair-shaped throughput: one 32-row window at symbol size 332 (the
   // flight geometry), per-row lincomb vs lincomb_rows, unpadded (332,
   // 12 B scalar tail per row) and padded to the ring stride (336, what
-  // SwEncoder::build_repair passes since 2026-09-22). MB/s counts row
+  // SwEncoder::build_repair passes). MB/s counts row
   // bytes read; us/repair is the number the fec_worker gauge reports.
   // "hot": the same 32 rows every repair (L1-resident). "cold": a
   // 544-row ring (window + kSlackRows, 183 kB > L1) with the window
@@ -131,7 +131,7 @@ int main() {
   // end-to-end encoder frames/s at the flight geometry (symbol 332, w32,
   // bpb 4, ov 0.5, 38 kB frames = 18 Mb/s at 60 fps), sync FEC (repairs
   // inline, so this is feed + repair CPU on one thread): the copy/alloc
-  // diet's A/B number (2026-09-22).
+  // diet's A/B number.
   {
     std::array<UepLayerCfg, 2> layers{};
     for (int s = 0; s < 2; ++s) {
@@ -167,11 +167,11 @@ int main() {
   }
 
   // end-to-end encoder frames/s at bench geometry (symbol 164, bpb 8,
-  // window 128, overhead 0.75 literal — Task 3 deleted the kUepRefOverhead
-  // ladder; 0.75 reproduces the exact pre-Task-3 value byte-for-byte
-  // (kUepRefOverhead was flat 0.50 at every index post-2026-08-29-flatten,
-  // and this file already fed the *1.5-scaled result straight into
-  // SwConfig as the actually-applied overhead, so no x2 rule applies here
+  // window 128, overhead 0.75 literal — airtime-balance-uep deleted the
+  // kUepRefOverhead ladder; 0.75 reproduces the exact value before that
+  // byte-for-byte (kUepRefOverhead was flat 0.50 at every index after the
+  // UEP flatten, and this file already fed the *1.5-scaled result straight
+  // into SwConfig as the actually-applied overhead, so no x2 rule applies here
   // — it was never a cmd value routed through uep_layer_overhead).
   // 14000 B frames at 60 fps ~ 6.7 Mbps of video, the shape maburd ingests.
   {

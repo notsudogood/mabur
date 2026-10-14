@@ -137,8 +137,8 @@ TEST(uep_poll_has_nothing_to_seal_after_a_frame) {
 TEST(uep_add_frame_sink_streams_bodies_incrementally) {
   // The sink overload must deliver the same bodies, in the same order, as
   // the vector overload — just one at a time, so the hot loop can hand each
-  // to the TxQueue while later FEC blocks are still being packed (dq-spike
-  // 2026-08-31: the accumulate-then-push shape serialized ~3.4 ms of
+  // to the TxQueue while later FEC blocks are still being packed (dq-spike:
+  // the accumulate-then-push shape serialized ~3.4 ms of
   // FEC/SBI CPU in front of an idle radio). Two encoder instances differ in
   // their random initial seq, so equivalence is pinned on count, stream_id
   // and size per body, plus a full decoder round-trip of the sink output.

@@ -1,7 +1,7 @@
 #pragma once
-// SpotterFollow: the spotter page's channel follower (spec 2026-10-04
-// web-gs-channel-core §6). Pure: injected clock, no I/O. Decides the member
-// the one card should sit on; WebGs (spotter mode) feeds it and retunes.
+// SpotterFollow: the spotter page's channel follower. Pure: injected
+// clock, no I/O. Decides the member the one card should sit on; WebGs
+// (spotter mode) feeds it and retunes.
 //
 //  Sweeping  round-robin over the set; a member's dwell counts from the
 //            card's report (on_card_channel); a frame on the member locks.

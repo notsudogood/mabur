@@ -33,7 +33,7 @@ set -euo pipefail
 # --- defaults (a deliberately moderate starting point) ----------------------
 DEVOURER_DIR="${DEVOURER_DIR:-$(cd "$(dirname "$0")/../../../devourer" && pwd)}"
 TXDEMO="${TXDEMO:-$DEVOURER_DIR/build/txdemo}"
-CHANNEL=136          # mabur home channel (docs/channel-select.md); set to the op channel in use
+CHANNEL=136          # set to the op channel in use (any radio.channels member; docs/channel-select.md)
 RATE="6M"            # low legacy rate => each frame holds the air longer => more airtime steal
 BYTES=1000           # on-air PSDU size
 PPS=250              # frames/sec (translated to txdemo's inter-frame delay)

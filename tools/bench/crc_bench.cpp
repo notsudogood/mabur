@@ -1,12 +1,13 @@
 // CRC-16/CCITT-FALSE microbench: the production mabur::crc16_ccitt against a
 // bit-serial reference, over the FEC envelope size the drone's hot thread
-// CRCs ~200 times per frame (2026-09-21 bitrate-ceiling findings). Prints
-// ns/byte and the per-frame cost at a given air-bytes-per-frame figure.
+// CRCs ~200 times per frame (docs/findings/2026-09-21-bitrate-ceiling.md).
+// Prints ns/byte and the per-frame cost at a given air-bytes-per-frame
+// figure.
 //
 //   crc_bench [block_bytes=332] [air_kb_per_frame=72]
 //
 // Host build: tests CMake target `crc_bench`. Drone: cross-build like
-// encbench (docs/per-layer-symbol-debug-handoff.md) with common/src/crc16.cpp.
+// encbench with common/src/crc16.cpp.
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>

@@ -38,7 +38,7 @@ inside the arrival guard was a salvaged sub-block (a second "heard clean"
 bit in the ArrivalTracker, booked at settle time). `salvaged` is the
 upper bound and `salvage_only` the value: the other card's clean copy of
 the same body shadows most salvaged sub-blocks (flights 0043/0044,
-`docs/sbi-salvage-flights-2026-09-09.md`), and a salvaged repair symbol
+`docs/findings/2026-09-09-sbi-salvage-flights.md`), and a salvaged repair symbol
 never counts here because it carries no seq of its own.
 `flightreport.py` prints them as a SALVAGE section — totals per
 card/stream and the deltas per rung next to that rung's abandoned
@@ -57,7 +57,7 @@ FRAME from the last 1 s window, ranked by e2e. Read them together:
 `P99` alone is a tail statistic sitting among averages (fps/jit/mbps)
 and gets misread as typical — an operator reporting "fec is 10–30 ms"
 while the median was ~10 ms is what prompted the second row
-(`docs/dq-spike-findings-2026-08-31.md` §20).
+(`docs/findings/2026-08-31-dq-spike.md` §20).
 
 **2026-09-06: the per-segment breakdown left the OSD.** Each row used to
 render its frame's own seven segments (`enc dq air+ fec dec reg dsp`)
@@ -96,7 +96,7 @@ it is adjacent for one-glance reading but is two-way control time and
 never part of the e2e sum. What the absolute rows still exclude: sensor
 exposure/readout before the pts stamp (~10–16 ms est.) and everything
 past scanout start (HDMI + display processing) — LED/camera-lump
-territory, see `docs/latency-budget-findings-2026-08-31.md`.
+territory, see `docs/findings/2026-08-31-latency-budget.md`.
 
 `link.rcf_slot` (2026-09-03) counts how the RCF slotter released each
 control-frame send: `au` (at an AU completion with idle ahead, incl. the
@@ -109,7 +109,7 @@ probe's fallback release; ceil(decaying max) + 1). Healthy video = almost
 all `au`+`probe`, `timeout` well under 1 % — ⚠ at a high duty cycle
 (bench pinned mcs4, ~4 ms idle per 16.7 ms) `timeout` runs ~43 %, and
 with `feedback_ms` 50 = 3 AU periods those timeouts are phase-locked to
-the burst, see `docs/probe-blanking-fix-findings-2026-09-05.md`. See
+the burst, see `docs/findings/2026-09-05-probe-blanking-fix.md`. See
 `docs/link-adaptation.md` "RCF slotting".
 
 `link.streams[].arr_expected / arr_arrived / arr_expected_stale /
@@ -319,7 +319,7 @@ Consume the same numbers programmatically with:
   picks the au log in the same directory or `./log` whose mono range
   overlaps). `tools/bench/probesend.py` adds the GS send stamps from a
   `MABUR_GAPLOG=1` run to place every send against the probe
-  (`docs/probe-blanking-fix-findings-2026-09-05.md`). Never fatal, like
+  (`docs/findings/2026-09-05-probe-blanking-fix.md`). Never fatal, like
   the ctl log.
 
   **fec.log (feclog 3; feclog 1 from 2026-09-15 had no `bw`, feclog 2 from 2026-09-24 no `rtx`).** Per-episode FEC loss record, the
@@ -509,7 +509,7 @@ success or failure; `score`/`cost_us` are the last **successful** dwell's,
 since a failed retune produces no visit to score. `cards[i].energy` keeps
 its pre-existing shape but is now refilled from the verdict engine's
 ~150 ms window reads instead of the deleted 1 Hz `A`-record poll. Since
-2026-09-25 (NHM airtime evidence, `docs/nhm-airtime-spike-findings-2026-09-25.md`)
+2026-09-25 (NHM airtime evidence, `docs/findings/2026-09-25-nhm-airtime-spike.md`)
 it also carries `busy_pct` (NHM busy %, `null` when that window's reading
 was invalid or none has landed) and `own_air_pct` (the GS's own
 reconstructed airtime on that card, `null` only before the first window).
@@ -613,7 +613,7 @@ read the sideport. Reach for other tools only in these cases:**
   post-transition base P (`--profiles` lists every row). That table is
   the `venc.min_iqp` tuning readout (`docs/airtime-model.md`): read the
   rung-0 demote column after a flight, then move the floor. This is the
-  §9 measurement of `docs/probe-stream-flight-findings-2026-09-05.md`
+  §9 measurement of `docs/findings/2026-09-05-probe-stream-flight.md`
   and the A/B instrument for its drain-shed follow-up
   (`tests/test_airdrain.py` pins it on a synthetic cascade). The ctl and
   au indices are separate counters: pair them by mono span. The default
@@ -621,14 +621,14 @@ read the sideport. Reach for other tools only in these cases:**
   no episode (until 2026-09-06 it ended the window at the first
   `starved` E line, which read flight 0031 as 72 s of 566). `--model` on
   the three 2026-09-06 flights:
-  `docs/air-clock-flight-findings-2026-09-06.md`, which also gives the
+  `docs/findings/2026-09-06-air-clock-flight.md`, which also gives the
   per-AU reconstruction of the drone clock from `air_ms` (a candidate
   `--fit` mode).
 - **Verifying AU-completion cadence → `tools/bench/aucadence.py`** (on the
   GS: `python3 aucadence.py --ring /dev/shm/mabur-au --seconds 25 --json`).
   Same outside-the-daemon ring posture as ausniff; reports the base−enh
   completion offset (p50 of `arrival_mono − pts` per class, IDR-excluded —
-  metric provenance in `docs/airtime-balance-spike-findings-2026-08-29.md`).
+  metric provenance in `docs/findings/2026-08-29-airtime-balance-spike.md`).
   This is the **standing acceptance number for any change touching the
   AirBalancer, the venc pipeline, UEP overhead, or the bitrate policy** —
   the sideport `jitter_ms` EMA is the symptom of this offset and is noisier
@@ -654,7 +654,7 @@ read the sideport. Reach for other tools only in these cases:**
   vsync-locked-regulator; relocated by the 2026-09-06 consolidation). The
   player's 1 Hz `lat:` stderr line used to die in tmpfs with the power-off
   (`/tmp/maburplay.log`, gone on reboot — this is how the flight-0035 tail
-  segments were lost, see `docs/latency-budget-findings-2026-08-31.md`). It
+  segments were lost, see `docs/findings/2026-08-31-latency-budget.md`). It
   is now additionally appended to `lat.log` inside maburgs' current session
   directory — maburplay holds no logging config of its own, it just follows
   the `/tmp/mabur-session` marker maburgs writes and stops if the marker
@@ -982,7 +982,7 @@ CPU famine, not ring depth: above ~12 Mbps at the mcs5 bench op point the
 2×A7 SoC starves maburd's hot thread (ring pinned full for 100s of ms),
 so the honest knob is `encoder.bitrate_max_kbps` (`waybeam.bitrate_max_kbps`
 before the fold-in renamed the section) — the bench runs 10000.
-Full findings: `docs/venc-ring-vanish-findings-2026-08-12.md` (committed
+Full findings: `docs/findings/2026-08-12-venc-ring-vanish.md` (committed
 with the detection port). The detection (pts-jump, EMA-period,
 shed-immune) ships in maburd and exported as
 `drone.enc.{vanished_base,vanished_enh,self_idr_refused}` on the sideport
@@ -998,7 +998,7 @@ absent until both ends run the same build; video is unaffected); the 5 s
 delta, `encoder.roi_qp_low/normal`). Until this date the same value was
 exported as `drone.enc.qp`, read 0 for entire flights, and the flight-0011
 analysis mistook it for "rate control never moved"
-(`docs/handover-venc-overshoot-2026-09-03.md`). For a few hours that day
+(`docs/findings/2026-09-03-handover-venc-overshoot.md`). For a few hours that day
 `drone.enc.qp` carried the encoder's `startQual` instead — which this
 firmware never fills — so the key was deleted rather than shipped as a
 permanent 0: **there is no encoder-QP readback on this SDK.** (`roi_qp`
@@ -1043,11 +1043,11 @@ frame the drone's RX callback saw, split into CRC-clean RC from this GS
 CRC-failed (`crcfail`, preamble heard, payload undecodable). With carrier
 sense ON, `foreign + crcfail` is what the drone's transmitter deferred to.
 Software counts, not the chip's CCA/FA registers — that read stalls the
-drone's TX pool (`docs/cca-on-findings-2026-09-23.md`). Per period, NOT cumulative:
+drone's TX pool (`docs/findings/2026-09-23-cca-on.md`). Per period, NOT cumulative:
 the exporter repeats the last Telem's values on every record until the
 next one, so sample once per `drone.tlm_seq` — `flightreport.py` does
 (`DRONE RX` section, silent on older recordings); `maburtop` shows them on
-the drone `radio` row. `docs/cca-on-findings-2026-09-23.md`.
+the drone `radio` row. `docs/findings/2026-09-23-cca-on.md`.
 
 **2026-09-26 (VTX recorder).** `drone.rec = {state, err}` is the drone's
 onboard SD recorder status, taken from `Telem.rec_status` and sent on both

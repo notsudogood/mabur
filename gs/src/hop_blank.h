@@ -11,13 +11,13 @@ namespace maburgs {
 constexpr double kHopSettleBlankMs = 150.0;
 
 // Pure: how far ahead the ladder's rung store should be blanked, given the
-// verdict window that just closed (spec section 4: the store's residual/
-// util EWMAs are not updated "from the first impaired window until hop
-// confirmation plus the existing 150 ms post-transition settle-blank").
+// verdict window that just closed: the store's residual/util EWMAs are not
+// updated from the first impaired window until hop confirmation plus the
+// existing 150 ms post-transition settle-blank.
 //
 // Extracted like hop_burst_gate.h so the one decision has a unit test
-// instead of only ever running inside run_radio()'s hardware-touching
-// verdict block. The call site (gs/src/main.cpp, right after
+// instead of only ever running inside ChannelCore's hardware-touching
+// verdict block. The call site (gs/src/channel_core.cpp, right after
 // HopVerdict::window()) feeds the result to VrxController::blank_store(),
 // which keeps the LATER of the deadlines it is given -- so this composes
 // with, and never shortens, the deadline HopAction::Order sets.
@@ -61,13 +61,13 @@ inline std::optional<double> hop_store_blank_until(const VerdictOut& vo, bool re
 }
 
 // Pure: when the hop verdict's own link-loss window (a 500 ms trailing
-// S1LossWindow, main.cpp's s1_hop_loss) must be blanked. At Confirm -- the
+// S1LossWindow, ChannelCore::s1_hop_loss_) must be blanked. At Confirm -- the
 // instant the link lands on the new channel -- plus the same settle as the
 // store blank, so the verify that follows is judged on loss measured on the
 // channel it is verifying. Unblanked, the first eligible verify window still
 // carried the jam on the old channel and the hop's own retune gap: 128 read
-// 50.9 % loss with zero foreign frames and failed (bench 2026-09-24, GS
-// session 0207), which sent the retry back into the jam. The verdict gets
+// 50.9 % loss with zero foreign frames and failed (bench, GS session
+// 0207), which sent the retry back into the jam. The verdict gets
 // its own window rather than blanking s1_loss, which also feeds the
 // sideport/ctl-log/OSD loss gauge the pilot reads. Every other action keeps
 // the link where it was (Order/OneCardRetune: the confirm has not happened;

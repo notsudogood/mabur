@@ -1,5 +1,5 @@
 """RC-frame packer for the host e2e scripts: the RC_VERSION 14 RCF with its
-SipHash-2-4 tag (spec 2026-10-01 link-pairing). maburd --dry-run installs the
+SipHash-2-4 tag (docs/link-pairing.md). maburd --dry-run installs the
 replay session (vrx 1, vtx 1), so frames tagged under it verify. Reads
 RC_VERSION from rc_proto.h so a bump can't half-land (run_gs_e2e.sh history)."""
 import os, re, struct

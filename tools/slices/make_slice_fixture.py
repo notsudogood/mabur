@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Cut tests/fixtures/slices4_1080p.h265 out of a 4-slice 1080p capture.
 
-The source is the bench drone's cap4 (2026-10-09, spike-venc-slices
-MABUR_SPIKE_DUMP, by-frame + slices=4), kept at
+The source is the bench drone's cap4 (spike-venc-slices MABUR_SPIKE_DUMP,
+by-frame + slices=4), kept at
 sbc-groundstations-gilankpam/output/gs-p1-backup-2026-10-09/cap4.h265.
 Pictures 0,1,2 (IDR + two P) and 30..33 (refresh start + three 4-slice P):
 small, and every case the slice tests need.

@@ -56,7 +56,7 @@ case "$1" in
     [ -f "$LOGPIDFILE" ] && kill "$(cat "$LOGPIDFILE")" 2>/dev/null
     rm -f "$LOGPIDFILE"
     # The PID kill only stops the respawn-loop subshell; the foreground daemon survives without this.
-    killall maburd 2>/dev/null
+    killall maburd 2>/dev/null || true   # not running is not an error
     ;;
   restart)
     "$0" stop

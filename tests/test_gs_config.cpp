@@ -42,7 +42,7 @@ TEST(missing_keys_fall_back_to_defaults) {
 // Actual-overhead ranges (airtime-balance-uep): static_overhead's default
 // and validation range are doubled from cmd-value semantics ([0.10, 1.0]
 // default 0.25) to actual-air semantics ([0.1, 2.0] default 0.5).
-// Same-rate-fixed-pairs (Task 3): static_overhead split into a base/enh
+// Same-rate-fixed-pairs: static_overhead split into a base/enh
 // pair, both keeping the old scalar's default/range.
 TEST(static_overhead_default_and_range) {
   auto cfg = maburgs::load_config(write_tmp(""));
@@ -84,8 +84,8 @@ TEST(stale_static_overhead_key_throws) {
 // link.video_silence_ms claimed to tune the video-silence escape valve, but
 // the valve (VrxRzConfig.link_lost_ms, rendezvous.cpp) has been hardcoded to
 // 1000 ms since the GS scaffold (34fe0b9) — the key was never wired to it.
-// Removed 2026-07-26 in favor of the hardcode every bench run validated; a
-// stale key fails the boot like any other unknown key.
+// Removed in favor of the hardcode every bench run validated; a stale key
+// fails the boot like any other unknown key.
 TEST(stale_video_silence_ms_key_throws) {
   bool threw = false;
   try { maburgs::load_config(write_tmp("[link]\nvideo_silence_ms = 3000\n")); }
@@ -95,10 +95,10 @@ TEST(stale_video_silence_ms_key_throws) {
   CHECK(threw);
 }
 
-// Removed 2026-08-15 when the s3 residual demote became instant: with
-// attribution unconditional, the confirm window had nothing left to guard
-// against. Strict keys mean a tuned device config naming it must be edited
-// by hand BEFORE the new binary starts, or maburgs crash-loops at 2 s.
+// Removed when the s3 residual demote became instant: with attribution
+// unconditional, the confirm window had nothing left to guard against. Strict
+// keys mean a tuned device config naming it must be edited by hand BEFORE the
+// new binary starts, or maburgs crash-loops at 2 s.
 TEST(stale_s3_residual_confirm_ms_key_throws) {
   bool threw = false;
   try { maburgs::load_config(write_tmp("[link]\ns3_residual_confirm_ms = 500\n")); }
@@ -312,9 +312,9 @@ TEST(out_entry_missing_a_port_is_rejected) {
   std::remove(p.c_str());
 }
 
-// Software NACK (spec 2026-10-05 fec-nack section 7): [link.nack] is
-// optional and absent = off; the spike's settle_ms knob is gone (settle is
-// adaptive), and lookback must stay inside the decoder's seq horizon.
+// Software NACK: [link.nack] is optional and absent = off; the spike's
+// settle_ms knob is gone (settle is adaptive), and lookback must stay inside
+// the decoder's seq horizon.
 TEST(link_nack_section_parses_and_defaults_off) {
   auto off = maburgs::load_config(write_tmp(""));
   CHECK(!off.link.nack.enable && off.link.nack.lookback == 256 &&
@@ -446,13 +446,13 @@ TEST(gs_load_config_errors_carry_file_and_line) {
   CHECK(msg.find(".toml:3:") != std::string::npos);
 }
 
-// Fix round 1 (task-4 review): five keys were guarded by a bare
-// `if (contains(...))` with no `get_*` call and no `else note_default`,
-// so their absence silently vanished from the defaulted-key report --
-// fec.symbol_size, radio.cards, link.ladder (all reported by the drone's
-// equivalent parse_radio/parse_fec), plus the two sentinel-guarded keys
-// link.s3_down_util and link.probe.max_util (whose guard must stay: an
-// absent value resolves to link.down_util, not to get_num's own default).
+// Five keys were once guarded by a bare `if (contains(...))` with no `get_*`
+// call and no `else note_default`, so their absence silently vanished from the
+// defaulted-key report -- fec.symbol_size, radio.cards, link.ladder (all
+// reported by the drone's equivalent parse_radio/parse_fec), plus the two
+// sentinel-guarded keys link.s3_down_util and link.probe.max_util (whose guard
+// must stay: an absent value resolves to link.down_util, not to get_num's own
+// default).
 TEST(gs_load_config_reports_previously_invisible_defaults) {
   const std::string path = write_tmp(
       "[radio]\n"
@@ -587,9 +587,9 @@ TEST(hop_defaults_when_absent) {
   CHECK(cfg.hop.verdict.loss_pct == 3.0 && cfg.hop.verdict.fa_pps == 100 && cfg.hop.verdict.weak_rssi_dbm == -78);
   CHECK(cfg.radio.scan.busy.busy_dbm == -83 && cfg.radio.scan.busy.blocked_pct == 50.0);
 }
-// 2026-10-04: pin is static. The mode knob is radio.channel alone; the
-// busy-air thresholds belong to every measurer, so they live under
-// radio.scan. Removed keys fail boot, as every removed key does.
+// Pin is static. The mode knob is radio.channel alone; the busy-air thresholds
+// belong to every measurer, so they live under radio.scan. Removed keys fail
+// boot, as every removed key does.
 TEST(removed_hop_keys_fail_boot) {
   for (const char* body : {"[hop]\nenable = true\n", "[hop]\nscout_when_disabled = false\n",
                            "[hop.verdict]\nbusy_dbm = -83\n", "[hop.verdict]\nblocked_pct = 50\n"}) {
@@ -623,7 +623,7 @@ TEST(hop_relay_burst_period_ms_default_and_range) {
   CHECK(what_of([] { maburgs::load_config(write_tmp("[hop]\nrelay_burst_period_ms = 50\n")); })
             .find("relay_burst_period_ms") != std::string::npos);
   // min 500: under ~450 ms a burst can re-fire on the tick the trigger
-  // returns after a result and starve the controller (final review item 5)
+  // returns after a result and starve the controller
   CHECK(what_of([] { maburgs::load_config(write_tmp("[hop]\nrelay_burst_period_ms = 400\n")); })
             .find("relay_burst_period_ms") != std::string::npos);
 }
@@ -634,7 +634,7 @@ TEST(radio_scan_energy_period_ms_is_gone) {
   CHECK(threw);
 }
 
-// ---- per-rung width (2026-09-24, 40 MHz rungs) ---------------------------
+// ---- per-rung width (40 MHz rungs) ---------------------------------------
 
 TEST(ladder_rung_bw_is_required_and_20_or_40) {
   auto cfg = maburgs::load_config(write_tmp(
@@ -759,10 +759,10 @@ TEST(gs_config_rejects_static_offset_qdb) {
 }
 
 // src_bitrate_mbps/margin_db/min_offset_qdb/max_offset_qdb/base_ref_idx were
-// the old model-driven controller/link-table energy-model + qdB-rail keys.
-// The measured-loss ladder controller (SDD 2026-07-27) replaces that
-// resolver entirely; each is now an unknown key and must fail the boot like
-// any other stale key (config.cpp:check_keys, "link").
+// the old model-driven controller/link-table energy-model + qdB-rail keys. The
+// measured-loss ladder controller replaces that resolver entirely; each is now
+// an unknown key and must fail the boot like any other stale key
+// (config.cpp:check_keys, "link").
 TEST(deleted_model_controller_keys_now_throw) {
   const char* deleted_keys[] = {"src_bitrate_mbps", "margin_db",
                                 "min_offset_qdb", "max_offset_qdb",
@@ -781,9 +781,9 @@ TEST(deleted_model_controller_keys_now_throw) {
 }
 
 // frame_gap_timeout_ms/frame_lookahead: FrameStream tuning knobs for the
-// session-negotiated frame-wire tail (Task 10). JSON keys under video
-// (PR C: the section was video_out until the RTP destination was deleted;
-// a stale video_out key now fails boot like any other unknown key).
+// session-negotiated frame-wire tail. JSON keys under video (PR C: the section
+// was video_out until the RTP destination was deleted; a stale video_out key
+// now fails boot like any other unknown key).
 TEST(video_frame_keys) {
   auto cfg = maburgs::load_config(write_tmp(""));
   CHECK(cfg.video.frame_gap_timeout_ms == 50);
@@ -795,14 +795,13 @@ TEST(video_frame_keys) {
 }
 
 // link.ladder: measured-loss ladder controller rungs + max_mcs filter +
-// thresholds (SDD 2026-07-27 ladder-controller Task 2).
-// Pins the C++ struct default (no "link.ladder" key at all -- config.cpp
-// never touches c.link.ladder_cfg.ladder in that case, so this is the
-// literal member-initializer in gs/src/config.h). Actual-air overhead
-// (airtime-balance-uep): old cmd-value defaults x2, same global rule as
-// the bundle json's ladder -- a regression back to half-scale values here
-// would parse and validate silently (all in-range), so this test exists
-// to catch exactly that.
+// thresholds. Pins the C++ struct default (no "link.ladder" key at all --
+// config.cpp never touches c.link.ladder_cfg.ladder in that case, so this is
+// the literal member-initializer in gs/src/config.h). Actual-air overhead
+// (airtime-balance-uep): old cmd-value defaults x2, same global rule as the
+// bundle json's ladder -- a regression back to half-scale values here would
+// parse and validate silently (all in-range), so this test exists to catch
+// exactly that.
 TEST(ladder_defaults_to_spec_six_rung_ladder) {
   auto cfg = maburgs::load_config(write_tmp(""));
   auto& L = cfg.link.ladder_cfg.ladder;
@@ -812,17 +811,17 @@ TEST(ladder_defaults_to_spec_six_rung_ladder) {
   CHECK(L[1].mcs == 2); CHECK(L[1].overhead_base > 0.999 && L[1].overhead_base < 1.001);
   CHECK(L[2].mcs == 4); CHECK(L[2].overhead_base > 0.499 && L[2].overhead_base < 0.501);
   CHECK(L[3].mcs == 5); CHECK(L[3].overhead_base > 0.499 && L[3].overhead_base < 0.501);
-  // mcs6 rung at 0.5 (cmd-value 0.25, not the spec's cmd-value 0.15) since
-  // 2026-07-29 — see the ladder_cfg comment in gs/src/config.h and
-  // docs/mcs6-bench-anomaly.md.
+  // mcs6 rung at 0.5 (cmd-value 0.25, not the originally designed cmd-value
+  // 0.15) — see the ladder_cfg comment in gs/src/config.h and
+  // docs/findings/2026-07-27-mcs6-bench-anomaly.md.
   CHECK(L[4].mcs == 6); CHECK(L[4].overhead_base > 0.499 && L[4].overhead_base < 0.501);
   CHECK(L[5].mcs == 7); CHECK(L[5].overhead_base > 0.199 && L[5].overhead_base < 0.201);
-  // Same-rate-fixed-pairs (Task 3): the struct default duplicates each
+  // Same-rate-fixed-pairs: the struct default duplicates each
   // rung's value into overhead_enh too.
   for (auto& r : L) CHECK(std::abs(r.overhead_enh - r.overhead_base) < 1e-9);
 }
 
-// Same-rate-fixed-pairs (Task 3): rung overhead is now a base/enh pair.
+// Same-rate-fixed-pairs: rung overhead is now a base/enh pair.
 TEST(rung_overhead_pair_parses) {
   auto cfg = maburgs::load_config(write_tmp(
       "[[link.ladder]]\nmcs = 1\nbw = 20\noverhead_base = 1.0\noverhead_enh = 0.5\n"));
@@ -879,8 +878,8 @@ TEST(ladder_rung_mcs_out_of_range_rejected) {
 
 TEST(ladder_rung_overhead_out_of_range_rejected) {
   // Actual-overhead ranges (airtime-balance-uep): rung overhead accepts
-  // [0.1, 2.0], not the old cmd-value [0.05, 1.0]. Same-rate-fixed-pairs
-  // (Task 3): both overhead_base and overhead_enh are validated.
+  // [0.1, 2.0], not the old cmd-value [0.05, 1.0]. Same-rate-fixed-pairs:
+  // both overhead_base and overhead_enh are validated.
   bool threw = false;
   try {
     maburgs::load_config(write_tmp(
@@ -1041,7 +1040,7 @@ TEST(au_ring_values_load) {
 
 // link.s3_* keys: s3 steady-state demote tuning (LadderCfg). Strict keys
 // apply here like every other "link" key. The five flat probe_* keys went
-// with the s3 probe (spec 2026-09-04); link.probe replaces them.
+// with the s3 probe; link.probe replaces them.
 TEST(s3_keys_parse) {
   auto cfg = maburgs::load_config(write_tmp(
       "[link]\ns3_demote = false\ns3_down_util = 0.4\n"));
@@ -1060,7 +1059,7 @@ TEST(s3_defaults_and_sentinel_resolution) {
   CHECK(lc.s3_settle_ms == 300);
 }
 
-// The four keys the 2026-09-06 consolidation removed. Unknown keys fail boot
+// The four keys the debug-log consolidation removed. Unknown keys fail boot
 // by design (PR #7), which is what makes an old config a hard stop rather
 // than a silently half-configured GS.
 TEST(removed_ctl_log_keys_are_rejected) {
@@ -1124,7 +1123,7 @@ TEST(rung_stats_parses_and_validates) {
   } catch (const std::exception&) {}
 }
 
-// Removed 2026-08-15: attribution is unconditional. The switch's remaining
+// Removed: attribution is unconditional. The switch's remaining
 // value was reproducing pre-attribution numbers, and the instant s3
 // residual demote makes attrib=false unsafe rather than merely different.
 TEST(stale_link_attrib_key_throws) {
@@ -1136,9 +1135,7 @@ TEST(stale_link_attrib_key_throws) {
   CHECK(threw);
 }
 
-// link.fade: config surface for fade-aware demotes (spec 2026-08-14
-// fade-demote). This task adds ONLY the config block; nothing consumes
-// cfg_.fade yet.
+// link.fade: config surface for fade-aware demotes.
 TEST(link_fade_defaults) {
   auto cfg = maburgs::load_config(write_tmp("[link]\n"));
   CHECK(cfg.link.ladder_cfg.fade.cascade == true);
@@ -1184,7 +1181,7 @@ TEST(link_fade_rejects_unknown_key_and_bad_ranges) {
   } catch (const std::exception&) {}
 }
 
-// --- link.rcf_slot_hold_ms (gs-uplink-self-blanking 2026-09-02) --------------
+// --- link.rcf_slot_hold_ms (gs-uplink-self-blanking) ------------------------
 TEST(rcf_slot_hold_defaults_when_absent) {
   auto cfg = maburgs::load_config(write_tmp(""));
   CHECK(cfg.link.rcf_slot_hold_ms == 30);
@@ -1199,7 +1196,7 @@ TEST(rcf_slot_hold_explicit_and_zero_parse) {
   CHECK(b.link.rcf_slot_hold_ms == 0);
 }
 
-// --- link.arrival_guard_syms (cca-on 2026-09-23, from tx-windows §5.2) ------
+// --- link.arrival_guard_syms (cca-on) ---------------------------------------
 TEST(arrival_guard_defaults_and_parses) {
   CHECK(maburgs::load_config(write_tmp("")).link.arrival_guard_syms == 192);
   CHECK(maburgs::load_config(write_tmp("[link]\narrival_guard_syms = 96\n")).link.arrival_guard_syms == 96);
@@ -1209,7 +1206,7 @@ TEST(arrival_guard_defaults_and_parses) {
   CHECK(threw);
 }
 
-// --- link.probe block (spec 2026-09-04 sections 4.2, 5) ---------------------
+// --- link.probe block -------------------------------------------------------
 TEST(probe_block_defaults) {
   auto c = maburgs::load_config(write_tmp(""));
   const auto& p = c.link.ladder_cfg.probe;
@@ -1246,10 +1243,10 @@ TEST(probe_block_parses_and_bounds) {
   CHECK(threw);
 }
 
-// probe.clean_ms went with the ms streak (probe per AU, 2026-09-16): the
-// streak is clean_bodies now, and the old key fails boot like any other
-// unknown key -- a config still carrying it would silently mean a
-// different confidence at a different frame rate.
+// probe.clean_ms went with the ms streak (probe per AU): the streak is
+// clean_bodies now, and the old key fails boot like any other unknown key -- a
+// config still carrying it would silently mean a different confidence at a
+// different frame rate.
 TEST(probe_clean_ms_key_fails_boot) {
   bool threw = false;
   try { maburgs::load_config(write_tmp("[link.probe]\nclean_ms = 3000\n")); }
@@ -1269,9 +1266,8 @@ TEST(old_flat_probe_keys_fail_boot) {
   }
 }
 
-// Carried from the Task 7 review: s3_min_syms feeds s3_usable()'s
-// h.s3_expected_syms >= s3_min_syms comparison directly -- a non-positive
-// value would silently disable every s3 demote.
+// s3_min_syms feeds s3_usable()'s h.s3_expected_syms >= s3_min_syms comparison
+// directly -- a non-positive value would silently disable every s3 demote.
 TEST(s3_min_syms_rejects_non_positive) {
   for (const char* v : {"0", "-5"}) {
     bool threw = false;
@@ -1281,7 +1277,7 @@ TEST(s3_min_syms_rejects_non_positive) {
   }
 }
 
-// debug_log (2026-09-06 consolidation): one knob for the whole GS. Default
+// debug_log (debug-log consolidation): one knob for the whole GS. Default
 // OFF -- nothing is written until it is set.
 TEST(debug_log_defaults) {
   auto c = maburgs::load_config(write_tmp(""));
@@ -1330,19 +1326,19 @@ TEST(bundle_default_sets_every_known_key_but_radio_cards) {
                        &defaulted);
   for (const std::string& d : defaulted)
     std::fprintf(stderr, "  bundle leaves defaulted: %s\n", d.c_str());
-  // radio.cards is auto-scan by design. link.key (Task 4's optional inline
-  // overlay) is read by presence (gs/src/config.cpp), so its absence --
-  // the bundle deliberately leaves it unset in favour of key_file -- must
-  // NOT register as a defaulted key (fix round 1, Task 4 review): it would
-  // otherwise print "link.key=" under every plain boot's defaulted-key
-  // list, diluting the real DEFAULT-key warning right next to it.
+  // radio.cards is auto-scan by design. link.key (the optional inline overlay)
+  // is read by presence (gs/src/config.cpp), so its absence -- the bundle
+  // deliberately leaves it unset in favour of key_file -- must NOT register as
+  // a defaulted key: it would otherwise print "link.key=" under every plain
+  // boot's defaulted-key list, diluting the real DEFAULT-key warning right
+  // next to it.
   CHECK(defaulted.size() == 1);
   CHECK(!defaulted.empty() && defaulted[0] == "radio.cards=(auto-scan)");
 }
 
-// spec 2026-09-25-nhm-airtime §6; default blocked_pct is 50, not the spec's
-// 30 -- hw spike findings (docs/nhm-airtime-spike-findings-2026-09-25.md).
-// Under radio.scan since 2026-10-04: every measurer reads them.
+// radio.scan busy-air keys: default blocked_pct is 50, not 30 -- hw spike
+// findings (docs/findings/2026-09-25-nhm-airtime-spike.md). They live under
+// radio.scan because every measurer reads them.
 TEST(scan_busy_keys_parse_and_validate) {
   auto c = maburgs::load_config(write_tmp("[radio.scan]\nbusy_dbm = -86\nblocked_pct = 40\n"));
   CHECK(c.radio.scan.busy.busy_dbm == -86 && c.radio.scan.busy.blocked_pct == 40.0);
@@ -1352,10 +1348,10 @@ TEST(scan_busy_keys_parse_and_validate) {
   CHECK(threw);   // -82 is not an NHM bucket edge
 }
 
-// Task 11 (b): the floor on the recovered-symbols impaired term (bench
-// session 0232: 97 % of recovered-only impaired windows had <= 8).
-// Revert (drop the key from check_keys / the parse): the first load throws
-// "unknown key" and the default read is not 8.
+// The floor on the recovered-symbols impaired term (bench session 0232: 97 %
+// of recovered-only impaired windows had <= 8). Revert (drop the key from
+// check_keys / the parse): the first load throws "unknown key" and the default
+// read is not 8.
 TEST(hop_verdict_recovered_min_key) {
   auto c = maburgs::load_config(write_tmp("[hop.verdict]\nrecovered_min = 0\n"));
   CHECK(c.hop.verdict.recovered_min == 0);
@@ -1372,8 +1368,8 @@ TEST(hop_verdict_recovered_min_key) {
   CHECK(maburgs::HopVerdictCfg{}.recovered_min == 8);
 }
 
-// Task 12 (e): the AU-rate starved term. Revert (drop the key from
-// check_keys / the parse): the first load throws "unknown key".
+// The AU-rate starved term. Revert (drop the key from check_keys / the parse):
+// the first load throws "unknown key".
 TEST(hop_verdict_starved_frac_key) {
   auto c = maburgs::load_config(write_tmp("[hop.verdict]\nstarved_frac = 0\n"));
   CHECK(c.hop.verdict.starved_frac == 0.0);
@@ -1390,7 +1386,7 @@ TEST(hop_verdict_starved_frac_key) {
   CHECK(maburgs::HopVerdictCfg{}.starved_frac == 0.25);
 }
 
-// Task 12 (f): the confirm extension while the op reads blocked.
+// The confirm extension while the op reads blocked.
 // Revert (drop the key from check_keys / the parse): the first load throws
 // "unknown key".
 TEST(hop_confirm_extend_ms_key) {
@@ -1409,7 +1405,7 @@ TEST(hop_confirm_extend_ms_key) {
   CHECK(maburgs::HopCfg{}.confirm_extend_ms == 3000);
 }
 
-// ---- Task 4: link.key_file + link.key overlay (spec 2026-10-01-link-pairing §2) ----
+// ---- link.key_file + link.key overlay (link pairing) ----
 
 TEST(link_key_file_missing_uses_default_and_says_so) {
   auto path = write_tmp("[link]\nkey_file = \"" + std::string(MABUR_TEST_SCRATCH_DIR) +
@@ -1512,8 +1508,8 @@ TEST(overlay_missing_file_fails) {
   CHECK(threw);
 }
 
-// radio.relays (spec 2026-10-02-maburgs-remote-card §3): CPE510 relays are
-// RemoteCards appended after the USB cards, "ipv4:port" each.
+// radio.relays: CPE510 relays are RemoteCards appended after the USB cards,
+// "ipv4:port" each.
 TEST(radio_relays_default_empty_and_parse) {
   auto none = maburgs::load_config(write_tmp(""));
   CHECK(none.radio.relays.empty());

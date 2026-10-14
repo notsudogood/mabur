@@ -9,8 +9,8 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 # RCF delivered after frame 1 (same trick as run_host_e2e.sh / run_gs_e2e.sh):
-# the fixture alternates TRAIL_R/TRAIL_N on its 12 P frames (2-stream space,
-# spec 2026-08-29-airtime-balance-uep), so without an RCF the boot MAX_RANGE
+# the fixture alternates TRAIL_R/TRAIL_N on its 12 P frames (2-stream
+# space), so without an RCF the boot MAX_RANGE
 # op point (drone/src/rc_agent.cpp:apply_max_range) would shed the 6 genuine
 # sid-1 (enh) frames for good -- feeding one here is what makes the ring
 # carry both streams, not just an incidental side effect of the RCF check.
@@ -29,7 +29,7 @@ echo "== fixture -> maburd bodies -> maburgs -> AU ring must be byte-exact =="
   --rc-in "$TMP/rc.bin"
 
 # The gs bundle's fec.symbol_size must match the drone bundle's encode-time
-# symbol_size (332, adopted 2026-07-29 to dodge the mcs6+STBC 1392-1400 B PHY
+# symbol_size (332, chosen to dodge the mcs6+STBC 1392-1400 B PHY
 # hole); without it the sliding-window decode geometry mismatches and yields 0
 # AUs. The au_ring paths are REWRITTEN to this run's temp dir -- the bundle
 # sets every knob explicitly, including path/socket, so appending a second
@@ -60,7 +60,7 @@ python3 tools/bench/ausniff.py --ring "$TMP/au-ring" --oneshot \
 # the BOOT MAX_RANGE op point (drone/src/rc_agent.cpp:apply_max_range) --
 # and the IDR always classifies to sid 0 regardless. Every frame from index
 # 1 on (both the base and the genuine enh/TRAIL_N frames the fixture now
-# alternates in, 2-stream space, spec 2026-08-29-airtime-balance-uep) is
+# alternates in, 2-stream space) is
 # processed post-RCF, i.e. unshed. The ceiling is therefore all 13 fixture
 # frames, on BOTH streams -- this is the standing gate that actually
 # exercises sid 1 end-to-end through the AU ring.

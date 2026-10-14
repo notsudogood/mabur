@@ -8,7 +8,7 @@
 #include "star6e.h"
 #include "venc_frame_ring.h"
 
-/* frame-shm:// is the ONLY transport (spec 2026-08-28 §3): the RTP
+/* frame-shm:// is the ONLY transport: the RTP
  * packetizer, the sendmmsg batch, the udp:// / unix:// / shm:// socket
  * paths and the audio output all belonged to waybeam's HTTP-configured
  * multi-transport surface and are deleted.  mabur publishes whole access

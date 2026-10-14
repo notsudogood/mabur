@@ -22,7 +22,7 @@
  * Run on the drone (stdout is CSV; see tools/bench/vencprobe_analyze.py):
  *   vencprobe --low 3000 --high 10000 --dwell 2500 --cycles 6 > /tmp/vp.csv
  *
- * PASSIVE mode (2026-09-03, venc-overshoot bench): --cycles 0 --duration MS
+ * PASSIVE mode (venc-overshoot bench): --cycles 0 --duration MS
  * never POSTs; it only logs frames and the 25 ms /venc polls (req bitrate)
  * for MS milliseconds. Stimulus is external (cover/uncover the
  * lens, pan) and tools/bench/vencburst_analyze.py finds the cycles:

@@ -180,7 +180,7 @@ export function debugGroups({ connected, mode, core, rcfPct, ausRate, hitches60,
 // Live-state message over the video. Before the first picture of a Connect
 // the screen is black, so say what the page is waiting for; after it, a
 // frozen gate shows nothing here: the last frame stays up while the page
-// requests an IDR (spec 2026-09-28).
+// requests an IDR.
 export function statusText({ state, mode, ch, core, sinceStartMs, w, hiddenBanner, hasPicture }) {
   if (state !== 'live') return '';
   let primary = '';

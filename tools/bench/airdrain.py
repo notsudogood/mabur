@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """airdrain.py -- per-frame `air` excess around every rung transition: is the
 post-demote latency spike a drain, and how big/long is it? (flights 20/21,
-docs/probe-stream-flight-findings-2026-09-05.md section 9; the measurement
+docs/findings/2026-09-05-probe-stream-flight.md section 9; the measurement
 the drain-shed follow-up is A/B'd with)
 
 Replays the player's `air` arithmetic (gs/player/src/lat_tracker.cpp) over
@@ -19,12 +19,12 @@ the first 500 ms after the demote against the NEW rung's nominal PHY rate
 promotes get peak summaries; the steady-state excess per rung (frames >= 3 s
 from any transition) and standalone spike seconds close the report.
 
-Inputs (one boot -- the ctl and au indices are DIFFERENT counters, match
-them by mono span; the lat log is not needed and its index is a third
-counter, see docs/observability.md):
-  ctl    /media/dvr/ctl-NNNN_<date>.log   (ctllog >= 8 for the ov pairs)
-  aulog  /media/dvr/log/au-NNNN.log       (flightrec '# aulog 3', air_ms
-                                          column 12; aulog-2 logs still parse)
+Inputs: a debug-log session directory (its ctl.log + au.log; see
+docs/observability.md "Debug-log session directory"), or the legacy pair
+from before the debug-log consolidation -- ctl-NNNN_<date>.log (ctllog >= 8
+for the ov pairs) + flightrec's au-NNNN.log ('# aulog 3', air_ms column 12;
+aulog-2 logs still parse). The legacy ctl and au indices are DIFFERENT
+counters: match them by mono span.
 
 Usage: python3 tools/bench/airdrain.py [<session-dir> | ctl-NNNN_<date>.log au-NNNN.log]
          [--from S --to S] [--spike MS] [--profiles] [--model]
@@ -39,7 +39,7 @@ Usage: python3 tools/bench/airdrain.py [<session-dir> | ctl-NNNN_<date>.log au-N
                the GS-measured air+q per frame -- a through-origin slope,
                residual percentiles, per-cascade peak pairs, and the quiet
                floor; prints one line saying so instead if the log predates
-               aulog 3 (docs/data-provenance.md, 2026-09-06 air clock)
+               aulog 3 (docs/data-provenance.md, air clock)
 (run from the repo root: imports tools/flightreport.py; tests/test_airdrain.py)
 """
 import argparse, bisect, collections, os, statistics as st, sys
@@ -94,7 +94,7 @@ def air_excess(rows):
 
 def model_compare(A, casc):
     """Drone air-clock model (aulog-3 `air_ms`: the modelled backlog at the
-    AU's arrival on the drone, spec 2026-09-06) vs the GS-measured excess.
+    AU's arrival on the drone) vs the GS-measured excess.
     Compared as air + q: the drone books at TxQueue push, the GS floor is
     post-pop, so the queue wait sits between the two. Through-origin slope
     measured/model over frames where either side is >= 5 ms (the leaky
@@ -129,7 +129,7 @@ def analyze(ctl_path, au_path, t0=None, t1=None, spike_ms=15.0):
     t0 = t0 * 1000 if t0 is not None else E[0]['t_ms']
     # To the LAST S line: a starve is link loss, not the end of the flight,
     # and find_episodes' starved episodes are dropped below. (Ending at the
-    # first starved E line read flight 0031 as 72 s of 566, 2026-09-06.)
+    # first starved E line read flight 0031 as 72 s of 566.)
     t1 = t1 * 1000 if t1 is not None else S[-1]['t_ms']
     Ew = [e for e in E if t0 <= e['t_ms'] <= t1]
 
@@ -194,7 +194,7 @@ def analyze(ctl_path, au_path, t0=None, t1=None, spike_ms=15.0):
     # Transition IDRs: every non-starved E line with the first BASE IDR that
     # completes within 600 ms of it (the SetChnAttr keyframe every bitrate
     # write fires), its size against the base P median 1 s before and
-    # 0.3-1.3 s after. This is the venc.min_iqp readout (2026-09-06): the
+    # 0.3-1.3 s after. This is the venc.min_iqp readout: the
     # rung-0 demote IDR ran 27-41 kB at ~3x the OLD P in flight 0356.
     idrs = []
     for e in Ew:

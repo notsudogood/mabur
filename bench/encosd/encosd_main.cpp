@@ -1,5 +1,4 @@
-// encosd -- MPP encoder-side OSD spike bench (see
-// docs/superpowers/specs/2026-08-04-mpp-enc-osd-spike.md).
+// encosd -- MPP encoder-side OSD spike bench.
 //
 // Creates an MPP H.265 encoder at 1080p, feeds it synthetic NV12 frames with
 // an obvious moving pattern, optionally attaches a palette + indexed bitmap

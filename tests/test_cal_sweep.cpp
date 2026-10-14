@@ -156,9 +156,9 @@ TEST(stamps_each_frame_with_its_rate_and_index) {
 TEST(zeroes_rate_diffs_on_session_acceptance) {
   // Per-rate walls must be measured against a common base, so the
   // wall-equalized diff table comes off at on_cmd() acceptance itself
-  // (Task 11 review: moved out of pump_sweeping's old lazy once-per-
-  // session guard, so the ack -- also armed inside on_cmd() -- reads a
-  // chip that has already been zeroed). No pump() call is needed to
+  // (not in pump_sweeping's old lazy once-per-session guard, so the ack --
+  // also armed inside on_cmd() -- reads a chip that has already been
+  // zeroed). No pump() call is needed to
   // trigger it any more, which is the whole point of this test: it would
   // have kept passing even with the old lazy behaviour if it still called
   // pump() first, so it deliberately does not.
@@ -368,8 +368,8 @@ TEST(duplicate_result_for_accepted_nonce_is_ignored) {
   // this is a repeat of the nonce the sweeper already accepted. The uplink
   // can duplicate a result frame same as it duplicates commands, and
   // letting it re-arm Applying would mean cal_apply's flash write runs a
-  // second time -- Task 9 exists partly to hold that line at one write
-  // per session.
+  // second time -- the accepted-nonce check exists partly to hold that
+  // line at one write per session.
   CaptureSink sink;
   RadioTx tx(sink);
   FakePowerCtl pwr;
@@ -472,8 +472,7 @@ TEST(a_new_nonce_mid_session_does_not_read_the_anchor_through_a_parked_override)
 }
 
 TEST(a_repeat_of_the_running_phase_re_arms_the_ack) {
-  // Review ruling reversing the original "exactly one ack per phase" (Task
-  // 11): the GS repeats its CalCmd every 200 ms and gives up (fails the
+  // Not "exactly one ack per phase": the GS repeats its CalCmd every 200 ms and gives up (fails the
   // whole session) at 3000 ms, and a single lost ack Telem previously cost
   // the entire phase. CalSession::on_ack() is a no-op outside AwaitAck, so
   // re-arming on every exact repeat of the phase already running is
@@ -529,7 +528,7 @@ TEST(programmed_index_is_anchor_plus_rel_clamped_to_the_chip_range) {
 TEST(unreadable_anchor_refuses_the_command_and_arms_no_ack) {
   // A chip whose reference cannot be read back (GetTxPowerState invalid)
   // cannot place a relative cell; the GS times out in AwaitAck as for a
-  // lost ack (spec 2026-09-13 §2).
+  // lost ack.
   FakePowerCtl pwr;
   pwr.anchor = -1;
   CalSweep s(CalSweepCfg{});
@@ -540,7 +539,7 @@ TEST(unreadable_anchor_refuses_the_command_and_arms_no_ack) {
 }
 
 TEST(a_refused_command_is_observable_exactly_once) {
-  // Final-review finding 2: the refusal path above zeroes the rate-diff
+  // The refusal path above zeroes the rate-diff
   // table (on_cmd does that BEFORE read_anchor_idx()) and then opens no
   // session at all -- so active() never rises and main.cpp's falling-edge
   // restore_operating_power() never fires. Left invisible, the drone flies
@@ -593,7 +592,7 @@ TEST(unreadable_anchor_mid_sweep_is_a_refusal_too) {
 }
 
 TEST(unreadable_anchor_mid_sweep_quiesces_the_old_session) {
-  // Review finding: a new nonce preempting an actively-Sweeping session
+  // A new nonce preempting an actively-Sweeping session
   // whose anchor read then fails must fully quiesce, not just clear
   // has_session_ -- otherwise pump()'s switch(state_) keeps dispatching to
   // pump_sweeping() on the stale Sweeping state forever (has_session_ only

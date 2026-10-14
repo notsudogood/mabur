@@ -2,7 +2,7 @@
 """latab.py A.log B.log — vsync A/B verdict from two persisted lat logs.
 
 A = vsync_lock false (baseline D=12), B = servo. Gates recalibrated
-2026-08-31 after the first bench A/B: the original "e2e p50 <= A-8"
+after the first bench A/B: the original "e2e p50 <= A-8"
 encoded a wrong baseline model — the D=12 rule passes ~84% of frames
 straight through (reg p50 == 0), so its MEDIAN already sits near the
 half-period floor and no servo carrying a nonzero lead can beat it

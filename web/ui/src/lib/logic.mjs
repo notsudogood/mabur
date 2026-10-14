@@ -17,7 +17,7 @@ export function nalTypes(u8) {
 }
 
 const VPS = 32, SPS = 33, PPS = 34, DISCONT = 0x02;
-// Slice salvage (spec 2026-10-10-h265-slices §5.5): the GS core rebuilt a
+// Slice salvage: the GS core rebuilt a
 // truncated AU from its complete slices plus skip-slice fills -- a legal
 // picture, decodable, but never a sync point.
 const SALVAGED = 0x40;
@@ -48,8 +48,7 @@ export class Gate {
   onDecoderError() { this.armed = false; }
 }
 
-// GS-requested IDR pacing (spec 2026-09-28, backoff added in the final
-// whole-branch review 2026-09-28): ask the moment the gate is unarmed, then
+// GS-requested IDR pacing: ask the moment the gate is unarmed, then
 // every retryMs while it stays so (the IDR itself was lost). Polled per AU
 // and on decoder errors; no timer -- with no AUs the link is down and the
 // drone's link-up path covers it.
@@ -385,8 +384,8 @@ export function relayFieldVisible(savedAtLoad, openedThisVisit) {
   return !!(savedAtLoad || openedThisVisit);
 }
 
-// The typed relay address from `webgs.last`. New key on purpose: builds
-// before 2026-09-29 saved relayAddr = the old default for every user.
+// The typed relay address from `webgs.last`. New key on purpose: older
+// builds saved relayAddr = the old default for every user.
 export function loadRelayCustom(saved) {
   return saved && typeof saved.relayCustom === 'string' ? saved.relayCustom.trim() : '';
 }
@@ -409,7 +408,7 @@ export function errorText(line) {
     return 'CPE relay connection lost. Press Connect to restart.';
   }
   if (line.includes('no RTL card')) {
-    return 'No RTL8812EU/8812AU/8821AU card found — plug it in and press Connect.';
+    return 'No RTL8812EU/8812AU/8812CU/8821AU card found — plug it in and press Connect.';
   }
   if (line.includes('claim failed')) {
     return 'Card busy — maburgs or another tab has it. Close that and press Connect.';

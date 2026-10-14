@@ -2,7 +2,7 @@
 // and the drone's CalSweep, driven against each other through the real
 // wire codecs, over a channel that can drop frames in either direction.
 //
-// Why this file exists (review finding I5): both state machines were
+// Why this file exists: both state machines were
 // thoroughly unit-tested in isolation, and the ~500 lines of glue across
 // the two main.cpp files had no coverage at all. Every defect that
 // actually escaped this build was of that class -- CAP_CALIBRATE never
@@ -65,7 +65,7 @@ constexpr int kTrueWall[8] = {127, 127, 127, 95, 73, 54, 51, 49};
 constexpr int kAnchor = 53;
 int kTrueWallRel(int r) { return kTrueWall[r] - kAnchor; }
 
-// The TXAGC transfer curve of docs/txagc-calibration.md: flat floor, a
+// The TXAGC transfer curve of docs/findings/2026-07-16-txagc-calibration.md: flat floor, a
 // ~0.3 dB/idx ramp, then a flat ceiling. The knee at the top is what a
 // no_dip row's wall is derived from.
 int ramp_rssi(int idx) {

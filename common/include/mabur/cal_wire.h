@@ -4,10 +4,9 @@
 // received frame to a (rate, idx) cell with no clock sync and no sequence
 // negotiation. Frame loss IS the measurement, so this format must survive
 // operating points where nothing else on the link does.
-// idx is SIGNED and RELATIVE to the chip's own efuse TXAGC anchor (spec
-// 2026-09-13-relative-walls), not an absolute TXAGC index -- it lives in
-// the chip's 7-bit signed diff-field range, [-64, 63].
-// Spec: docs/superpowers/specs/2026-09-10-tx-power-calibration-design.md.
+// idx is SIGNED and RELATIVE to the chip's own efuse TXAGC anchor, not an
+// absolute TXAGC index -- it lives in the chip's 7-bit signed diff-field
+// range, [-64, 63].
 #include <cstdint>
 #include <cstring>
 #include <vector>

@@ -6,8 +6,8 @@
 
 namespace maburgs {
 
-// Per-card bookkeeping for the verdict window's NHM arm (spec
-// 2026-09-25-nhm-airtime §6): a read is ours only if WE armed it, with the
+// Per-card bookkeeping for the verdict window's NHM arm: a read is ours
+// only if WE armed it, with the
 // period devourer still reports (a scout dwell re-arms with its own), on the
 // channel the card is still on (a window spanning a retune binned two
 // channels), AND no in-flight scout dwell has touched the card since we

@@ -5,7 +5,7 @@
 
 namespace mabur {
 
-// Per-frame virtual air-serialization clock (spec 2026-09-06 air-clock §2).
+// Per-frame virtual air-serialization clock.
 //
 // free_at_us_ is the moment the air becomes free given every body pushed to
 // the TxQueue so far, priced at the applied op's PHY rate per layer:
@@ -26,7 +26,7 @@ namespace mabur {
 // No clock of its own: every call takes the caller's steady-clock µs, like
 // RcAgent's now_ms contract, so tests drive it synthetically.
 //
-// Thread-safe (fec-nack, spec 2026-10-05 §4.3): the hot thread prices it
+// Thread-safe (fec-nack): the hot thread prices it
 // (set_rates on an op change), books every video/probe body and reads the
 // backlog per frame; the RX thread's T_NACK handler books every retransmit
 // body. All three members take m_. The lock is per BODY (book) or per frame

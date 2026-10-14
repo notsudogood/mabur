@@ -1,5 +1,5 @@
 // Covers what survives in drone/venc/venc_cfg.c after venc.resilience was
-// decomposed into its components (2026-09-04): the absent-key defaults and
+// decomposed into its components: the absent-key defaults and
 // the SuperFrame byte math. The preset table, venc_cfg_expand_preset() and
 // VencPresetOut are gone — the pipeline reads VencCfg directly.
 #include <cstdio>
@@ -61,8 +61,8 @@ TEST(intra_rows_spreads_the_picture_over_the_sweep) {
 // venc_superframe_p_bytes(): P-frame SuperFrame threshold as a percentage
 // of the per-frame budget at the PROGRAMMED rate (kbps x 1024), so the cap
 // follows the rung. Rung 5 at 60 fps: 16000 kbps -> 16.384 Mbit/s -> 34133 B
-// per frame; 200 % -> 68266 B. The 2026-09-03 bench saw scene-cut frames of
-// 195 kB against that budget.
+// per frame; 200 % -> 68266 B. The venc-overshoot bench saw scene-cut
+// frames of 195 kB against that budget.
 TEST(superframe_p_bytes_follows_the_rung_budget) {
   CHECK(venc_superframe_p_bytes(100, 16000, 60) == 34133);
   CHECK(venc_superframe_p_bytes(200, 16000, 60) == 68266);
@@ -72,9 +72,9 @@ TEST(superframe_p_bytes_follows_the_rung_budget) {
   CHECK(venc_superframe_p_bytes(1000, 200000, 1) > 0);     // no overflow at the rails
 }
 
-// 2026-10-11: under VENC_SUPERFRAME_MIN_BYTES (4096) the cap is off rather
-// than a ~1.3 kB ceiling at the new 300 kbps floor; every rate the cap ever
-// ran at (>= 1000 kbps, 60 fps, 200 %) is unaffected.
+// Under VENC_SUPERFRAME_MIN_BYTES (4096) the cap is off rather than a ~1.3 kB
+// ceiling at the 300 kbps floor; every rate the cap ever ran at (>= 1000 kbps,
+// 60 fps, 200 %) is unaffected.
 TEST(superframe_p_cap_is_off_below_its_minimum) {
   CHECK(venc_superframe_p_bytes(200, 1000, 60) == 4266);   // old floor: unchanged
   CHECK(venc_superframe_p_bytes(200, 960, 60) == 4096);    // exactly at the minimum: kept
@@ -82,7 +82,8 @@ TEST(superframe_p_cap_is_off_below_its_minimum) {
   CHECK(venc_superframe_p_bytes(200, 300, 60) == 0);       // the floor: off
 }
 
-// The SSC338Q cuts slices in whole 64-px CTU rows (findings 2026-10-09):
+// The SSC338Q cuts slices in whole 64-px CTU rows
+// (docs/findings/2026-10-09-venc-slice.md):
 // 1080p = 17 rows, and only counts whose fixed row height reproduces the
 // count are achievable.
 TEST(slice_rows_follow_the_sdk_row_geometry) {

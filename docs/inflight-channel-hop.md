@@ -16,7 +16,7 @@ in `tests/test_channel_core.cpp` (`two_card_order_rcf_carries_hop_and_plan_leads
 Built without hardware, then benched on 2026-09-15: deployed both ends,
 four fixes forced by the bench (see Measurements), a co-channel hop
 confirmed in 268 ms onset-to-video on two cards and 427 ms on one, with
-`ausniff` clean through it. Not flown. `docs/handover-inflight-hop-bench-2026-09-15.md`
+`ausniff` clean through it. Not flown. `docs/findings/2026-09-15-handover-inflight-hop-bench.md`
 covers what is still owed — read it before flying auto.
 
 ## 1. Wire and hop protocol
@@ -242,12 +242,12 @@ term; 60→30 fps low-power is a 0.5 drop, so keep `starved_frac` below it.
 
 `blocked` is the NHM-airtime evidence added 2026-09-25 (spec
 `docs/superpowers/specs/2026-09-25-nhm-airtime-design.md`; bench numbers
-in `docs/nhm-airtime-spike-findings-2026-09-25.md`). The other five bits
+in `docs/findings/2026-09-25-nhm-airtime-spike.md`). The other five bits
 are all derived from the preamble detector (`foreign`, `fa`) or from RSSI/
 SNR, so an interferer that fills airtime without tripping the correlator —
 a long-frame 802.11 jam at low pps, or a co-channel analog VTX carrier,
 which desenses the front end and reads as a fade with SNR intact
-(`docs/analog-vtx-findings-2026-09-25.md`) — was invisible to every one of
+(`docs/findings/2026-09-25-analog-vtx.md`) — was invisible to every one of
 them. `nhm_busy_pct` comes from the chip's NHM histogram (airtime above
 `radio.scan.busy_dbm`, an `nf::kNhmAbsThDbm` bucket edge — config validation rejects
 any other value), armed and read once per verdict window per op card
@@ -533,7 +533,7 @@ before falling through to the existing score/boot-pick/home/config-order
 chain. A channel with events but no busy evidence at all (no NHM, or every
 visit invalid) ranks purely on score as before — the tier only ever adds a
 worse rank, never a better one. Rationale and defaults in
-`docs/nhm-airtime-spike-findings-2026-09-25.md`.
+`docs/findings/2026-09-25-nhm-airtime-spike.md`.
 
 At `radio.width = 40` dwells keep the 40 MHz tuning and score the primary
 only, and the ranker stays built over the same primaries as at 20 MHz. That
@@ -821,7 +821,7 @@ queue) landed on `../devourer` ahead of this plan and are consumed
 unmodified — no devourer change was part of this task's scope. The
 spike's "~10 ms with the batched path, 26 ms without" planning figures are
 in the design spec; the measured figure from the real GS path is one of
-the numbers `docs/handover-inflight-hop-bench-2026-09-15.md` still owes.
+the numbers `docs/findings/2026-09-15-handover-inflight-hop-bench.md` still owes.
 
 ## 7. Config
 
@@ -895,7 +895,7 @@ unconfirmed order is kept while the op reads blocked; <= `confirm_ms`
 `docs/superpowers/specs/2026-09-25-nhm-airtime-design.md`) feed the
 `blocked` evidence bit (§2) and are shared unchanged by both rankers
 (§3); the spec's own draft carried a provisional `blocked_pct = 30`, the
-hw spike (`docs/nhm-airtime-spike-findings-2026-09-25.md`) replaced it
+hw spike (`docs/findings/2026-09-25-nhm-airtime-spike.md`) replaced it
 with 50 — midway between the worst clean-channel error (~10 in a single
 window) and a real interferer's reading (95–99).
 
@@ -1137,7 +1137,7 @@ boot-scan dwells are excluded).
 
 ## Measurements
 
-Bench, 2026-09-15 (`docs/handover-inflight-hop-bench-2026-09-15.md` has
+Bench, 2026-09-15 (`docs/findings/2026-09-15-handover-inflight-hop-bench.md` has
 the run-by-run record). Two RTL8822EU cards on the GS, the drone on the
 bench, interferer = `tools/bench/benchjam.sh` (a spare 8822EU on the host,
 QoS-Data 1000 B at 6 Mbit/s, 250 frames/s, ~35 % airtime, `DEVOURER_TX_SA`
@@ -1173,8 +1173,8 @@ the periodic dwells are that today.
 |---|---|---|---|
 | co-channel 802.11 neighbour, 333 ms dwell, two cards | first `V interfered` → `H order` **150 ms**, `lead_confirm` **+118 ms** (onset→video **268 ms**), `verify_pass` +1001 ms; drone followed 165→120 and stayed | `E hop_restore 5 5` at the order (no demote had happened in the 150 ms detection) | 59.6 fps, 0 frame_id gaps, 0 incomplete over 100 s spanning onset, hop and verify |
 | same, one-card GS (`[[radio.cards]]` pinned) | `H order` 153 ms, `one_card_retune` +258 ms (5 RCFs at `feedback_ms` 50), `lead_confirm` +274 ms (onset→video **427 ms**), `verify_pass` +1002 ms; drone followed 165→136 | `hop_restore 5 5` at the order, then a **4-rung demote cascade** in the 750 ms after the retune (`residual` 0.88, `util` 1.15–1.48: the drone retunes on the first RCF it hears, the sole GS radio only after all five, so the ladder's loss windows see ~200 ms of 100 % loss), re-promoted to rung 5 over the next 15 s | 59.5 fps, 10 frame_id gaps, 1 incomplete over 85 s |
-| non-802.11 (analog VTX co-channel, 2026-09-25, one-card host GS) | **no hop**: 0 `interfered` over 176 windows (FA 0 on every one — an FM carrier never trips the preamble detector), 131 `unknown`; see `docs/analog-vtx-findings-2026-09-25.md` | n/a — ladder shed 6→3 five times on `util` and re-promoted each time | 19–20 fps (from 31), 4–6 gaps / 45 s while the carrier desensed the card (RSSI −58 → −70…−79) |
-| analog VTX co-channel, two-card GS, NHM `blocked` (2026-09-26, VTX ~3 m from GS, op 132+136) | first `V interfered 21` (blocked, both cards 100 % busy) → `H order` **150 ms**, `lead_confirm` +83 ms, `verify_pass` +1016 ms (136→144); operator cycling E-channels then chased the link 144→112 (+82 ms, `verify_fail` on 112's FA background → hold) and later escape/return hops, 6 hops all confirmed 82–116 ms, drone followed every one; see `docs/nhm-airtime-spike-findings-2026-09-25.md` "Analog VTX and DJI O4" | not read | 30.8–31.6 fps, 0 gaps on every pass (disarmed 30 fps) |
+| non-802.11 (analog VTX co-channel, 2026-09-25, one-card host GS) | **no hop**: 0 `interfered` over 176 windows (FA 0 on every one — an FM carrier never trips the preamble detector), 131 `unknown`; see `docs/findings/2026-09-25-analog-vtx.md` | n/a — ladder shed 6→3 five times on `util` and re-promoted each time | 19–20 fps (from 31), 4–6 gaps / 45 s while the carrier desensed the card (RSSI −58 → −70…−79) |
+| analog VTX co-channel, two-card GS, NHM `blocked` (2026-09-26, VTX ~3 m from GS, op 132+136) | first `V interfered 21` (blocked, both cards 100 % busy) → `H order` **150 ms**, `lead_confirm` +83 ms, `verify_pass` +1016 ms (136→144); operator cycling E-channels then chased the link 144→112 (+82 ms, `verify_fail` on 112's FA background → hold) and later escape/return hops, 6 hops all confirmed 82–116 ms, drone followed every one; see `docs/findings/2026-09-25-nhm-airtime-spike.md` "Analog VTX and DJI O4" | not read | 30.8–31.6 fps, 0 gaps on every pass (disarmed 30 fps) |
 | DJI O4 co-channel, two-card GS (2026-09-26, O4 ch2 20 MHz, link home 153 = 149+153) | run 1 (candidates [161,144], `confirm_ms` 500): blocked `0x61/0x71` at onset but loss 0 for ~3 s (busy-but-healthy holds), order at 48 % loss → 161 +460 ms; O4 read 80 % on BOTH 144 and 153, 161 25–37 % → stuck lossy, 13 gaps/10 s. Run 2 ([161,112]): 161→112 clean escape, then a false `raised` on 112 ordered 153, **withdraw at 510 ms** with the drone already moved → **60 s split**. Run 3 ([161,112], `confirm_ms` 1000): order **152 ms** after the first blocked window, `lead_confirm` +468 ms, `verify_pass`, no further H | not read | run 3: 31.8 fps, 0 gaps, 0 incomplete on 161 |
 | channel-core extraction regression (2026-10-04, two-card GS, benchjam 250 fps / 1000 B / 6M at the lowest power step on op 64; `docs/channel-select.md` "Bench 2026-10-04 — channel core extraction") | `H order` → `lead_confirm` **+122 ms** → `verify_pass` +1009 ms (64→144), the same H/M sequence as before the refactor. At default jam power the jam leaked onto every channel: 144→64→40→112 via `verify_fail`, a hold on 112 until the jam stopped, then back to 64 with `verify_pass` | not read | 30.2 fps, 1 frame_id gap (181 ms before the order, jam loss), 0 incomplete over 60 s |
 | fade (no hop expected) | not run | n/a | not run |

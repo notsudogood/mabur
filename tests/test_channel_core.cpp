@@ -115,7 +115,7 @@ TEST(may_send_two_usb_drops_scout_card_unless_beaconing) {
   CHECK(g.core->snapshot(0).scout_gated_sends == 1);   // the gate counts
   // beaconing_/quiet_ are set and cleared again within one synchronous
   // run_once() call, so polling may_send() from the test body after the call
-  // returns can never observe either branch (see task-2-report.md). The
+  // returns can never observe either branch. The
   // production core instead reads the gate from another thread while the
   // scout thread is mid-dwell; the synchronous equivalent is Rig's sleep
   // callback, which samples the gate (gate_obs) from inside the scout's own
@@ -192,8 +192,8 @@ TEST(session_opened_with_key_mismatch_or_foreign_nonce_is_ignored) {
   CHECK(g.core->op() == 40);
 }
 
-// Carried from Task 2 (task-2-brief.md Step 1): needed step_scout_inputs_ --
-// the search request goes false once the plan is in session.
+// Needs step_scout_inputs_ -- the search request goes false once the plan
+// is in session.
 TEST(disc_targets_is_tx_when_scout_owns_nothing) {
   Rig g(2, 0, /*pinned=*/true, 40);
   g.tick(true, false, /*tx=*/1);  // linked: release_scout() false, search off
@@ -205,8 +205,9 @@ TEST(disc_targets_is_tx_when_scout_owns_nothing) {
 
 // The one-card prelude (auto): silent one_card_ms, then AckPrelude commits
 // the prelude ranking (no link) and the first op window runs. The link-edge
-// continuation ("one-card linked") is Task 4's own test once step_move_edge_
-// exists (step_move_edge_ is the only thing that can ever set link_edge_seen_).
+// continuation ("one-card linked") has its own test,
+// one_card_link_edge_freezes_one_card_linked (step_move_edge_ is the only
+// thing that can ever set link_edge_seen_).
 TEST(one_card_prelude_commits_before_first_disc) {
   Rig g(1, 0);
   g.cards[0]->cca_per_ms_on[40] = 5;   // 40 busy, the rest clean
@@ -235,7 +236,7 @@ TEST(two_card_no_link_commits_at_maturity) {
   CHECK(g.cards[0]->ch == g.core->op());
 }
 
-TEST(store_failure_is_logged_not_fatal) {   // Review Focus 2
+TEST(store_failure_is_logged_not_fatal) {
   Rig g(2, 0);
   g.store_ok = false;
   g.cards[1]->cca_per_ms_on[40] = 5; g.cards[1]->cca_per_ms_on[36] = 5;
@@ -293,7 +294,7 @@ TEST(mechanical_retune_skips_scout_card_and_follows_desired) {
   mabur::rc::DiscAck ack; ack.vrx_nonce = g.vrx->rz_nonce(); ack.vtx_nonce = 1; ack.agreed_channel = 64; ack.seq = 1;
   g.core->on_session_opened(ack, static_cast<double>(g.clk.ms));
   g.cards[1]->calls.clear();
-  // core->tick() directly (the brief's form); the check is specifically
+  // core->tick() directly; the check is specifically
   // for the CORE's mechanical "retune 64" on card 1 -- the scout's own
   // dwells retune through its own calls, which this tick does not count.
   g.core->tick(g.in(true));
@@ -357,8 +358,7 @@ static void interfere(Rig& g, int windows = 3, int tx = 0) {
 // Bring an AUTO rig to a frozen pick on 40 without a hop, so the reactive
 // layer is live exactly as in flight. Two cards: no dwell ever completes
 // (the scout card refuses to retune), so max_ms freezes op in place. One
-// card: link-up freezes it ("one-card linked"). The hop tests used pinned
-// rigs for this until 2026-10-04 (frozen from construction); pinned now
+// card: link-up freezes it ("one-card linked"). Not a pinned rig: pinned
 // means NO reactive hop.
 static void freeze_auto(Rig& g) {
   if (g.cards.size() >= 2) {
@@ -375,7 +375,7 @@ static void freeze_auto(Rig& g) {
 
 // Pinned = static. An interfered op produces a verdict (the OSD/sideport
 // still say the pin is dirty) but no order, no escape, no exhausted hold:
-// the controller is never fed a reactive trigger. Review Focus 1.
+// the controller is never fed a reactive trigger.
 TEST(pinned_two_card_never_hops_on_interference) {
   Rig g(2, 0, /*pinned=*/true, 40);
   link_up(g);
@@ -399,7 +399,7 @@ TEST(pinned_two_card_never_hops_on_interference) {
 }
 
 // Same on one card (the web GS shape): the one-card path has no scout, so
-// the only reactive source is the freshness burst + order. Review Focus 2.
+// the only reactive source is the freshness burst + order.
 TEST(pinned_one_card_never_hops_on_interference) {
   Rig g(1, 0, /*pinned=*/true, 40);
   link_up(g);
@@ -414,7 +414,7 @@ TEST(pinned_one_card_never_hops_on_interference) {
   CHECK(r->hop_ch == 0);
 }
 
-// Bench 2026-10-04 (row 9): the relocation onto pinned 40 landed, then one
+// Bench (row 9): the relocation onto pinned 40 landed, then one
 // verify window read the pin interfered (the 36-48 router) -> verify_fail,
 // "relocation to 40 did not land; staying on 40", holds 1. Pinned, the
 // relocation has nowhere else to go: the confirm lands it, no verify.
@@ -543,7 +543,7 @@ TEST(withdraw_on_no_video_restores_cards) {
   CHECK(g.core->op() == 40);
 }
 
-TEST(lead_card_dies_mid_order_withdraws_to_op) {   // Review Focus 1
+TEST(lead_card_dies_mid_order_withdraws_to_op) {
   Rig g(2, 0); freeze_auto(g);
   link_up(g);
   for (int i = 0; i < 5; ++i) g.tick(true);
@@ -577,7 +577,7 @@ TEST(session_loss_mid_order_withdraws) {
   CHECK(!g.core->hopping());
 }
 
-TEST(cal_running_holds_relocation_and_move_edge) {   // Review Focus 3
+TEST(cal_running_holds_relocation_and_move_edge) {
   Rig g(2, 0, true, 40);
   g.core->on_rc_body(64);
   mabur::rc::DiscAck ack; ack.vrx_nonce = g.vrx->rz_nonce(); ack.vtx_nonce = 1; ack.agreed_channel = 64; ack.seq = 1;
@@ -608,9 +608,9 @@ TEST(cal_running_holds_relocation_and_move_edge) {   // Review Focus 3
   for (int i = 0; i < 20; ++i) g.tick(true, false);
   CHECK(g.sink.has_line("maburgs channel: relocate 64 -> 40 placed"));
   CHECK(g.sink.has_hop("relocate"));
-  // Carried from plan 1: the edge released on the same tick as the relocate
-  // was DROPPED by the `!plan_.hopping()` guard. Now it is held through the
-  // hop and acted on once the hop resolves (here: confirm + verify_pass).
+  // The edge released on the same tick as the relocate must not be dropped
+  // by the `!plan_.hopping()` guard: it is held through the hop and acted
+  // on once the hop resolves (here: confirm + verify_pass).
   {
     const auto r = pump_rcf(g);
     REQUIRE(r.has_value() && r->hop_ch == 40);
@@ -641,14 +641,14 @@ TEST(cal_running_holds_relocation_and_move_edge) {   // Review Focus 3
 }
 
 TEST(relocate_lands_on_verify_pass_and_freezes_relocated) {
-  // Pinned, not auto: BootPick's own "op unmeasured" guard (final review
-  // I1, boot_pick.cpp) means an AUTO pick never relocates off a link found
-  // before any scouting -- "a linked scout never measures op's own pair,
+  // Pinned, not auto: BootPick's own "op unmeasured" guard (boot_pick.cpp)
+  // means an AUTO pick never relocates off a link found before any
+  // scouting -- "a linked scout never measures op's own pair,
   // so a drone found at once leaves op with only its pre-link visits. A
   // working link is not moved on a one-sided comparison." That freezes
   // auto mode's pick in place on 64 forever (confirmed: 200+ ticks never
   // produce the relocate), which is BootPick's deliberate design, not a
-  // gap this task's dispatch/controller code can or should route around.
+  // gap the dispatch/controller code can or should route around.
   // Pinned mode skips the pick entirely (open_ false from construction)
   // and goes straight to the relocation gate this test actually exercises
   // -- same as cal_running_holds_relocation_and_move_edge, carried through
@@ -671,7 +671,7 @@ TEST(relocate_lands_on_verify_pass_and_freezes_relocated) {
   CHECK(std::string(g.core->snapshot(0).scan_state) != "moving");
 }
 
-// Carried from plan 1: the AUTO boot hop. The scout measures op's pair to
+// The AUTO boot hop. The scout measures op's pair to
 // min_rounds BEFORE the drone appears on 64 (a linked scout never visits
 // op's own halves, so without that BootPick freezes "op unmeasured"), and
 // the link forms while the later pairs are still short of min_rounds (else
@@ -722,8 +722,7 @@ TEST(auto_want_pick_relocates_linked_drone_to_the_pick) {
   CHECK(!g.stored.empty() && g.stored.back() == target);   // the store follows op
 }
 
-// Carried from Task 3 (continuation deferred to Task 4): the move edge
-// (step_move_edge_) is what sets link_edge_seen_, which BootPick reads next
+// The move edge (step_move_edge_) is what sets link_edge_seen_, which BootPick reads next
 // tick as "one-card linked".
 TEST(one_card_link_edge_freezes_one_card_linked) {
   Rig g(1, 0);
@@ -768,7 +767,7 @@ TEST(inflight_step_skips_when_not_in_session_or_hopping_or_one_card) {
   h.core->run_inflight_step();
   h.tick(false);
   CHECK(!h.core->snapshot(0).dwell[1].has_value());   // no session: never dwells
-  // pinned two-card, linked: never dwells either (Review Focus 4)
+  // pinned two-card, linked: never dwells either
   Rig p(2, 0, /*pinned=*/true, 40);
   link_up(p);
   for (int i = 0; i < 10; ++i) p.tick(true);
@@ -798,12 +797,12 @@ TEST(snapshot_channel_is_the_given_tx_card) {
   CHECK(g.core->snapshot(1).channel == 112);
 }
 
-TEST(shutdown_joins_threads_and_is_idempotent) {   // Review Focus 5
+TEST(shutdown_joins_threads_and_is_idempotent) {
   // Real threads, real clock. Auto + LINKED, max_ms at its floor: the boot
   // scout thread measures for ~1 s, the pick freezes in place, the scout
   // parks, and the in-flight thread starts and dwells on the non-TX card
   // every dwell_period_ms; shutdown() must join both. (Pinned would start
-  // no in-flight thread at all since 2026-10-04.)
+  // no in-flight thread at all.)
   Config cfg = bundle();
   cfg.radio.channels = {40, 64}; cfg.radio.width = 40;
   cfg.radio.scan.max_ms = 1000;
@@ -853,7 +852,7 @@ TEST(relay_only_roster_searches_without_measuring) {
   CHECK(g.sink.picks.empty());                // no K line ever: nothing measured
 }
 
-// Bench 2026-10-04: web GS on a CPE relay, auto channel set -- the drone
+// Bench: web GS on a CPE relay, auto channel set -- the drone
 // linked, then sat in FAILSAFE. BootPick(false) never froze the scout, so
 // pick_open() stayed true, scout_owns_() stayed true for life, and the gate
 // dropped every RCF on the relay (the scout card) once search stopped
@@ -866,7 +865,7 @@ TEST(relay_only_roster_in_session_lets_rcfs_through) {
   CHECK(g.core->may_send(0));
 }
 
-TEST(relay_only_roster_no_ready_relay_is_quiet) {   // Review Focus 4
+TEST(relay_only_roster_no_ready_relay_is_quiet) {
   Rig g(0, 1);
   g.cards[0]->is_ready = false;
   for (int i = 0; i < 20; ++i) g.tick();
@@ -875,7 +874,7 @@ TEST(relay_only_roster_no_ready_relay_is_quiet) {   // Review Focus 4
   CHECK(g.cards[0]->calls.empty());           // scout never started (card not ready): nothing touched it
 }
 
-// ---- relay sweep (spec 2026-10-05-cpe-relay-hop) ----
+// ---- relay sweep (CPE relay hop) ----
 static SweepResult sweep_of(std::initializer_list<std::pair<uint8_t, uint16_t>> ch_busy) {
   SweepResult r;
   for (int pass = 0; pass < 2; ++pass)
@@ -916,7 +915,7 @@ TEST(relay_only_sweep_ranks_in_one_burst_then_hops) {
   CHECK(relay_dwells == 6);                        // 3 channels x 2 passes logged as D records
 }
 
-TEST(relay_only_sweep_timeout_allows_next_burst) {   // Review Focus 3
+TEST(relay_only_sweep_timeout_allows_next_burst) {
   Rig g(0, 1);
   freeze_auto(g);
   for (int i = 0; i < 5; ++i) g.tick(true);
@@ -938,7 +937,7 @@ TEST(relay_only_sweep_timeout_allows_next_burst) {   // Review Focus 3
   CHECK(g.cards[0]->sweeps.size() == 2);           // relay_burst_period_ms (1000) has passed
 }
 
-// Fix round 1: a lost SCAN / SCAN_RESULT. RemoteCard::sweeping() stays true
+// A lost SCAN / SCAN_RESULT. RemoteCard::sweeping() stays true
 // until a matching result, the next start_scan or a reopen -- so the fake
 // keeps sweep_in_flight set throughout. The verdict must not skip the relay
 // on the card's own flag past the core's timeout, or a one-card roster
@@ -956,7 +955,7 @@ TEST(relay_lost_scan_result_does_not_blind_the_verdict) {
   CHECK(g.cards[0]->sweeps.size() == 2);           // interfered verdicts again -> the next SCAN
 }
 
-// Fix round 1: a sweep pending across a session drop. On reconnect an
+// A sweep pending across a session drop. On reconnect an
 // expired sweep is a timeout; a result that sat on the card meanwhile is
 // taken and discarded, never ranked with the reconnect's timestamp.
 TEST(relay_sweep_expired_across_session_drop_discards_late_result) {
@@ -1010,7 +1009,7 @@ static void rebuild_with_set(Rig& g, std::vector<uint8_t> set) {
       [&g](int ms) { g.clk.sleep(ms); });
 }
 
-TEST(relay_only_single_member_set_sends_no_scan) {   // Review Focus 4
+TEST(relay_only_single_member_set_sends_no_scan) {
   Rig g(0, 1);
   rebuild_with_set(g, {40});
   link_up(g);
@@ -1053,7 +1052,7 @@ TEST(relay_plus_usb_tx_usb_lets_the_relay_sweep) {
   CHECK(!usb_retuned_off_op);                      // the USB TX card never left the link
 }
 
-// Final review item 4: the sweep timeout is derived from the request --
+// The sweep timeout is derived from the request --
 // max(1000, passes * n * (observe_ms + 40) + 300). An 8-member set sweeps 7
 // channels x 2 passes x 60 ms + 300 = 1140 ms: a pending SCAN must NOT time
 // out at 1000 ms.
@@ -1085,7 +1084,7 @@ TEST(relay_sweep_timeout_scales_with_the_request) {
   CHECK(g.core->sweep_timeouts() == 1);
 }
 
-// Final review item 1: relay + USB with the relay down (booting / not owned)
+// Relay + USB with the relay down (booting / not owned)
 // and the USB card transmitting. The dead relay must not take the burst:
 // the USB TX card bursts (pick rule 3), no SCAN is attempted.
 TEST(relay_plus_usb_relay_not_ready_usb_tx_bursts) {
@@ -1106,7 +1105,7 @@ TEST(relay_plus_usb_relay_not_ready_usb_tx_bursts) {
   CHECK(usb_dwells > 0);                           // the USB TX card burst
 }
 
-// Final review item 2: relay + USB, the relay transmits, the USB card is
+// Relay + USB, the relay transmits, the USB card is
 // the spare: the USB card bursts (pick rule 1), no SCAN.
 TEST(relay_plus_usb_usb_spare_bursts) {
   Rig g(1, 1);
@@ -1124,7 +1123,7 @@ TEST(relay_plus_usb_usb_spare_bursts) {
   CHECK(usb_dwells > 0);
 }
 
-// Final review item 3: while the relay sweeps, the TX selector must not
+// While the relay sweeps, the TX selector must not
 // move TX onto it -- the sweep freezes the TX selection like a dwell.
 TEST(tx_frozen_while_relay_sweeps) {
   Rig g(1, 1);

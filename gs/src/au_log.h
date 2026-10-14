@@ -15,7 +15,7 @@ namespace maburgs {
 // and no rows lost to a reader overrun.
 //
 // Format (`# aulog 5`), 16 columns -- the aulog 4 twelve plus 4 trailing
-// slice-salvage columns (spec 2026-10-10-h265-slices §5.6), all 0 for an
+// slice-salvage columns, all 0 for an
 // unsplit/complete-unsplit AU:
 //   t_us pts sid fid len flags nal0 t_first t_complete enc dq air
 //   slices kept filled after_hole

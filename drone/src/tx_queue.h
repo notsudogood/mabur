@@ -16,8 +16,8 @@ namespace mabur {
 // — a bounded-latency, FEC-recoverable erasure the receiver's overhead
 // absorbs. Without this stage the backlog landed in the waybeam SHM ring,
 // whose overflow makes the RTP packetizer abort NALs mid-chain
-// (sender-side slice truncation, invisible to seq-gap accounting — bench
-// 2026-07-13, the PixelPilot glitch root cause).
+// (sender-side slice truncation, invisible to seq-gap accounting — bench:
+// the PixelPilot glitch root cause).
 class TxQueue {
  public:
   explicit TxQueue(size_t cap) : cap_(cap) {}
@@ -57,8 +57,8 @@ class TxQueue {
     if (signal) cv_.notify_one();
   }
 
-  // fec-nack (spec 2026-10-05 §4.2): a retransmit body jumps the line -- it is
-  // the one the GS is waiting on -- and wakes the consumer at once. May
+  // fec-nack: a retransmit body jumps the line -- it is the one the GS is
+  // waiting on -- and wakes the consumer at once. May
   // exceed cap_ by the retransmit count (never drops video for it). Marks
   // the body retx; push() overflow skips the retransmits at the head.
   void push_front(UepBody&& b) {
@@ -102,9 +102,9 @@ class TxQueue {
     return n;
   }
 
-  // Drops everything currently queued without closing the queue (Task 11
-  // video quiesce: pre-calibration video bodies must not trickle out mixed
-  // with sweep frames once the TX writer thread switches to draining
+  // Drops everything currently queued without closing the queue
+  // (calibration video quiesce: pre-calibration video bodies must not trickle
+  // out mixed with sweep frames once the TX writer thread switches to draining
   // cal_sweep.pump() instead of this queue). Distinct from close(): the
   // queue keeps accepting pushes (there are none while the hot thread is
   // itself quiesced, but nothing here should assume that) and pop_batch

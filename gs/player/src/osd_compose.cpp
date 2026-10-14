@@ -181,7 +181,7 @@ OsdComposeOut OsdComposer::compose(int idx, const Surface& s, const OsdComposeIn
                                     geom_changed ? &gs_rects_ : nullptr);
 
     // A changed card count is the only thing that moves a GS box after
-    // layout(), and GsOverlay erases a box it is about to vacate. That erase
+    // layout(), and the bar erases a box it is about to vacate. That erase
     // goes straight through to the MSP glyphs underneath, and shadow_[idx]
     // still records those cells as painted -- so without this the flight OSD
     // keeps a transparent hole the shape of a card row until whatever text

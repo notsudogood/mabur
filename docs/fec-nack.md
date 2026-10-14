@@ -1,8 +1,9 @@
 # Software NACK: base-layer selective repeat on top of the FEC
 
 Spec: `docs/superpowers/specs/2026-10-05-fec-nack-design.md` (gitignored;
-this page is the committed, as-built record). Spike and its bench numbers:
-`docs/fec-nack-spike-findings-2026-10-05.md`. RC_VERSION 15.
+this page is the committed, as-built record). Spike:
+`docs/findings/2026-10-05-fec-nack-spike.md`; as-built bench gate:
+`docs/findings/2026-10-06-fec-nack-bench.md`. RC_VERSION 15.
 
 ## What it is
 
@@ -16,7 +17,7 @@ as loss for every ladder input, so the ladder demotes exactly as it would
 without the NACK. Base layer only; the wire carries a `sid` byte so enh can
 follow, but the drone refuses any `sid != 0` today.
 
-**Scope: `maburgs` and the web GS in GS mode.** Since 2026-10-06 the
+**Scope: `maburgs` and the web GS in GS mode.** The
 browser GS (`web/`, `docs/web-gs.md` "Software NACK") runs the same
 `NackTracker` over the same decoder, FrameStream and ladder, sent directly
 through its one card; its Config form's "Retransmit (NACK)" switch is the
@@ -47,8 +48,8 @@ link-pairing SipHash (`rc::verify_control` finds it at
 `stream_id` byte (`common/include/mabur/sbi.h`). `sbi_peek_stream_id` and
 the per-layer decoder read the low 7 bits (`kSbiStreamIdMask`), so a retx
 body routes as plain sid 0; `sbi_unpack` exposes `retx`, and the decoder's
-accounting and the latency anchor read it. Header layout and `SBI_VER`
-unchanged.
+accounting and the latency anchor read it. The mark needs no other header
+field and no `SBI_VER` change.
 
 **Telem** (+6 bytes, `TELEM_LEN` 48 → 54): `u16 nack_rx, retx_syms,
 retx_refused`, per Telem period, saturating:
@@ -60,8 +61,8 @@ retx_refused`, per Telem period, saturating:
 - `retx_refused` — symbols the air bucket refused. A refused symbol is
   never queued; nothing waits for tokens.
 
-**RC_VERSION 14 → 15** (2026-10-06): T_NACK's final layout and the Telem
-resize. Both-ends flag day (`docs/deploy.md`). DiscAck is unchanged.
+**RC_VERSION 15** carries T_NACK's layout and the 54-byte Telem; a pair on
+different RC_VERSIONs has no control link ("Deploy" below).
 
 ## GS: NackTracker
 
@@ -108,14 +109,13 @@ estimate (it is a property of the link, not of the session).
 again, up to `max_tries` (2). A frame carrying any second-try seq sets the
 repeat flag. `max_tries = 0` is observe-only: lateness stats, no sends.
 
-**Minimum lead** (2026-10-06, after flight 0026). A request, first try or
+**Minimum lead.** A request, first try or
 repeat, is withheld when `now + min_lead_ms` (12) is past the entry's
 deadline: the answer could not land in time, and in a demote cascade such
 deadline-doomed seqs were packed first (ascending) and ate the drone's air
 bucket ahead of seqs that could still have been filled. The entry is dead
 on the spot and counts `lead_skipped` (per seq); it books
-`dropped_deadline` later only if it had been requested before. The
-flight's fill p50 was 11 ms, the bench's 10.
+`dropped_deadline` later only if it had been requested before.
 
 **Deadline.** An entry still Unknown `gap_ms(0)` after `t0` is **dead**:
 never requested again. `gap_ms(0)` is the rate-aware sid-0 frame gap
@@ -162,8 +162,6 @@ max_tries = 2        # 0..16; 0 = observe only
 min_lead_ms = 12     # 1..100; withhold a request this close to the deadline
 ```
 
-The removed spike keys `settle_ms` and `slotted` fail boot.
-
 ## Drone: ring, handler, bucket
 
 **RetxRing** (`common/include/mabur/retx_ring.h`). Fixed slots of one
@@ -208,11 +206,12 @@ miss.
 **Bucket** (`drone/src/nack_bucket.h`). Tokens are symbols. Depth is
 `nack.burst_ms` (20) of air at the current op's delivered sid-0 rate,
 re-set at every verified NACK (`TokenBucket::depth_for`; growing it only
-raises the ceiling, shrinking it clamps what is held): about 44 symbols at
-mcs0/20, 146 at mcs1/40, 450 at mcs4/40. Until 2026-10-06 the depth was a
-fixed 64 symbols, 4 ms of air at rung 5 and 30 ms at rung 0, and flight
-0026 refused 49 % of what it was asked, two thirds of it at rungs 0-1 in
-demote cascades. Tokens start full at 64. Refilled at each verified NACK at
+raises the ceiling, shrinking it clamps what is held): about 75 symbols at
+mcs0/40, 146 at mcs1/40, 433 at mcs4/40 with the bundle's efficiency
+tables. A fixed symbol depth would be a few ms of air at the top rung and
+tens of ms at the bottom one, refusing most of a demote cascade's requests;
+sizing it in air time keeps the burst equal at every rung. Tokens start
+full at 64 (before the first op is known). Refilled at each verified NACK at
 
 ```
 rate = delivered_mbps(op.ladder[0]) × 1e6/8 / 346 B × nack.air_pct/100   symbols/s
@@ -299,18 +298,18 @@ on both GS cards, the drone's carrier sense defers to the jammer, and the
 uplink NACK goes through the same air.
 
 **Calibrate** the frame rate per bench geometry, at the pinned rung, 60 s
-per step, until the control shows ~30 base abandoned symbols/min (spec §8).
-2026-10-05 at pinned mcs2/40: 60 and 120 fps → 0 base abandoned/min; 180 →
-86 base + 1 434 enh; 250 → 979 base.
+per step, until the control shows ~30 base abandoned symbols/min (spec §8);
+the calibration runs so far are in the findings records below.
 
 **Arms** (`tools/bench/nack/`): `cfg/A0_control.toml` (`[link.nack]
 enable = false`) and `cfg/A1_nack.toml` (`enable = true`, lookback 256,
 repeat_ms 16, max_tries 2), both the GS's live config pinned at
 `static_mcs 2` / `static_bw 40` / `static_overhead_base 0.5` /
-`static_overhead_enh 0.25` with `debug_log.enable`. Stage the as-built
-`out/arm64/maburgs` as `GSBIN` (default `/usr/local/bin/maburgs.fecnack`)
-before the arms; the spike's `maburgs.nack` speaks the RC 14 spike wire
-and gets no link to an RC 15 drone, yet still writes a session. Stop `S96maburgs`,
+`static_overhead_enh 0.25` with `debug_log.enable`; `cfg/F0_control.toml` /
+`cfg/F1_nack.toml` are the same pair with the ladder adaptive
+(`static_mcs = -1`) for the fade arm. Stage the build under test
+(`out/arm64/maburgs`) as `GSBIN` (default `/usr/local/bin/maburgs.fecnack`)
+before the arms. Stop `S96maburgs`,
 stage the configs in `/tmp/cfg/` on the GS, run `runjam.sh` (each ssh
 retries 18 × 5 s because the jammer disturbs the GS's management Wi-Fi;
 an arm whose restart did not write a new `/tmp/mabur-session` aborts the
@@ -329,14 +328,9 @@ feedback period of a control run; `suppressed` rises during pulses;
 `retx_refused` bounded; fills visible at the lower rung after each pulse.
 *Loss-sim* (secondary): `s0 eff=1.5 burst=4`, same criteria.
 
-**Spike result** (findings page; spike wire, fixed settle): under the
-jammer at 180 fps, 300 s, control 256 truncated / 124 dropped AUs / 569
-base abandoned symbols vs NACK (settle 12) 14 / 7 / 0 and (settle 6)
-12 / 3 / 0; fill ms p50/p90/max 15/24/46 (settle 12, whole run) and
-14/25/46 (settle 6); repeats 15–19 % of requests;
-wasted 19 % (settle 12) and 34 % (settle 6); `air_pct` 52.6–53.0 in every
-arm. Under loss-sim the direct NACK took truncated AUs 314 → 8 and dropped
-50 → 0 for ~86 kb/s of retransmit air.
+Bench records: spike `docs/findings/2026-10-05-fec-nack-spike.md`;
+as-built gate against these criteria
+`docs/findings/2026-10-06-fec-nack-bench.md`.
 
 ## Changes on notsudogood/mabur (2026-10-10)
 
@@ -475,12 +469,12 @@ in 126.
   that failed its tag or counter, a corrupted one is invisible, and so is
   a ring miss.
 
-## Deploy and rollback
+## Deploy
 
-RC_VERSION 15 is a flag day: deploy both ends together (`docs/deploy.md`).
-New keys: binary before config. Turning the feature off is config-only on
-the GS (`[link.nack] enable = false`, the shipped default) and needs no
-drone change: a drone that is never asked never re-sends. Reverting the
-binaries means both ends (RC_VERSION) and both configs: a pre-NACK build
-fails boot on `[nack]` / `[link.nack]` (strict keys), so restore each
-`.pre-nack` binary with a config that lacks those sections.
+RC_VERSION 15 is a flag day: `maburd` and `maburgs` must both run it (a
+mismatched pair has no control link), so swap the two back to back. On each
+end the binary goes in before a config that carries `[nack]` /
+`[link.nack]` — a build without those keys fails boot on them (strict
+keys). Turning the feature off is config-only on the GS (`[link.nack]
+enable = false`, the shipped default); a drone that is never asked never
+re-sends.

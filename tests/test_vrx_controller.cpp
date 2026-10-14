@@ -8,7 +8,7 @@ using namespace maburgs;
 
 static LadderCfg default_ladder() {
   LadderCfg lcfg;
-  // Same-rate-fixed-pairs (Task 4): overhead_enh set explicitly (equal to
+  // Same-rate-fixed-pairs: overhead_enh set explicitly (equal to
   // overhead_base) rather than left at the struct default, since
   // op_from_rung() now feeds it straight into the RCF's enh field.
   lcfg.ladder = {{0, 1.0, 1.0}, {2, 0.5, 0.5},  {4, 0.25, 0.25},
@@ -28,7 +28,7 @@ static LinkHealth healthy() { return LinkHealth{true, 0.0, 0.0, false}; }
 static LinkHealth no_data() { return LinkHealth{false, 0.0, 0.0, false}; }
 
 // Accept an unflagged DiscAck for this controller's vrx_nonce: the only way
-// into SESSION (link-pairing spec 2026-10-01 §6) -- no RCF goes out before it.
+// into SESSION (link pairing) -- no RCF goes out before it.
 static void link(VrxController& vrx, double now, uint32_t vtx = 0xBEEF0001) {
   mabur::rc::DiscAck ack;
   ack.vrx_nonce = vrx.rz_nonce();
@@ -62,7 +62,7 @@ TEST(rcf_pacing_and_keepalive_disc) {
   CHECK(disc == 5);                // keep-alive at 1000 ms: t=500,1500,2500,3500,4500 (fix a)
 }
 
-// Bench 2026-09-26 (GS session 0232, escape 144 -> 112): the drone took the
+// Bench (GS session 0232, escape 144 -> 112): the drone took the
 // hop order from an RCF, then processed a keep-alive DISC it had received on
 // the OLD channel just after it -- proposal 144 != its new channel 112 ->
 // a "disc" retune straight back, and GS and drone sat apart ~33 s until
@@ -214,7 +214,7 @@ TEST(disc_ack_feeds_rendezvous) {
 
 // peer_caps() surfaces the most recently accepted DiscAck's chip_caps (0
 // before any accept), so main.cpp's core loop can gate the frame-wire tail
-// on the peer's advertised CAP_FRAME_WIRE bit (Task 10).
+// on the peer's advertised CAP_FRAME_WIRE bit.
 TEST(peer_caps_captured_from_disc_ack) {
   auto vrx = make();
   CHECK(vrx.peer_caps() == 0);
@@ -232,8 +232,7 @@ TEST(peer_caps_captured_from_disc_ack) {
 // peer_acked() separates "no DiscAck yet" from "peer advertised caps == 0".
 // Both read peer_caps() == 0, so without
 // this main.cpp cannot tell a fresh start from a pre-frame-wire drone — it
-// logged "upgrade maburd" at every maburgs startup (caught on the rig
-// 2026-07-25).
+// logged "upgrade maburd" at every maburgs startup (caught on the rig).
 TEST(peer_acked_false_until_a_disc_ack_is_accepted) {
   auto vrx = make();
   CHECK(!vrx.peer_acked());
@@ -256,9 +255,8 @@ TEST(peer_acked_false_until_a_disc_ack_is_accepted) {
 // T_TELEM frames are drone->GS display-only telemetry, not rendezvous
 // traffic: on_rc_frame must tolerate the unknown (to it) frame type and
 // leave rendezvous/link state completely untouched. GS routes T_TELEM to a
-// separate holder before it ever reaches on_rc_frame (Task 3), but the
-// controller itself must not choke if it ever sees one. Spec 2026-07-26
-// drone-telemetry.
+// separate holder before it ever reaches on_rc_frame, but the
+// controller itself must not choke if it ever sees one.
 TEST(on_rc_frame_tolerates_unknown_type_telem) {
   auto vrx = make();
   vrx.step(1500, no_data());  // silence -> BEACONING, seq_ advances
@@ -513,7 +511,7 @@ TEST(key_mismatch_sends_no_rcf_and_reports) {
   CHECK(!vrx.peer_acked());
 }
 
-// Final review C1 addendum A: a DISC proposes the channel it is sent on.
+// A DISC proposes the channel it is sent on.
 // The rewritten copy must still verify under the key (the drone drops an
 // untagged DISC as a wrong-key GS) and keep every other field.
 // Revert (send the op copy everywhere): the burst copy proposes 136.
@@ -541,7 +539,7 @@ MTEST_MAIN
 
 // (c) Starvation guard: a decode-collapse window (zero completed base-layer
 // packets) must force the ladder to its failsafe rung (0) regardless of any
-// other health field — bench 2026-07-12: at NLOS range the old SNR
+// other health field — bench: at NLOS range the old SNR
 // estimator read high off a trickle of survivor frames and pinned an
 // aggressive op with video frozen indefinitely. LadderController::update
 // forces rung 0 unconditionally on video_starved (ladder_controller.cpp
@@ -574,7 +572,7 @@ TEST(starved_health_forces_ladder_rung_zero_and_recovers) {
 
   // Collapse phase: a SUSTAINED starved run forces rung 0 (single starved
   // windows are debounced by starved_confirm_ms=300 — the op-switch FEC
-  // re-key glitch, hw 2026-07-27). 45 x 10 ms = 450 ms > 300 ms.
+  // re-key glitch seen on hw). 45 x 10 ms = 450 ms > 300 ms.
   std::optional<VrxController::Out> out;
   LinkHealth starved{true, 0.0, 0.0, /*video_starved=*/true};
   for (int i = 0; i < 45 && vrx.ctl().rung() != 0; ++i) {
@@ -630,7 +628,7 @@ TEST(static_pin_overrides_controller) {
   CHECK(std::abs(r->fec_overhead_enh - 0.4) < 1e-9);
 }
 
-// --- link.probe byte in the RCF head (spec 2026-09-04 sections 4.2, 5) -----
+// --- link.probe byte in the RCF head ---------------------------------------
 
 // Drives the link into SESSION with a DiscAck, then steps until an RCF is
 // emitted; returns the parsed RCF.
@@ -676,7 +674,7 @@ TEST(pinned_link_can_probe_a_fixed_mcs) {
         mabur::rc::encode_profile(mabur::rc::PhyMode::HT, 5, 20));
 }
 
-// ---- per-rung width (2026-09-24) ------------------------------------------
+// ---- per-rung width -------------------------------------------------------
 
 static LadderCfg bw40_ladder() {
   LadderCfg lcfg;
@@ -724,7 +722,7 @@ TEST(static_pin_carries_pin_bw) {
   CHECK(r.probe_profile == mabur::rc::encode_profile(mabur::rc::PhyMode::HT, 4, 40));
 }
 
-// --- Task 8: hop plumbing (spec 2026-09-14 in-flight channel hop) ---
+// --- hop plumbing (in-flight channel hop) ---
 
 // set_hop() is carried in EVERY RCF from then on, defaulting to 0/0 (no
 // order ever issued) until the first call.
@@ -771,7 +769,7 @@ TEST(restore_rung_rcf_in_the_same_tick_carries_restored_profile) {
   // Bring the link up for real first (accepts the DiscAck, and a genuine
   // ctrl_.update() stamps the ladder's last_feedback_ms_): restore_rung on
   // a controller that has never once been fed real feedback is not a
-  // scenario Task 11's HopController produces, and on_tick()'s blind-side
+  // scenario the HopController produces, and on_tick()'s blind-side
   // timeout (measured off that never-stamped default) would otherwise
   // force rung 0 right back on the very first tick.
   auto r0 = first_rcf(vrx, healthy(), t);

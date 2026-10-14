@@ -9,10 +9,10 @@ namespace mabur::rc {
 // Byte-exact port of devourer's tools/precoder/rc_proto.py
 // (encode_profile/decode_profile/DEFAULT_PROFILE_TABLE) and
 // tools/precoder/adaptive_link.py (ladder_spec) and
-// tools/precoder/energy_model.py (phy_rate_mbps rate tables). The per-seq
-// bandwidth-probe schedule was removed 2026-07-27 (SDD ladder-controller
-// Task 5): the ladder controller never varies bw independently of the
-// commanded rung, so probing alternate widths per seq had no consumer left.
+// tools/precoder/energy_model.py (phy_rate_mbps rate tables). There is no
+// per-seq bandwidth-probe schedule: the ladder controller never varies bw
+// independently of the commanded rung, so probing alternate widths per seq
+// would have no consumer.
 
 enum class PhyMode : uint8_t { HT, VHT };
 
@@ -33,10 +33,10 @@ void decode_profile(uint8_t p, PhyMode& mode, uint8_t& mcs, uint8_t& bw);
 
 // Builds the 2-slot ladder (BASE, ENH) for a (mode, scored mcs, bw)
 // operating point. Both slots ride the scored mcs — same-rate, UEP is
-// per-layer FEC overhead only (2026-08-30 ruling, see the comment on the
-// definition). Both slots carry STBC, and LDPC unless `ldpc` is false
-// (drone radio.ldpc, 2026-10-02: an RTL8821AU GS cannot decode HT-LDPC;
-// flags-off measured 2-3 dB weaker at the same MCS, so true is the default).
+// per-layer FEC overhead only (see the comment on the definition). Both
+// slots carry STBC, and LDPC unless `ldpc` is false (drone radio.ldpc: an
+// RTL8821AU GS cannot decode HT-LDPC; flags-off measured 2-3 dB weaker at
+// the same MCS, so true is the default).
 std::array<LayerTxSpec, 2> ladder_from(PhyMode mode, uint8_t mcs, uint8_t bw,
                                        bool ldpc = true);
 

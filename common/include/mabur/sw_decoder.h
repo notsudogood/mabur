@@ -11,14 +11,14 @@
 
 namespace mabur {
 
-// Per-envelope transition-boundary hint for loss attribution (spec
-// 2026-08-14-fec-generation-attribution-design.md). kPre = the air frame
-// carrying this envelope was heard at a pre-transition PHY rate (provably
-// old-op, however late it arrived); kPost = heard at the expected
-// post-transition rate; kNone = no boundary armed or rate unknown.
+// Per-envelope transition-boundary hint for loss attribution (FEC-generation
+// attribution). kPre = the air frame carrying this envelope was heard at a
+// pre-transition PHY rate (provably old-op, however late it arrived); kPost =
+// heard at the expected post-transition rate; kNone = no boundary armed or
+// rate unknown.
 enum class SwBoundary : uint8_t { kNone = 0, kPre, kPost };
 
-// One loss episode (fec.log gauge, 2026-09-15): a run of source seqs the
+// One loss episode (fec.log gauge): a run of source seqs the
 // channel never delivered directly, grouped with any other such run within
 // one repair window of it (they compete for the same repairs). Final at
 // horizon eviction, so `missing` counts only seqs whose direct copy never
@@ -70,7 +70,7 @@ class SwDecoder {
   // clean: the carrying body's FCS verdict (ArrivalTracker::on_source);
   // decode is identical either way, only arr_salvage_only depends on it.
   // retx: the carrying body is a NACK retransmit (kSbiRetxMark). It fixes
-  // the video only (spec 2026-10-05 option A): never touches the arrival
+  // the video only: never touches the arrival
   // tracker, counts syms_retx (not delivered, not recovered), and a retx of
   // a seq already known changes nothing.
   std::vector<std::vector<uint8_t>> add_symbol(const uint8_t* env, size_t len,
@@ -93,7 +93,7 @@ class SwDecoder {
   // repair merely won an arrival race, the channel did deliver the symbol.
   // Loss metrics must treat these as arrived — recovered alone reads a
   // reorder-heavy healthy link as lossy (2x-parity rung 0 measured 19-26%
-  // phantom pre-FEC loss on a clean bench, 2026-07-27).
+  // phantom pre-FEC loss on a clean bench).
   uint64_t syms_recovered_arrived() const { return syms_recovered_arrived_; }
   uint64_t syms_abandoned() const { return syms_abandoned_; }
   // Symbols first made known by a retransmit body, and of those, how many
@@ -119,7 +119,7 @@ class SwDecoder {
   // closed episode is dropped.
   static constexpr size_t kMaxQueuedEpisodes = 1024;
   std::vector<LossEpisode> take_episodes();
-  // Arrival-time pre-FEC accounting (ArrivalTracker, spec 2026-09-05):
+  // Arrival-time pre-FEC accounting (ArrivalTracker):
   // expected = seq advance past the settle line, arrived = heard; stale
   // twins follow the same watermark boundary abandonment uses.
   uint64_t arr_expected() const { return arr_.expected(); }
@@ -128,9 +128,8 @@ class SwDecoder {
   uint64_t arr_arrived_stale() const { return arr_.arrived_stale(); }
   uint64_t arr_late() const { return arr_.late(); }
   uint64_t arr_salvage_only() const { return arr_.salvage_only(); }
-  // The ArrivalTracker guard this decoder was constructed with (spec
-  // 2026-09-23 tx-windows §5.2). ArrivalTracker::kDefaultGuard if the
-  // constructor's arrival_guard arg was 0.
+  // The ArrivalTracker guard this decoder was constructed with.
+  // ArrivalTracker::kDefaultGuard if the constructor's arrival_guard arg was 0.
   uint32_t arrival_guard() const { return arr_guard_; }
   uint64_t symbols_in() const { return symbols_in_; }
   // Highest virtual seq seen or implied — its ADVANCE rate is the stream's
@@ -161,7 +160,7 @@ class SwDecoder {
   // spanning a missing seq adds one independent row. O(live known seqs).
   uint64_t deficit() const;
 
-  // SPIKE 2026-10-05 (fec-nack): wire seqs in (newest - lookback, newest)
+  // fec-nack: wire seqs in (newest - lookback, newest)
   // that are above the live floor and not known (neither delivered nor
   // repair-recovered) -- the decoder's current erasure set, ascending.
   std::vector<uint32_t> missing_sources(uint32_t lookback) const;

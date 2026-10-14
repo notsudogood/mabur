@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Scene-change overshoot from a PASSIVE tools/bench/vencprobe capture
 (`vencprobe --cycles 0 --duration MS`), for the bench plan in
-docs/handover-venc-overshoot-2026-09-03.md.
+docs/findings/2026-09-03-handover-venc-overshoot.md.
 
 The flight data (1 Hz telemetry) showed the SigmaStar CBR encoder running
 10-40 % over its commanded bitrate for the first second of motion after a
@@ -34,7 +34,7 @@ Cycle detection, two triggers OR'd:
                  (the flight-0011 shape: 4.9 Mb/s static, then motion)
   steady->burst  the 100 ms rate exceeds burst_frac x programmed after
                  >= 1 s of the trailing-1 s rate inside +-10 % of it
-                 (the bench lens-uncover shape, 2026-09-03: CBR spends its
+                 (the bench lens-uncover shape: CBR spends its
                  whole budget even on a covered lens, so there is no quiet
                  deficit, and the scene cut still costs one 6x frame)
 Each cycle also reports the largest frame and how many frames exceeded
@@ -98,9 +98,9 @@ class Cycle:
 
 def load(fh):
     """vencprobe CSV -> (frames, polls, cmds). Polls carry qp=None unless the
-    capture has the short-lived 3rd column (a few hours on 2026-09-03; it
-    always read 0 — this SDK has no encoder-QP readback, so the column and
-    the daemon plumbing behind it were removed the same day)."""
+    capture has the short-lived 3rd column (early captures only; it always
+    read 0 — this SDK has no encoder-QP readback, so the column and the
+    daemon plumbing behind it were removed)."""
     frames, polls, cmds = [], [], []
     bad = 0
     for line in fh:
@@ -388,7 +388,7 @@ def transitions(frames, polls, prm: Params, t_first=None):
     the largest frame. This is the promote/demote question: when the
     budget rises, does the RC dump the window it was held under
     (the 25.7 Mb/s catch-up second seen when the SuperFrame cap was
-    loosened, 2026-09-03), and when it falls, how long does the stream
+    loosened), and when it falls, how long does the stream
     overshoot the new command."""
     if len(frames) < 10 or len(polls) < 2:
         print("no polls to find transitions in")

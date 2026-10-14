@@ -16,7 +16,7 @@ only, so anything that must survive belongs here instead.
 `maburcal` supersedes `bench/txagcbench/`, deleted 2026-09-10. The
 measurement *history* that tool produced — the wall table, the transfer
 curve, the comb finding — is still current hardware fact and lives on in
-`docs/txagc-calibration.md`; only the tooling for producing a *new* unit's
+`docs/findings/2026-07-16-txagc-calibration.md`; only the tooling for producing a *new* unit's
 numbers moved.
 
 Run `maburcal` with `[radio] relays = []`: a CPE510 relay card's sweep
@@ -81,7 +81,7 @@ always, LDPC per the drone's `radio.ldpc` (`rc::ladder_from`,
 flags **off**, a frame nothing flies. Width stays 20 MHz: the per-rate
 table serves both widths, and with the flight flags the 20 MHz wall was
 the lower of the two at every MCS on the bench, so a 20 MHz sweep can only
-under-drive a 40 MHz rung (`docs/bw40-sweep-findings-2026-09-23.md`,
+under-drive a 40 MHz rung (`docs/findings/2026-09-23-bw40-sweep.md`,
 *TX-power walls*).
 
 **What changes when you rerun, and the catch.** On the one bench unit the
@@ -93,7 +93,7 @@ measures. What it cannot see is EVM: past the old (flags-off) wall the PA
 is already compressing, and the flags only make the frame *tolerate* the
 distortion (coding and diversity gain). Some of the extra drive may buy
 nothing at range. That question is open
-(`docs/bw40-sweep-findings-2026-09-23.md`, finding 4), and two more side
+(`docs/findings/2026-09-23-bw40-sweep.md`, finding 4), and two more side
 effects follow. STBC drives the second PA chain, so sweep RSSI peaks run
 ~5 dB higher and `saturated` fires sooner at a given distance (walls then
 read low, the safe direction). And the walls are not comparable with any
@@ -499,7 +499,7 @@ exactly as before.
 
 Why those three conditions, and the risk they carry: the rule extends a
 run across a failed cell, which is the overdriving direction. Past a real
-wall the bench data (`docs/txagc-calibration.md`, 100-frame cells) shows
+wall the bench data (`docs/findings/2026-07-16-txagc-calibration.md`, 100-frame cells) shows
 deep dips — 63 %, 32 %, 4 %, 1 % — that the 75 % bar refuses. The one
 measured island of good delivery past a wall (mcs6, 95–97 % at idx 53–57)
 is 5 indices wide, narrower than the two coarse cells (8 indices) the

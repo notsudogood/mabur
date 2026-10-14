@@ -143,7 +143,7 @@ bool RcAgent::verify_cal_frame(const uint8_t* body, size_t len, bool sweep_runni
     }
   }
   if (ok && rc::frame_type(body, len) == rc::T_CAL_CMD) {
-    // In-session freshness (spec 2026-10-01 §5): a cal nonce already seen
+    // In-session freshness: a cal nonce already seen
     // in this session, other than the running one, is a replay.
     if (auto c = rc::parse_cal_cmd(body, len)) {
       if (!have_cal_current_ || c->nonce != cal_current_) {
@@ -176,12 +176,12 @@ void RcAgent::note_arm_state(bool armed, uint64_t now_ms) {
   arm_report_.store(((now_ms + 1) << 1) | (armed ? 1u : 0u), std::memory_order_relaxed);
 }
 
-// Spec 2026-09-20 §2. Runs once per tick, after the BOOT branch. Unpacks
-// the latest arm report, latches ARMED forever, recomputes whether the
-// low-power operating point is wanted, and on a change runs the policy
-// with force in ANY state -- pre-link RENDEZVOUS on the ground is exactly
-// when this mode matters. "Fresh" tolerates a report stamped a little
-// AFTER this tick's clock: the MSP thread stamps on its own read.
+// Runs once per tick, after the BOOT branch. Unpacks the latest arm report,
+// latches ARMED forever, recomputes whether the low-power operating point
+// is wanted, and on a change runs the policy with force in ANY state --
+// pre-link RENDEZVOUS on the ground is exactly when this mode matters. "Fresh"
+// tolerates a report stamped a little AFTER this tick's clock: the MSP thread
+// stamps on its own read.
 void RcAgent::intake_arm_state_(uint64_t now_ms) {
   const uint64_t r = arm_report_.load(std::memory_order_relaxed);
   if (r != 0) {
@@ -216,13 +216,12 @@ void RcAgent::intake_arm_state_(uint64_t now_ms) {
   run_bitrate_policy(now_ms, /*force=*/true);
 }
 
-// One pacer for every IDR producer (spec 2026-08-28 venc-foldin §4). 100 ms
-// floor for all of them — an IDR is the most expensive frame on the link and
-// two of them back to back buy nothing; chain-break requests also respect a
-// 1 s holdoff from the previous chain IDR, because one IDR heals a break and
-// a ring that has no consumer needs none at all (upstream measurement,
-// waybeam f956a52 venc_frame_ring.h). A refused request is DROPPED, not
-// queued: the next real break re-raises it.
+// One pacer for every IDR producer. 100 ms floor for all of them — an IDR
+// is the most expensive frame on the link and two of them back to back buy
+// nothing; chain-break requests also respect a 1 s holdoff from the previous
+// chain IDR, because one IDR heals a break and a ring that has no consumer
+// needs none at all (upstream measurement, waybeam f956a52 venc_frame_ring.h).
+// A refused request is DROPPED, not queued: the next real break re-raises it.
 bool RcAgent::idr_due(uint64_t now_ms, bool chain) {
   if (have_last_idr_ && now_ms - last_idr_ms_ < 100) return false;
   if (chain && have_last_chain_idr_ && now_ms - last_chain_idr_ms_ < 1000)
@@ -240,7 +239,7 @@ bool RcAgent::idr_due(uint64_t now_ms, bool chain) {
 // via ladder_from). This is a state-transition apply (BOOT's initial op, or
 // a LINKED->FAILSAFE entry), so it forces the bitrate policy to the robust
 // MCS0 floor bitrate immediately, bypassing the steady-state throttle and
-// hysteresis — the spec mandates failsafe = robust MCS + floor bitrate, and
+// hysteresis — failsafe means robust MCS + floor bitrate, and
 // a degraded radio link must never keep flooding at the last LINKED rate.
 void RcAgent::apply_max_range(uint64_t now_ms) {
   auto ladder = rc::ladder_from(PhyMode::HT, 0, 20, cfg_.radio.ldpc);
@@ -254,29 +253,28 @@ void RcAgent::apply_max_range(uint64_t now_ms) {
 
   applied_.ladder = ladder;
   applied_.probe_profile = rc::kNoProbeProfile;
-  // 2.0, not 1.0: the pre-Task-1 wire scale doubled every commanded
+  // 2.0, not 1.0: the pre-RC_VERSION-4 wire scale doubled every commanded
   // overhead on its way into the budget formula (uep_layer_overhead's ref
   // scale); RC_VERSION 4 made fec_overhead a literal actual-overhead value
   // with no translation left to apply it, so this hardcoded MAX_RANGE
   // constant — the one caller with no wire value to carry the doubling for
   // it — must apply the old ×2 itself to keep the MCS0 floor bitrate
-  // unchanged (carried review finding, Task 3 review). Both layers get the
-  // same 2.0: MAX_RANGE has no per-stream pair to carry (Task 6), and enh
-  // is shed here anyway.
+  // unchanged. Both layers get the same 2.0: MAX_RANGE has no per-stream
+  // pair to carry, and enh is shed here anyway.
   applied_.fec_ov_base = 2.0;
   applied_.fec_ov_enh = 2.0;
   applied_.shed[0] = false;
-  applied_.shed[1] = true;  // enh layer shed in MAX_RANGE, per spec
+  applied_.shed[1] = true;  // enh layer shed in MAX_RANGE
   ++applied_.generation;
   act_.apply_op(applied_);
   run_bitrate_policy(now_ms, /*force=*/true);
 }
 
 // Applies a resolved (DISC row or RCF-decoded) ladder/FEC operating point.
-// ov_base/ov_enh are the per-stream pair as-is (Task 6, RC_VERSION 5) — no
+// ov_base/ov_enh are the per-stream pair as-is (RC_VERSION 5) — no
 // translation, applied directly to the UEP layers by apply_op_to_uep. Does
 // NOT run the bitrate policy itself — callers on the RCF path invoke
-// run_bitrate_policy() explicitly afterwards, per the spec.
+// run_bitrate_policy() explicitly afterwards.
 void RcAgent::apply_ladder_op(const std::array<LayerTxSpec, 2>& ladder,
                               double ov_base, double ov_enh,
                               uint8_t probe_profile) {
@@ -292,8 +290,8 @@ void RcAgent::apply_ladder_op(const std::array<LayerTxSpec, 2>& ladder,
   applied_.probe_profile = probe_profile;
   if (probe_profile != rc::kNoProbeProfile) {
     // The probe flies the probe rung's own (mcs, bw) — not the current op's
-    // width — so a 20->40 promote is actually measured at 40 (controller
-    // Task 11b, 2026-09-24, docs/bw40.md). Only the mode is kept from the
+    // width — so a 20->40 promote is actually measured at 40
+    // (docs/bw40.md). Only the mode is kept from the
     // current op's ladder: the wire profile byte doesn't vary mode
     // independently of mcs/bw in practice, and ladder[1].mode is already
     // validated/known-good, so there's no reason to trust a decoded mode
@@ -343,16 +341,16 @@ void RcAgent::reapply_with_shed() {
 //    same tick that applied the MCS. The radio capacity has already
 //    dropped when the RCF lands; deferring the shed lets the encoder flood
 //    a smaller pipe and TxQueue drop-oldest kills whole FEC bodies — a
-//    multi-rung demote cascade under a gated shed is the 2026-08-09
-//    freeze-crash (docs/shed-lag-findings-2026-08-09.md).
+//    multi-rung demote cascade under a gated shed is the shed-lag
+//    freeze-crash (docs/findings/2026-08-09-shed-lag.md).
 //  - force=false, non-decrease (steady-state LINKED RCFs): the call is
 //    throttled to at most once per 1000ms, so repeated RCFs within one
 //    second collapse to a single call (scenario: bitrate hysteresis) and a
 //    late quality INCREASE stays harmless and lazy. The dedup test is an
 //    exact inequality vs the last value actually sent: a target that
 //    differs at all is a real operating-point change and must eventually
-//    reach the encoder. It was a +-10% magnitude deadband until
-//    2026-08-28, which measured as a permanent undershoot — the deadband
+//    reach the encoder. A +-10% magnitude deadband here measured as a
+//    permanent undershoot — the deadband
 //    filtered an ABSOLUTE target with no accumulator, so an error smaller
 //    than the band could never grow into it and the last applied value
 //    became a fixed point. Prod (airtime_budget 0.60, bitrate_max_kbps
@@ -376,17 +374,17 @@ void RcAgent::reapply_with_shed() {
 // and the commanded overhead pair in, kbps out. Nothing measured enters
 // it, so a fixed op commands a fixed bitrate for as long as it is held.
 //
-// It was measurement-anchored between 2026-08-29 and 2026-09-01: AirFeed
-// published a live share_base plus per-stream framing excess (emitted air
-// bytes over frame bytes, EWMA), and this function blended them in. That
-// correction was real — framing excess runs ~5% at large frames and more
-// as frames shrink — but it closed a loop the encoder could not afford.
-// Lower rate -> smaller frames -> proportionally more padding -> higher
-// excess -> lower target, re-evaluated on every RCF at 10-20 Hz, with the
-// 100 kbps rounding grid fine enough that the dither kept crossing it.
+// It used to be measurement-anchored: AirFeed published a live share_base
+// plus per-stream framing excess (emitted air bytes over frame bytes,
+// EWMA), and this function blended them in. That correction was real — framing
+// excess runs ~5% at large frames and more as frames shrink — but it closed a
+// loop the encoder could not afford. Lower rate -> smaller frames ->
+// proportionally more padding -> higher excess -> lower target, re-evaluated
+// on every RCF at 10-20 Hz, with the 100 kbps rounding grid fine enough that
+// the dither kept crossing it.
 //
 // On Star6E every MI_VENC_SetChnAttr that actually changes the rate emits
-// a keyframe (measured 2026-09-01: 15 real changes, 15 IDRs, each on the
+// a keyframe (measured: 15 real changes, 15 IDRs, each on the
 // next frame; 16 same-value writes, 0 IDRs), and that keyframe bypasses
 // idr_rate_limit entirely. In flight-0000 an IDR cost a median 63.8 kB
 // against a 21.4 kB base P frame — 38 ms of airtime at the rung it flew,
@@ -409,14 +407,14 @@ void RcAgent::run_bitrate_policy(uint64_t now_ms, bool force) {
   have_last_policy_ = true;
   // DELIVERED rates (air_rate.h): nominal × the measured per-MCS,
   // per-width air_clock.efficiency_20/_40, so airtime_budget is a fraction
-  // of what the link actually moves. Priced off nominal until 2026-09-17,
-  // which is why budget 0.6 sat at ~99 % of real mcs2 capacity and spiked
-  // (docs/bandwidth-sweep-findings-2026-09-17.md).
+  // of what the link actually moves. Priced off nominal instead, budget 0.6
+  // sat at ~99 % of real mcs2 capacity and spiked
+  // (docs/findings/2026-09-17-bandwidth-sweep.md).
   const double rate_b = delivered_mbps(applied_.ladder[0], cfg_.air_clock);
   // The probe stream has its own slot and is deliberately NOT a term here
   // — a probe costs zero encoder writes.
   const double rate_e = delivered_mbps(applied_.ladder[1], cfg_.air_clock);
-  // The commanded pair (Task 6, RC_VERSION 5) IS the source — no single
+  // The commanded pair (RC_VERSION 5) IS the source — no single
   // ov to fan out to both terms.
   double ovb = applied_.fec_ov_base, ove = applied_.fec_ov_enh;
   // Debug-HTTP per-layer override active: the layers fly THESE overheads
@@ -449,7 +447,7 @@ void RcAgent::run_bitrate_policy(uint64_t now_ms, bool force) {
   // policy's "structural minimum" would not be the one in force.
   kbps = std::clamp(kbps, static_cast<double>(cfg_.encoder.bitrate_min_kbps),
                      static_cast<double>(max_kbps));
-  // Low-power cap (spec 2026-09-20): min(), so FAILSAFE's floor and the
+  // Low-power cap: min(), so FAILSAFE's floor and the
   // cap compose; config validation keeps the cap inside the encoder clamp.
   if (low_power_active_)
     kbps = std::min(kbps, static_cast<double>(cfg_.low_power.bitrate_kbps));
@@ -515,15 +513,14 @@ void RcAgent::run_bitrate_policy(uint64_t now_ms, bool force) {
 // clean window (2000ms with no further drop-rise); each step-down restarts
 // the 2s window, so recovering from level 3 to level 0 takes three separate
 // 2s clean windows in a row, not one. shed_level_ still ranges 0..3 for its
-// own escalate/decay cadence, but the 2-stream space (spec
-// 2026-08-29-airtime-balance-uep) leaves only one droppable layer (sid 1,
-// enh) -- any level >= 1 sheds it and there is no second layer for level
-// >= 2 to additionally shed (see reapply_with_shed()). Any level change
-// reapplies the current op (shed folded in) so the change reaches the
-// actuator immediately.
+// own escalate/decay cadence, but the 2-stream space (airtime-balance UEP)
+// leaves only one droppable layer (sid 1, enh) -- any level >= 1 sheds it and
+// there is no second layer for level >= 2 to additionally shed (see
+// reapply_with_shed()). Any level change reapplies the current op (shed folded
+// in) so the change reaches the actuator immediately.
 //
-// Reaching level 3 also cut the encoder bitrate by 30% until 2026-08-28.
-// That cut was removed: it wrote act_.set_bitrate_kbps(last * 0.7) straight
+// Reaching level 3 used to also cut the encoder bitrate by 30%. That cut
+// was removed: it wrote act_.set_bitrate_kbps(last * 0.7) straight
 // to the actuator, bypassing run_bitrate_policy's
 // clamp(bitrate_min_kbps, bitrate_max_kbps), and it compounded because it
 // overwrote last_bitrate_kbps_ with its own output -- so each re-entry into
@@ -544,7 +541,7 @@ void RcAgent::run_bitrate_policy(uint64_t now_ms, bool force) {
 //    backpressure -- over-driving the air. Level-triggered, because a full
 //    queue is the condition itself, not an event. This is the one that
 //    matters in flight: the encoder overshoots its command on a scene
-//    change (17-22 Mb/s against 16 commanded, flight-0011 2026-09-03), the
+//    change (17-22 Mb/s against 16 commanded, flight-0011), the
 //    queue runs to its cap, and drop-oldest throws bodies away with the
 //    guard idle. Those drops are indistinguishable from RF loss at the GS
 //    (expected symbol, never arrived), which books them as residual and
@@ -616,26 +613,26 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
   if (type == rc::T_DISC) {
     auto d = rc::parse_disc(body, len);
     if (!d.has_value()) return;
-    // Auto channel select (spec 2026-10-03-auto-channel-set §2/§6): a DISC
-    // is a proposal (Disc.op_channel), not a command -- we agree to it when
-    // it's a member of our channel set; a non-member is answered with the
-    // current channel instead (the GS logs ack_override). The agreement
+    // Auto channel select: a DISC is a proposal (Disc.op_channel), not a
+    // command -- we agree to it when it's a member of our channel set; a
+    // non-member is answered with the current channel instead (the GS logs
+    // ack_override). The agreement
     // rides the ack and the pending pair; the move itself happens only once
     // that pair is promoted (see T_RCF).
     const uint8_t agreed = member_(d->op_channel) ? d->op_channel : channel_;
     if (!rc::verify_control(body, len, cfg_.link.key, rc::TagCtx{})) {
-      // Wrong key on the GS. Answer so the GS can SHOW it (spec §8) instead
-      // of looking like the stale-caps deadlock; change nothing else.
+      // Wrong key on the GS. Answer so the GS can SHOW it instead of
+      // looking like the stale-caps deadlock; change nothing else.
       auth_reject_.store(true, std::memory_order_relaxed);
       act_.send_control(rc::pack_disc_ack(
           make_disc_ack(d->vrx_nonce, 0, rc::kAckKeyMismatch, d->seq, agreed)));
       return;
     }
-    // A DISC only elicits an ack (spec §6): no op, no retune, no LINKED
+    // A DISC only elicits an ack: no op, no retune, no LINKED
     // entry, no watchdog refresh. The first RCF that verifies under the
     // acked pair does those. The ack itself still goes out on every DISC,
     // LINKED included: a rebooted GS's keep-alive is the only way it
-    // re-learns chip_caps (stale-caps deadlock, 2026-08-12).
+    // re-learns chip_caps (the stale-caps deadlock).
     uint32_t vtx;
     if (state_ == State::LINKED && current_.valid && d->vrx_nonce == current_.vrx_nonce) {
       vtx = current_.vtx_nonce;                       // keep-alive: same answer
@@ -661,7 +658,7 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
     if (verify_rcf_(body, len, *r, current_, &seq32)) {
       // in-session
     } else if (verify_rcf_(body, len, *r, pending_, &seq32)) {
-      // Promotion (spec §6 step 4): pending becomes current. A session swap
+      // Promotion: pending becomes current. A session swap
       // while LINKED touches nothing but the pair (op-thrash rule); from
       // any other state this RCF's own apply path below enters LINKED.
       current_ = pending_;
@@ -680,17 +677,17 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
         deferred_move_ch_ = current_.agreed_ch;          // after main's promote Telem
     } else {
       // Wrong key, wrong pair, stale or replayed seq: drop, flag for the
-      // next Telem, never move the seq tracker. No log (spec §7).
+      // next Telem, never move the seq tracker. No log.
       auth_reject_.store(true, std::memory_order_relaxed);
       return;
     }
     current_.last_seq32 = seq32;
     current_.have_seq = true;
     ++rcf_accepted_;
-    // Any accepted RCF confirms an in-flight move (spec §6: "the first GS
-    // frame received after the move confirms it") -- it arrived on the
-    // channel we retuned to, so there's nothing left for tick()'s fallback
-    // to guard against.
+    // Any accepted RCF confirms an in-flight move (the first GS frame
+    // received after the move confirms it) -- it arrived on the channel we
+    // retuned to, so there's nothing left for tick()'s fallback to guard
+    // against.
     if (move_pending_) act_.remember_channel(channel_);   // the GS heard us here: persist
     move_pending_ = false;
 
@@ -702,7 +699,7 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
     State prev_state = state_;
     apply_ladder_op(ladder, r->fec_overhead_base, r->fec_overhead_enh, r->probe_profile);
 
-    // In-flight hop order (spec 2026-09-14 §1): a NEW (epoch, ch) PAIR moves
+    // In-flight hop order: a NEW (epoch, ch) PAIR moves
     // us; the same pair again is a no-op; hop_ch 0 is a pre-hop GS. The order
     // in this very RCF must not be confirmed by itself, so move_pending_ is
     // re-armed AFTER the clear above; the next RCF heard on the new channel
@@ -723,7 +720,7 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
       }
     }
 
-    // VTX recorder wish (spec 2026-09-26). Unknown (maburgs just restarted,
+    // VTX recorder wish. Unknown (maburgs just restarted,
     // no player message yet) leaves the recorder alone; only a received
     // known-off stops it. Latched on success, retried on the next RCF.
     if (r->rec & rc::kRecKnown) {
@@ -731,7 +728,7 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
       if (want != rec_applied_ && act_.set_record(want == 1)) rec_applied_ = want;
     }
 
-    // GS-requested IDR (spec 2026-09-28): a CHANGED epoch is a request.
+    // GS-requested IDR: a CHANGED epoch is a request.
     // Marked seen on receipt -- pending stays set until tick() serves it, so
     // any number of bumps collapse into one IDR. No silent adopt of the
     // session's first epoch: a DISC link-up sends no IDR, and a page that
@@ -756,7 +753,7 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
     if (entering_linked && idr_due(now_ms, /*chain=*/false)) {
       act_.request_idr();
       // This link-up IDR already covers any GS request pending on this same
-      // RCF (spec 2026-09-28 fix round 1): FAILSAFE entry resets
+      // RCF: FAILSAFE entry resets
       // idr_epoch_seen_ to 0, so the first RCF back reads the page's
       // (unchanged) epoch as a fresh change and arms idr_gs_pending_ right
       // above -- without this, that pending request survives to the next
@@ -777,7 +774,7 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
 }
 
 void RcAgent::tick(uint64_t now_ms, const RadioHealth& health) {
-  // A promoted session's agreed channel (spec 2026-10-01 §6 step 5). Run
+  // A promoted session's agreed channel. Run
   // here, not on the promoting RCF, so main has sent one Telem saying
   // LINKED on the CURRENT channel first -- the GS follows on it.
   if (deferred_move_ch_ != 0) {
@@ -796,7 +793,7 @@ void RcAgent::tick(uint64_t now_ms, const RadioHealth& health) {
   }
 
   if (move_pending_ && now_ms - move_at_ms_ >= static_cast<uint64_t>(cfg_.link.move_confirm_ms)) {
-    // Unconfirmed move (spec 2026-10-03 §3): nothing from the GS on the new
+    // Unconfirmed move: nothing from the GS on the new
     // channel. Back to the channel we came from -- where the GS found us,
     // or where a withdrawing GS still is -- and stay there. There is no
     // home to fall through to.
@@ -834,7 +831,7 @@ void RcAgent::tick(uint64_t now_ms, const RadioHealth& health) {
     act_.request_idr();
   }
 
-  // GS-requested IDR (spec 2026-09-28), same tick-entry state rule as the
+  // GS-requested IDR, same tick-entry state rule as the
   // chain-break consumer above. Unlike a chain break, a refused request is
   // DEFERRED (pending survives to the next tick): the requester is frozen
   // and waiting, and dropping would cost it a full retry interval. Still
@@ -849,7 +846,7 @@ void RcAgent::tick(uint64_t now_ms, const RadioHealth& health) {
     if (have_last_fb_ && now_ms - last_fb_ms_ >= static_cast<uint64_t>(cfg_.link.failsafe_ms)) {
       apply_max_range(now_ms);
       state_ = State::FAILSAFE;
-      // Failsafe entry clears both sessions (spec 2026-10-01 §7): a kept
+      // Failsafe entry clears both sessions: a kept
       // pair would leave every RCF the GS sent during the fade replayable
       // for the life of the process. Recovery: the GS's next keep-alive
       // DISC gets a fresh pair; its RCFs set auth_reject until then
@@ -917,7 +914,7 @@ void RcAgent::tick(uint64_t now_ms, const RadioHealth& health) {
   // no GS has been heard from, MAX_RANGE was applied once on the BOOT tick,
   // and there is nothing to defend the value against. verb_apply_failed_
   // now retries in RENDEZVOUS too -- a refused low-power transition verb on
-  // the ground has no RCF to carry its retry (spec 2026-09-20).
+  // the ground has no RCF to carry its retry.
   //
   // ran_this_tick keeps it to at most one policy run per distinct now_ms: a
   // tick that has ALREADY run the policy (the failsafe entry a few lines up,
@@ -944,10 +941,10 @@ rc::DiscAck RcAgent::make_disc_ack(uint32_t vrx_nonce, uint32_t vtx_nonce, uint8
   ack.flags = flags;
   // Frame wire is the only video format maburd speaks; the bit stays on the
   // wire (one legal value) so a GS can still refuse a peer that lacks it.
-  // CAP_TELEMETRY: this drone also sends T_TELEM frames on its uplink
-  // (spec 2026-07-26 drone-telemetry) — display-grade only, not a gate.
-  // CAP_CALIBRATE: this build understands T_CAL_CMD/T_CAL_RESULT (Task 11
-  // wires them up in main.cpp) -- a real gate, unlike CAP_TELEMETRY:
+  // CAP_TELEMETRY: this drone also sends T_TELEM frames on its uplink —
+  // display-grade only, not a gate.
+  // CAP_CALIBRATE: this build understands T_CAL_CMD/T_CAL_RESULT (main.cpp
+  // wires them up) -- a real gate, unlike CAP_TELEMETRY:
   // gs/src/cal_session.cpp's start() refuses a session outright without it.
   // CAP_GENLOCK: applies T_GENLOCK to the sensor rate -- only when the
   // owner opted in ([genlock] enable), so the GS never steers a camera
@@ -955,10 +952,9 @@ rc::DiscAck RcAgent::make_disc_ack(uint32_t vrx_nonce, uint32_t vtx_nonce, uint8
   ack.chip_caps = rc::CAP_FRAME_WIRE | rc::CAP_TELEMETRY | rc::CAP_CALIBRATE;
   if (cfg_.genlock.enable) ack.chip_caps |= rc::CAP_GENLOCK;
   // agreed is member_(op_channel) ? the DISC's proposed op_channel : the
-  // current channel (spec 2026-10-03-auto-channel-set §2/§6) -- computed by
-  // the caller, which also stores it in the pending pair whose promotion
-  // drives the actual retune, so the ack and the move can never disagree
-  // about what was agreed to.
+  // current channel -- computed by the caller, which also stores it in the
+  // pending pair whose promotion drives the actual retune, so the ack and the
+  // move can never disagree about what was agreed to.
   ack.agreed_channel = agreed;
   ack.agreed_width = cfg_.radio.width;
   ack.seq = seq;

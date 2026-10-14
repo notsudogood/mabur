@@ -34,9 +34,9 @@ TEST(make_telem_maps_and_saturates) {
   // (RcAgent::run_congestion_guard), distinct from bit0's failsafe shed so
   // a bench can count congestion sheds and flightreport can attribute an
   // enh gap to congestion rather than RF.
-  // Bits 1/2/5 (radio_rx_ok / probe_on / air_shed) are gone since
-  // 2026-09-30 and must stay clear.
-  CHECK(t.flags == 0x99);  // | low_power (bit7, spec 2026-09-20)
+  // Bits 1/2/5 (radio_rx_ok / probe_on / air_shed) are gone (telem diet)
+  // and must stay clear.
+  CHECK(t.flags == 0x99);  // | low_power (bit7)
   CHECK(t.rcf_age_ms == 65535);
   CHECK(t.usb_fail == 65535);
   CHECK(t.nack_rx == 65535 && t.retx_syms == 5 && t.retx_refused == 6);
@@ -51,7 +51,7 @@ TEST(make_telem_maps_and_saturates) {
   // pts_at_build is a timestamp, not a gauge.
   CHECK(t.rcf_seq_echo == 0x4711);
   CHECK(t.pts_at_build == 0x0011223344556677ull);
-  // RX frame split per telemetry period (cca-on 2026-09-23): saturating u16s.
+  // RX frame split per telemetry period (cca-on): saturating u16s.
   CHECK(t.rx_crcfail == 65535);
   CHECK(t.rx_own == 6);
   CHECK(t.rx_foreign == 7);
@@ -71,7 +71,7 @@ TEST(low_power_flag_round_trips) {
   CHECK((mabur::make_telem(2, in).flags & 0x80) == 0);
 }
 
-// Link pairing (spec 2026-10-01 §8): a control frame that failed its tag
+// Link pairing: a control frame that failed its tag
 // since the last Telem sets flags bit1, so the GS can show it.
 TEST(auth_reject_is_flags_bit1) {
   mabur::TelemInputs in;
@@ -101,7 +101,7 @@ TEST(sys_readers_fail_soft) {
 
 // drone.sys.load was /proc/loadavg[0], which on the SigmaStar image counts
 // the SDK's parked D-state workers and read a flat ~13 idle or pegged
-// (docs/dq-spike-findings-2026-08-31.md). Replaced 2026-09-21 by the CPU
+// (docs/findings/2026-08-31-dq-spike.md). Replaced by the CPU
 // busy fraction of the tick, from a /proc/stat delta: bench read loadavg
 // 12.08 against 14 % busy over the same 2 s.
 TEST(cpu_busy_is_a_proc_stat_delta_not_loadavg) {

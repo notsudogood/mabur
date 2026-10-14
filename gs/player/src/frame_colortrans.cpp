@@ -82,7 +82,7 @@ FrameColorTrans::~FrameColorTrans() { deinit(); }
 // Mali-G52, ~10 ms at the 300 MHz simple_ondemand settles on, ~5 ms at 800.
 // Pipelined against the 13 ms encode the GPU is busy ~60 % of the time, and
 // simple_ondemand only clocks up past 90 %, so it never does -- and 16.8 ms
-// per frame cannot hold a 60 fps DVR (bench 2026-09-17: 3.7 % dropped).
+// per frame cannot hold a 60 fps DVR (bench: 3.7 % dropped).
 // Pinning "performance" for the stage's lifetime costs nothing outside a
 // recording (the stage exists only while one runs; panfrost runtime-PM
 // powers the GPU down when idle regardless of governor). Best-effort: a

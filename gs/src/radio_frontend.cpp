@@ -85,7 +85,7 @@ bool RadioFrontend::open_and_start() {
   // Keep FCS-failed frames (RCR ACRC32|AICV on the 8822E). A corrupt body
   // still yields its intact SBI sub-blocks -- each carries its own CRC16 --
   // and that salvage path was unreachable until devourer honoured this on
-  // Jaguar3 (2026-09-08): the WMAC dropped the frames before the host saw
+  // Jaguar3: the WMAC dropped the frames before the host saw
   // them, which is why per-card crc_fail sat at 0 for the project's whole
   // history. Cost measured on the bench: ~19 foreign junk frames in 4 min
   // against ~150k real frames/card/min. on_packet() below lets crc_err
@@ -95,7 +95,7 @@ bool RadioFrontend::open_and_start() {
   // Absolute idle floor (jgr3-nhm-abs-floor): only the with_nhm=true read
   // pays for it (the scout's dwell read and the one-off caps read). The
   // 1 Hz A record uses with_nhm=false and must stay a handful of register
-  // reads -- bench check in the auto-channel-select plan, Task 14.
+  // reads (bench-checked).
   dev_cfg.rx.abs_noise_floor = true;
   // Debug passthrough: devourer's env->config translation lives in its
   // examples/, not the library, so these two register-dump levers (used to
@@ -104,12 +104,12 @@ bool RadioFrontend::open_and_start() {
   dev_cfg.debug.dump_canary = std::getenv("DEVOURER_DUMP_CANARY") != nullptr;
   dev_cfg.debug.bb_dump = std::getenv("DEVOURER_BB_DUMP") != nullptr;
   // MAC carrier sense ON (chip default) -- same decision as maburd, see the
-  // block in drone/src/main.cpp: OFF from 2026-08-05 to 2026-09-23, back ON
-  // because a blind GS send kills a drone PPDU on both of these cards and
-  // carrier sense on BOTH ends removes that (docs/cca-on-findings-
-  // 2026-09-23.md). The two must move together: GS-only carrier sense
-  // measured WORSE than blind (docs/rcf-uplink-loss-findings-2026-08-14.md
-  // §6). RadioFrontend is constructed per card, so every card gets the flag
+  // block in drone/src/main.cpp: ON because a blind GS send kills a drone
+  // PPDU on both of these cards and carrier sense on BOTH ends removes that
+  // (docs/findings/2026-09-23-cca-on.md). The two must move together:
+  // GS-only carrier sense measured WORSE than blind
+  // (docs/findings/2026-08-14-rcf-uplink-loss.md §6). RadioFrontend is
+  // constructed per card, so every card gets the flag
   // and logs its own bring-up line below -- inert on RX-only cards, since
   // this gates TX only.
   dev_cfg.tuning.disable_cca = false;
@@ -171,7 +171,7 @@ bool RadioFrontend::open_and_start() {
                static_cast<int>(cfg_.card_id),
                dev_cfg.tuning.disable_cca
                    ? "OFF -- TX will not defer to co-channel traffic"
-                   : "ON -- TX defers to any decodable 802.11 preamble (chip default, 2026-09-23)");
+                   : "ON -- TX defers to any decodable 802.11 preamble (chip default)");
   ready_.store(true, std::memory_order_release);
   alive_.store(true, std::memory_order_release);
   rx_thread_ = std::thread([this] {
@@ -196,7 +196,7 @@ void RadioFrontend::on_packet(const Packet& pkt) {
   const RxVerdict v = fill_rx_body(pkt.Data.data(), pkt.Data.size(), meta, m);
   if (v == RxVerdict::Short) return;
   // Foreign traffic never reaches the queue: it polluted per-card EMAs and
-  // the seq-loss walk (spec revision 2). CRC-failed frames pass — a corrupt
+  // the seq-loss walk. CRC-failed frames pass — a corrupt
   // SA proves nothing, and they never fed EMAs/seq anyway.
   if (v == RxVerdict::Foreign) {
     foreign_.fetch_add(1, std::memory_order_relaxed);
@@ -205,7 +205,7 @@ void RadioFrontend::on_packet(const Packet& pkt) {
   const uint64_t now = mono_us_now();
   if (!a.crc_err) {
     own_.fetch_add(1, std::memory_order_relaxed);
-    // Own airtime (spec 2026-09-25-nhm-airtime §5), CRC-good own frames only.
+    // Own airtime, CRC-good own frames only.
     const uint16_t r = a.data_rate;
     const uint8_t mcs = (r >= 0x0C && r <= 0x13) ? static_cast<uint8_t>(r - 0x0C)
                         : (r >= 0x80 && r <= 0x87) ? static_cast<uint8_t>(r - 0x80) : 255;
@@ -405,7 +405,7 @@ void RadioFrontend::stop() {
   // complete and the join below would wait for the next received frame --
   // forever with the drone off. Releasing the interface makes Chrome abort
   // them (AbortError), which ends the loop. Re-claimed for Stop()'s de-init
-  // writes. Moved here from web/src/web_main.cpp run_live (2026-10-04).
+  // writes. Moved here from web/src/web_main.cpp run_live.
   bool released_early = false;
   const uint64_t t_stop0 = mono_us_now();
   const bool had_rx = rx_thread_.joinable();
@@ -435,7 +435,7 @@ void RadioFrontend::stop() {
   // Release the per-adapter advisory lock (claim_interface_then_reset filled
   // it) or the next open_and_start() on this same card refuses with "already
   // in use by another devourer process" — the process deadlocks against its
-  // own stale lock and a replugged card can never reopen (bench 2026-07-12).
+  // own stale lock and a replugged card can never reopen (bench).
   usb_lock_.reset();
   if (usb_ctx_) { libusb_exit(usb_ctx_); usb_ctx_ = nullptr; }
 }

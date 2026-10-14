@@ -253,7 +253,7 @@ TEST(long_run_deque_pruning) {
   CHECK(approx_eq(sample.loss, 0.10, 1e-3));
 }
 
-// blank_until(): the 2026-09-02 flight ctl-0160 cascade fix. One residual
+// blank_until(): the flight ctl-0160 cascade fix. One residual
 // event stayed >0 in this window across a rung transition (nothing cleared
 // it), and block 4 demotes on >0 every tick — so every s1 residual event
 // walked the ladder to rung 0 at 50 ms/rung. The window must forget

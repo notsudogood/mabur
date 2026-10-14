@@ -19,7 +19,7 @@ std::optional<bool> msp_status_armed(const MspMessage& m);
 
 // Appends the 6-byte MSP_STATUS request ($M< size 0, cmd 101, checksum)
 // that makes the FC answer with the frame above. The OSD UART is full
-// duplex; the DisplayPort push keeps streaming around it (spike 2026-09-19).
+// duplex; the DisplayPort push keeps streaming around it (spike-verified).
 void msp_append_status_request(std::vector<uint8_t>& out);
 
 }  // namespace mabur

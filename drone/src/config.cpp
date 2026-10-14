@@ -139,8 +139,8 @@ void parse_radio(const Value& j, RadioCfg& r) {
   if (r.power_mode == "offset" && !rate_walls_rel_present)
     fail("radio.rate_walls_rel", "required when power_mode = \"offset\"");
 
-  // Relative walls live in the 7-bit two's complement diff field [-64,63]
-  // (spec 2026-09-13). Outside it the value would wrap on air.
+  // Relative walls live in the 7-bit two's complement diff field [-64,63].
+  // Outside it the value would wrap on air.
   for (size_t i = 0; i < r.rate_walls_rel.size(); ++i) {
     const int v = r.rate_walls_rel[i];
     if (v < rc::kRelMin || v > rc::kRelMax)
@@ -290,11 +290,11 @@ void parse_encoder(const Value& j, EncoderCfg& e) {
   }
 }
 
-// venc: boot-time encoder pipeline config -> VencCfg (spec 2026-08-28
-// venc-foldin §3). The venc core is a pure mechanism with zero policy, so
-// there is intentionally NO "bitrate" key here — it's simply absent from
-// the known-key set below, so one lands on the ordinary unknown-key path
-// like any other stale key (global constraint: no venc.bitrate ever).
+// venc: boot-time encoder pipeline config -> VencCfg. The venc core is a pure
+// mechanism with zero policy, so there is intentionally NO "bitrate" key here
+// — it's simply absent from the known-key set below, so one lands on the
+// ordinary unknown-key path like any other stale key (global constraint: no
+// venc.bitrate ever).
 // "WIDTHxHEIGHT" at j["size"], e.g. "1920x1080"; fails naming <section>.size.
 void parse_wxh(const Value& j, const char* section, int& w, int& h) {
   std::string s;
@@ -409,12 +409,12 @@ void parse_venc(const Value& j, VencSectionCfg& v) {
     note_default("venc", "superframe_p_pct", to_text(kDef.core.superframe_p_pct));
   }
 
-  // Error-resilience structure: the five components venc.resilience used to
-  // name a preset for (deleted 2026-09-04). Each lands on an MI struct field
-  // verbatim, so the checks below are the hardware's own limits, not policy --
-  // except the sweep, a length in frames whose rows per P-frame the pipeline
-  // derives from the encoded height (venc_cfg_intra_rows), so it needs no
-  // venc.size-dependent bound. 255: the 8-bit GDR cycle counter.
+  // Error-resilience structure: five components, set individually (there is no
+  // preset key). Each lands on an MI struct field verbatim, so the checks below
+  // are the hardware's own limits, not policy -- except the sweep, a length in
+  // frames whose rows per P-frame the pipeline derives from the encoded height
+  // (venc_cfg_intra_rows), so it needs no venc.size-dependent bound. 255: the
+  // 8-bit GDR cycle counter.
   if (j.contains("intra_refresh_frames")) {
     int frames = 0;
     assign_if_present(j, "intra_refresh_frames", frames, "venc");
@@ -462,10 +462,9 @@ void parse_venc(const Value& j, VencSectionCfg& v) {
   if (v.core.ref_base != 0 && v.core.ref_enhance == 0)
     fail("venc.ref_enhance", "must be >= 1 when venc.ref_base is nonzero");
 
-  // H.265 row slices (spec 2026-10-10-h265-slices §5.1). Checked against
-  // the configured size, parsed above: the encoder cuts whole 64-px CTU
-  // rows, so only some counts exist, and asking for one that doesn't must
-  // fail boot rather than fly a different split.
+  // H.265 row slices. Checked against the configured size, parsed above: the
+  // encoder cuts whole 64-px CTU rows, so only some counts exist, and asking
+  // for one that doesn't must fail boot rather than fly a different split.
   if (j.contains("slices")) {
     int n = 0;
     assign_if_present(j, "slices", n, "venc");
@@ -576,8 +575,8 @@ void parse_link(const Value& j, LinkCfg& l) {
   // it was merely a hot spin at 0; behind the gate a non-positive value casts
   // to a ~1.8e19 ms period and the gate fires once at startup and never
   // again — no failsafe transition, no rendezvous fallback, no congestion
-  // guard, no watchdog, no telemetry, and nothing logged to say so (review
-  // finding 2026-08-14). Same [1,1000] idiom as rc_drain_ms below.
+  // guard, no watchdog, no telemetry, and nothing logged to say so. Same
+  // [1,1000] idiom as rc_drain_ms below.
   if (l.tick_ms < 1 || l.tick_ms > 1000)
     fail("link.tick_ms", "must be in [1,1000]");
   if (l.rc_drain_ms < 1 || l.rc_drain_ms > 1000)

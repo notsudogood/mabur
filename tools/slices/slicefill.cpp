@@ -1,4 +1,4 @@
-// Dev oracle feed for SkipSliceWriter (spec 2026-10-10-h265-slices §5.7):
+// Dev oracle feed for SkipSliceWriter:
 // rewrites ONE picture of an Annex-B H.265 stream, replacing some of its
 // slices with make_skip_slice() fills, so tools/slices/slicefill_check.py
 // can decode both streams with ffmpeg (and the GS hardware) and compare.

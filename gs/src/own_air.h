@@ -5,7 +5,7 @@
 namespace maburgs {
 
 // Our own video's airtime, reconstructed on the GS from the frames a card
-// decoded (spec 2026-09-25-nhm-airtime §5): payload at the HT-1SS PHY rate
+// decoded: payload at the HT-1SS PHY rate
 // plus one HT-mixed preamble per PPDU. devourer marks a PPDU's FIRST
 // subframe with the PHY status (RxAtrib.physt) and only that subframe
 // carries bw/stbc, so the accumulator latches them there and times the

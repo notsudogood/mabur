@@ -219,7 +219,7 @@ test('external failure (worker) -> error', async () => {
   assert.equal(s.snapshot.error, 'Page worker failed');
 });
 
-// Ruling (Task 3 review): onExit and onError can arrive in either order.
+// onExit and onError can arrive in either order.
 // The session must end in 'error' showing the MAPPED onError text
 // regardless of which callback the runtime fires first.
 test('exit_before_error_still_shows_mapped_error', async () => {

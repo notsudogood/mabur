@@ -62,7 +62,7 @@ jobs:
       - name: Test
         run: |
           nix-shell -p pkg-config libusb1 --run \
-            "ctest --test-dir build -R 'test_|host_e2e|gs_e2e|gs_au_e2e|player_e2e' -j$(nproc) --output-on-failure"
+            "ctest --test-dir build -R 'test_|sim_|host_e2e|gs_e2e|gs_au_e2e|player_e2e' -j$(nproc) --output-on-failure"
 
       - name: Upload ctest log
         if: failure()

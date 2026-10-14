@@ -143,7 +143,7 @@ TEST(close_wakes_and_rejects) {
   CHECK(q.depth() == 0);
 }
 
-// fec-nack (spec 2026-10-05 §4.2): a retransmit body jumps the line -- the
+// fec-nack: a retransmit body jumps the line -- the
 // GS is waiting on it -- ahead of video bodies already queued.
 TEST(push_front_jumps_the_line_and_wakes) {
   TxQueue q(8);

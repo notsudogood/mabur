@@ -60,7 +60,7 @@ TEST(parses_a_live_datagram) {
   CHECK(s.scan_auto);                                // scan.state != "off"
   REQUIRE(s.air_pct.has_value());
   CHECK(*s.air_pct > 61.4 && *s.air_pct < 61.6);
-  // link.pre_fec_loss (both layers pooled, 2026-09-23) is the OSD's pre-FEC
+  // link.pre_fec_loss (both layers pooled) is the OSD's pre-FEC
   // figure; link.ctl.pre_fec_loss is the BASE-only sample the ladder acted
   // on and is only the fallback when the pooled gauge is null.
   REQUIRE(s.pre_loss_pct.has_value());
@@ -79,7 +79,7 @@ TEST(parses_a_live_datagram) {
   // card its heard status (see the evm_db comment in gs_snapshot.h).
   CHECK(!s.cards[1].evm_db.has_value());
   CHECK(s.cards[1].heard);
-  // link.rtt (link-rtt 2026-09-02): control-path RTT + the pts offset the
+  // link.rtt (link-rtt): control-path RTT + the pts offset the
   // player folds into its own anchor for the absolute LAT floor.
   REQUIRE(s.rtt_ms.has_value());
   CHECK(*s.rtt_ms > 12.3 && *s.rtt_ms < 12.5);
@@ -344,7 +344,7 @@ TEST(parses_a_real_recorded_datagram) {
 
   REQUIRE(s.mcs.has_value());
   CHECK(*s.mcs == 0);                                  // link.ctl.rung.mcs
-  // This real capture predates the Task 5 (same-rate-fixed-pairs) ov ->
+  // This real capture predates the same-rate-fixed-pairs ov ->
   // ov_base rename: it wrote rung.ov, not rung.ov_base, so fec_pct is
   // absent -- the honest "never received" rendering, not a crash or a
   // stale/wrong number.
@@ -417,9 +417,9 @@ TEST(null_pre_fec_loss_stays_empty_not_zero) {
   CHECK(!s.pre_loss_pct.has_value());
 }
 
-// The link-level gauge pools both video layers (2026-09-23) and is the
-// pilot's number; the ctl figure is the base-only sample the ladder acted
-// on and only fills in when the pooled window is null.
+// The link-level gauge pools both video layers and is the pilot's number; the
+// ctl figure is the base-only sample the ladder acted on and only fills in
+// when the pooled window is null.
 TEST(pooled_link_pre_fec_loss_wins_over_the_ctl_figure) {
   const char* j = R"({"v":1,
     "link":{"ctl":{"pre_fec_loss":0.021},"pre_fec_loss":0.031}})";
@@ -456,9 +456,9 @@ TEST(scan_auto_is_false_when_off_or_absent) {
   CHECK(!s.scan_auto);
 }
 
-// link.state == "key_mismatch" (spec 2026-10-01 link-pairing): our key
-// file differs from the drone's. Any other state value, or an absent
-// block, reads false -- never true by default.
+// link.state == "key_mismatch" (link pairing): our key file differs from the
+// drone's. Any other state value, or an absent block, reads false -- never
+// true by default.
 TEST(key_mismatch_parses_from_link_state) {
   GsSnapshot s;
   REQUIRE(parse(R"({"link": {"channel": 136, "state": "key_mismatch"}})", &s));
@@ -471,14 +471,12 @@ TEST(key_mismatch_parses_from_link_state) {
   CHECK(!s.key_mismatch);
 }
 
-// In-flight channel hop (spec 2026-09-14-inflight-channel-hop, scan.pick
-// keying since 2026-10-03 auto-channel-set deleted link.home): `hopped`
-// means "the live channel is the hop feature's own standing target, and
-// that target isn't the GS's frozen boot pick" -- not "a hop has ever
-// happened this session" (hop.hops is a cumulative counter that never
-// resets) and not a plain channel != pick check (that also fires for the
-// boot pick itself, which has its own "(a)" mark and is unrelated to this
-// feature).
+// In-flight channel hop (keyed on scan.pick): `hopped` means "the live channel
+// is the hop feature's own standing target, and that target isn't the GS's
+// frozen boot pick" -- not "a hop has ever happened this session" (hop.hops is
+// a cumulative counter that never resets) and not a plain channel != pick
+// check (that also fires for the boot pick itself, which has its own "(a)"
+// mark and is unrelated to this feature).
 TEST(hopped_true_only_when_channel_matches_a_non_pick_hop_target) {
   GsSnapshot s;
   // Landed on the hop target, target != pick -> true.
@@ -562,7 +560,7 @@ TEST(drone_soc_temp_parses_and_drops_the_sentinel) {
   CHECK(!s.soc_temp_c);
 }
 
-// drone.rec (spec 2026-09-26-vtx-recorder): the drone recorder's state/err,
+// drone.rec (VTX recorder): the drone recorder's state/err,
 // and drone.tlm_age_ms alongside it. Empty when the drone block is
 // null/absent or the keys are missing/mistyped.
 TEST(drone_rec_parses_and_is_empty_when_absent) {

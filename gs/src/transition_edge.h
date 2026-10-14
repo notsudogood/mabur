@@ -1,18 +1,18 @@
 #pragma once
 // Rung-transition edge-detect for loss attribution, extracted from the
-// control step in gs/src/main.cpp (2026-09-05) so the wiring is testable:
-// the dry-run e2e never runs the ladder, so before this nothing on the
-// host could pin which decision windows get settle-blanked at an edge.
+// control step in gs/src/main.cpp so the wiring is testable: the dry-run
+// e2e never runs the ladder, so without this nothing on the host could pin
+// which decision windows get settle-blanked at an edge.
 //
-// On a COMMANDED op change (mcs, bw or base overhead) this (1) marks the decoder's per-sid transition
-// watermark, (2) settle-blanks the two residual decision windows and (3)
-// clears the two util decision windows (back since 2026-10-06, flight
-// 0026; see on_tick). The util windows stopped being blanked on 2026-09-05
-// when they moved to the ArrivalTracker -- the base (s1) residual window since 2026-09-02 (flight
-// ctl-0160: one residual event walked the ladder to rung 0 at 50 ms/rung),
-// and the enh (s3) residual window since 2026-09-05 (flights 20/21: 13 of
+// On a COMMANDED op change (mcs, bw or base overhead) this (1) marks the
+// decoder's per-sid transition watermark, (2) settle-blanks the two
+// residual decision windows and (3) clears the two util decision windows
+// (flight 0026; see on_tick). The util windows are not blanked: they read
+// the ArrivalTracker. The base (s1) residual window is blanked because
+// unblanked, one residual event walked the ladder to rung 0 at 50 ms/rung
+// (flight ctl-0160); the enh (s3) residual window because unblanked, 13 of
 // 14 s3_residual cascades took a second step at exactly s3_settle_ms and
-// were promoted straight back). The controller's s3_blank_until only gates
+// were promoted straight back (flights 20/21). The controller's s3_blank_until only gates
 // READING for s3_settle_ms; the 500 ms window behind it kept the
 // abandonment-horizon's ~80 ms late booking of old-rung loss, so the tick
 // the gate opened it demoted again on a 0 ms confirm. Bench ctl-0287's
@@ -25,7 +25,7 @@
 // dilutes them faster with post-close current entries. The residual
 // exposure that left -- old-rung util entries surviving up to 500 ms into
 // the new rung while the in-regime confirm is fade.confirm_ms (100 ms);
-// bench campaign 2 (8 pulses, docs/arrival-loss-findings-2026-09-05.md)
+// bench campaign 2 (8 pulses, docs/findings/2026-09-05-arrival-loss.md)
 // showed zero re-fires, but the control arm also showed none -- is what
 // flight 0026 then showed in every 5->0 cascade, hence (3). Observability
 // windows (pool_resid*, s1_loss, s3_loss) stay untouched -- they report,
@@ -45,7 +45,7 @@ struct TransitionEdge {
   // by which time the window holds nothing older than settle_ms.
   static constexpr double kResidSettleMs = 150.0;
 
-  // A rung is (mcs, bw) since the 40 MHz rungs (2026-09-24): 20/3 -> 40/3
+  // A rung is (mcs, bw) with the 40 MHz rungs: 20/3 -> 40/3
   // changes the PHY rate and airtime with the MCS unchanged, so the width
   // is part of every "changed" test below.
   int last_op_mcs = -1;
@@ -57,14 +57,14 @@ struct TransitionEdge {
   // Returns true when any edge fired this tick. The two RESIDUAL (post-FEC)
   // windows are settle-blanked: abandonment books ~80 ms late. The two
   // UTIL (pre-FEC) windows are CLEARED, with no swallow: they read the
-  // ArrivalTracker (2026-09-05 spec), which classifies every missing symbol
+  // ArrivalTracker, which classifies every missing symbol
   // by the watermark at booking time, so nothing booked after the edge is
   // old-rung debris -- but the 500 ms of old-rung loss legitimately booked
   // BEFORE the edge stayed in them, and in the fade regime (100 ms confirm,
   // 150 ms spacing) one real demote kept re-deciding on it every 150 ms,
-  // two or three rungs past where the fade stopped (flight 0026,
-  // 2026-10-06: u collapsed to 0 in one tick exactly 500 ms after the
-  // booking, 17 of 82 cascade steps). That loss already produced its
+  // two or three rungs past where the fade stopped (flight 0026: u
+  // collapsed to 0 in one tick exactly 500 ms after the booking, 17 of 82
+  // cascade steps). That loss already produced its
   // demote; the new rung is judged on its own entries only, so a genuine
   // continuing fade now steps ~250 ms/rung (confirm on fresh entries)
   // instead of 150.
@@ -74,7 +74,7 @@ struct TransitionEdge {
                double now_ms) {
     bool fired = false;
     // sid 0 (base) rides the rung mcs (rc::ladder_from(...)[0].mcs, the same
-    // mcs as enh since 2026-08-30) and always tracks the op. Overhead-only steps mark sid 0 too
+    // mcs as enh) and always tracks the op. Overhead-only steps mark sid 0 too
     // (FEC re-key debris exists without a PHY change; the decoder then uses
     // the plain same-MCS fallback). Static-pin mode: nothing ever arms.
     if (op.mcs != last_op_mcs || op.bw != last_op_bw || op.overhead_base != last_op_ov) {
@@ -90,9 +90,8 @@ struct TransitionEdge {
       last_op_ov = op.overhead_base;
       fired = true;
     }
-    // sid 1 (enh) runs the op MCS too -- since the continuous probe stream
-    // replaced the discrete probe attempt (2026-09-04) the enh layer is
-    // never diverted to a candidate rate.
+    // sid 1 (enh) runs the op MCS too -- probing rides the continuous probe
+    // stream, so the enh layer is never diverted to a candidate rate.
     if (op.mcs != last_enh_mcs || op.bw != last_enh_bw) {
       dec.mark_transition(1, static_cast<uint8_t>(op.mcs),
                           static_cast<uint64_t>(now_ms));

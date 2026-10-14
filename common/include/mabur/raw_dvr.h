@@ -18,8 +18,8 @@ namespace mabur {
 bool au_has_param_sets(const uint8_t* au, size_t n);
 
 // The raw DVR's recording rules, shared by maburplay's raw mode and the web
-// GS (spec 2026-09-28-web-local-recording §1.1): arm, wait for a sync
-// point, write complete AUs through DvrMux, seal. Single-threaded.
+// GS: arm, wait for a sync point, write complete AUs through DvrMux, seal.
+// Single-threaded.
 class RawDvr {
  public:
   enum class State { Off, WaitSync, Recording, Error };

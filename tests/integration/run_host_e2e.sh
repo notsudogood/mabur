@@ -10,7 +10,7 @@ trap 'rm -rf "$TMP"' EXIT
 # Neither of the next two runs feeds --rc-in, so the agent never leaves its
 # BOOT-time MAX_RANGE operating point (drone/src/rc_agent.cpp:apply_max_range
 # unconditionally sheds the enh layer, sid 1, until an RCF or DISC lands).
-# 2-stream space (spec 2026-08-29-airtime-balance-uep): classify_frame
+# 2-stream space: classify_frame
 # (common/src/nal.cpp) routes critical NALs and any non-TRAIL_N VCL to sid 0
 # (base); only TRAIL_N (mabur's SVC-T enhance marker) reaches sid 1 (enh).
 # The fixture alternates TRAIL_R/TRAIL_N on its 12 P frames (tools/genvectors/
@@ -49,13 +49,13 @@ with open(sys.argv[1], "wb") as f:
 EOF
 "$MABURD" -c bundle/mabur.default.toml --dry-run --in "$FIX" --out "$TMP/f2.bin" \
   --rc-in "$TMP/rc.bin"
-# 2-stream space (spec 2026-08-29-airtime-balance-uep): the fixture's IDR
+# 2-stream space: the fixture's IDR
 # always classifies to sid 0 (base) regardless of the P-frame alternation
 # (see the classify_frame comment above). The IDR's own bodies are sent
 # before the RCF lands (delivered once 1 frame has been consumed) and still
 # ride the boot MAX_RANGE mcs (0); only the bodies for frames 1-12 postdate
 # the RCF -- their sid-0 (base) share rides the new BASE mcs (scored mcs 4,
-# same-rate ruling 2026-08-30 -- both slots ride the scored mcs, no rate
+# same-rate pairs -- both slots ride the scored mcs, no rate
 # split), while the sid-1 (enh) share, now unshed once the RCF lands, rides
 # alongside on its own stream at the same mcs. --after 8 skips exactly the
 # IDR's bodies: this fixture's ~3 kB IDR access unit packs into 8 bodies
@@ -96,7 +96,7 @@ import sys, os, struct
 # Packed by tests/integration/mabur_rc.py: RC_VERSION read from rc_proto.h, tag under the dry-run replay session (1,1).
 sys.path.insert(0, os.path.join("tests", "integration"))
 from mabur_rc import pack_rcf, encode_profile
-# Same RCF as above but probe_profile 0x06 (HT mcs6, 20 MHz), spec 2026-09-04 §2.
+# Same RCF as above but probe_profile 0x06 (HT mcs6, 20 MHz).
 w = pack_rcf(1, encode_profile(4, 20), 25, 25, probe=0x06)
 with open(sys.argv[1], "wb") as f:
     f.write(struct.pack("<II", 1, len(w))); f.write(w)
@@ -119,7 +119,7 @@ def sid_mcs(fr):
     sid = body[3] if len(body) > 10 and body[:2] == b"\xb0\xf5" else -1
     return sid, fr[12]
 seq = [sid_mcs(fr) for fr in frames]
-# Probe per AU (2026-09-16): every video AU's burst -- sid 0 (base) and
+# Probe per AU: every video AU's burst -- sid 0 (base) and
 # sid 1 (enh) alike -- ends in exactly one probe body, so the probe
 # cadence is the AU rate. A base run followed straight by an enh run (or
 # vice versa) with no probe between them is the old enh-only behaviour.

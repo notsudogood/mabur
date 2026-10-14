@@ -4,8 +4,8 @@
 namespace mabur {
 
 // Peak short-window encoder rate from the monotonic (bytes, frames)
-// counters, for the drone `stats:` line (2026-09-03,
-// docs/handover-venc-overshoot-2026-09-03.md).
+// counters, for the drone `stats:` line
+// (docs/findings/2026-09-03-handover-venc-overshoot.md).
 //
 // The 1 Hz Telem enc_kbytes delta averages away exactly the thing that
 // fills the TxQueue: flight-0011's scene-change bursts read 17-22 Mb/s

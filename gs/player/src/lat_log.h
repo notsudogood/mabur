@@ -25,7 +25,7 @@ inline constexpr const char* kSessionMarker = "/tmp/mabur-session";
 // CLOCK_MONOTONIC on the same box, so every debug-log file shares one clock.
 //
 // Never blocks, never throws, never spams: a missing or unusable session is
-// re-checked at most every 30 s and the line always still goes to stderr via
+// re-checked at most every 5 s (kRecheckUs) and the line always still goes to stderr via
 // the caller.
 class LatLog {
  public:

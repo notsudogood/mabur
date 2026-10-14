@@ -45,7 +45,7 @@ struct CardCaps {
   // Per-frame PHY SNR is a real measurement independent of RSSI (Realtek).
   // False on the CPE510 relay: ath9k's "SNR" is RSSI above a calibrated
   // noise floor -- one measurement, not two -- so no cross-card SNR
-  // comparison may include it (spec 2026-10-02-maburgs-remote-card §4).
+  // comparison may include it.
   bool snr_ok = true;
 };
 
@@ -57,7 +57,7 @@ class ScoutRadio {
   virtual bool retune(uint8_t ch) = 0;
   // Full retune to `ch` AT a new width (SetMonitorChannel, tens of ms):
   // the boot scout card joining the 40 MHz link once the pick freezes
-  // (docs/bw40.md §3). Default keeps 20 MHz-only radios/fakes unchanged.
+  // (docs/bw40.md "Boot scan scores every half"). Default keeps 20 MHz-only radios/fakes unchanged.
   virtual bool retune_width(uint8_t ch, uint8_t width_mhz) {
     (void)width_mhz;
     return retune(ch);
@@ -70,7 +70,7 @@ class ScoutRadio {
   virtual ScoutEnergy read_energy_scout() = 0;
   virtual ScoutFrames frames() const = 0;
 
-  // Busy-airtime NHM window (spec 2026-09-25-nhm-airtime): arm at the start
+  // Busy-airtime NHM window: arm at the start
   // of an observation, read at its end. Defaults = unsupported, so fakes and
   // non-Jaguar3 radios read as "no airtime evidence".
   virtual bool arm_nhm_busy(uint16_t period_4us) { (void)period_4us; return false; }

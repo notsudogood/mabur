@@ -55,7 +55,7 @@ class ChunkTable {
 };
 
 // One access unit of a row-sliced H.265 picture, rebuilt from FrameStream's
-// fragment chunks (spec 2026-10-10-h265-slices §5.2).
+// fragment chunks.
 //
 // Fragment i covers AU bytes [i*F - hdr_len, ...) where F = chunk 0's size
 // (every fragment but the last is F bytes; chunk 0 also carries the
@@ -75,7 +75,11 @@ class SliceAssembler {
                  uint16_t count, size_t hdr_len);
 
   void drain(const ChunkTable& chunks, const ByteSink& out);
-  void finish(const ChunkTable& chunks, const ByteSink& out);
+  // raw_out (optional): where the passthrough remainder goes -- the rest of
+  // the contiguous prefix, which may end mid-NAL. Unset = out. Everything
+  // else finish() and drain() emit ends on a NAL boundary (ring v4's
+  // writer contract).
+  void finish(const ChunkTable& chunks, const ByteSink& out, const ByteSink& raw_out = {});
 
   const SliceSalvage& result() const { return result_; }
   uint8_t slices() const { return n_; }

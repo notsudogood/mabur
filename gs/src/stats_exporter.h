@@ -29,20 +29,20 @@ struct StatsClassIn {  // copied from ClassTrack (gs/src/aggregator.h)
 // Class index order matches RfClass in gs/src/aggregator.h: s0,s1,probe,msp,ctrl.
 constexpr int kNumStatsClasses = 5;
 
-// Per-card energy detection sample (spec 2026-09-13-auto-channel-select).
+// Per-card energy detection sample (auto channel select).
 struct StatsEnergyIn {
   uint32_t cca = 0, fa = 0;
   uint64_t own = 0, foreign = 0;
   std::optional<int> igi;
-  // Busy airtime (spec 2026-09-25-nhm-airtime §6): NHM busy % and own
+  // Busy airtime: NHM busy % and own
   // video's airtime % of the verdict window, nullopt when the card's NHM
   // window didn't cover this window on this channel (busy_pct) or when no
   // window has landed yet (own_air_pct).
   std::optional<double> busy_pct, own_air_pct;
 };
 
-// One card's in-flight scouting activity (spec 2026-09-14-inflight-channel-
-// hop), copied plain from the drained ScoutDwell/HopVisit records -- same
+// One card's in-flight scouting activity (in-flight channel hop), copied
+// plain from the drained ScoutDwell/HopVisit records -- same
 // no-controller-reference pattern as StatsCtlIn. visits is cumulative
 // (every completed dwell, success or not); score and cost_us are the LAST
 // dwell's, not an aggregate (score only updates on a successful dwell --
@@ -78,12 +78,12 @@ struct StatsStreamIn {  // copied from mabur::UepDecoder::LayerStats
            symbols_stale = 0, symbols_bad_cfg = 0, rows_in_flight = 0;
   uint64_t syms_abandoned_stale = 0;
   uint64_t arr_expected = 0, arr_arrived = 0, arr_expected_stale = 0,
-           arr_arrived_stale = 0, arr_late = 0;  // ArrivalTracker (2026-09-05)
-  uint64_t bodies_corrupt = 0, subblocks_salvaged = 0;  // rx.keep_corrupted (2026-09-08)
-  uint64_t arr_salvage_only = 0;  // seqs only a salvaged sub-block delivered (2026-09-09)
+           arr_arrived_stale = 0, arr_late = 0;  // ArrivalTracker
+  uint64_t bodies_corrupt = 0, subblocks_salvaged = 0;  // rx.keep_corrupted
+  uint64_t arr_salvage_only = 0;  // seqs only a salvaged sub-block delivered
 };
 
-// One rung of the per-rung EWMA store (spec 2026-08-13), copied plain from
+// One rung of the per-rung EWMA store, copied plain from
 // RungStore::stat() by main — same no-controller-reference pattern as
 // StatsCtlIn. evm/evm_sd NaN -> JSON null; ages -1 = never sampled.
 struct StatsRungIn {
@@ -139,7 +139,7 @@ struct StatsCtlIn {
   uint64_t demotes_s3_residual = 0, demotes_s3_util = 0;
   double last_event_snr_db = 0.0;  // NaN -> JSON null
   double last_event_evm_db = 0.0;  // NaN -> JSON null (label-only, like snr)
-  // Continuous probe gate counters (probe-stream, 2026-09-04): promotes
+  // Continuous probe gate counters (probe-stream): promotes
   // gated by a clean probe read, and probe_holds is a count of hold
   // EPISODES (one per continuous Lossy/NoInfo run that blocked a promote),
   // not ticks -- a Clean-but-short streak ("wait, it's working, just not
@@ -150,10 +150,10 @@ struct StatsCtlIn {
   // gate's live state is now StatsProbeIn / link.probe instead.
   uint64_t promotes_probed = 0, probe_holds = 0;
 
-  // Per-rung EWMA store snapshot, index = rung index (spec 2026-08-13).
+  // Per-rung EWMA store snapshot, index = rung index.
   std::vector<StatsRungIn> rungs;
 
-  // --- fade-aware demotes (spec 2026-08-14) ---
+  // --- fade-aware demotes ---
   // demotes_fade counts fade EVENTS that produced a step, not rungs lost to
   // fade: the predictive trigger latches to exactly one demote per fade
   // event and re-arms only on an observed recovery (both deltas measurably
@@ -164,7 +164,7 @@ struct StatsCtlIn {
   double fade_dsnr = 0.0;
 };
 
-// Control-path RTT + pts offset (link-rtt, 2026-09-02), straight from
+// Control-path RTT + pts offset (link-rtt), straight from
 // RttEstimator. rtt_ms is EWMA, rtt_min_ms the session min (the floor
 // bound); pts_off_us the min-RTT-filtered (pts − GS-mono) offset, absent
 // until the drone ships a non-zero pts_at_build. floor_ms = maburgs'
@@ -179,7 +179,7 @@ struct StatsRttIn {
   std::optional<double> floor_ms;
 };
 
-// RCF slotting counters (gs-uplink-self-blanking 2026-09-02), cumulative:
+// RCF slotting counters (gs-uplink-self-blanking), cumulative:
 // sends released by an AU completion (incl. in-grace immediate sends),
 // released by the hold timeout, and passed straight through (slotter off,
 // DISC, or no recent video).
@@ -189,7 +189,7 @@ struct StatsRcfSlotIn {
   int tail_ub_ms = 0;   // learned completion->probe deadline, ms
 };
 
-// Software NACK (spec 2026-10-05 fec-nack §8): the GS NackTracker's
+// Software NACK (fec-nack): the GS NackTracker's
 // cumulative counters plus the per-export window (fill latencies, natural
 // lateness), exported as link.nack only while [link.nack] is enabled.
 struct StatsNackIn {
@@ -207,7 +207,7 @@ struct StatsNackIn {
   mabur::NackWindow enh_win;
 };
 
-// Continuous probe gate snapshot (probe-stream, 2026-09-04), straight from
+// Continuous probe gate snapshot (probe-stream), straight from
 // LadderController::probe_gate() -- plain values only, same no-controller-
 // reference pattern as StatsCtlIn. Unlike StatsCtlIn::ctl this is NOT
 // optional on StatsInput: it always exports (link.probe is present even in
@@ -232,9 +232,8 @@ struct StatsProbeIn {
   std::vector<Card> cards;
 };
 
-// In-flight channel hop snapshot (spec 2026-09-14-inflight-channel-hop),
-// straight from HopController's own accessors (state()/epoch()/hop_ch()/
-// hops()/holds()) plus the latest HopVerdict::window() output -- plain
+// In-flight channel hop snapshot, straight from HopController's own
+// accessors (state()/epoch()/hop_ch()/hops()/holds()) plus the latest HopVerdict::window() output -- plain
 // values only, no controller reference, matching StatsCtlIn's pattern.
 // Unconditional (like StatsProbeIn): a pinned GS, whose reactive hop never
 // runs, still exports the verdict/counters at their idle defaults, so a
@@ -271,7 +270,7 @@ struct StatsInput {
   // and reading it out of maburplay's own config instead would say what
   // the PLAYER believes rather than what the receiver is tuned to.
   int channel = 0;
-  // Boot-time scan's state (spec 2026-09-13-auto-channel-select):
+  // Boot-time scan's state (auto channel select):
   // "off" | "scouting" | "moving" | "frozen".
   std::string scan_state = "off";
   uint64_t scan_rounds = 0;
@@ -279,7 +278,7 @@ struct StatsInput {
   StatsRcfSlotIn rcf_slot;
   StatsNackIn nack;
   bool in_session = false;  // VrxState::SESSION
-  bool key_mismatch = false;   // VrxState::KEY_MISMATCH (spec 2026-10-01 §8)
+  bool key_mismatch = false;   // VrxState::KEY_MISMATCH
   std::string key_fp;          // mabur::key_fingerprint(cfg.link.key)
   int tx_card = 0;
   OpPoint op;
@@ -293,15 +292,12 @@ struct StatsInput {
   // this. NOT a copy of StatsCtlIn::pre_fec_loss: that one is the last
   // BASE-only sample the CONTROLLER acted on and holds through
   // starved/invalid windows, this one is this window's raw measurement
-  // with BOTH video layers pooled (2026-09-23) and is nullopt when the
+  // with BOTH video layers pooled and is nullopt when the
   // window produced no valid sample.
   std::optional<double> pre_fec_loss;
-  // Transition attribution (spec 2026-08-14, unconditional since
-  // 2026-08-15). residual_cur = the attributed (current-rung-only) sibling
-  // of residual_loss; close_ms = s1's last boundary open->close latency,
-  // nullopt = never closed. The `suppressed` counter was deleted 2026-09-02
-  // with the packet-level delivery window it was defined against (it counted
-  // windows where the total-vs-attributed views disagreed).
+  // Transition attribution (unconditional). residual_cur = the attributed
+  // (current-rung-only) sibling of residual_loss; close_ms = s1's last
+  // boundary open->close latency, nullopt = never closed.
   std::optional<double> residual_cur;
   std::optional<double> attrib_close_ms;
   std::array<int, 2> layer_delivery_pct{};
@@ -317,10 +313,10 @@ struct StatsInput {
   StatsHopIn hop;
   uint64_t frames_clean = 0, frames_truncated = 0, frames_dropped = 0;
   uint64_t stall_resets = 0;
-  // Slice salvage (spec 2026-10-10-h265-slices §5.6): FrameStream counters.
+  // Slice salvage: FrameStream counters.
   uint64_t slice_salvaged = 0, slices_kept = 0, slices_filled = 0, slices_after_hole = 0;
   // Frames finished at once because nothing could still fill their gap
-  // (FrameStream early give-up, 2026-10-10), per layer [base, enh].
+  // (FrameStream early give-up), per layer [base, enh].
   uint64_t early_finished[2] = {0, 0};
   uint64_t slice_fallback[kSliceFbCount] = {};  // indexed by SliceFallback
   // AU ring publish health (PR C: replaced the rtp/udp blocks -- video
@@ -336,8 +332,7 @@ struct StatsInput {
   std::optional<mabur::rc::Telem> telem;
   uint64_t telem_rx_ms = 0;   // GS monotonic arrival stamp
 
-  // Head-segment latency aggregates (Task 10, spec 2026-08-30-latency-
-  // accounting): nullopt while the pts anchor isn't usable() yet, or while
+  // Head-segment latency aggregates (latency accounting): nullopt while the pts anchor isn't usable() yet, or while
   // it's usable but due() said this poll() won't actually emit -- the core
   // loop only pays LatWindow::flush()'s destructive read+clear on a poll
   // that is about to emit (see main.cpp), so this is deliberately absent

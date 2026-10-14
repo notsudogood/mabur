@@ -1,5 +1,5 @@
 #pragma once
-// OsdScreen -- the web GS's MSP OSD screen model (spec 2026-09-27-web-msp-osd).
+// OsdScreen -- the web GS's MSP OSD screen model.
 // Takes whole DisplayPort snapshots (MspSink's output), applies them to the
 // shared MspScreen, and publishes each completed screen (DRAW_SCREEN) at most
 // once per min_interval_ms -- maburplay OsdSource's gate. A screen completed

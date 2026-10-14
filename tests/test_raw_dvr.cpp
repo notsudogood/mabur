@@ -73,10 +73,10 @@ TEST(irap_detection) {
   CHECK(!mabur::au_is_irap(p.data(), p.size()));
 }
 
-// The live encoder is GDR: VPS/SPS/PPS ride on a TRAIL_R refresh start
-// every gop_s, real IDRs are rare. A file that begins on the refresh start
-// has no IRAP up front, and Apple's decoder (QuickTime, VLC on macOS)
-// refuses it -- the 2026-09-29 web-GS recording. Only an IDR opens.
+// The live encoder is GDR: VPS/SPS/PPS ride on a TRAIL_R refresh start every
+// gop_s, real IDRs are rare. A file that begins on the refresh start has no
+// IRAP up front, and Apple's decoder (QuickTime, VLC on macOS) refuses it --
+// as a web-GS recording did. Only an IDR opens.
 TEST(nothing_written_before_first_idr) {
   const std::string path = scratch("rawdvr_wait.mp4");
   std::remove(path.c_str());
@@ -126,9 +126,9 @@ TEST(plain_aus_do_not_cut_fragments) {
   CHECK(d.fragments() == 1);
 }
 
-// A refresh start mid-recording is an ordinary sample: marking it sync
-// told players it was a random-access point it is not (702 of 844 "sync"
-// samples in the 2026-09-29 recording were P slices).
+// A refresh start mid-recording is an ordinary sample: marking it sync told
+// players it was a random-access point it is not (702 of 844 "sync" samples in
+// one web-GS recording were P slices).
 TEST(gdr_refresh_start_is_not_a_sync_point) {
   const std::string path = scratch("rawdvr_gdr.mp4");
   std::remove(path.c_str());
@@ -260,8 +260,7 @@ TEST(write_failure_is_sticky_error) {
 
 // Once a fragment's write starts failing, DvrMux must not keep issuing more
 // sink writes for the rest of that fragment, nor from the close() a failed
-// write triggers (2026-09-28 final review: "DvrMux keeps writing into a
-// failed sink").
+// write triggers.
 TEST(write_failure_stops_further_sink_writes) {
   std::vector<uint8_t> mem;
   bool destroyed = false;

@@ -7,7 +7,7 @@
 // "always above" choice lands off-grid (136+140 centres on 138, straddling
 // the real 132+136 and 140+144), where every other 40 MHz network and
 // devourer's spur table (keyed on standard centres) disagree with us
-// (docs/bw40-sweep-findings-2026-09-23.md).
+// (docs/findings/2026-09-23-bw40-sweep.md).
 #include <cstdint>
 
 namespace mabur {

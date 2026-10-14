@@ -234,10 +234,10 @@ export class VideoPipeline {
     this.pollIdr();
   }
 
-  // GS-requested IDR (spec 2026-09-28): ask when the gate is unarmed, paced
+  // GS-requested IDR: ask when the gate is unarmed, paced
   // by IdrRequester. Every early return in onAuInner still reaches this.
   // No VideoDecoder in this browser is a permanent, local, unfixable-by-a-
-  // key-frame condition -- never ask for one (finding 1a, final review).
+  // key-frame condition -- never ask for one.
   pollIdr() {
     if (typeof VideoDecoder === 'undefined') return;
     if (this.idr.poll(this.gate.armed, performance.now())) {

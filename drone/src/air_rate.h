@@ -1,7 +1,7 @@
 #pragma once
 // Delivered air rate of a TX spec: nominal PHY rate × the per-MCS efficiency
-// the bench measured at saturation (docs/bandwidth-sweep-findings-2026-09-17.md,
-// config air_clock.efficiency_20 / efficiency_40, picked by the spec's bw).
+// the bench measured at saturation (docs/findings/2026-09-17-bandwidth-sweep.md,
+// config air_clock.efficiency_20 / efficiency_40, picked by the TX spec's bw).
 // Both drone consumers of "how fast does the air drain" price off this,
 // never off the nominal rate alone: RcAgent::run_bitrate_policy (so
 // encoder.airtime_budget is a fraction of capacity the link actually

@@ -20,7 +20,7 @@ void lincomb(uint8_t* acc, const uint8_t* sym, uint8_t coeff, size_t len);
 // n lincomb() calls over a zeroed out, but the accumulator lives in
 // registers across all n rows (loaded/stored once per 64 B block instead
 // of once per row), which is where the per-row form spent its cycles on
-// the drone's Cortex-A7 (2026-09-22 profile: 74 % of the FEC worker in
+// the drone's Cortex-A7 (profile: 74 % of the FEC worker in
 // lincomb, ~55 us CPU per 32 x 332 B repair). Rows with coeff 0 are
 // skipped. len need not be a multiple of 16 (scalar tail), but callers
 // that can pad to 16 should — the tail is ~10x slower per byte.

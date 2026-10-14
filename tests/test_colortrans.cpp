@@ -9,7 +9,7 @@ static bool near3(Vec3 v, float r, float g, float b, float tol = 2e-4f) {
 }
 
 // Reference values: a NumPy transcription of ../colortrans/colortrans3.glsl
-// with the kColorTrans3 constants, computed 2026-09-16 (spec section 1).
+// with the kColorTrans3 constants.
 // Black and white pin the clamps, mid grey pins the grade (no saturation
 // effect on grey), the two colours pin the matrix and the saturation mix.
 TEST(forward_matches_the_glsl_reference) {

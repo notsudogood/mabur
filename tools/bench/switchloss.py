@@ -85,14 +85,14 @@ if not ladder:
 max_mcs = max(ladder)
 
 def rates(rung):
-    """PHY MCS per stream at a rung: same-rate fixed pairs (2026-08-30) put
+    """PHY MCS per stream at a rung: same-rate fixed pairs put
     base and enh on the op MCS; the probe canary runs one above it."""
     m = ladder[rung]
     return {0: m, 1: m, 5: m + 1 if m + 1 <= max_mcs else None}
 
 # ---- probe log: the drone's applied op, as heard ---------------------------
 probe_rows = []
-first_col = 10   # probelog 2; probelog 3 (2026-09-24) inserts bw after mcs
+first_col = 10   # probelog 2; probelog 3 inserts bw after mcs
 for line in open(probe_path):
     p = line.split()
     if not p: continue

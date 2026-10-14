@@ -41,7 +41,7 @@ void RawDvr::feed(const uint8_t* au, size_t n, uint32_t pts_us, bool complete) {
   // every TRAIL_R refresh start, which references frames before it.
   // Treating those as sync opened files on a P slice and flagged P slices
   // as random-access points -- Apple's decoder (QuickTime, VLC on macOS)
-  // refused the whole file (2026-09-29 web-GS recording).
+  // refused the whole file (seen on a web-GS recording).
   const bool key = au_is_irap(au, n);
   if (state_ == State::WaitSync) {
     // A file must BEGIN at a sync point. params_ is sticky, so on a second

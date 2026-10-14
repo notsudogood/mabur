@@ -22,7 +22,7 @@ LinkHealthAssembler::LinkHealthAssembler(const LinkHealthCfg& cfg)
 void LinkHealthAssembler::on_au_begin(uint8_t sid, uint16_t frame_id,
                                       double now_ms) {
   // One probe expectation per video access unit, base and enh alike
-  // (probe per AU, 2026-09-16): the probe body rides the AU's send
+  // (probe per AU): the probe body rides the AU's send
   // opportunity, so the AU count is what "expected" means
   // (probe_track.h explains why seq gaps cannot be).
   probe_track_.on_au(sid, frame_id, now_ms);
@@ -59,14 +59,14 @@ LinkHealthAssembler::Tick LinkHealthAssembler::tick(double now_ms,
   Tick out;
   // Transition boundaries for loss attribution + settle-blank of the two
   // residual decision windows + clear of the two util decision windows:
-  // gs/src/transition_edge.h (extracted 2026-09-05 so
+  // gs/src/transition_edge.h (extracted so
   // tests/test_transition_edge.cpp can pin what an edge blanks; the util
-  // windows rejoined it 2026-10-06, flight 0026).
+  // windows rejoined it after flight 0026).
   edge_.on_tick(in.op, agg.decoder(), s1_resid_cur_, s3_resid_cur_,
                 s1_loss_cur_, s3_loss_cur_, now_ms);
 
   // Control step: post-FEC residual from the FEC decoder's own abandonment
-  // counters — ONE formula for every consumer since 2026-09-02, see
+  // counters — ONE formula for every consumer, see
   // gs/src/ladder_residual.cpp. Per-layer delivery is operator-facing only
   // — it rides the stats sideport below, never the RCF (RC_VERSION 3
   // dropped it; maburd never read it).
@@ -78,8 +78,8 @@ LinkHealthAssembler::Tick LinkHealthAssembler::tick(double now_ms,
     w.add(lc.expected, lc.arrived, now_ms);
     const auto ls = w.sample(now_ms);
     // Idle layer reads 100, matching the deleted window_delivery_pct (the
-    // 2026-07 controller-wedge finding in docs/bench-validation.md turns
-    // on that convention). Truncating like the old integer ratio did.
+    // controller's minimum-power wedge fix relies on that convention).
+    // Truncating like the old integer ratio did.
     const int pct =
         ls.valid ? static_cast<int>(100.0 * (1.0 - ls.loss)) : 100;
     ld[static_cast<size_t>(s)] =
@@ -115,7 +115,7 @@ LinkHealthAssembler::Tick LinkHealthAssembler::tick(double now_ms,
   // BASE sid's (0) window, the critical always-decode layer that drives
   // the ladder's ordinary demote/promote decisions.
   const auto s1 = agg.decoder().stats(0);
-  // Pre-FEC (util) accounting from the ArrivalTracker (spec 2026-09-05):
+  // Pre-FEC (util) accounting from the ArrivalTracker:
   // expected = seq advance past the settle line, arrived = heard, booked
   // at arrival -- no repair/completion lag, and a denominator that does
   // not depend on decoder progress after a re-key. The total feeds the
@@ -143,7 +143,7 @@ LinkHealthAssembler::Tick LinkHealthAssembler::tick(double now_ms,
   // Block 4's instant-demote input: BASE post-FEC loss from the FEC
   // decoder's own abandonment count, mirroring s3_resid_cur below. See
   // gs/src/ladder_residual.cpp for why this replaced the packet-level
-  // delivery window on 2026-09-02.
+  // delivery window.
   const auto s1_rc = maburgs::ladder_residual_counts(agg.decoder());
   s1_resid_cur_.add(s1_rc.expected, s1_rc.arrived, now_ms);
   const auto s1_rcur_sample = s1_resid_cur_.sample(now_ms);
@@ -167,7 +167,7 @@ LinkHealthAssembler::Tick LinkHealthAssembler::tick(double now_ms,
   const auto s3_cur_sample = s3_loss_cur_.sample(now_ms);
   const auto s3_rcur_sample = s3_resid_cur_.sample(now_ms);
 
-  // Probe window (spec 2026-09-04 section 3.3): union block counters for
+  // Probe window: union block counters for
   // the profile currently commanded, windowed by the same machinery as the
   // s1/s3 windows above. Blanked on a commanded-profile change so it
   // refills only from bodies carrying the new profile (RCF lag + the
@@ -238,8 +238,8 @@ LinkHealthAssembler::Tick LinkHealthAssembler::tick(double now_ms,
   }
 
   // Every demote input reads the CURRENT-rung (attributed) value; stale
-  // transition debris can no longer fire any demote. Unconditional since
-  // 2026-08-15. sample_valid / s3_valid / s3_expected_syms stay
+  // transition debris can no longer fire any demote. Unconditional.
+  // sample_valid / s3_valid / s3_expected_syms stay
   // total-based on purpose: they gate "was there traffic at all", and an
   // all-stale window must still count as feedback (a cur-based valid
   // would un-stamp last_feedback_ms_ and could walk into the blind-side
@@ -254,7 +254,7 @@ LinkHealthAssembler::Tick LinkHealthAssembler::tick(double now_ms,
   health.s3_residual_loss =
       s3_rcur_sample.valid ? s3_rcur_sample.loss : 0.0;
   health.s3_expected_syms = s3_loss_.expected_in_window(now_ms);
-  // Probe gate inputs (spec 2026-09-04 section 3.3). probe_rung is the rung
+  // Probe gate inputs. probe_rung is the rung
   // the sample was commanded at. The h.probe_rung == pr equality the
   // controller checks against is always true in practice -- both sides
   // read probe_rung() on the same tick -- and is kept only as a cheap

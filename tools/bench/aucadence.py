@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # Base-vs-enh AU completion-offset gate for the maburgs AU ring (metric
-# defined in docs/airtime-balance-spike-findings-2026-08-29.md; the spike's
-# throwaway aucadence.py, mainlined 2026-08-30 after the airtime-balance-uep
-# flag day made this a standing acceptance number).
+# defined in docs/findings/2026-08-29-airtime-balance-spike.md; the spike's
+# throwaway aucadence.py, mainlined after the airtime-balance-uep flag day
+# made this a standing acceptance number).
 #
 # Per-AU completion delay = t_complete_us − pts (SlotHdr v2's writer-stamped
-# finish() time; 2026-08-31, was arrival_mono_us from a ~0.5 ms poll of the
-# ring writer index before that — see docs/data-provenance.md). Only relative
+# finish() time; before SlotHdr v2 it was arrival_mono_us from a ~0.5 ms poll
+# of the ring writer index — see docs/data-provenance.md). Only relative
 # delays are meaningful (drone pts and GS monotonic clocks share no epoch),
 # so the reported OFFSET is p50(base delays) − p50(enh delays): the clock
 # offset cancels in the difference, leaving the systematic, class-dependent
@@ -40,9 +40,10 @@ import argparse, json, mmap, statistics, struct, sys, time
 HDR = 4096
 SLOT_HDR = 64
 MAGIC = 0x4D425541
-# SlotHdr v3 (kAuRingVersion 3, 2026-09-06 air-clock): +u16 drone_air_ms at
-# slot offset 52 (the drone's modelled air backlog at the AU's arrival, ms).
-VERSION = 3
+# Ring v4 (kAuRingVersion 4): codec byte gone, offset 54 u8 state (0 closed,
+# 1 open, 2 aborted), 55 nslices, 56 valid_len. Only closed records count.
+VERSION = 4
+STATE_CLOSED = 0
 FLAG_IDR = 0x01
 
 
@@ -80,11 +81,12 @@ def main():
         l1 = struct.unpack_from("<I", mm, base)[0]
         if l1 & 1:
             return None
-        ln, rec, fid, pts, sid, flags, codec = struct.unpack_from(
-            "<IQQIBBB", mm, base + 4)
+        ln, rec, fid, pts, sid, flags = struct.unpack_from(
+            "<IQQIBB", mm, base + 4)
         t_complete = struct.unpack_from("<Q", mm, base + 40)[0]
+        state = struct.unpack_from("<B", mm, base + 54)[0]
         l2 = struct.unpack_from("<I", mm, base)[0]
-        if l1 != l2:
+        if l1 != l2 or state != STATE_CLOSED:
             return None
         return ln, pts, sid, flags, t_complete
 

@@ -440,10 +440,9 @@ TEST(owner_mid_retune_is_not_a_logged_transition) {
   r.card->tick(r.now_ms += 1100);
   CHECK(r.card->transitions() == 3);
 }
-// Plan 2 review carry-over, fix round 1: the mid-retune suppression is
-// bounded to 1 s -- a relay stuck in a failed TUNE (owner, never reaching
-// our channel) still logs "waiting for STATUS" once the grace runs out,
-// instead of going silent forever.
+// The mid-retune suppression is bounded to 1 s -- a relay stuck in a
+// failed TUNE (owner, never reaching our channel) still logs "waiting for
+// STATUS" once the grace runs out, instead of going silent forever.
 TEST(owner_stuck_in_a_failed_tune_logs_after_the_grace) {
   Rig r;
   REQUIRE(r.card->open_and_start());

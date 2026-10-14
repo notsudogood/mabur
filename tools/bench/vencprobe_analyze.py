@@ -44,8 +44,8 @@ def load(path):
             cmds.append(dict(tb=int(p[1]), ta=int(p[2]), kbps=int(p[3]),
                              ok=int(p[4])))
         elif p[0] == 's':
-            # 3rd column (encoder qp) existed for a few hours on 2026-09-03
-            # and was always 0 (the SDK never fills startQual); tolerated.
+            # 3rd column (encoder qp) existed only in early captures and
+            # was always 0 (the SDK never fills startQual); tolerated.
             polls.append(dict(t=int(p[1]), kbps=int(p[2]),
                               qp=int(p[3]) if len(p) > 3 else None))
     return frames, cmds, polls

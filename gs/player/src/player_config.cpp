@@ -3,7 +3,6 @@
 #include <fstream>
 #include <stdexcept>
 
-#include "gs_layer.h"  // parse_gs_style
 #include "mabur/toml.h"
 
 namespace maburplay {
@@ -96,12 +95,12 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
     ~Clear() { g_defaulted = nullptr; g_file.clear(); g_line = 0; }
   } clear_on_exit;
 
-  for (const char* sec : {"dvr", "osd", "input", "display", "colortrans"})
+  for (const char* sec : {"dvr", "osd", "input", "display", "colortrans", "decoder"})
     if (!j.contains(sec)) note_default("", sec, "(section absent)");
 
   check_keys(j, "",
              {"ring_path", "socket", "backend", "screen_mode", "dvr", "osd",
-              "input", "display", "colortrans"});
+              "input", "display", "colortrans", "decoder"});
   Config c;
 
   c.ring_path = get_str(j, "ring_path", "/dev/shm/mabur-au", "");
@@ -160,13 +159,10 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
 
     if (o.contains("gs")) {
       const Value& g = o["gs"];
-      check_keys(g, "osd.gs", {"enable", "port", "font", "style", "stale_ms"});
+      check_keys(g, "osd.gs", {"enable", "port", "font", "stale_ms"});
       c.osd.gs.enable = get_bool(g, "enable", c.osd.gs.enable, "osd.gs");
       c.osd.gs.port = static_cast<int>(get_int(g, "port", c.osd.gs.port, 1, 65535, "osd.gs"));
       c.osd.gs.font = get_str(g, "font", c.osd.gs.font, "osd.gs");
-      c.osd.gs.style = get_str(g, "style", c.osd.gs.style, "osd.gs");
-      if (!parse_gs_style(c.osd.gs.style, nullptr))
-        fail("osd.gs.style", "must be \"compact\" or \"essential\"");
       // Default mirrors OsdCfg::GsCfg::stale_ms (see player_config.h).
       c.osd.gs.stale_ms =
           static_cast<int>(get_int(g, "stale_ms", c.osd.gs.stale_ms, 0, 60000, "osd.gs"));
@@ -226,6 +222,12 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
     const Value& ct = j["colortrans"];
     check_keys(ct, "colortrans", {"enable"});
     c.colortrans.enable = get_bool(ct, "enable", c.colortrans.enable, "colortrans");
+  }
+
+  if (j.contains("decoder")) {
+    const Value& dc = j["decoder"];
+    check_keys(dc, "decoder", {"stream"});
+    c.decoder.stream = get_bool(dc, "stream", c.decoder.stream, "decoder");
   }
 
   return c;

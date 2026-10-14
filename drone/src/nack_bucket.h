@@ -4,7 +4,7 @@
 
 namespace mabur {
 
-// Air cap for NACK re-sends (spec 2026-10-05 fec-nack §4.3), in symbols.
+// Air cap for NACK re-sends, in symbols.
 // The handler refills it at nack.air_pct of the base layer's delivered
 // capacity and takes one token per re-sent symbol (two for a repeat-flagged,
 // doubled send). A take beyond the tokens is REFUSED whole -- never queued,

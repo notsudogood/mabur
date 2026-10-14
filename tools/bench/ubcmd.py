@@ -17,7 +17,7 @@ Gotcha: commands are terminated with CR alone.  U-Boot re-runs the previous
 command on a bare LF, so sending CRLF executes everything twice -- which
 looks exactly like the hardware being slow.
 
-Env: MABUR_SERIAL (default /dev/ttyUSB0), MABUR_DRONE (192.168.10.95).
+Env: MABUR_SERIAL (default /dev/ttyUSB0), MABUR_DRONE (the board's IP, required).
 """
 import serial, sys, time, subprocess, threading
 
@@ -26,7 +26,7 @@ dur  = float(sys.argv[2])
 cmds = sys.argv[3:]
 
 import os
-HOST = os.environ.get("MABUR_DRONE", "192.168.10.95")
+HOST = os.environ.get("MABUR_DRONE") or sys.exit("set MABUR_DRONE=<board ip>")
 s = serial.Serial(os.environ.get("MABUR_SERIAL", "/dev/ttyUSB0"),
                   int(os.environ.get("MABUR_SERIAL_BAUD", "115200")), timeout=0.05)
 s.reset_input_buffer()

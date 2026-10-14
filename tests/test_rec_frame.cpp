@@ -1,5 +1,5 @@
 // Host tests for drone/venc/rec_frame.h: the record drain's per-NAL
-// start-code -> length-prefix rewrite (VTX recorder CPU diet, 2026-09-26).
+// start-code -> length-prefix rewrite (VTX recorder CPU diet).
 #include <cstring>
 #include <vector>
 

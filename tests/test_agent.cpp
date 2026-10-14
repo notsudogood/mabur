@@ -36,7 +36,7 @@ struct MockActuator : Actuator {
   bool bitrate_ok = true;
   bool roi_ok = true;
   std::vector<uint8_t> retunes;
-  // Parallel to `retunes` (same index): the spec §7 reason literal the agent
+  // Parallel to `retunes` (same index): the reason literal the agent
   // passed with each move. Kept separate so channel assertions stay
   // `retunes[i] == ch`.
   std::vector<std::string> retune_reasons;
@@ -100,7 +100,7 @@ Config make_cfg() {
   return cfg;
 }
 
-// Link pairing (spec 2026-10-01 §6/§7): every RCF the drone accepts must
+// Link pairing: every RCF the drone accepts must
 // carry a SipHash tag for a session pair (vrx_nonce, vtx_nonce) plus the
 // extended seq32. kVrx is the test GS's vrx_nonce.
 static const uint32_t kVrx = 0xCAFEF00D;
@@ -108,13 +108,13 @@ static const uint32_t kVrx = 0xCAFEF00D;
 // Builds a CRC-valid, tagged RCF wire frame for seq/profile/fec_overhead,
 // with DISTINCT base/enh overheads (ov_16ths keeps the callers' existing
 // sixteenths-based literals: 8 == 0.5, 16 == 1.0, ...). This is the widened
-// form (controller ruling, Task 6): the 4-arg overload below still packs one
+// form: the 4-arg overload below still packs one
 // value into both wire fields for the ~40 call sites that don't care about
 // the split, but a test that means to exercise the base/enh PAIR (the
 // share-weighting tests, and the AppliedOp-pair test) must call this form
 // directly, or the two wire fields collapse to the same value and the
 // weighted target can't tell base from enh apart (see the weakened-test
-// comments this replaced, Task 2 finding). vtx_nonce is the session's (from
+// comments this replaced). vtx_nonce is the session's (from
 // the DISC_ACK); seq32 0 means "same as the wire seq" (no wrap yet).
 std::vector<uint8_t> make_rcf_wire(uint16_t seq, uint8_t profile, uint8_t ov_base_16ths,
                                    uint8_t ov_enh_16ths, uint8_t probe_profile,
@@ -218,7 +218,7 @@ TEST(boot_first_tick_applies_max_range_and_moves_to_rendezvous) {
     CHECK(op.ladder[static_cast<size_t>(i)].bw == expect_ladder[static_cast<size_t>(i)].bw);
   }
   // 2.0, not the wire-literal 1.0: apply_max_range's hardcoded constant
-  // carries the old pre-Task-1 ×2 translation itself (see its comment).
+  // carries the old ×2 translation itself (see its comment).
   CHECK(op.fec_ov_base > 1.999 && op.fec_ov_base < 2.001);
   CHECK(op.fec_ov_enh > 1.999 && op.fec_ov_enh < 2.001);
   CHECK(op.shed[0] == false);
@@ -232,7 +232,7 @@ TEST(boot_first_tick_applies_max_range_and_moves_to_rendezvous) {
   CHECK(act.bitrates.back() == 1400);
 }
 
-// 2. Link pairing (spec 2026-10-01 §6): a DISC only elicits a DISC_ACK. It
+// 2. Link pairing: a DISC only elicits a DISC_ACK. It
 // carries a vtx_nonce for the GS's vrx_nonce, agrees to the proposed
 // channel, and reports the drone's OWN width (40 proposed here, to catch an
 // ack that echoes the GS's request). No op, no retune, no LINKED entry: the
@@ -380,7 +380,7 @@ TEST(new_vrx_nonce_while_linked_swaps_session_without_touching_op) {
 
 // A promotion while LINKED whose pair was acked on a DIFFERENT channel still
 // moves -- deferred to tick() like any promotion (the old LINKED ack-only
-// branch honoured a channel move; spec 2026-10-01 §6 keeps it, but only
+// branch honoured a channel move; link pairing keeps it, but only
 // once the new pair has proved itself with a verified RCF).
 TEST(promotion_while_linked_to_a_new_channel_defers_the_move) {
   Config cfg = make_cfg();
@@ -428,7 +428,7 @@ TEST(wrong_key_disc_gets_flagged_ack_and_nothing_else) {
   CHECK(agent.state() == RcAgent::State::RENDEZVOUS);
 }
 
-// Spec 2026-10-01 §7: failsafe entry clears both sessions. Otherwise every
+// Failsafe entry clears both sessions. Otherwise every
 // RCF the GS sent during an uplink fade stays replayable (valid tag, seq32
 // still ahead of the tracker) for the life of the process. Recovery is the
 // GS's next keep-alive DISC, which gets a fresh pair.
@@ -583,12 +583,12 @@ TEST(cal_cmd_with_an_already_seen_nonce_is_refused_until_the_session_changes) {
 }
 
 // The GS is radio-silent for every sweep phase, so the drone always hits
-// FAILSAFE (and clears its session, spec 2026-10-01 §7) partway through a
+// FAILSAFE (and clears its session) partway through a
 // calibration run. The run's later cal frames -- the next phase's CAL_CMD,
 // and above all the CAL_RESULT sent straight into the silent verify window
 // -- are still tagged under the pair the run was going under, and must
-// verify for as long as the caller says a sweep is running. Bench repro
-// 2026-10-03: every result auth-rejected, nothing ever applied.
+// verify for as long as the caller says a sweep is running. Bench repro:
+// every result auth-rejected, nothing ever applied.
 TEST(cal_frames_verify_under_the_running_sweeps_session_after_failsafe_clears_it) {
   Config cfg = make_cfg();
   MockActuator act;
@@ -773,9 +773,9 @@ TEST(genlock_setpoint_applied_only_when_enabled_tagged_and_fresh) {
 }
 
 // 2b. Keep-alive DISC while LINKED: ACK-ONLY. The drone must reply with a
-// DiscAck (so a rebooted GS re-learns chip_caps — the stale-caps deadlock,
-// 2026-08-12/2026-08-28) but must otherwise treat the DISC as noise: no
-// init-profile apply (the 2026-07-12 op-thrash fix stands), no state
+// DiscAck (so a rebooted GS re-learns chip_caps — the stale-caps deadlock)
+// but must otherwise treat the DISC as noise: no init-profile apply (the
+// op-thrash fix stands), no state
 // change, no failsafe-watchdog refresh, no bitrate re-force.
 TEST(keepalive_disc_while_linked_acks_without_op_change) {
   Config cfg = make_cfg();
@@ -830,7 +830,7 @@ TEST(keepalive_disc_while_linked_acks_without_op_change) {
 }
 
 // 3. RCF profile HT mcs2/20, fec16=8 (ov=0.5) -> op ladder is BASE=mcs2,
-// ENH=mcs2 (same-rate ruling, 2026-08-30 spec same-rate-fixed-pairs), ov
+// ENH=mcs2 (same-rate fixed pairs), ov
 // 0.5; set_bitrate_kbps called with the weighted target: rate_b=rate_e=19.5
 // (mcs2, both slots), ovb==ove so the fixed share cancels out, denom =
 // 0.6*1.5/19.5 + 0.4*1.5/19.5 = 0.076923, kbps = 1000*0.65/0.076923 =
@@ -838,7 +838,7 @@ TEST(keepalive_disc_while_linked_acks_without_op_change) {
 // link-rtt: the telem echo must name the RCF rcf_age_ms is aging against,
 // and go INVALID whenever last_fb_ms_ was refreshed by something that is
 // not an RCF. Failsafe entry is exactly that case: it clears the session
-// (spec 2026-10-01 §7) AND rebases last_fb_ms_ to now, so a fresh-looking age paired
+// AND rebases last_fb_ms_ to now, so a fresh-looking age paired
 // with a stale echoed seq would let the GS fabricate an RTT sample from
 // the wrong send time. (A keepalive DISC while LINKED changes nothing —
 // feedback state included — so the echo correctly stays valid there.)
@@ -883,7 +883,7 @@ TEST(rcf_apply_computes_ladder_fec_and_bitrate) {
   CHECK(act.bitrates.back() == 8500);
 }
 
-// 3b. Per-MCS efficiency (docs/bandwidth-sweep-findings-2026-09-17.md): the
+// 3b. Per-MCS efficiency (docs/findings/2026-09-17-bandwidth-sweep.md): the
 // policy prices each layer at nominal × air_clock.efficiency_<bw>[mcs], so
 // the budget is a fraction of the capacity the link DELIVERS. Same op as 3
 // (20 MHz) with efficiency_20[2] = 0.5: both rate terms halve, kbps
@@ -903,7 +903,7 @@ TEST(bitrate_policy_prices_at_delivered_rate) {
 }
 
 // 3a. AppliedOp carries the RCF's base/enh overheads as a genuine PAIR, not
-// folded into one value (Task 6, RC_VERSION 5): base=1.0, enh=0.5 must
+// folded into one value (RC_VERSION 5): base=1.0, enh=0.5 must
 // survive on_rc_frame -> apply_ladder_op -> AppliedOp distinctly.
 TEST(applied_op_carries_distinct_base_enh_overhead_pair) {
   Config cfg = make_cfg();
@@ -1033,8 +1033,7 @@ TEST(bitrate_policy_failsafe_degenerates_to_single_rate) {
 
 // 3d. The commanded overhead PAIR is weighted by the FIXED base share
 // (kShareBase = 0.60), with no measured term anywhere: AirFeed is deleted
-// and the target is once again a pure function of the operating point
-// (2026-09-01, "be like master"). Same-rate ruling means BASE and ENH share
+// and the target is a pure function of the operating point. Same-rate ruling means BASE and ENH share
 // one PHY rate (mcs5, 52 Mbps both slots), so with ovb==ove the ov term
 // factors out of the weighted sum entirely and the share is unobservable —
 // this test therefore uses a DISTINCT pair (ov_base=0.5, ov_enh=1.0), which
@@ -1196,7 +1195,7 @@ TEST(rcf_after_failsafe_requests_idr) {
   CHECK(agent.state() == RcAgent::State::FAILSAFE);
   int idr_before = act.idr_calls;
 
-  // Failsafe cleared the session (spec 2026-10-01 §7): the keep-alive DISC
+  // Failsafe cleared the session: the keep-alive DISC
   // re-pairs, and the first RCF under the new pair re-links.
   const uint32_t vtx2 = ack_agent(agent, act, 136, kVrx, 1400);
   auto wire2 = make_rcf_wire(2, profile_byte, 8, vtx2);
@@ -1268,7 +1267,7 @@ TEST(congestion_shed_escalates_and_recovers) {
 // the pipe the queue ran to its cap and drop-oldest threw bodies away with
 // shed_level_ still 0 -- and those drops are indistinguishable from RF
 // loss at the GS, which booked them as residual and demoted 5->4->3->2 in
-// 450 ms at 36 dB SNR (flight-0011 @88 s / @102 s, 2026-09-03). A queue at
+// 450 ms at 36 dB SNR (flight-0011 @88 s / @102 s). A queue at
 // or past half its cap must shed the enh layer BEFORE the first drop (a
 // shed is invisible to the ladder: no s3 traffic, no s3 decision); below
 // that it must not. Same 2 s clean decay as the USB trigger. REVERT CHECK:
@@ -1433,7 +1432,7 @@ TEST(bitrate_policy_hysteresis_within_one_second) {
 // the same tick that applies the MCS. The radio capacity has already
 // dropped when the RCF lands; a swallowed shed means the encoder floods a
 // smaller pipe and TxQueue drop-oldest kills whole FEC bodies (the
-// 2026-08-09 freeze-crash — docs/shed-lag-findings-2026-08-09.md). The
+// freeze-crash — docs/findings/2026-08-09-shed-lag.md). The
 // v1 throttle/hysteresis exist to dedup repeated identical RCFs, never to
 // defer a decrease.
 TEST(demote_cascade_sheds_every_decrease_immediately) {
@@ -1477,7 +1476,7 @@ TEST(demote_cascade_sheds_every_decrease_immediately) {
   //    too. No longer collides with the MAX_RANGE floor's 1400: that is
   //    ov=2.0, not this RCF's literal 1.0 — the old uep_layer_overhead
   //    clamp-to-2.0 translation that made them coincide is gone since
-  //    Task 1/RC_VERSION 4.)
+  //    RC_VERSION 4.)
   const Step down[] = {{4, 8, 16900}, {2, 8, 8500}, {0, 16, 2100}};
   uint64_t t = 3100;
   for (const Step& d : down) {
@@ -1530,7 +1529,7 @@ TEST(bitrate_increase_still_gated) {
 
 // 10d. A promote must reach the encoder even when bitrate_max_kbps clamps
 // the new target to within 10% of the last applied value. Measured on the
-// bench 2026-08-28: prod runs airtime_budget 0.60 / bitrate_max 10000.
+// bench: prod runs airtime_budget 0.60 / bitrate_max 10000.
 // Re-derived for the same-rate ruling (both slots ride the scored mcs,
 // ov literal per rung, budget 0.60):
 //   rung4 (mcs4/ov1.5 -- ov16=24, not the two-rate-era 16/1.0, which now
@@ -1541,7 +1540,7 @@ TEST(bitrate_increase_still_gated) {
 //     denom=(1+1.0)/52=0.038462, kbps=600/0.038462=15600.0, clamps to
 //     10000.
 // |10000-9400| = 600 is inside the v1 `changed_enough` deadband (last/10 =
-// 940) that existed until 2026-08-28, so the promote was swallowed and the
+// 940) the agent used to have, so the promote was swallowed and the
 // encoder stayed on the mcs4 bitrate forever while the link ran mcs5 -- a
 // permanent 6% undershoot at the rung the link sits on nearly all the
 // time. The deadband is a filter on an absolute target with no
@@ -1625,7 +1624,7 @@ TEST(congestion_shed_never_commands_below_bitrate_min) {
 
 TEST(link_established_latches_on_rendezvous_to_linked_rcf_not_on_failsafe_flap) {
   // BOOT/RENDEZVOUS -> LINKED is the process-(re)start scenario: frames
-  // encoded before the link is up never reach the air (rig 2026-07-25:
+  // encoded before the link is up never reach the air (rig:
   // discont_seen=0 at every stall onset), so main re-marks the frame
   // discontinuity window when the link first comes up. FAILSAFE -> LINKED
   // must NOT latch: a routine RF flap would re-base the GS's id space and
@@ -1637,7 +1636,7 @@ TEST(link_established_latches_on_rendezvous_to_linked_rcf_not_on_failsafe_flap) 
   agent.tick(0, RadioHealth{});           // BOOT -> RENDEZVOUS
   CHECK(!agent.take_link_established());
   const uint32_t vtx = ack_agent(agent, act);
-  CHECK(!agent.take_link_established());  // a DISC links nothing (spec 2026-10-01 §6)
+  CHECK(!agent.take_link_established());  // a DISC links nothing
 
   uint8_t profile_byte = encode_profile(PhyMode::HT, 2, 20);
   auto rcf1 = make_rcf_wire(1, profile_byte, 8, vtx);
@@ -1658,8 +1657,8 @@ TEST(link_established_latches_on_rendezvous_to_linked_rcf_not_on_failsafe_flap) 
 
 // 11. RCF with probe_profile != kNoProbeProfile fills the dedicated probe
 // slot (AppliedOp.probe/probe_profile), NOT the enh layer — ladder[1] stays
-// on the base profile's scored mcs regardless of a probe (spec 2026-09-04
-// probe-stream). agent.probe_on() reflects the last accepted RCF's
+// on the base profile's scored mcs regardless of a probe (probe stream).
+// agent.probe_on() reflects the last accepted RCF's
 // probe_profile and clears the moment a follow-up RCF arrives at
 // kNoProbeProfile.
 TEST(probe_rcf_fills_the_probe_slot_not_the_enh_layer) {
@@ -1687,7 +1686,7 @@ TEST(probe_rcf_fills_the_probe_slot_not_the_enh_layer) {
   CHECK(!agent.probe_on());
 }
 
-// 11a. radio.ldpc = false (2026-10-02, RTL8821AU GS): every slot the agent
+// 11a. radio.ldpc = false (RTL8821AU GS): every slot the agent
 // applies flies BCC -- the BOOT MAX_RANGE op, the RCF-commanded rung and its
 // probe slot. STBC stays on.
 TEST(ldpc_off_config_clears_ldpc_on_every_applied_slot) {
@@ -1728,8 +1727,7 @@ TEST(max_range_clears_the_probe_slot) {
   CHECK(act.applied.back().probe_profile == kNoProbeProfile);
 }
 
-// 11c. A probe must not move the encoder bitrate (spec 2026-08-05 s3-probe-
-// promote, carried into 2026-09-04 probe-stream: the probe stream has its
+// 11c. A probe must not move the encoder bitrate (the probe stream has its
 // own slot and costs zero encoder writes — the bitrate stays keyed to the
 // base profile's ladder[1]).
 TEST(probe_rcf_does_not_change_bitrate) {
@@ -1751,7 +1749,7 @@ TEST(probe_rcf_does_not_change_bitrate) {
 // 11d. The probe airs at the probe profile's OWN width, not the current
 // op's — a 20/4 op with a 40/3 probe_profile (GS sitting on 20 with 40
 // above it) must measure the 40 rung at 40, or a 20->40 promote is blind
-// (controller Task 11b, 2026-09-24, docs/bw40.md).
+// (docs/bw40.md).
 TEST(probe_rcf_airs_at_the_probe_profiles_own_width) {
   Config cfg = make_cfg();
   MockActuator act;
@@ -1778,7 +1776,7 @@ TEST(probe_rcf_airs_at_the_probe_profiles_own_width) {
   CHECK(op2.probe.bw == 40);
 }
 
-// Link pairing (spec 2026-10-01 §6): a DISC no longer links, so it no longer
+// Link pairing: a DISC no longer links, so it no longer
 // latches link_established either -- the first verified RCF does.
 TEST(link_established_latches_on_first_rcf_not_on_disc) {
   Config cfg = make_cfg();
@@ -1795,8 +1793,8 @@ TEST(link_established_latches_on_first_rcf_not_on_disc) {
   CHECK(!agent.take_link_established());
 }
 
-// Auto channel select (spec 2026-09-13), as amended by link pairing (spec
-// 2026-10-01 §6): DISC with a foreign channel -> ack agreeing to the NEW
+// Auto channel select, as amended by link pairing: DISC with a foreign
+// channel -> ack agreeing to the NEW
 // channel from the current one; the retune waits for the first verified RCF
 // and then runs from tick() (after main's promote Telem).
 TEST(disc_foreign_channel_acks_then_retunes) {
@@ -1818,14 +1816,14 @@ TEST(disc_foreign_channel_acks_then_retunes) {
   REQUIRE(act.retunes.size() == 1);
   CHECK(act.retunes[0] == 149);
   REQUIRE(act.retune_reasons.size() == 1);
-  CHECK(act.retune_reasons[0] == "disc");             // spec §7 reason
+  CHECK(act.retune_reasons[0] == "disc");             // retune reason
   CHECK(agent.channel() == 149);
   CHECK(agent.state() == RcAgent::State::LINKED);
 }
 
 // A keep-alive DISC for the CURRENT pair re-proposing a channel mid-session
 // is ack-only now: the ack still reports the agreed channel, but nothing
-// retunes and the op is untouched (spec 2026-10-01 §6: no DISC path
+// retunes and the op is untouched (no DISC path
 // retunes; an in-session channel change is the RCF hop order's job, and the
 // GS only acts on an ack's channel on a NEW vtx_nonce).
 TEST(linked_keepalive_disc_foreign_channel_acks_without_retune) {
@@ -1884,10 +1882,10 @@ TEST(unconfirmed_move_returns_home_after_move_confirm_ms) {
   REQUIRE(act.retunes.size() == 2);
   CHECK(act.retunes[1] == 136);
   REQUIRE(act.retune_reasons.size() == 2);
-  CHECK(act.retune_reasons[1] == "move_unconfirmed");  // spec §7 reason
+  CHECK(act.retune_reasons[1] == "move_unconfirmed");  // retune reason
   CHECK(agent.channel() == 136);
   CHECK(agent.state() == RcAgent::State::RENDEZVOUS);
-  // Leaving LINKED clears both sessions (spec §7), same as failsafe entry:
+  // Leaving LINKED clears both sessions, same as failsafe entry:
   // an RCF under the old pair is rejected ...
   CHECK(!agent.current_session().valid);
   const uint32_t old_vtx = parse_disc_ack(act.controls[0].data(), act.controls[0].size())->vtx_nonce;
@@ -1905,17 +1903,16 @@ TEST(unconfirmed_move_returns_home_after_move_confirm_ms) {
   CHECK(agent.state() == RcAgent::State::LINKED);
 }
 
-// Reordered from the brief (which ticked 3000 then 1600, non-monotonic) to a
-// monotonic timeline that still exercises all four checkpoints: the move
+// A monotonic timeline that exercises all four checkpoints: the move
 // (deferred to the tick at 100) is confirmed at 500; no fallback past
 // move_confirm_ms (100+2000=2100, checked via retunes.size() staying at 1 --
 // state has already moved on to FAILSAFE by then since failsafe_ms(1000) <
 // move_confirm_ms(2000) from the RCF's last_fb_ms=500, which the same
 // tick(2100) call also crosses); LINKED -> FAILSAFE without a home retune
-// (channel stays on the op channel per spec §6: "on the op channel only
-// while LINKED or FAILSAFE"); FAILSAFE -> RENDEZVOUS at +rendezvous_ms from
-// the FAILSAFE-entry rebase, WITHOUT any retune (spec 2026-10-03 §3:
-// FAILSAFE->RENDEZVOUS never retunes -- there is no home to go to).
+// (channel stays on the op channel: the drone sits on the op channel only
+// while LINKED or FAILSAFE); FAILSAFE -> RENDEZVOUS at +rendezvous_ms from
+// the FAILSAFE-entry rebase, WITHOUT any retune (FAILSAFE->RENDEZVOUS
+// never retunes -- there is no home to go to).
 TEST(gs_frame_confirms_move_and_rendezvous_entry_never_retunes) {
   auto cfg = make_cfg();
   MockActuator act;
@@ -1940,7 +1937,7 @@ TEST(gs_frame_confirms_move_and_rendezvous_entry_never_retunes) {
   CHECK(agent.channel() == 149);                       // stays put, never "home"
 }
 
-// fec-nack (spec 2026-10-05 §4.2): a T_NACK's counter must be strictly
+// fec-nack: a T_NACK's counter must be strictly
 // greater than the last one accepted in this link session (replay guard);
 // a new vtx nonce restarts the counter space, because the GS restarts its
 // counter at 1 on every pair it adopts.
@@ -2062,8 +2059,8 @@ TEST(nack_check_separates_malformed_from_rejected) {
 MTEST_MAIN
 
 // A restarted GS resets its RCF seq to ~1 while the drone's tracker holds
-// the old session's high seq (bench 2026-07-12: a GS restart must never lock
-// the drone out). Since link pairing (spec 2026-10-01 §6) a restarted GS is
+// the old session's high seq (bench: a GS restart must never lock the
+// drone out). Since link pairing a restarted GS is
 // a NEW vrx_nonce: its DISC gets a fresh pair whose seq32 starts from its
 // first RCF, so the old session's baseline never applies to it.
 TEST(gs_restart_low_seq_accepted_after_failsafe) {
@@ -2095,7 +2092,7 @@ TEST(gs_restart_low_seq_accepted_after_failsafe) {
   CHECK(agent.current().generation == gen);
 }
 
-// 14. Spec 2026-08-28 venc-foldin §4: ONE IDR pacer in RcAgent. 100 ms min
+// 14. venc fold-in: ONE IDR pacer in RcAgent. 100 ms min
 // spacing overall; a chain-break request additionally holds off 1 s from the
 // previous chain-break-triggered IDR. GS-requested IDRs (the
 // RCF-after-failsafe path) share the same 100 ms floor.
@@ -2322,7 +2319,7 @@ TEST(reassert_is_a_five_second_cadence_not_a_per_tick_spam) {
   CHECK(act.bitrates.back() == target);
 }
 
-// In-flight channel hop (spec 2026-09-14 §1): the RCF carries hop_ch/
+// In-flight channel hop: the RCF carries hop_ch/
 // hop_epoch so the GS can move the drone mid-flight without a DISC
 // round-trip. hop_ch 0 means "no hop order" (a pre-hop GS); a new
 // (epoch, ch) pair retunes and arms move_pending_ like a DISC move, but
@@ -2378,10 +2375,10 @@ TEST(rcf_hop_withdrawal_returns_to_previous_channel) {
   CHECK(agent.hop_epoch() == 2);
 }
 
-// Unconfirmed hop falls back to the PRE-HOP channel, not home (spec
-// 2026-09-14 §1 step 4: "both converge on the old channel"). A GS that
-// withdraws at confirm_ms goes back to the old op; a drone that had already
-// moved must go there too. Bench 2026-09-26 (GS session 0233): hop 112 ->
+// Unconfirmed hop falls back to the PRE-HOP channel, not home (both ends
+// converge on the old channel). A GS that withdraws at confirm_ms goes
+// back to the old op; a drone that had already moved must go there too.
+// Bench (GS session 0233): hop 112 ->
 // 153 with home == 153, GS withdrew at 510 ms, the drone's fallback went
 // "home" -- the channel it was already on -- and the pair sat split 60 s.
 // Reverting to go_home_() here makes these fail: the first two stay on (or
@@ -2419,7 +2416,7 @@ TEST(unconfirmed_hop_reverts_to_pre_hop_channel_not_home) {
   CHECK(agent.channel() == 149);
 }
 
-// The revert is one step (spec 2026-10-03 §3): the drone sits in RENDEZVOUS
+// The revert is one step: the drone sits in RENDEZVOUS
 // on the pre-hop channel and stays there. Further silence does not move it
 // again -- there is no home to fall through to.
 TEST(silence_after_hop_revert_stays_on_the_pre_hop_channel) {
@@ -2439,8 +2436,8 @@ TEST(silence_after_hop_revert_stays_on_the_pre_hop_channel) {
   CHECK(agent.channel() == 149);
 }
 
-// Once the single revert step has dropped the session (spec 2026-10-01 §7,
-// spec 2026-10-03 §3), the withdrawing GS's own RCF under the now-stale pair
+// Once the single revert step has dropped the session, the withdrawing
+// GS's own RCF under the now-stale pair
 // is rejected, not a confirmation; its next DISC re-pairs and the following
 // RCF relinks on the same pre-hop channel -- never "home".
 TEST(withdraw_after_hop_revert_rejects_stale_rcf_then_relinks) {
@@ -2480,7 +2477,7 @@ TEST(rcf_hop_ch_zero_is_ignored) {
   CHECK(agent.hop_epoch() == 0);
 }
 
-// Fix round 1, item 1 (reviewer): a restarted GS resets its hop epoch
+// A restarted GS resets its hop epoch
 // numbering along with everything else, so a stale latched hop_epoch_/
 // hop_ch_ from the old session must not swallow the new session's first
 // hop order. Every session boundary resets the hop latches (promotion, the
@@ -2496,8 +2493,8 @@ TEST(new_disc_session_clears_stale_hop_state_so_the_next_hop_retunes) {
 
   // The GS restarts: nothing more arrives, so the unconfirmed move sends the
   // drone home (RENDEZVOUS) once move_confirm_ms elapses -- a restart long
-  // enough to lose the link, which also clears the session (spec 2026-10-01
-  // §7), not a same-session keep-alive DISC, which takes the LINKED
+  // enough to lose the link, which also clears the session, not a
+  // same-session keep-alive DISC, which takes the LINKED
   // ack-only path and does not reach a reset site.
   agent.tick(200 + cfg.link.move_confirm_ms + 100, RadioHealth{});
   REQUIRE(act.retunes.size() == 2);
@@ -2529,7 +2526,7 @@ TEST(new_disc_session_clears_stale_hop_state_so_the_next_hop_retunes) {
   CHECK(agent.hop_epoch() == 1);
 }
 
-// Fix round 1, item 2 (reviewer): the spec's freshness guard compares the
+// The hop freshness guard compares the
 // (hop_epoch, hop_ch) PAIR, not the epoch alone -- a same-epoch RCF
 // commanding a different channel must still be applied.
 TEST(rcf_same_epoch_different_channel_is_applied_not_ignored) {
@@ -2539,8 +2536,8 @@ TEST(rcf_same_epoch_different_channel_is_applied_not_ignored) {
   REQUIRE(act.retunes.size() == 1);
   CHECK(act.retunes[0] == 149);
 
-  // 161 (a member, like 149) rather than the original brief's 40 (not a
-  // member of make_cfg's {136,149,161} since Task 5): the freshness check
+  // 161 (a member, like 149) rather than 40 (not a member of make_cfg's
+  // {136,149,161}): the freshness check
   // under test is the (epoch, ch) PAIR comparison, not channel membership.
   auto w2 = make_rcf_wire_hop(3, 0x24, 1.0, 0.5, /*hop_ch=*/161, /*epoch=*/1, vtx);
   agent.on_rc_frame(w2.data(), w2.size(), 260);
@@ -2551,7 +2548,7 @@ TEST(rcf_same_epoch_different_channel_is_applied_not_ignored) {
   CHECK(agent.hop_epoch() == 1);
 }
 
-// VTX onboard recorder (spec 2026-09-26): RcAgent applies the RCF `rec` wish.
+// VTX onboard recorder: RcAgent applies the RCF `rec` wish.
 
 static std::vector<uint8_t> make_rcf_wire_rec(uint16_t seq, uint8_t rec, uint32_t vtx) {
   Rcf r; r.seq = seq; r.profile = 0x24;
@@ -2608,7 +2605,7 @@ TEST(rcf_rec_retries_until_the_actuator_takes_it) {
   CHECK(act.records.size() == 2);   // failed once, taken once, then latched
 }
 
-// GS-requested IDR (spec 2026-09-28 web-idr-request): an idr_epoch CHANGE
+// GS-requested IDR (web IDR request): an idr_epoch CHANGE
 // raises one pending IDR, served from tick() through the shared pacer and
 // deferred (not dropped) when the 100 ms floor refuses it.
 
@@ -2734,7 +2731,7 @@ TEST(gs_idr_served_on_the_tick_that_enters_failsafe) {
 }
 
 TEST(gs_idr_rcf_failsafe_recovery_sends_exactly_one_idr) {
-  // Fix round 1 (spec 2026-09-28): FAILSAFE entry resets idr_epoch_seen_ to
+  // FAILSAFE entry resets idr_epoch_seen_ to
   // 0, so the first RCF back reads the page's UNCHANGED epoch as a fresh
   // change and re-arms idr_gs_pending_ on the very RCF whose entering_linked
   // path already issues a link-up IDR. Without satisfying the pending
@@ -2752,7 +2749,7 @@ TEST(gs_idr_rcf_failsafe_recovery_sends_exactly_one_idr) {
   // FAILSAFE -> LINKED via RCF, same epoch as before: entering_linked's own
   // link-up IDR must cover the request the intake just re-armed, in the
   // same RCF -- not a second one 100 ms later. FAILSAFE cleared the
-  // session (spec 2026-10-01 §7): the keep-alive DISC re-pairs first.
+  // session: the keep-alive DISC re-pairs first.
   const uint32_t vtx2 = ack_agent(agent, act, 136, kVrx, 1300);
   auto w2 = make_rcf_wire_idr(3, 5, vtx2);
   agent.on_rc_frame(w2.data(), w2.size(), 1400);
@@ -2765,7 +2762,7 @@ TEST(gs_idr_rcf_failsafe_recovery_sends_exactly_one_idr) {
   // entering_linked block and act.idr_calls reads after_failsafe + 2 here.
 }
 
-// Low-power (pre-arm) mode, spec 2026-09-20.
+// Low-power (pre-arm) mode.
 
 // Helper: BOOT tick, DISC/ack, then a LINKED mcs5 session entered by the
 // first RCF at t=100 (ov 0.5/0.5). Returns the session's vtx_nonce; the
@@ -2996,8 +2993,8 @@ TEST(low_power_cap_survives_failsafe_entry) {
   CHECK(act.fps.back() == 15);
 }
 
-// ---- Task 5 (2026-10-03-auto-channel-set): start-channel parking, follow
-// members only, unconfirmed move back (not home), stay put, remember -----
+// ---- auto channel set: start-channel parking, follow members only,
+// unconfirmed move back (not home), stay put, remember -----------------
 
 // Tags a plain, steady-state RCF under the current pair (the vtx_nonce from
 // the latest DISC_ACK) at a fresh, strictly increasing seq

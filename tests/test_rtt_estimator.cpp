@@ -1,4 +1,4 @@
-// link-rtt (2026-09-02): GS-side control-path RTT + pts-offset estimator.
+// link-rtt: GS-side control-path RTT + pts-offset estimator.
 // The drone echoes WHICH RCF rcf_age_ms ages against (seq identity) plus
 // its pts-domain clock at telem build; this module matches the echo
 // against recorded send times and produces:

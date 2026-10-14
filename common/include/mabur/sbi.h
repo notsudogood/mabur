@@ -6,15 +6,15 @@ namespace mabur {
 
 // Hard cap on one SBI body (one injected air frame's payload). No 802.11
 // constant enforces this in code — the chip accepts well past the 2304B
-// MSDU nominal via injection. The cap was 2900 from 2026-07 to 2026-09-08:
-// the July symbol-size sweep saw a 3207 B body lose 61.6% of frames whole
-// (docs/fec-symbol-size-328.md) and the constant fenced that envelope. No
-// register explains it (GS RX packet limit 12 kB, HT MPDU max 3839 B) and
-// it predates A-MPDU, so on 2026-09-08 the cap was raised to the HT MPDU
-// ceiling — 3839 B less the 24 B MAC header and 4 B FCS = 3811 B on air,
-// which by the guard's formula below (which under-counts by 13 + 2*bpb)
-// is 3760 — to let the bench re-test 9/10-block bodies. Bodies beyond the
-// old 2900 are UNPROVEN on air until that test reports.
+// MSDU nominal via injection. An earlier 2900 B cap came from the
+// symbol-size sweep, where a 3207 B body lost 61.6% of frames whole
+// (docs/findings/2026-07-25-fec-symbol-size-328.md). No register explains
+// that loss (GS RX packet limit 12 kB, HT MPDU max 3839 B) and it predates
+// A-MPDU, so the cap is the HT MPDU ceiling — 3839 B less the 24 B MAC
+// header and 4 B FCS = 3811 B on air, which by the guard's formula below
+// (which under-counts by 13 + 2*bpb) is 3760 — to let the bench re-test
+// 9/10-block bodies. Bodies beyond 2900 B are UNPROVEN on air until that
+// test reports.
 //
 // NOTE: the config-load guard that enforces this (drone/src/config.cpp)
 // measures only bpb*(kSwHeaderLen + symbol_size) — the per-block SW-header
@@ -40,8 +40,8 @@ constexpr uint8_t SBI_VER = 2;  // ver 0 (7-byte) and ver 1 (11-byte, no air_ms)
 constexpr int SBI_Q_MS_OFF = 7;    // u16 LE: TxQueue wait, ms, saturating
 constexpr int SBI_ENC_US_OFF = 9;  // u16 LE: encoder latency, µs, saturating
 constexpr int SBI_AIR_MS_OFF = 11; // u16 LE: drone air-clock backlog at the
-                                   // AU's arrival, ms, saturating (spec
-                                   // 2026-09-06); 0 = unknown / probe body
+                                   // AU's arrival, ms, saturating;
+                                   // 0 = unknown / probe body
 // Post-hoc patchers for the three duration fields. The header sits OUTSIDE
 // the FEC envelopes and per-block CRCs — that is the only reason a
 // submit-time measurement can exist on this wire; everything inside the
@@ -55,12 +55,12 @@ void sbi_set_air_ms(uint8_t* body, size_t len, uint16_t ms);
 // decoder.
 constexpr uint8_t kMspStreamId = 4;
 
-// Reserved SBI stream_id for the probe stream (spec 2026-09-04): a
+// Reserved SBI stream_id for the probe stream: a
 // video-body-sized canary at the candidate rung's MCS, one per enh AU.
 // Routed to the GS ProbeTrack, never the video decoder.
 constexpr uint8_t kProbeStreamId = 5;
 
-// Retransmit mark (spec 2026-10-05 fec-nack §5): bit 7 of the SBI stream_id
+// Retransmit mark (fec-nack): bit 7 of the SBI stream_id
 // byte. A body the drone re-sent on a T_NACK carries it; routing and the
 // per-layer decoder read the low 7 bits, the decoder's accounting and the
 // latency anchor read the bit. Header layout and SBI_VER unchanged.
@@ -91,12 +91,11 @@ class SbiPacker {
   // empty if nothing is pending.
   std::vector<std::vector<uint8_t>> flush();
 
-  // Single-body forms of add/flush for the hot path (copy/alloc diet
-  // 2026-09-22): the body is built in place as envelopes arrive — header
-  // at the first envelope, CRC + payload appended per envelope — and
-  // handed out by move when the group completes. Same bytes as add/flush
-  // (test_sbi pins it); empty result = no body this call. add/flush are
-  // wrappers over these.
+  // Single-body forms of add/flush for the hot path (copy/alloc diet): the
+  // body is built in place as envelopes arrive — header at the first
+  // envelope, CRC + payload appended per envelope — and handed out by move
+  // when the group completes. Same bytes as add/flush (test_sbi pins it);
+  // empty result = no body this call. add/flush are wrappers over these.
   std::vector<uint8_t> add_one(const uint8_t* env, size_t len);
   std::vector<uint8_t> flush_one();
 

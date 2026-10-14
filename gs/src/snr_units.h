@@ -10,12 +10,12 @@ namespace maburgs {
 // numerically comparable to recordings made after it. Multiply by this
 // before showing/logging/deciding anything in dB. Single definition — the
 // sideport exporter and the controller's SNR labels must never disagree
-// (scale-break history: CLAUDE.md, 2026-08-04).
+// (scale-break history: docs/data-provenance.md, "SNR scale break").
 constexpr double kSnrRawToDb = 0.5;
 
 // devourer's RxAtrib.evm shares the same half-dB raw scale (its
 // LinkHealth.cpp: evm_db = raw / 2.0). Negative, lower = cleaner. Exported
-// in dB from day one — see the 2026-08-04 SNR scale break in CLAUDE.md for
-// why raw units must never reach a recording.
+// in dB from day one — see the SNR scale break in docs/data-provenance.md
+// for why raw units must never reach a recording.
 constexpr double kEvmRawToDb = 0.5;
 }  // namespace maburgs

@@ -3,7 +3,7 @@
 
 using namespace maburgs;
 
-// The RF staleness gate (spec 2026-08-14 fade-demote §3). CardTrack's EMAs
+// The RF staleness gate (fade-demote). CardTrack's EMAs
 // freeze at their last value when frames stop arriving — which is exactly
 // what a deep fade does — so a card that received nothing this feedback
 // window must not supply the RF labels the predictive fade trigger reads.

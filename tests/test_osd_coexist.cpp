@@ -13,7 +13,6 @@
 #include "gs_compact.h"
 #include "gs_draw.h"
 #include "gs_font.h"
-#include "gs_overlay.h"
 #include "mabur/msp_dp.h"
 #include "osd_compose.h"
 #include "osd_font.h"
@@ -34,7 +33,7 @@ static constexpr int W = 1920, H = 1080;
 // --- fonts ------------------------------------------------------------
 
 // GSFONT_SCALED is the full 30-size synthetic .gfont, generated once by the
-// build (see tests/CMakeLists.txt) and shared with test_gs_overlay.cpp --
+// build (see tests/CMakeLists.txt) and shared with test_gs_compact.cpp --
 // which is the point: both files want that exact set, and building it is
 // ~11 s of Python each time.
 static GsFont& gsfont() {
@@ -50,7 +49,7 @@ static GsFont& gsfont() {
 
 // 38x60 glyphs, so the 50x18 MSP grid is 1900x1080 -- 91% of a 1080p
 // surface, close to what the shipped Betaflight font produces (~84%) and
-// enough to reach every GS corner block, which is the point. Glyph gi is a
+// enough to reach every GS bar field, which is the point. Glyph gi is a
 // solid opaque colour carrying gi in its low bits, so a probe pixel says
 // WHICH screen a buffer is showing, not merely that it is showing one.
 //
@@ -83,8 +82,8 @@ static OsdFont& mspfont() {
 
 // --- MSP screens ------------------------------------------------------
 
-// Every cell of the grid set to `ch`, so the grid covers the GS corners and
-// a probe anywhere in it identifies the screen.
+// Every cell of the grid set to `ch`, so the grid covers the GS bar and a
+// probe anywhere in it identifies the screen.
 static mabur::MspScreen full_screen(char ch) {
   std::vector<uint8_t> s;
   std::vector<uint8_t> clr = {2};
@@ -176,13 +175,12 @@ struct Rig {
   bool dirty = false;
   bool last_announce = false;
 
-  explicit Rig(bool with_msp = true, bool with_gs = true,
-               GsStyle style = GsStyle::kEssential)
+  explicit Rig(bool with_msp = true, bool with_gs = true)
       : raster(mspfont(), ScaleMode::kSharp) {
     if (with_msp) comp.set_raster(&raster);
     if (with_gs) {
-      comp.set_gs(make_gs_layer(style, gsfont()), make_gs_layer(style, gsfont()),
-                  make_gs_layer(style, gsfont()));
+      comp.set_gs(make_gs_layer(gsfont()), make_gs_layer(gsfont()),
+                  make_gs_layer(gsfont()));
       std::string err;
       REQUIRE(comp.gs_layout(W, H, &err));
     }
@@ -228,9 +226,8 @@ static OsdComposeIn make_in(const mabur::MspScreen* scr, bool fresh, bool stale,
 
 // The picture the screen is supposed to be showing, composed from nothing.
 static std::vector<uint32_t> reference(const OsdComposeIn& in, bool with_msp, bool with_gs,
-                                       bool seen_screen = true,
-                                       GsStyle style = GsStyle::kEssential) {
-  Rig r(with_msp, with_gs, style);
+                                       bool seen_screen = true) {
+  Rig r(with_msp, with_gs);
   OsdComposeIn ref = in;
   // A virgin composer has never seen a screen, so it needs the fresh flag to
   // latch one; a blanked grid, or a run in which no screen has ever arrived,
@@ -257,14 +254,20 @@ static int diff_box(const std::vector<uint32_t>& a, const std::vector<uint32_t>&
     }
   return n;
 }
-// Summed over every active GS field box, which is where the collision lives.
+// Summed over every GS field box, which is where the collision lives. The
+// bar runs the full width of the BOTTOM rows, which the MSP grid covers
+// everywhere, so it collides with the grid on essentially every cell it
+// spans. The probe is reconciled to snap_cards(3) -- what every caller
+// composes with -- so its boxes are the ones actually on the buffers.
 static int diff_gs_fields(const Rig& r, int b, const std::vector<uint32_t>& ref, int* boxes) {
-  GsOverlay probe(gsfont());
+  GsCompactBar probe(gsfont());
   std::string err;
   REQUIRE(probe.layout(W, H, &err));
+  Buf scratch;
+  probe.update(snap_cards(3), false, player(60.0), scratch.s, nullptr);
   int n = 0, cnt = 0;
-  for (int f = 0; f < (int)GsFieldId::kCount; ++f) {
-    const GsFieldId id = (GsFieldId)f;
+  for (int f = 0; f < (int)GsBarField::kCount; ++f) {
+    const GsBarField id = (GsBarField)f;
     if (!probe.debug_field_active(id)) continue;
     const DirtyRect box = probe.debug_field_box(id);
     if (box.w <= 0 || box.h <= 0) continue;
@@ -291,15 +294,15 @@ TEST(a_vanished_card_row_is_cleared_from_both_buffers) {
   CHECK(diff_px(r.buf[1].px, ref) == 0);
 }
 
-// Non-vacuity. The hazard is real and is a property of GsOverlay, not of the
-// composer: repaint_intersecting() is gated on `active`, so it can never
-// CLEAR anything, and one overlay clearing a vacated row clears it in
+// Non-vacuity. The hazard is real and is a property of the layer, not of
+// the composer: repaint_intersecting() can never CLEAR anything, and one
+// layer erasing the boxes a card-count reflow vacates erases them in
 // whichever buffer happened to be back. Driven directly, not through the
 // composer, so this control cannot drift with it.
-TEST(one_gs_overlay_cannot_clear_the_buffer_it_was_not_drawing_into) {
+TEST(one_gs_layer_cannot_clear_the_buffer_it_was_not_drawing_into) {
   const GsSnapshot s4 = snap_cards(4), s2 = snap_cards(2);
   const GsPlayerState ps = player(60.0);
-  GsOverlay one(gsfont());
+  GsCompactBar one(gsfont());
   std::string err;
   REQUIRE(one.layout(W, H, &err));
   Buf b[2];
@@ -331,7 +334,7 @@ TEST(the_msp_grid_never_destroys_a_gs_field_in_either_buffer) {
   int boxes = 0;
   CHECK(diff_gs_fields(r, 0, ref, &boxes) == 0);
   CHECK(diff_gs_fields(r, 1, ref, nullptr) == 0);
-  CHECK(boxes >= 13);  // the fixture must actually have fields to destroy
+  CHECK(boxes == (int)GsBarField::kCount);  // the fixture has fields to destroy
   // ...and the MSP grid really is on the surface, so this is not passing
   // because nothing was drawn.
   CHECK(r.px(0, kProbeX, kProbeY) == glyph_px('X'));
@@ -344,7 +347,7 @@ TEST(without_a_reclaim_the_msp_grid_does_destroy_them) {
   const mabur::MspScreen scr = full_screen('X');
   const GsSnapshot sn = snap_cards(3);
   const GsPlayerState ps = player(60.0);
-  GsOverlay ov(gsfont());
+  GsCompactBar ov(gsfont());
   OsdRaster raster(mspfont(), ScaleMode::kSharp);
   std::string err;
   REQUIRE(ov.layout(W, H, &err));
@@ -631,7 +634,7 @@ TEST(the_burn_index_map_tracks_the_screen_through_an_alternating_value) {
 // The burn sink must never be handed the DISPLAY surface. On hardware that
 // surface is a write-combine DRM dumb-buffer mapping, and quantize READING
 // it uncached measured 2-23 ms per OSD update on the pump loop (dvr-latency
-// probe, 2026-09-02) -- every burned recording stalled decode drain and
+// probe) -- every burned recording stalled decode drain and
 // blew vsync release deadlines, which is what "recording makes the display
 // laggy" was. The composer mirrors the picture into its own cached canvas
 // (heap memory, same lineage rules) and feeds THAT; the map must still
@@ -661,11 +664,11 @@ TEST(the_burn_sink_gets_a_cached_canvas_not_the_display_buffer) {
   CHECK(worst == 0);
 }
 
-// Non-vacuity: the same sequence fed the rects a single per-buffer overlay
+// Non-vacuity: the same sequence fed the rects a single per-buffer layer
 // yields. Driven directly, so it cannot drift with the composer.
 TEST(a_per_buffer_rect_list_would_not_keep_the_burn_map_current) {
   const GsSnapshot sn = snap_cards(3);
-  GsOverlay ov[2] = {GsOverlay(gsfont()), GsOverlay(gsfont())};
+  GsCompactBar ov[2] = {GsCompactBar(gsfont()), GsCompactBar(gsfont())};
   std::string err;
   REQUIRE(ov[0].layout(W, H, &err));
   REQUIRE(ov[1].layout(W, H, &err));
@@ -721,17 +724,17 @@ TEST(the_burn_map_survives_an_msp_collision_and_a_stale_blank) {
 //
 // It used to be `if (gs_reclaimed > 0) gs_[2]->invalidate()`, which restates
 // every ACTIVE field. The trigger is "any MSP-written cell touched any GS
-// field box" -- so one changed cell anywhere near a corner cost a full
+// field box" -- so one changed cell anywhere on the bar cost a full
 // restate, on the loop that reaps DRM flips, at the MSP screen rate, held
 // under the recorder's map mutex. This measures the difference and prints
 // both figures; the counterfactual is computed from a separately laid-out
-// overlay so it cannot drift with the composer.
+// bar so it cannot drift with the composer.
 TEST(the_burn_restate_is_scoped_to_the_fields_the_collision_hit) {
   const GsSnapshot sn = snap_cards(3);
   const GsPlayerState ps = player(60.0);
 
   // What invalidate() used to restate: every active field box.
-  GsOverlay counter(gsfont());
+  GsCompactBar counter(gsfont());
   std::string err;
   REQUIRE(counter.layout(W, H, &err));
   {
@@ -741,7 +744,7 @@ TEST(the_burn_restate_is_scoped_to_the_fields_the_collision_hit) {
   long all_active_px = 0;
   int all_active_boxes = 0;
   for (int i = 0; i < counter.field_count(); ++i) {
-    const GsFieldId id = (GsFieldId)i;
+    const GsBarField id = (GsBarField)i;
     if (!counter.debug_field_active(id)) continue;
     const DirtyRect b = counter.debug_field_box(id);
     all_active_px += (long)b.w * b.h;
@@ -758,7 +761,7 @@ TEST(the_burn_restate_is_scoped_to_the_fields_the_collision_hit) {
         const DirtyRect c{col * 38, row * 60, 38, 60};
         bool any = false;
         for (int i = 0; i < counter.field_count(); ++i) {
-          const GsFieldId id = (GsFieldId)i;
+          const GsBarField id = (GsBarField)i;
           if (!counter.debug_field_active(id)) continue;
           const DirtyRect b = counter.debug_field_box(id);
           if (c.x < b.x + b.w && b.x < c.x + c.w && c.y < b.y + b.h && b.y < c.y + c.h) {
@@ -790,14 +793,15 @@ TEST(the_burn_restate_is_scoped_to_the_fields_the_collision_hit) {
   // Both buffers current, on the same screen and the same GS sample.
   for (int i = 0; i < 4; ++i) r.tick(make_in(&base, true, false, &sn, ps, true));
 
-  // Row 16, col 3: bottom-left, inside the card block. Assert it really
-  // does land on a GS box -- otherwise this measures nothing.
-  const int kRow = 16, kCol = 3;
+  // The MSP cell under the middle of the `ch` item. Assert it really does
+  // land on a GS box -- otherwise this measures nothing.
+  const DirtyRect ch_box = counter.debug_field_box(GsBarField::kCh);
+  const int kRow = (ch_box.y + ch_box.h / 2) / 60, kCol = (ch_box.x + ch_box.w / 2) / 38;
   {
     const DirtyRect c{kCol * 38, kRow * 60, 38, 60};
     bool on_box = false;
     for (int i = 0; i < counter.field_count(); ++i) {
-      const GsFieldId id = (GsFieldId)i;
+      const GsBarField id = (GsBarField)i;
       if (!counter.debug_field_active(id)) continue;
       const DirtyRect b = counter.debug_field_box(id);
       if (c.x < b.x + b.w && b.x < c.x + c.w && c.y < b.y + b.h && b.y < c.y + c.h)
@@ -821,25 +825,22 @@ TEST(the_burn_restate_is_scoped_to_the_fields_the_collision_hit) {
   // The premise: this cell really did force a reclaim...
   CHECK(out.gs_reclaimed > 0);
   // ...and the restate is a small fraction of what a full one costs.
-  // Measured 12,946 of 115,493 px = 8.9x. The bar is 5x, which still fails
-  // hard on the mutation this guards (reverting to invalidate() makes the
-  // two equal, i.e. 1x). It was 10x when the RSSI boxes were sized for the
-  // 11-glyph unheard string; narrowing them to the numeric shrank the
-  // FULL-restate baseline, not the scoped restate, so the ratio tightened
-  // while the absolute cost of both went down.
-  CHECK(burn_px * 5 < all_active_px);
+  // Measured 21,310 of 132,699 px = 6.2x (the cell under `ch` reclaims it
+  // and its neighbour). The bar is 3x, which still fails hard on the
+  // mutation this guards: reverting to invalidate() makes the two equal,
+  // i.e. 1x.
+  CHECK(burn_px * 3 < all_active_px);
   // And the map is still exactly right -- the whole point is that scoping
   // the restate costs no correctness.
   CHECK(fb.wrong_against(r.buf[r.front].s) == 0);
 }
 
 // N2. The burn's index map is refreshed per COMPOSITION, and a composition
-// that publishes a blank may be one whose buffer was already clear -- it
-// never held this episode's grid. Keying the burn's blank feed off "this
-// buffer was cleared just now" misses exactly that composition, and the map
-// then carries a flight OSD the screen has already dropped for the whole
-// stale episode. The interleaving is the reviewer's: lit, blank, ONE screen
-// back, quiet again, then a GS publish.
+// that publishes a blank may be one whose buffer was already clear -- it never
+// held this episode's grid. Keying the burn's blank feed off "this buffer was
+// cleared just now" misses exactly that composition, and the map then carries
+// a flight OSD the screen has already dropped for the whole stale episode. The
+// interleaving: lit, blank, ONE screen back, quiet again, then a GS publish.
 TEST(the_burn_map_does_not_keep_a_grid_the_screen_dropped) {
   const mabur::MspScreen scr = full_screen('X');
   const GsSnapshot sn = snap_cards(3);
@@ -880,29 +881,32 @@ TEST(the_burn_map_does_not_keep_a_grid_the_screen_dropped) {
 // A GS box that moves punches a hole in the MSP grid underneath
 // ======================================================================
 
-// The area a card row vacates. Taken from a throwaway overlay so the test
-// knows the geometry without reimplementing place_card_row_().
+// The area the `ch` item vacates when the card count drops. Taken from a
+// throwaway bar so the test knows the geometry without reimplementing
+// place_(): with four cards the rssi/snr lists are wide and row 0 starts
+// far left; with one it re-centres inward.
 static DirtyRect vacated_by_shrinking_cards(const GsPlayerState& ps) {
-  GsOverlay probe(gsfont());
+  GsCompactBar probe(gsfont());
   std::string err;
   REQUIRE(probe.layout(W, H, &err));
   Buf b;
   probe.update(snap_cards(4), false, ps, b.s, nullptr);
-  const DirtyRect four = probe.debug_field_box(GsFieldId::kCard0Rssi);
+  const DirtyRect four = probe.debug_field_box(GsBarField::kCh);
   probe.update(snap_cards(1), false, ps, b.s, nullptr);
-  const DirtyRect one = probe.debug_field_box(GsFieldId::kCard0Rssi);
-  // With one card the block hugs the bottom, so slot 0's four-card position
-  // is well clear of it -- assert that rather than assume it.
-  REQUIRE(four.y + four.h <= one.y);
+  const DirtyRect one = probe.debug_field_box(GsBarField::kCh);
+  // The re-centred row must start clear of the old box -- assert that
+  // rather than assume it -- and the old box must sit under the MSP grid.
+  REQUIRE(four.x + four.w <= one.x);
+  REQUIRE(four.x + four.w / 2 < 50 * 38);
   return four;
 }
 
-// GsOverlay clears a box it is about to vacate, and that erase goes straight
+// The bar clears a box it is about to vacate, and that erase goes straight
 // through to the MSP glyphs underneath while the MSP shadow still records
 // those cells as painted. Left alone it is a transparent hole in the flight
-// OSD, the shape of a card row, lasting until whatever text was in those
-// cells happens to change.
-TEST(a_vacated_card_row_does_not_leave_a_hole_in_the_msp_grid) {
+// OSD, the shape of the vacated box, lasting until whatever text was in
+// those cells happens to change.
+TEST(a_vacated_gs_box_does_not_leave_a_hole_in_the_msp_grid) {
   const mabur::MspScreen scr = full_screen('X');
   const GsPlayerState ps = player(60.0);
   const DirtyRect vac = vacated_by_shrinking_cards(ps);
@@ -911,7 +915,7 @@ TEST(a_vacated_card_row_does_not_leave_a_hole_in_the_msp_grid) {
   const GsSnapshot s4 = snap_cards(4), s1 = snap_cards(1);
   Rig r;
   for (int i = 0; i < 2; ++i) r.tick(make_in(&scr, true, false, &s4, ps, true));
-  // Non-vacuity: with four cards that pixel really is the overlay's, not the
+  // Non-vacuity: with four cards that pixel really is the bar's, not the
   // grid's, so the check below is not measuring an area nothing ever used.
   CHECK(r.px(0, px, py) != glyph_px('X'));
   CHECK(r.px(1, px, py) != glyph_px('X'));
@@ -923,13 +927,13 @@ TEST(a_vacated_card_row_does_not_leave_a_hole_in_the_msp_grid) {
 
 // Non-vacuity for the repair itself: the raw sequence, with no composer,
 // leaves the hole. This is what the flight OSD did before the repair.
-TEST(without_the_repair_the_vacated_row_stays_transparent) {
+TEST(without_the_repair_the_vacated_box_stays_transparent) {
   const mabur::MspScreen scr = full_screen('X');
   const GsPlayerState ps = player(60.0);
   const DirtyRect vac = vacated_by_shrinking_cards(ps);
   const int px = vac.x + vac.w / 2, py = vac.y + vac.h / 2;
 
-  GsOverlay ov(gsfont());
+  GsCompactBar ov(gsfont());
   OsdRaster raster(mspfont(), ScaleMode::kSharp);
   std::string err;
   REQUIRE(ov.layout(W, H, &err));
@@ -1099,93 +1103,6 @@ TEST(a_new_burn_sink_gets_a_full_msp_restate_too) {
   r.step(make_in(&scr, true, false, nullptr, GsPlayerState{}, false));
   r.commit();
   CHECK(second.wrong_against(r.buf[r.front].s) == 0);
-}
-
-// ======================================================================
-// (k) The compact bar through the same composer
-// ======================================================================
-//
-// The bar is a different GsLayer, not a different composer, so nothing in
-// osd_compose.cpp knows which one it is holding. What IS different is where
-// the ink sits: the bar runs the full width of the BOTTOM ROW, which the MSP
-// grid covers everywhere, so it collides with the grid on essentially every
-// cell instead of in the four corners. That makes it the harsher case for
-// the collision reclaim, which is why it gets its own pair here.
-
-static int diff_bar_fields(const Rig& r, int b, const std::vector<uint32_t>& ref,
-                           int* boxes) {
-  GsCompactBar probe(gsfont());
-  std::string err;
-  REQUIRE(probe.layout(W, H, &err));
-  Buf scratch;
-  std::vector<DirtyRect> d;
-  // Reconcile the probe to the same card count the rig saw, so its boxes are
-  // the ones actually on the buffers.
-  probe.update(snap_cards(3), false, player(60.0), scratch.s, &d);
-  int n = 0, cnt = 0;
-  for (int f = 0; f < (int)GsBarField::kCount; ++f) {
-    const DirtyRect box = probe.debug_field_box((GsBarField)f);
-    if (box.w <= 0 || box.h <= 0) continue;
-    ++cnt;
-    n += diff_box(r.buf[b].px, ref, box);
-  }
-  if (boxes) *boxes = cnt;
-  return n;
-}
-
-TEST(the_msp_grid_never_destroys_a_compact_bar_field_in_either_buffer) {
-  const mabur::MspScreen scr = full_screen('X');
-  const GsSnapshot sn = snap_cards(3);
-  const GsPlayerState ps = player(60.0);
-  Rig r(true, true, GsStyle::kCompact);
-  for (int i = 0; i < 2; ++i) r.tick(make_in(&scr, false, false, &sn, ps, true));
-  for (int i = 0; i < 2; ++i) r.tick(make_in(&scr, true, false, &sn, ps, false));
-
-  const auto ref = reference(make_in(&scr, true, false, &sn, ps, true), true, true,
-                             true, GsStyle::kCompact);
-  int boxes = 0;
-  CHECK(diff_bar_fields(r, 0, ref, &boxes) == 0);
-  CHECK(diff_bar_fields(r, 1, ref, nullptr) == 0);
-  CHECK(boxes == (int)GsBarField::kCount);  // the fixture has ink to destroy
-  CHECK(r.px(0, kProbeX, kProbeY) == glyph_px('X'));
-}
-
-// Non-vacuity for the test above, and the same control the corner layout
-// has: draw the bar, then let the grid draw over it with nothing reclaiming,
-// and the bar's boxes must differ from the composed picture. Driven directly
-// rather than through the composer so it cannot drift with it.
-TEST(without_a_reclaim_the_msp_grid_does_destroy_the_compact_bar) {
-  const mabur::MspScreen scr = full_screen('X');
-  const GsSnapshot sn = snap_cards(3);
-  const GsPlayerState ps = player(60.0);
-  GsCompactBar bar(gsfont());
-  OsdRaster raster(mspfont(), ScaleMode::kSharp);
-  std::string err;
-  REQUIRE(bar.layout(W, H, &err));
-  Buf b;
-  ShadowGrid sh;
-  bar.update(sn, false, ps, b.s, nullptr);
-  raster.draw(scr, b.s, &sh);
-  const auto ref = reference(make_in(&scr, true, false, &sn, ps, true), true, true,
-                             true, GsStyle::kCompact);
-  Rig probe(true, true, GsStyle::kCompact);  // only for the box enumeration
-  probe.buf[0].px = b.px;
-  CHECK(diff_bar_fields(probe, 0, ref, nullptr) > 0);
-}
-
-// Both buffers converge on the same picture with the bar, exactly as they
-// must with the corner blocks: a per-buffer lineage that only one publisher
-// refreshes is what strobes at the publish rate.
-TEST(both_buffers_match_a_from_scratch_compact_composition) {
-  const mabur::MspScreen scr = full_screen('X');
-  const GsSnapshot sn = snap_cards(2);
-  const GsPlayerState ps = player(60.0);
-  Rig r(true, true, GsStyle::kCompact);
-  for (int i = 0; i < 4; ++i) r.tick(make_in(&scr, i == 0, false, &sn, ps, true));
-  const auto ref = reference(make_in(&scr, true, false, &sn, ps, true), true, true,
-                             true, GsStyle::kCompact);
-  CHECK(diff_px(r.buf[0].px, ref) == 0);
-  CHECK(diff_px(r.buf[1].px, ref) == 0);
 }
 
 MTEST_MAIN

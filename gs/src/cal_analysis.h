@@ -1,7 +1,6 @@
 #pragma once
 // Per-rate wall finding for the TX-power calibration kit. Pure: no I/O, no
 // state, no clock -- one row of measured cells in, one wall out.
-// Spec: docs/superpowers/specs/2026-09-10-tx-power-calibration-design.md.
 #include <array>
 #include <cstdint>
 #include <vector>
@@ -14,7 +13,7 @@ namespace maburgs {
 constexpr int kRssiNone = -999;
 
 // Indices are RELATIVE to the drone chip's per-channel anchor, in the 7-bit
-// signed diff-field range (spec 2026-09-13). -1 is a legal index.
+// signed diff-field range. -1 is a legal index.
 constexpr int kNoWall = -128;   // undetermined: caller leaves config untouched
 static_assert(kNoWall == mabur::rc::kWallUndetermined, "one sentinel");
 constexpr int kRailRel = mabur::rc::kRailRel;  // a no-dip row parks at the field's top
@@ -57,7 +56,7 @@ struct CalThresholds {
   //   - the next TWO cells are back at deliver_pct.
   // The last two guard the overdriving direction. Past a real wall the
   // bench saw deep dips (63%, 32%, 4%, 1%) and one island of good delivery
-  // 5 indices wide (mcs6, idx 53-57, docs/txagc-calibration.md): two
+  // 5 indices wide (mcs6, idx 53-57, docs/findings/2026-07-16-txagc-calibration.md): two
   // coarse cells span 8, so the run cannot climb through that island. A
   // forgiven cell is flagged kCalNoiseCell in cal.log either way.
   double noise_pct = 75.0;

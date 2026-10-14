@@ -1,18 +1,15 @@
 #!/usr/bin/env bash
 # Build + deploy maburd + its init script + default config to a camera, then
-# restart the service. maburd is a DYNAMIC glibc ARM binary since the
-# 2026-08-29 venc fold-in (see tools/build-arm.sh); every library it NEEDs is
+# restart the service. maburd is a DYNAMIC glibc ARM binary (venc runs
+# in-process; see tools/build-arm.sh); every library it NEEDs is
 # already on the OpenIPC rootfs, and libusb is still linked statically, so
 # nothing extra is copied.
 # Usage: bundle/install.sh root@<camera-ip> [path/to/maburd]
 #
-# maburd now runs the encoder itself, so there is no waybeam to configure and
-# no frame-shm ring to cross-check. On a camera that still runs waybeam this
-# script is NOT enough: waybeam must be retired first (stop it, chmod a-x
-# /etc/init.d/S95waybeam -- plain `chmod -x` leaves the group/other bits and
-# root still runs it -- and move the binary aside) or two processes will fight
-# over the MI pipeline and neither will encode. Full sequence in
-# docs/deploy.md.
+# maburd runs the encoder itself (no waybeam). A camera still running
+# waybeam must have it retired first (stop it, chmod a-x
+# /etc/init.d/S95waybeam, move the binary aside) or two processes fight over
+# the MI pipeline and neither encodes.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -26,10 +23,20 @@ HOST=${1:?usage: install.sh root@<camera-ip> [binary]}
 BIN=${2:-out/arm/maburd}
 [ -f "$BIN" ] || { echo "error: $BIN not built (run tools/build-arm.sh)" >&2; exit 1; }
 
+# The wrapper is installed as /etc/init.d/S00mabur -- the name the OpenIPC
+# image uses (openipc-builder package/mabur/mabur.mk), so busybox rcS starts
+# maburd first. The repo file keeps its historical name, bundle/S96mabur.
+# A camera with an old /etc/init.d/S96mabur gets it stopped and removed
+# below, so one name owns the service. (Both copies share one pidfile, so
+# the second start at boot is a no-op, but stop/start by the wrong name
+# and the docs disagreeing is how a deploy goes wrong.)
+#
 # Stop maburd before overwriting its binary: a running maburd holds
 # /usr/bin/maburd busy, so scp'ing over it in place fails with "Text file
 # busy". Downtime spans the copy, which is fine here.
-ssh "$HOST" '/etc/init.d/S96mabur stop'
+ssh "$HOST" 'for s in S00mabur S96mabur; do
+  [ -x /etc/init.d/$s ] && /etc/init.d/$s stop
+done; true'
 
 # -O forces the legacy SCP transfer protocol: OpenIPC/BusyBox targets ship no
 # /usr/libexec/sftp-server, so modern scp's default sftp mode fails ("scp:
@@ -52,12 +59,13 @@ elif ssh "$HOST" '[ -f /etc/mabur.json ]'; then
 else
   scp -O bundle/mabur.default.toml "$HOST:/etc/mabur.toml"
 fi
-scp -O bundle/S96mabur "$HOST:/etc/init.d/S96mabur"
+scp -O bundle/S96mabur "$HOST:/etc/init.d/S00mabur"
 
 ssh "$HOST" '
   set -e
-  chmod +x /usr/bin/maburd /etc/init.d/S96mabur
-  /etc/init.d/S96mabur start
+  rm -f /etc/init.d/S96mabur
+  chmod +x /usr/bin/maburd /etc/init.d/S00mabur
+  /etc/init.d/S00mabur start
 '
 
 echo "installed. logs: ssh $HOST 'cat /tmp/mabur.log'  (or stderr via serial)"

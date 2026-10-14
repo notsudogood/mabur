@@ -34,6 +34,35 @@ RTP output were deleted in PR C.
 This file is deliberately short. The detail lives in `docs/`; load the one
 page the task needs rather than carrying all of it.
 
+Two kinds of doc, two rules:
+
+- **`docs/*.md` are reference pages: they describe the code at HEAD.** A
+  change that alters behaviour, a default, a config key, a wire field or a
+  log format fixes the page in the same commit. Present tense; no bench
+  narratives, dated asides or SUPERSEDED chains — those go to findings.
+- **`docs/findings/YYYY-MM-DD-topic.md` are dated records** (spikes,
+  benches, flights, handovers), indexed in `docs/findings/README.md`. They
+  are snapshots and are never edited to match later code; each carries a
+  one-line `**Status:**` pointing at the reference page that owns the
+  topic now.
+- **Code comments say what the code does and why — no dates, no
+  spec/plan citations.** Never cite `docs/superpowers/` specs or plans,
+  `.superpowers/` reports, "spec section N", "Task 11", "fix round 2" or
+  review ids: those files are machine-local, so state the rationale in the
+  comment itself. No date stamps ("since 2026-09-16", "bench 2026-07-13"):
+  a comment is true at HEAD or it is wrong; history belongs in git and
+  `docs/findings/`. Code that still reads old recordings names the old
+  format by its version marker, not its date. Links to committed docs
+  (including dated `docs/findings/` paths) are fine.
+- **No bench or host specifics in code, docs or commits.** Device IPs and
+  ssh logins (drone, GS, spare boards), credentials, MACs, and this
+  machine's paths/users/NICs stay out of the repo — they live only in
+  Claude's memory (`device-addresses`). Write "the drone", "the GS",
+  `root@<gs-ip>` or `$GS`; bench scripts take targets from the
+  environment (`DRONE=`, `GS=`) with no default. Product addresses the
+  software itself ships with (the CPE relay's firmware-fixed `10.83.11.1`,
+  loopback ports) and synthetic test values are not bench specifics.
+
 | If the task touches… | Read |
 |---|---|
 | ladder rungs, promote/demote, s3 probes, fade, attribution, RCF drain, RcAgent's encoder verbs + IDR pacing | `docs/link-adaptation.md` |
@@ -46,25 +75,25 @@ page the task needs rather than carrying all of it.
 | comparing recordings, metric scales, removed sideport keys, "why do these two flights disagree" | `docs/data-provenance.md` |
 | shipping a binary or config to a device | `docs/deploy.md` |
 | calibrating a VTX's TX-power walls, maburcal, cal.log | `docs/calibration.md` |
-| a specific past investigation | the dated `docs/*-findings-*.md` / `docs/handover-*.md` |
-| airtime/serialization math, per-stream FEC overhead, why jitter ∝ frame size, encoder size knobs (max_ipprop, presets, dead SDK caps) | `docs/airtime-model.md` |
+| a specific past investigation, or why something is the way it is | `docs/findings/README.md` (dated index) |
+| airtime/serialization math, per-stream FEC overhead, why jitter ∝ frame size, the encoder bitrate formula, encoder size knobs (max_ipprop, min_iqp, superframe_p_pct, `ref_*`/intra-refresh, dead SDK caps) | `docs/airtime-model.md` |
 | half-duplex timing: who transmits when, the slotter, airtime budget, why RCFs get lost | `docs/tx-rx-timing.md` |
-| boot time, the OpenIPC init chain, U-Boot/serial console on the drone | `docs/boot-time-findings-2026-09-07.md` |
-| carrier sense (CCA) on/off, the GS-send self-collision, the drone's RX channel view (`drone.radio.rx`), why the OSD LOSS row reads what it reads, the pending cca-on flight gate | `docs/cca-on-findings-2026-09-23.md` |
-| 40 MHz (HT40): which rungs fly 40, per-width tables, pair candidates, the boot scan's pair pick, no_agg, scanlog 3 / ctllog 12 | `docs/bw40.md` (as built: per-rung width, pairs, scan, no_agg) + `docs/bw40-sweep-findings-2026-09-23.md` ("Start here") |
-| the VTX onboard SD recorder ([record], dvr.target, the RCF rec byte, OSD REC field), VENC bind-peer order, the MI /proc/mi_modules/mi_venc per-stage delay instrument, the startup vanish-counter ratchet | docs/vtx-recorder.md (as built) + docs/sd-record-findings-2026-09-26.md (spike) |
+| boot time, the OpenIPC init chain, U-Boot/serial console on the drone | `docs/findings/2026-09-07-boot-time.md` |
+| carrier sense (CCA) on/off, the GS-send self-collision, the drone's RX channel view (`drone.radio.rx`), why the OSD LOSS row reads what it reads, the pending cca-on flight gate | `docs/findings/2026-09-23-cca-on.md` |
+| 40 MHz (HT40): which rungs fly 40, per-width tables, pair candidates, the boot scan's pair pick, no_agg, scanlog 6 / ctllog 12 | `docs/bw40.md` (as built: per-rung width, pairs, scan, no_agg) + `docs/findings/2026-09-23-bw40-sweep.md` ("Start here") |
+| the VTX onboard SD recorder ([record], dvr.target, the RCF rec byte, OSD REC field), VENC bind-peer order, the MI /proc/mi_modules/mi_venc per-stage delay instrument, the startup vanish-counter ratchet | docs/vtx-recorder.md (as built) + docs/findings/2026-09-26-sd-record.md (spike) |
 | the efficient-link plan (current line of work): 20 MHz bottom / 40 MHz top ladder, per-rung FEC (thick floor, thin top after slice concealment), genlock (camera rate steered onto the screen's refresh: `genlock.h`, `T_GENLOCK`/`CAP_GENLOCK`, `[genlock]` / `display.genlock`, the `genlock:` lat.log line, CAMERA vs SCREEN report section), source-first FEC ordering | `docs/efficient-link-plan.md` |
 | feedback-repair (software ACK / coded repair, parked 2026-10-09): the phased rollout, arq.log shadow mode, `SwDecoder::deficit()` (the turnaround bench and listen window were removed at the 2026-10-10 merge of upstream's slice-salvage; their results stay in the doc) | `docs/feedback-repair-rollout.md` |
 | the browser GS / spotter (web/), WebUSB+WASM build, LinkHealthAssembler sharing, channel set form, CHANNEL line, spotter follower | docs/web-gs.md |
 | the CPE510 relay card (mabur-relay protocol v4, maburgs RemoteCard + radio.relays, web GS relay mode, relay TX, interference sweep/hop on a relay) | docs/cpe510-relay.md |
 | pairing / the link key file, SipHash tag, session nonces, KEY MISMATCH, auth_reject | docs/link-pairing.md |
-| the software NACK (base-layer selective repeat): T_NACK, the retx ring, the air bucket, the retx accounting class, feclog 3 | docs/fec-nack.md (as built) + docs/fec-nack-spike-findings-2026-10-05.md (spike) |
-| H.265 row slices, slice salvage (SliceAssembler, skip-slice fills, `[venc] slices`, FrameHdr `slice_rows`, `kRecFlagSliceSalvaged`, aulog 5) | docs/slices.md (as built) + docs/venc-slice-findings-2026-10-09.md |
+| the software NACK (base-layer selective repeat): T_NACK, the retx ring, the air bucket, the retx accounting class, feclog 3 | docs/fec-nack.md (as built) + docs/findings/2026-10-05-fec-nack-spike.md (spike) |
+| H.265 row slices: slice salvage (SliceAssembler, skip-slice fills, `[venc] slices`, FrameHdr `slice_rows`, `kRecFlagSliceSalvaged`, aulog 5) and streamed decode (AU ring v4 open slots, StreamFeeder, the decoder-input thread (FeedLoop), `[decoder] stream`, the MPP patches in `gs/player/mpp-patches/`, the stream-mode GS image and its p1 flash) | docs/slices.md (as built) + docs/findings/2026-10-09-venc-slice.md; flashing: docs/deploy.md |
 | radio/PHY below mabur | `third_party/devourer/CLAUDE.md` |
 
-Design specs live in `docs/superpowers/specs/` — **gitignored**, so they
-are on this machine only and anything that must survive belongs in a
-committed `docs/` page instead.
+Design specs and plans live in `docs/superpowers/` — **gitignored**, so
+they are on this machine only and anything that must survive belongs in a
+committed `docs/` page instead. Never cite them from code comments.
 
 ## Compatibility policy — there isn't one
 
@@ -115,8 +144,7 @@ NixOS host: wrap every cmake/ctest invocation in
 resolve. Host suite: `ctest --test-dir build -R 'test_|host_e2e'`.
 Cross-builds: `tools/build-arm64.sh` (maburgs), `tools/build-arm.sh`
 (maburd + the bench TX tools, OpenIPC glibc toolchain at
-`../openipc-builder`). Devices: drone `root@192.168.10.152`, GS
-`root@10.18.0.1`. Carve-out: `tools/build-arm64.sh` must run bare, never
+`../openipc-builder`). Carve-out: `tools/build-arm64.sh` must run bare, never
 inside that `nix-shell` wrapper — Nix's pkg-config wrapper overrides
 `PKG_CONFIG_LIBDIR` and breaks its stage 6 glibc build.
 Never load the 8812eu kernel module on the GS cards.

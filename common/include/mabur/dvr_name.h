@@ -18,7 +18,7 @@ namespace mabur {
 // The high-water mark is not redundant with the scan. NEITHER writer
 // creates the file when the name is minted -- burned mode opens the mux on
 // the encoder thread at the first encoded frame, raw mode at the next
-// sid-0 sync point (up to ~2 s later) -- so a stop/start pair inside that
+// IRAP sync point (up to ~2 s later) -- so a stop/start pair inside that
 // window would scan an unchanged directory twice and hand out one index
 // twice, and both writers open "wb". The record button makes that a
 // double-tap away (kDebounceMs is 50).

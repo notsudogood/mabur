@@ -127,12 +127,12 @@ TEST(discont_resets_and_requires_warmup) {
   CHECK(a.usable());
 }
 
-// link-rtt (2026-09-02): floor_us_from combines an anchor base with the
-// telem-derived pts offset into the absolute network floor. The anchor's
-// pts64 space is seeded from the TRUNCATED 32-bit slot pts while the
-// offset is measured in the full 64-bit MI domain, so the raw sum is off
-// by k·2^32 µs per drone-uptime wrap at anchor seed — the helper must
-// recover the ms-class truth for any k, including negative sums.
+// link-rtt: floor_us_from combines an anchor base with the telem-derived pts
+// offset into the absolute network floor. The anchor's pts64 space is seeded
+// from the TRUNCATED 32-bit slot pts while the offset is measured in the full
+// 64-bit MI domain, so the raw sum is off by k·2^32 µs per drone-uptime wrap
+// at anchor seed — the helper must recover the ms-class truth for any k,
+// including negative sums.
 TEST(floor_us_from_wraps_out_the_high_bits) {
   // No wrap: base 4200µs above the (negated) offset -> floor 4200.
   CHECK(maburgs::floor_us_from(-1'000'000, 1'004'200) == 4200);

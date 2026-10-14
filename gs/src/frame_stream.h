@@ -12,7 +12,7 @@
 
 namespace maburgs {
 
-// FRAG fragment arrival metadata (Task 7's DecodedFrag mirror at the
+// FRAG fragment arrival metadata (the DecodedFrag mirror at the
 // FrameStream boundary). Fields default to 0/unknown so call sites that
 // don't have real values (tests, the dry-run replay's synthetic feed) can
 // rely on push_fragment's default argument.
@@ -26,8 +26,8 @@ struct FragArrival {
   bool retx = false;          // this fragment's body was a NACK retransmit
 };
 
-// Newest (highest id64) slot's tail state for sid, for the NACK tail trigger
-// (Task 6/7): how many fragments the slot wants, how far the highest-seq
+// Newest (highest id64) slot's tail state for sid, for the NACK tail
+// trigger: how many fragments the slot wants, how far the highest-seq
 // fragment reaches, and when the slot last made progress.
 struct TailView {
   uint16_t count = 0;
@@ -52,11 +52,21 @@ struct FrameStreamCfg {
 class FrameStream {
  public:
   struct Callbacks {
-    std::function<void(const mabur::framewire::FrameHdr&, uint8_t sid)> begin_frame;
+    // nslices (ring v4): the picture's
+    // slice count when a SliceAssembler emits it slice by slice, 1 for a
+    // whole AU (unsplit, or no usable SPS/PPS yet), 0 when the assembler
+    // could not size it. Known here because the assembler is built first.
+    std::function<void(const mabur::framewire::FrameHdr&, uint8_t sid, uint8_t nslices)> begin_frame;
     std::function<void(const uint8_t*, size_t)> frame_data;  // Annex-B bytes, in order
     // lat.t_complete_us is always 0 here — the ring writer stamps finish
-    // time (Task 6). See Slot::lat below for the other fields' latch rules.
+    // time. See Slot::lat below for the other fields' latch rules.
     std::function<void(bool complete, const AuLatMeta& lat)> end_frame;
+    // Ring v4 writer contract: the one
+    // piece of a split AU that may end mid-NAL -- SliceAssembler's
+    // passthrough remainder at finish -- comes here instead of frame_data,
+    // so a consumer can keep it out of what it publishes as NAL-aligned.
+    // Optional: unset = frame_data. Unsplit AUs never use it.
+    std::function<void(const uint8_t*, size_t)> frame_tail;
   };
 
   FrameStream(FrameStreamCfg cfg, Callbacks cb) : cfg_(cfg), cb_(std::move(cb)) {
@@ -91,7 +101,7 @@ class FrameStream {
   uint64_t bad_fragments() const { return bad_frags_; }
   uint64_t stall_resets() const { return stall_resets_; }
 
-  // Slice salvage (spec 2026-10-10-h265-slices §5.3). salvaged is a subset
+  // Slice salvage. salvaged is a subset
   // of frames_truncated(): the AU still finished with a hole.
   uint64_t slice_salvaged() const { return slice_salvaged_; }
   uint64_t slices_kept() const { return slices_kept_; }
@@ -103,7 +113,7 @@ class FrameStream {
 
   // Newest (highest id64) slot of `sid` that has its header, is not
   // finished, and has at least one fragment with a known sw_seq; nullopt
-  // otherwise. Consumed by the NACK tail trigger (Task 6/7).
+  // otherwise. Consumed by the NACK tail trigger.
   std::optional<TailView> tail_view(uint8_t sid) const;
 
   // Early give-up (2026-10-10): a mid-frame gap whose missing fragment
@@ -142,7 +152,7 @@ class FrameStream {
     bool have_seq_at_max = false;   // false => no fragment with a known sw_seq yet
     bool began = false;
     bool discont = false;           // this frame re-based the id64 space
-    // Per-AU latency latch (Task 8), passed to end_frame at finish():
+    // Per-AU latency latch, passed to end_frame at finish():
     //  - t_first_us: min over every stored fragment's nonzero body_mono_us
     //    (repair-completed heads carry the completing body's time —
     //    documented approximation, biased small on exactly the frames
@@ -153,7 +163,7 @@ class FrameStream {
     //    idx-0 chunk.
     //  - t_complete_us: left 0 here — the ring writer stamps finish time.
     AuLatMeta lat;
-    // Slice salvage (Task 9): engaged in try_emit's begin-frame step when
+    // Slice salvage: engaged in try_emit's begin-frame step when
     // the AU is split (slice_rows > 0) and params_ has a usable SPS/PPS.
     // nullopt for an unsplit AU or one with no usable parameter set yet.
     std::optional<SliceAssembler> sa;

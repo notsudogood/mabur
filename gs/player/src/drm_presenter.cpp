@@ -21,9 +21,9 @@
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
-// Real KMS atomic implementation (Task 9). See drm_presenter.h for the
-// ownership/flush-ordering contract. All libdrm includes live here, per
-// the Task-7 design constraint that the header stays SDK-free.
+// Real KMS atomic implementation. See drm_presenter.h for the
+// ownership/flush-ordering contract. All libdrm includes live here, so
+// the header stays SDK-free.
 namespace maburplay {
 
 namespace {
@@ -173,7 +173,7 @@ uint64_t mono_ms() {
   return static_cast<uint64_t>(ts.tv_sec) * 1000u + static_cast<uint64_t>(ts.tv_nsec) / 1000000u;
 }
 
-// Microsecond twin, for LatTracker's vsync-fallback timestamp (Task 11):
+// Microsecond twin, for LatTracker's vsync-fallback timestamp:
 // when the kernel does not report DRM_CAP_TIMESTAMP_MONOTONIC, on_flip's
 // timestamp is this called at event receipt instead of the flip event's
 // own (nonexistent) kernel stamp.
@@ -222,7 +222,7 @@ struct PlaneProps {
 // dma_resv the KMS framebuffer of that frame shares via PRIME. So while a
 // recording ran, one commit in ten waited 7-15 ms for a GPU job that only
 // READS the buffer, missed its vblank, and dsp p99 sat at one vsync (5 -> 22
-// ms, bench 2026-09-17). An explicit fence makes the helper take only
+// ms, bench). An explicit fence makes the helper take only
 // KERNEL-usage fences (there are none: the decoder is done before the frame
 // reaches us, the OSD is CPU-drawn), which is the documented way to opt out
 // of implicit sync. The fence content never matters, so one signalled
@@ -384,7 +384,7 @@ struct DrmPresenter::Impl {
   uint64_t commit_errors = 0;
   uint64_t frames_dropped_busy = 0;
   uint64_t flips_total = 0;
-  // Mailbox engagements (vsync-lock observability, Task 6): every present()
+  // Mailbox engagements (vsync-lock observability): every present()
   // call that arrives while a flip is outstanding and has to park in
   // `mailbox` -- whether the slot was empty (frame waits) or already held
   // an unshown frame (this one displaces it). Superset of
@@ -395,7 +395,7 @@ struct DrmPresenter::Impl {
   bool paced = false;
   uint64_t mailbox_dropped_paced = 0;
 
-  // Vsync timestamp capture (Task 11 -- LatTracker's dsp segment).
+  // Vsync timestamp capture (LatTracker's dsp segment).
   // ts_exact is latched once at init() from DRM_CAP_TIMESTAMP_MONOTONIC;
   // last_flip_us is the most recent flip event's timestamp (kernel-exact
   // when ts_exact, else a mono_us()-at-receipt approximation).
@@ -459,7 +459,7 @@ void DrmPresenter::Impl::on_flip(bool real_event) {
     if (on_screen.valid) release_slot(on_screen);
     on_screen = pending;
     pending = Slot{};
-    // LatTracker vsync capture (Task 11): only for a REAL kernel flip --
+    // LatTracker vsync capture: only for a REAL kernel flip --
     // the watchdog's force-complete path (real_event=false) promotes a
     // frame that never actually reached the screen, and a fabricated
     // vsync stamp on it would corrupt the dsp segment. Excluded frames
@@ -473,7 +473,7 @@ void DrmPresenter::Impl::on_flip(bool real_event) {
   //   re-entrancy: present() -> poll_events() -> on_flip() -> present() --
   //   the inner present() sees flip_pending == false and commits without
   //   recursing further (its own poll_events guard is behind flip_pending).
-  // - PACED (vsync servo active, hw 2026-08-31): DROP it. A parked frame
+  // - PACED (vsync servo active, hw-measured): DROP it. A parked frame
   //   is a release that missed its latch; resubmitting it here can only
   //   latch a full period late, and that flip is then still in flight
   //   when the next on-grid release arrives -- which parks too, and the
@@ -651,7 +651,7 @@ bool DrmPresenter::Impl::init(const std::string& screen_mode, bool want_osd, Rel
     return false;
   }
 
-  // LatTracker's dsp segment (Task 11): whether page-flip events carry a
+  // LatTracker's dsp segment: whether page-flip events carry a
   // real CLOCK_MONOTONIC kernel timestamp. Absent, on_flip_static() falls
   // back to mono_us() at event receipt and the tracker marks dsp
   // approximate ("dsp~" in the 1 Hz lat line) -- never a hard failure,
@@ -1217,15 +1217,14 @@ void DrmPresenter::Impl::free_splash() {
 // would cover the picture permanently. Detaching a plane is the one commit
 // shape a driver in this state will still take.
 //
-// Returns whether the commit was actually accepted. Deliberately deviates
-// from the plan here: the brief had this return void and free the splash
-// buffer unconditionally at the call site, but that frees an FB the kernel
-// may still be scanning out on a REJECTED detach -- the exact hazard the
-// sibling branch two lines up at the call site already refuses to run into
-// ("freeing here would RmFB a buffer still being scanned out"), except
-// worse: drm_framebuffer_remove() on an in-use primary-plane FB falls back
-// to disabling the CRTC, and needs_modeset stays false, so nothing brings
-// the screen back afterward. The caller now only frees on success and
+// Returns whether the commit was actually accepted. Deliberately not void
+// with the splash buffer freed unconditionally at the call site: that would
+// free an FB the kernel may still be scanning out on a REJECTED detach -- the
+// exact hazard the sibling branch two lines up at the call site already
+// refuses to run into ("freeing here would RmFB a buffer still being scanned
+// out"), except worse: drm_framebuffer_remove() on an in-use primary-plane FB
+// falls back to disabling the CRTC, and needs_modeset stays false, so nothing
+// brings the screen back afterward. The caller now only frees on success and
 // leaves splash_active set otherwise, so a later, quieter frame retries.
 bool DrmPresenter::Impl::detach_splash_plane() {
   drmModeAtomicReqPtr r = drmModeAtomicAlloc();
@@ -1681,7 +1680,7 @@ void DrmPresenter::Impl::drop_all() {
   // because its event hasn't been drained yet.
   poll_events();
 
-  // Flush-ordering contract (carried from Task 8's review): every held
+  // Flush-ordering contract: every held
   // DmaFrame is released back to the backend right now, unconditionally,
   // BEFORE the caller is allowed to call backend->flush()/mpi->reset().
   // `pending`'s FB may still be referenced by a commit the kernel hasn't

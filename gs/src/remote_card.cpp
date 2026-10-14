@@ -86,7 +86,7 @@ bool RemoteCard::ready() const {
 bool RemoteCard::alive() const {
   std::lock_guard<std::mutex> lk(mu_);
   // A relay we have never heard from since (re)start is not alive: a dead
-  // CPE would otherwise read UP for ~2 s after every reopen (bench 2026-10-02).
+  // CPE would otherwise read UP for ~2 s after every reopen (bench).
   return running_.load() && c_.have_status() && !c_.lost(now_ms_());
 }
 
@@ -130,7 +130,7 @@ void RemoteCard::tick(uint64_t now_ms) {
     else if (c_.refused(now_ms) || c_.ownership_lost(now_ms)) { st = St::Refused; owned_retune_since_ms_ = 0; }
     // An owner mid-retune (a search-burst or hop TUNE: STATUS state 1, or a
     // STATUS still on the old channel) is not a transition out of Owned --
-    // the pair waiting/owned used to print on every burst (plan 2 bench).
+    // the pair waiting/owned used to print on every burst (bench).
     // Bounded to 1 s (ownership_lost()'s own grace): a retune completes in
     // ~50 ms, but a relay stuck in a failed TUNE (owner, never reaching our
     // channel -- tune_failed()'s case) must still surface "waiting for
@@ -194,7 +194,7 @@ void RemoteCard::on_survey_(const relay::Survey& s) {
   // counters are the relay's backlog for that gen, not this verdict window's.
   // A counter that went DOWN within one gen (a fast relay restart that
   // reused the gen) is a gen change too: the restarted counters began at 0,
-  // so the new-gen rule applies -- never a u32 wrap (final review item 6).
+  // so the new-gen rule applies -- never a u32 wrap.
   const bool regressed = have_sv_ && s.gen == sv_last_.gen &&
                          (s.active_ms < sv_last_.active_ms || s.busy_ms < sv_last_.busy_ms ||
                           s.rx_ms < sv_last_.rx_ms || s.ofdm_err < sv_last_.ofdm_err ||
@@ -309,11 +309,11 @@ void RemoteCard::on_datagram(const uint8_t* b, size_t n) {
   rx_frames_.fetch_add(1);
   if (r == RelayClient::Rx::Foreign) { foreign_.fetch_add(1); return; }
   // A relay another client has tuned elsewhere, or one still swinging to
-  // our order, must not feed the aggregator (spec §2).
+  // our order, must not feed the aggregator.
   if (!ready_now) return;
   if (m.crc_ok) {
     own_.fetch_add(1);
-    // Own airtime (spec 2026-09-25-nhm-airtime §5). Width from the tuned
+    // Own airtime. Width from the tuned
     // sec, never the per-frame bit; ath9k marks the LAST A-MPDU subframe
     // phy_valid (not the first, as devourer does), so the latch applies to
     // the following PPDU -- one preamble per PPDU is still counted once.

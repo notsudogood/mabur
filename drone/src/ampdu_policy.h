@@ -1,6 +1,6 @@
 #pragma once
-// Per-rung A-MPDU policy. The 2026-09-17 saturation sweep
-// (docs/bandwidth-sweep-findings-2026-09-17.md) measured the prod agg6
+// Per-rung A-MPDU policy. The saturation sweep
+// (docs/findings/2026-09-17-bandwidth-sweep.md) measured the prod agg6
 // aggregation DELIVERING LESS than QoS-Data singles at mcs0-3 (0.87/0.78/
 // 0.71/0.76 of nominal vs 0.93/0.88/0.84/0.80) and more at mcs5+ (0.76 vs
 // 0.68/0.63): a ~100 us fixed per-PPDU cost the aggregation mode pays even

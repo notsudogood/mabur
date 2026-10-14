@@ -273,7 +273,7 @@ test('?ch=N against a full 8-member set that lacks N is ignored (set and link un
   assert.equal(loadConfig(s, new URLSearchParams('ch=48')).link, 48);
 });
 
-// Software NACK (fec-nack web port 2026-10-06): a GS-mode switch, default on
+// Software NACK (fec-nack web port): a GS-mode switch, default on
 // (the deployed maburgs flies with it), carried to the core as [link.nack].
 test('nack: default on, normalized, described, overlay [link.nack] in GS mode only', () => {
   assert.equal(defaultConfig().nack, true);

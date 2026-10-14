@@ -1,6 +1,6 @@
 #pragma once
 // LinkCard: what main.cpp drives on every radio card, USB (RadioFrontend)
-// or CPE510 relay (RemoteCard). Spec 2026-10-02-maburgs-remote-card §1.
+// or CPE510 relay (RemoteCard).
 // ScoutRadio supplies retune()/retune_width()/read_energy*()/frames()/nhm.
 #include <cstdint>
 #include <optional>
@@ -37,7 +37,7 @@ class LinkCard : public ScoutRadio {
   // Energy reads exist (FA/CCA/NHM): may serve as boot or in-flight scout.
   virtual bool can_scout() const = 0;
   virtual std::optional<RelayStatsIn> relay_stats() const { return std::nullopt; }
-  // Relay sweep (mabur-relay v4 SCAN, spec 2026-10-05-cpe-relay-hop §3):
+  // Relay sweep (mabur-relay v4 SCAN):
   // the card surveys a channel list itself and reports later -- an async
   // burst, unlike ScoutRadio's synchronous dwells. USB cards: unsupported.
   // read_survey_window(): op-channel airtime over the span since the

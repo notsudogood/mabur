@@ -44,7 +44,7 @@ class FramePipeline {
   // frame for the next kDiscontStickyMs — a one-shot flag is sent right at
   // radio bring-up and is systematically lost, wedging the GS's emit cursor
   // above the new epoch for up to a full 16-bit id wrap
-  // (docs/gs-frame-stall-after-drone-restart-handoff.md). The GS rebases once
+  // (docs/findings/2026-07-25-gs-frame-stall-after-drone-restart.md). The GS rebases once
   // per flagged run and its decoder recovers at the next IDR.
   //
   // Also re-anchors the vanish tracker: a new producer may re-base pts (and
@@ -58,27 +58,27 @@ class FramePipeline {
     self_idr_pending_ = false;
   }
 
-  // The encoder's frame rate just changed under us (low-power set_fps,
-  // spec 2026-09-20): forget the learned period so the next deltas are
-  // confirmed as the new one instead of booked as holes. The EMA only ever
-  // learns from deltas under kVanishFactor x period, so a live 60 -> 15 fps
-  // drop would otherwise read every 66.7 ms step as a 4x hole and book 3
-  // phantom vanishes per frame, forever (bench 2026-09-20). Touches ONLY the
-  // period tracker: no discontinuity flag, the pts anchor and the counters
-  // stay -- nothing was lost.
+  // The encoder's frame rate just changed under us (low-power set_fps):
+  // forget the learned period so the next deltas are confirmed as the new one
+  // instead of booked as holes. The EMA only ever learns from deltas under
+  // kVanishFactor x period, so a live 60 -> 15 fps drop would otherwise read
+  // every 66.7 ms step as a 4x hole and book 3 phantom vanishes per frame,
+  // forever (seen on the bench). Touches ONLY the period tracker: no
+  // discontinuity flag, the pts anchor and the counters stay -- nothing was
+  // lost.
   void note_rate_change() {
     period_samples_ = 0;
     period_us_ = 0.0;
   }
 
-  // Air-clock enh admission (spec 2026-09-06 §3). While closed, a frame
-  // that resolves to sid 1 (enh) is dropped BEFORE frame_id allocation --
-  // the drop_if_shed contract: no id gap reaches the GS FrameStream,
-  // last_enc_us is not latched, the discont latch stays pending. Base and
-  // IDR frames are never gated. Set by the hot thread before each encode
-  // from AirClock::backlog_us vs air_clock.shed_ms; booked in
-  // air_dropped(), deliberately NOT in UepEncoder::dropped(1) so the
-  // congestion/failsafe shed counter keeps its meaning.
+  // Air-clock enh admission. While closed, a frame that resolves to sid 1
+  // (enh) is dropped BEFORE frame_id allocation -- the drop_if_shed contract:
+  // no id gap reaches the GS FrameStream, last_enc_us is not latched, the
+  // discont latch stays pending. Base and IDR frames are never gated. Set by
+  // the hot thread before each encode from AirClock::backlog_us vs
+  // air_clock.shed_ms; booked in air_dropped(), deliberately NOT in
+  // UepEncoder::dropped(1) so the congestion/failsafe shed counter keeps its
+  // meaning.
   void set_enh_gate_closed(bool closed) { enh_gate_closed_ = closed; }
   uint64_t air_dropped() const { return air_dropped_; }
 
@@ -97,13 +97,13 @@ class FramePipeline {
 
   // Frames where the producer ENHANCE flag and the TRAIL_N scan disagreed.
   // Same contract as idr_disagreements(): a bug signal, never a silent
-  // choice — the frame protects up to base (spec 2026-07-26 svct-enable).
+  // choice — the frame protects up to base.
   uint64_t enhance_disagreements() const { return enhance_disagree_; }
   uint16_t next_frame_id() const { return next_frame_id_; }
 
   // ── venc-ring vanish detection ──────────────────────────────────────────
-  // (docs/venc-ring-vanish-findings-2026-08-12.md) Frames dropped between
-  // waybeam's encoder and this reader never get a frame_id — the wire closes
+  // (docs/findings/2026-08-12-venc-ring-vanish.md) Frames dropped between
+  // the encoder (venc ring) and this reader never get a frame_id — the wire closes
   // seamlessly over the hole, so the pts step between consecutive ring reads
   // is the ONLY read-side evidence. A delta > 1.5x the observed period books
   // the missing frames here, classified from the neighbours' producer ENHANCE
@@ -127,17 +127,17 @@ class FramePipeline {
   // Zero the vanish counters WITHOUT touching the period tracker, prev-pts
   // anchor, or the self-IDR latch (contrast mark_discontinuity, which
   // re-anchors). Called by main at the FIRST link-establish only: encoder
-  // bring-up churn books ~8-9 counts before a link exists (flight finding
-  // 2026-08-13), and zeroing there makes telemetry report in-flight
-  // vanishes without an analyzer-side boot baseline. First establish ONLY —
-  // a mid-flight re-establish must not erase in-flight counts.
+  // bring-up churn books ~8-9 counts before a link exists (flight finding),
+  // and zeroing there makes telemetry report in-flight vanishes without an
+  // analyzer-side boot baseline. First establish ONLY — a mid-flight
+  // re-establish must not erase in-flight counts.
   void reset_vanish_counters() {
     vanished_base_ = 0;
     vanished_enh_ = 0;
     self_idr_refused_ = 0;
   }
 
-  // H.265 row-slice geometry (spec 2026-10-10-h265-slices §5.1).
+  // H.265 row-slice geometry.
   // ctb64_rows = the picture's 64-px CTU rows; slice_rows = rows per slice
   // the encoder was asked for (0 = split off). encode() then stamps
   // FrameHdr.slice_rows per AU: slice_rows when the AU carries exactly

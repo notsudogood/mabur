@@ -54,8 +54,7 @@ std::vector<HopRankEntry> HopRanker::ranking(double now_ms) const {
     entries.push_back(e);
   }
   // Ranked first, then by score; ties among RANKED entries -> boot-time
-  // pick, then config order (spec 2026-10-03-auto-channel-set §5: "ties ->
-  // boot-time pick, then config order" -- no home). Unranked entries skip
+  // pick, then config order -- there is no home. Unranked entries skip
   // the tiebreak and fall straight to config order, so their relative
   // order stays pure config order (stable_sort preserving entries'
   // original, candidates_-derived order).

@@ -3,7 +3,6 @@
 // frames into measurement cells, drives the coarse -> fine -> result ->
 // verify phase transitions, and is the sole place that decides whether the
 // GS is allowed to transmit at all while a run is in progress.
-// Spec: docs/superpowers/specs/2026-09-10-tx-power-calibration-design.md.
 #include <array>
 #include <cstdint>
 #include <map>
@@ -138,7 +137,7 @@ class CalSession {
   double margin_db() const { return cfg_.margin_db; }
 
   // Test accessors into the currently-live phase's cell tally. idx is
-  // signed and relative to the drone chip's anchor (spec 2026-09-13); the
+  // signed and relative to the drone chip's anchor; the
   // anchor itself never reaches this session.
   uint16_t cell_received(uint8_t rate, int idx, int card) const;
   uint16_t cell_corrupt(uint8_t rate, int idx) const;
@@ -163,7 +162,7 @@ class CalSession {
   void begin_await(const mabur::rc::CalCmd& cmd, uint64_t now_ms);
 
   // Moves to Verify: builds the local (never transmitted -- the drone
-  // self-initiates this sweep once it applies the result, spec step 9) plan
+  // self-initiates this sweep once it applies the result) plan
   // for the park indices, seeds cells for it, and computes how long the GS
   // must stay silent to cover it.
   void begin_verify(uint64_t now_ms);
@@ -207,7 +206,7 @@ class CalSession {
   // Cleared and reseeded at each phase boundary -- once a phase's cells
   // have been folded into coarse_walls_/final_walls_ the raw tally is no
   // longer needed. Keyed by `int`: idx is signed and relative to the
-  // drone's anchor (spec 2026-09-13), not an absolute TXAGC index.
+  // drone's anchor, not an absolute TXAGC index.
   std::array<std::map<int, CalCell>, 8> cells_;
   // Raw per-cell-per-card RSSI samples, median-reduced into CalCell::rssi_dbm
   // at phase end (sorted_cells()).

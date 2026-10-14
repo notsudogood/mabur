@@ -1,6 +1,6 @@
 // The ladder's block-4 instant-demote input: post-FEC (residual) loss.
 //
-// This wiring had NO coverage before 2026-09-02 -- test_vrx_controller.cpp
+// This wiring once had NO coverage -- test_vrx_controller.cpp
 // hand-builds LinkHealth, so nothing exercised decoder -> residual ->
 // controller. That gap is how a reorder double-count reached the demote
 // path: on the bench it fired 31 spurious demotes in ~7 minutes while the
@@ -114,10 +114,10 @@ TEST(dropped_unit_is_residual_loss) {
   CHECK(rc.arrived < rc.expected);
 }
 
-// The same scaffold as dropped_unit_is_residual_loss, but the withheld
-// body arrives later as a retransmit: the video is whole (the retx fills
-// the content), yet the ladder must still see the loss (option A, spec
-// 2026-10-05 fec-nack) -- a NACK retransmit fixes the video only.
+// The same scaffold as dropped_unit_is_residual_loss, but the withheld body
+// arrives later as a retransmit: the video is whole (the retx fills the
+// content), yet the ladder must still see the loss -- a NACK retransmit fixes
+// the video only.
 TEST(retx_filled_symbol_is_still_residual_loss) {
   auto layers = one_symbol_layers();
   UepEncoder enc(layers, /*flush_ms=*/15);

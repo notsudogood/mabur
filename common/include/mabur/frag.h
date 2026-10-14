@@ -24,7 +24,7 @@ class Fragmenter {
 
   // Same fragments, handed out as (6-byte header, pointer into pkt, chunk
   // length) without a vector per fragment — the hot path writes both spans
-  // straight into the FEC envelope (copy/alloc diet 2026-09-22). The
+  // straight into the FEC envelope (copy/alloc diet). The
   // vector form is this plus a concatenating sink.
   using Sink = std::function<void(const uint8_t* hdr, const uint8_t* chunk,
                                   size_t chunk_len)>;

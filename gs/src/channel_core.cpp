@@ -61,7 +61,7 @@ ChannelCore::ChannelCore(ChannelCoreCfg cfg, std::vector<LinkCard*> cards, VrxCo
   }
   one_card_ = cfg_.n_usb == 1;
   scout_card_ = pick_boot_scout(can_scout_);
-  // Relay-only roster (no USB card), spec §3.7: the last ready-able relay
+  // Relay-only roster (no USB card): the last ready-able relay
   // still searches the set (DISC bursts, no energy reads). measure = false
   // below; the pick never opens. Scoped to cfg_.n_usb == 0 to agree with
   // scan_disc_targets's own n_usb == 0 special case -- with any USB card
@@ -98,7 +98,7 @@ ChannelCore::ChannelCore(ChannelCoreCfg cfg, std::vector<LinkCard*> cards, VrxCo
     // never freezes the scout, so close the scout's pick here too. Left
     // open, pick_open() kept scout_owns_() true for life and may_send()
     // dropped every RCF on the relay -- the drone linked, then sat in
-    // FAILSAFE (web GS on a CPE, auto, 2026-10-04). Search is unaffected:
+    // FAILSAFE (web GS on a CPE, auto). Search is unaffected:
     // freeze() only stops measuring, which measure=false already does.
     if (relay_search_only_) scout_->freeze();
     scout_->set_search(true);
@@ -229,7 +229,7 @@ void ChannelCore::shutdown() {
 void ChannelCore::on_rc_body(uint8_t rx_ch) { rc_body_rx_ch_ = rx_ch; }
 
 void ChannelCore::on_session_opened(const mabur::rc::DiscAck& ack, double now_ms) {
-  // Final review C1: the link forms where the drone is found. Only the ack
+  // The link forms where the drone is found. Only the ack
   // that OPENED the session -- our nonce, not key-mismatch flagged, so a
   // stranger's drone cannot drag the cards -- and only on the rx_channel of
   // this body. plan.link_found() moves op to it for every card; the
@@ -260,7 +260,7 @@ bool ChannelCore::may_send(int card) const {
 }
 
 std::vector<uint8_t> ChannelCore::disc_for_card(const std::vector<uint8_t>& frame, int card) const {
-  // A DISC proposes the channel it is sent on (final review C1 addendum A).
+  // A DISC proposes the channel it is sent on.
   const uint8_t ch = cards_[static_cast<size_t>(card)]->channel();
   if (plan_.member(ch)) return disc_for_channel(frame, ch, cfg_.key);
   return frame;
@@ -315,7 +315,7 @@ void ChannelCore::apply_hop_action_(const HopAction& act, double now_ms) {
       plan_.hop_withdraw(now_ms);
       break;
     case HopAction::VerifyPass:
-      verdict_.reset();   // thaw the frozen references (spec section 2)
+      verdict_.reset();   // thaw the frozen references
       break;
     case HopAction::Hold:
     case HopAction::None:
@@ -473,7 +473,7 @@ void ChannelCore::step_hop_edge_and_window_(const ChannelTickIn& in) {
                       (scout_owns_() && i == scout_card_) ||
                       (sweep_.on && sweep_.card == i);   // NOT fe.sweeping(): a relay's
     // scan_pending_ outlives a lost SCAN_RESULT, and skipping the card on it
-    // past our own timeout blinds a one-card verdict for good (fix round 1).
+    // past our own timeout blinds a one-card verdict for good.
     if (!verdict_card_usable(fe.ready(), busy, fe.channel(), plan_.op())) {
       window_prev_ok_[si] = false;
       nhm_win_[si].invalidate();
@@ -507,7 +507,7 @@ void ChannelCore::step_hop_edge_and_window_(const ChannelTickIn& in) {
           : 0.0;
       const auto nhm_pct = nhm_ok ? nhm_busy_pct(nb, cfg_.radio.scan.busy.busy_dbm) : std::nullopt;
       // A relay reports op-channel airtime through SURVEY (busy %, rx %);
-      // rx ~ our own video on the op, so it plays own_air (spec §4).
+      // rx ~ our own video on the op, so it plays own_air.
       const auto busy_pct = sw.valid ? std::optional<double>(sw.busy_pct) : nhm_pct;
       const double own_used = sw.valid ? sw.rx_pct : own_pct;
       vc[si].busy_valid = busy_pct.has_value();
@@ -574,8 +574,8 @@ void ChannelCore::step_controller_(const ChannelTickIn& in) {
                                boot_pick_.relocation_pending(last_bi_);
   // Sweep-capable is per tick: a relay that is down, booting or owned by
   // another client cannot take a SCAN (RemoteCard::start_sweep refuses it),
-  // and picking it would starve the USB card of its burst (final review
-  // item 1). The static can_sweep_ only says "speaks v4".
+  // and picking it would starve the USB card of its burst. The static
+  // can_sweep_ only says "speaks v4".
   std::vector<bool> sweepable(static_cast<size_t>(n_cards_));
   for (int i = 0; i < n_cards_; ++i)
     sweepable[static_cast<size_t>(i)] = can_sweep_[static_cast<size_t>(i)] && cards_[static_cast<size_t>(i)]->ready();
@@ -664,8 +664,8 @@ void ChannelCore::step_move_edge_(const ChannelTickIn& in) {
   // replay time (the drone's latest accepted ack). on_ack() with agreed == op
   // is a no-op (channel_plan.cpp); a member agreed != op (e.g. after a
   // withdrawn hop) moves op as a normal ack move (Commit / AckOverride).
-  // Deliberate 2026-10-04 change: before it, an edge landing on a hopping tick
-  // was consumed and dropped.
+  // Held, not consumed: an edge landing on a hopping tick would otherwise be
+  // dropped.
   if (cal_move_hold_.take(vrx_.take_move_edge(), in.cal_running || plan_.hopping())) {
     const uint8_t proposed = vrx_.proposal();
     const uint8_t agreed = vrx_.agreed_channel();
@@ -753,7 +753,7 @@ void ChannelCore::poll_sweep_(double now_ms) {
   auto& fe = *cards_[static_cast<size_t>(sweep_.card)];
   // Expiry first: a sweep left pending across a session drop is a timeout,
   // and a result that sat on the card meanwhile is taken and discarded --
-  // never ranked under the reconnect's timestamp (fix round 1).
+  // never ranked under the reconnect's timestamp.
   if (now_ms - sweep_.sent_ms >= sweep_.timeout_ms) {
     (void)fe.take_sweep_result();
     sweep_.on = false;

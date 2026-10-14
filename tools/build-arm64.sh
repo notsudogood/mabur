@@ -14,11 +14,10 @@
 # this and fails loudly rather than let CMake surface a confusing
 # path-does-not-exist error instead.
 #
-# Deviations from the original Bootlin-based plan (see
-# .superpowers/sdd/task-16-brief.md and task-16-report.md for the full
-# rationale): this host is NixOS, where prebuilt toolchains like Bootlin's
-# are dynamically linked against /lib64/ld-linux-x86-64.so.2 — a path that
-# does not exist on NixOS, so the downloaded compiler cannot even execute.
+# Why not a prebuilt Bootlin toolchain: this host is NixOS, where prebuilt
+# toolchains like Bootlin's are dynamically linked against
+# /lib64/ld-linux-x86-64.so.2 — a path that does not exist on NixOS, so the
+# downloaded compiler cannot even execute.
 # Instead this script uses Nix's own cross stdenv
 # (pkgsCross.aarch64-multiplatform.pkgsStatic), which targets
 # aarch64-unknown-linux-musl and works natively on NixOS. It also
@@ -90,7 +89,7 @@ fi
 # CMAKE_FIND_ROOT_PATH staging dir: a minimal fake sysroot with lib/ and
 # include/ symlinked straight at the two Nix libusb outputs. Also see
 # cmake/aarch64-musl.cmake for why CMAKE_FIND_ROOT_PATH_MODE_{LIBRARY,INCLUDE}
-# is BOTH, not the original plan's ONLY: pkg-config resolves libusb's
+# is BOTH, not ONLY: pkg-config resolves libusb's
 # location to its real (out-of-root) /nix/store path, and ONLY mode drops
 # any find_library()/find_path() candidate outside CMAKE_FIND_ROOT_PATH
 # instead of falling back to it verbatim — silently losing the -L flag.
@@ -125,7 +124,7 @@ export CPATH
 #        source: pkgsCross...pkgsStatic.libdrm already ships a static
 #        libdrm.a + headers for aarch64-unknown-linux-musl — same reasoning
 #        and the same out/.dev-suffix quirk as the libusb block above). Used
-#        by maburplay's DrmPresenter (MABUR_PLAYER_HW, Task 9).
+#        by maburplay's DrmPresenter (MABUR_PLAYER_HW).
 if [ ! -e toolchain/libdrm-arm64-out ]; then
   nix-build -E \
     'with import <nixpkgs> {}; pkgsCross.aarch64-multiplatform.pkgsStatic.libdrm' \
@@ -157,11 +156,32 @@ export MABUR_DRM_ROOT="$PWD/toolchain/drm-arm64"
 #        musl/cross-compilation; a plain `cmake -S .` on any host hits the
 #        same "Cannot find source file" error at every tag). `develop` HEAD
 #        has a complete, consistent tree (full h265 decoder rewrite), so
-#        that's what's pinned here — commit df4864bd1e907cbfd427c397348976c5b2b05ee9
-#        ("fix[mpi_enc_utils]: Restore ref_cfg setup", 2026-07-28). Bump by
+#        that's what's pinned here — commit 14729dd578e570e5f00fd1dd2113f5429012d64b
+#        ("feat[vepu511]: Setup quant registers for H.264", develop HEAD).
+#        Bumped from df4864bd1e907cbfd427c397348976c5b2b05ee9
+#        ("fix[mpi_enc_utils]: Restore ref_cfg setup") for
+#        8f88b50d ("fix[h265d]: Force PS/RPS update for the first sent
+#        task"), an upstream h265d fix landed between the two refs. Bump by
 #        changing MPP_REF below; re-verify h265/CMakeLists.txt's file list
 #        still matches the tree before trusting a new ref.
-MPP_REF=df4864bd1e907cbfd427c397348976c5b2b05ee9
+MPP_REF=14729dd578e570e5f00fd1dd2113f5429012d64b
+
+# fpvOS rkvdec2 stream-mode patches (docs/slices.md "Part 2"), ported to
+# MPP_REF. CANONICAL here: sbc-groundstations-gilankpam's
+# package/rockchip-mpp/ carries byte-identical copies, so the GS image's
+# shared librockchip_mpp is the same decoder as this static one -- change
+# them here first, then copy them there.
+# What MPP_REF (14729dd5) is, checked when porting (2026-10):
+#  - no libmpp_ext.so split: every codec lives in librockchip_mpp;
+#  - the h265d hal's fast_mode = base:fast_parse && support_fast_mode, read
+#    once at hal init (hal_h265d_vdpu34x.c); MPP_DEC_SET_ENABLE_FAST_PLAY
+#    sets base:enable_fast_play and plays no part in it;
+#  - mpp_dec_cfg "base:fast_parse" exists and defaults to 1 (mpp_dec_cfg.c),
+#    and the hal only streams with it 0 -- so a streaming decoder sets it
+#    BEFORE mpp_init (pre-init MPP_DEC_SET_CFG lands in mpp->mDecCfg).
+MPP_PATCHES=(gs/player/mpp-patches/0*.patch)
+MPP_PATCH_SUM=$(cat "${MPP_PATCHES[@]}" | sha256sum | cut -d' ' -f1)
+MPP_KEY="$MPP_REF+$MPP_PATCH_SUM"
 
 # Desired-state guard, not directory-existence: a bare `[ ! -d ... ]` check
 # has two failure modes — (a) an interrupted fetch/checkout can leave
@@ -185,14 +205,27 @@ if [ "$MPP_HEAD" != "$MPP_REF" ]; then
   mv "$mpp_tmp" toolchain/mpp-src
 fi
 
-# Ref-aware artifact cache: toolchain/mpp-arm64/.ref records which MPP_REF
-# the staged librockchip_mpp.a was built from, so a re-pin (MPP_REF bumped
-# above) correctly triggers a rebuild instead of silently reusing a stale
-# archive built from the old commit. .ref is written only AFTER a successful
-# build (see below), so an interrupted build also self-heals: no matching
-# .ref means the next run rebuilds rather than trusting a partial artifact.
+# Patch state, keyed like the artifact cache below: an edited patch is
+# re-applied onto a pristine checkout. reset + clean also drops files a
+# previous patch set created (test/mpi_dec_stream_test.c).
+if [ "$(cat toolchain/mpp-src/.mabur-patched 2>/dev/null)" != "$MPP_KEY" ]; then
+  git -C toolchain/mpp-src reset -q --hard
+  git -C toolchain/mpp-src clean -fdq
+  for p in "${MPP_PATCHES[@]}"; do
+    git -C toolchain/mpp-src apply --whitespace=nowarn "$PWD/$p"
+  done
+  echo "$MPP_KEY" > toolchain/mpp-src/.mabur-patched
+fi
+
+# Ref-aware artifact cache: toolchain/mpp-arm64/.ref records which MPP_REF +
+# patch set (MPP_KEY) the staged librockchip_mpp.a was built from, so a
+# re-pin (MPP_REF bumped above) correctly triggers a rebuild instead of
+# silently reusing a stale archive built from the old commit. .ref is
+# written only AFTER a successful build (see below), so an interrupted
+# build also self-heals: no matching .ref means the next run rebuilds
+# rather than trusting a partial artifact.
 if [ ! -e toolchain/mpp-arm64/lib/librockchip_mpp.a ] \
-   || [ "$(cat toolchain/mpp-arm64/.ref 2>/dev/null)" != "$MPP_REF" ]; then
+   || [ "$(cat toolchain/mpp-arm64/.ref 2>/dev/null)" != "$MPP_KEY" ]; then
   # -DBUILD_TEST=OFF: test/demo binaries have glibc-isms and aren't needed.
   # -DBUILD_SHARED_LIBS=OFF: mpp's own CMakeLists always builds BOTH
   #   rockchip_mpp (SHARED) and rockchip_mpp_static regardless of this
@@ -225,7 +258,7 @@ if [ ! -e toolchain/mpp-arm64/lib/librockchip_mpp.a ] \
   cp toolchain/mpp-build/mpp/librockchip_mpp.a toolchain/mpp-arm64/lib/
   # Written last, only on success: marks the artifact cache as valid for
   # this exact MPP_REF (see the skip condition above).
-  echo "$MPP_REF" > toolchain/mpp-arm64/.ref
+  echo "$MPP_KEY" > toolchain/mpp-arm64/.ref
 fi
 export MABUR_MPP_ROOT="$PWD/toolchain/mpp-arm64"
 

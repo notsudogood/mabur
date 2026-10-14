@@ -68,7 +68,7 @@ struct OsdComposeOut {
 // to the sink in place of the display surface. It exists because the DRM
 // dumb buffers are WRITE-COMBINE mappings on hardware: writes stream fine,
 // but quantize_rects READING one back was measured at 2-23 ms per OSD
-// update on the pump loop (dvr-latency probe, 2026-09-02) against the
+// update on the pump loop (dvr-latency probe) against the
 // ~0.1-2.2 ms the cached-memory bench projects -- enough to stall decode
 // drain and blow vsync release deadlines on every burned recording. The
 // canvas costs one extra cached draw per update and 4 bytes/px of heap;
@@ -85,8 +85,8 @@ class OsdComposer {
   // Null raster => this run has no MSP overlay. Not owned.
   void set_raster(OsdRaster* r) { raster_ = r; }
   // All three or none: buffer 0, buffer 1, and the burn's lineage. All
-  // three must be the SAME style -- they are three lineages of one overlay,
-  // not three overlays (see make_gs_layer / osd.gs.style).
+  // three must be the SAME layout -- they are three lineages of one
+  // overlay, not three overlays (see make_gs_layer).
   void set_gs(std::unique_ptr<GsLayer> b0, std::unique_ptr<GsLayer> b1,
               std::unique_ptr<GsLayer> burn);
   // Installing a sink resets the burn's OWN lineage -- burn_shadow_ (the

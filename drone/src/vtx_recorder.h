@@ -1,6 +1,5 @@
 #pragma once
-// VTX onboard SD recorder (spec docs/superpowers/specs/2026-09-26-vtx-recorder-design.md,
-// background docs/sd-record-findings-2026-09-26.md).
+// VTX onboard SD recorder (background docs/findings/2026-09-26-sd-record.md).
 //
 // Threads:
 //   - request() : RcAgent's agent thread (via Actuator::set_record). Never blocks.

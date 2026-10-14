@@ -17,14 +17,14 @@ namespace maburgs {
 // block belongs to the stats sideport and the OSD feed.
 constexpr int kRecControlPort = 8401;
 
-// Loopback-only UDP listener for the record button's VTX wish
-// (spec 2026-09-26-vtx-recorder). Commands: "vtx_rec on" / "vtx_rec off",
-// and "idr" (2026-10-11): maburplay's raw recorder is armed and waiting for
-// a sync point. Each one bumps idr_requests(), whose low byte rides every
-// RCF as idr_epoch -- the web GS's request path (docs/web-gs.md "Key-frame
-// recovery"); the drone serves one paced IDR per change. The live encoder
-// is GDR and sends a real IRAP almost never on its own, so without this a
-// press after arming could wait the whole flight.
+// Loopback-only UDP listener for the record button's VTX wish.
+// Commands: "vtx_rec on" / "vtx_rec off", and "idr": maburplay's raw
+// recorder is armed and waiting for a sync point. Each one bumps
+// idr_requests(), whose low byte rides every RCF as idr_epoch -- the web GS's
+// request path (docs/web-gs.md "Key-frame recovery"); the drone serves one
+// paced IDR per change. The live encoder is GDR and sends a real IRAP almost
+// never on its own, so without this a press after arming could wait the
+// whole flight.
 // The wish is HELD until the next command -- no decay: a crashed player
 // must never stop the onboard recording by silence. It starts UNKNOWN
 // (wire byte 0), so a maburgs restart does not stop it either; the player

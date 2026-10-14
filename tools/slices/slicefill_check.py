@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ffmpeg oracle for slice-salvage fills (spec 2026-10-10-h265-slices §5.7).
+"""ffmpeg oracle for slice-salvage fills.
 
 For each picture/mode: rewrite one picture with build/slicefill, decode the
 original and the rewritten stream with ffmpeg (-err_detect explode), and

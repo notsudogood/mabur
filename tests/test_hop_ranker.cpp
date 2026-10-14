@@ -32,10 +32,9 @@ TEST(stale_visits_are_dropped) {
   CHECK(!r.best(20000, 136, {}).has_value());
 }
 TEST(tie_break_falls_through_to_config_order) {
-  // Spec 2026-10-03-auto-channel-set §5: "ties -> boot-time pick, then
-  // config order" -- there is no home any more, so a tie among candidates
-  // none of which is the boot pick (200) resolves to whichever is listed
-  // first.
+  // Ties resolve to the boot-time pick, then config order -- there is no home
+  // any more, so a tie among candidates none of which is the boot pick (200)
+  // resolves to whichever is listed first.
   HopRanker r(cfg(), BusyCfg{}, {120, 149, 165}, 200);
   for (int i = 0; i < 3; ++i) { r.add(V(120, i * 100, 2)); r.add(V(149, i * 100, 2)); r.add(V(165, i * 100, 2)); }
   CHECK(*r.best(1000, 255, {}) == 120);
@@ -80,7 +79,7 @@ TEST(blocked_channel_loses_to_a_busier_by_events_unblocked_one) {
 }
 // radio.scan.blocked_pct is the ranker's own input (BusyCfg), not a
 // constant: at 30 a 40 %-busy channel is blocked and loses to a busier-by-
-// events clean one; at the default 50 it is not. Pins the 2026-10-04 move.
+// events clean one; at the default 50 it is not.
 TEST(blocked_threshold_comes_from_busy_cfg) {
   maburgs::HopCfg c;
   BusyCfg b; b.blocked_pct = 30;
@@ -114,8 +113,8 @@ TEST(visits_without_busy_rank_as_today) {
 }
 MTEST_MAIN
 
-// ---- Task 11 (a): never hop INTO a blocked channel ----------------------
-// Bench 2026-09-26: every candidate but one was blocked by the long-frame
+// ---- never hop INTO a blocked channel ----------------------------------
+// Bench: every candidate but one was blocked by the long-frame
 // jam leaking from 144, the "all blocked -> least busy wins" tier handed
 // back 136 (99.6-100 % busy on every dwell), and the link sat on it for
 // ~33 s. ranking() keeps the blocked tier for display; best() with
@@ -139,8 +138,7 @@ TEST(best_require_unblocked_skips_blocked) {
 }
 
 // Relay sweep visits (20 ms survey, cca 0) and USB dwells (5 ms, CCA counts)
-// are different scales: a ranking uses only the newest visit's source kind
-// (spec 2026-10-05 §6).
+// are different scales: a ranking uses only the newest visit's source kind.
 TEST(ranking_uses_only_the_newest_visit_source) {
   HopCfg c; BusyCfg b;
   HopRanker r(c, b, {40, 64, 112}, 0);

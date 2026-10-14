@@ -1,14 +1,12 @@
 #pragma once
-// Drone-side calibration sweep state machine (spec
-// 2026-09-10-tx-power-calibration-design.md).
+// Drone-side calibration sweep state machine (docs/calibration.md).
 //
 // Walks the (rate, TXAGC index) cells a GS-commanded CalCmd describes,
 // stamping every frame it sends with the cell it was sent in so the GS can
 // attribute delivery back to that cell -- see mabur/cal_wire.h's header
 // comment for why attribution has to survive corrupt frames.
 //
-// Three constraints shape this class (see docs/superpowers/specs for the
-// full design):
+// Three constraints shape this class:
 //
 //   1. It owns no thread. RadioTx::send_body is single-caller by contract
 //      (drone/src/radio_tx.h) -- its scratch buffer is not thread-safe --
@@ -55,7 +53,7 @@ struct CalSweepCfg {
   // per radio.ldpc, exactly what rc::ladder_from gives every video rung.
   // Until then the sweep aired HT20 with both flags off -- a frame nobody
   // flies, whose delivery wall sits 4-6 dB below the flight frame's at
-  // mcs4-7 (docs/bw40-sweep-findings-2026-09-23.md, TX-power walls).
+  // mcs4-7 (docs/findings/2026-09-23-bw40-sweep.md, TX-power walls).
   bool ldpc = true;
 };
 
@@ -107,7 +105,7 @@ class CalSweep {
   // (constraint 3's monotonic half: coarse < fine < verify never runs
   // backward). An EXACT repeat of the phase already running is also
   // idempotent -- the cell cursor is left exactly as it is, nothing is
-  // re-zeroed -- but re-arms the ack every time (review ruling: the GS
+  // re-zeroed -- but re-arms the ack every time (the GS
   // resends its CalCmd every 200 ms into a 30-50%-lossy uplink, and a
   // single lost ack Telem must not cost the whole phase). A phase strictly
   // AHEAD of the one already accepted (matching nonce) resumes sweeping
@@ -143,29 +141,28 @@ class CalSweep {
 
   State state() const { return state_; }
 
-  // Drains the pending result set by on_result(), if any. Once drained,
-  // the caller (Task 11's apply/verify wiring) owns it; a second call
-  // returns nullopt until another on_result() lands.
+  // Drains the pending result set by on_result(), if any. Once drained, the
+  // caller (the apply/verify wiring) owns it; a second call returns nullopt
+  // until another on_result() lands.
   std::optional<rc::CalResult> take_pending_result();
 
   // Drains the ack flag on_cmd() armed: for a new phase, OR an exact
-  // repeat of the phase already running (review ruling reversing the
-  // original "exactly one ack per phase" -- the GS resends its CalCmd
-  // every 200 ms and gives up at 3000 ms over a 30-50%-lossy uplink, and a
-  // single lost ack Telem otherwise cost the whole phase). False for a
-  // call that accepted nothing at all -- a stale repeat of an EARLIER
-  // phase (constraint 3's other branch), or a new session refused because
-  // the anchor couldn't be read. The caller (Task 11's RC dispatch) must
-  // send one T_TELEM per drained true, before it next calls pump() for
-  // this phase: CalSession::on_ack() (gs/src/cal_session.h) is a no-op
-  // outside AwaitAck (so re-answering a retransmission is harmless) but is
-  // what ENDS AwaitAck and opens the radio-silence window the first time
-  // it lands, and it re-enters AwaitAck for the fine phase. A drone that
-  // never acked at all no longer costs the phase outright -- the GS takes
-  // the first arriving sweep frame of the phase it is commanding as an
-  // implicit ack -- but that only closes the air one settle_ms after the
-  // sweep has already started, so the Telem ack is still the one that
-  // gets the window right.
+  // repeat of the phase already running (not "exactly one ack per phase"
+  // -- the GS resends its CalCmd every 200 ms and gives up at 3000 ms over
+  // a 30-50%-lossy uplink, and a single lost ack Telem would otherwise cost
+  // the whole phase). False for a call
+  // that accepted nothing at all -- a stale repeat of an EARLIER phase
+  // (constraint 3's other branch), or a new session refused because the
+  // anchor couldn't be read. The caller (the RC dispatch) must send one
+  // T_TELEM per drained true, before it next calls pump() for this phase:
+  // CalSession::on_ack() (gs/src/cal_session.h) is a no-op outside AwaitAck
+  // (so re-answering a retransmission is harmless) but is what ENDS AwaitAck
+  // and opens the radio-silence window the first time it lands, and it
+  // re-enters AwaitAck for the fine phase. A drone that never acked at all no
+  // longer costs the phase outright -- the GS takes the first arriving sweep
+  // frame of the phase it is commanding as an implicit ack -- but that only
+  // closes the air one settle_ms after the sweep has already started, so the
+  // Telem ack is still the one that gets the window right.
   //
   // The ack no longer carries the anchor -- it never left the drone in
   // the first place (see the class comment) -- so this is a plain flag,
@@ -181,19 +178,18 @@ class CalSweep {
   // table" flag, armed once by on_cmd()'s anchor-read failure and cleared
   // by this call.
   //
-  // Why the caller must act on it (final review, finding 2): on_cmd()'s
-  // new-session branch calls zero_rate_diffs() BEFORE read_anchor_idx(),
-  // because the diffs have to be off before the anchor can be read at all.
-  // A chip that then cannot report its anchor leaves the drone with a
-  // FLATTENED table and no session -- has_session_ stays false, so
-  // main.cpp's cal_active falling edge (the one place that re-programs the
-  // operating power, restore_operating_power()) never fires, and the
-  // flattening is permanent until restart. Every rate whose wall sits
-  // below the anchor then transmits ABOVE its measured wall: the
-  // overdriven direction, caused by the calibration kit itself, which is
-  // the exact hazard close_session() exists to prevent for the sessions
-  // that DO open. So this is not a diagnostic -- draining it true is a
-  // standing obligation to restore operating power.
+  // Why the caller must act on it: on_cmd()'s new-session branch calls
+  // zero_rate_diffs() BEFORE read_anchor_idx(), because the diffs have to be
+  // off before the anchor can be read at all. A chip that then cannot report
+  // its anchor leaves the drone with a FLATTENED table and no session --
+  // has_session_ stays false, so main.cpp's cal_active falling edge (the one
+  // place that re-programs the operating power, restore_operating_power())
+  // never fires, and the flattening is permanent until restart. Every rate
+  // whose wall sits below the anchor then transmits ABOVE its measured wall:
+  // the overdriven direction, caused by the calibration kit itself, which is
+  // the exact hazard close_session() exists to prevent for the sessions that
+  // DO open. So this is not a diagnostic -- draining it true is a standing
+  // obligation to restore operating power.
   //
   // Armed on both refusal paths: a cold refusal (no session in flight) and
   // a refusal that preempted a live session with a new nonce. Never armed

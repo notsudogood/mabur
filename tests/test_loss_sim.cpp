@@ -102,8 +102,8 @@ TEST(out_of_range_ids_never_drop) {
   CHECK(!s.should_drop(LossSim::kMaxCards, 3));
 }
 
-// sid 5 is the probe stream (spec 2026-09-04): configurable and dropped
-// like any other stream, unlike sids past kStreams which are ignored.
+// sid 5 is the probe stream: configurable and dropped like any other stream,
+// unlike sids past kStreams which are ignored.
 TEST(probe_stream_sid5_is_configurable) {
   LossSim s;
   s.configure(5, 1.0, 1.0);
@@ -124,11 +124,10 @@ TEST(clamps_out_of_range_config) {
   CHECK(!s.enabled());
 }
 
-// Fix round 1: a chain with recovery rate r = 1/burst can only reach
-// steady-state loss up to burst/(1+burst) before p would need to exceed 1.
-// loss=0.90, burst=3.0 is past that threshold (3/4 = 0.75) -- configure()
-// must keep the requested loss exact and raise burst instead of silently
-// capping delivered loss at 0.75.
+// A chain with recovery rate r = 1/burst can only reach steady-state loss up
+// to burst/(1+burst) before p would need to exceed 1. loss=0.90, burst=3.0 is
+// past that threshold (3/4 = 0.75) -- configure() must keep the requested loss
+// exact and raise burst instead of silently capping delivered loss at 0.75.
 TEST(saturation_raises_burst_keeps_loss) {
   LossSim s;
   s.configure(3, 0.90, 3.0);
@@ -291,7 +290,7 @@ TEST(crc_fail_bodies_are_not_injected) {
 // The parser is exercised directly; the socket plumbing is not unit-tested
 // (it is three POSIX calls and is proven by the bench run itself).
 //
-// Fix round 2: apply() now takes the card count, because injection is per-card
+// apply() takes the card count, because injection is per-card
 // and the loss the decoder sees is the union (percard^ncards). Every reply
 // states both rates. The bench GS runs 2 cards, so that is the default here.
 static constexpr int kBenchCards = 2;
@@ -336,9 +335,9 @@ TEST(control_parses_commands) {
         "drops=0,0,0,0,0,0 note=eff-nominal");
 }
 
-// FINDING 1: `loss=` keeps meaning PER-CARD, unchanged. On 2 cards a dialled
-// 20% delivers ~4% to the decoder, and the reply must say so rather than
-// letting the operator read 20% as the loss under test.
+// `loss=` means PER-CARD. On 2 cards a dialled 20% delivers ~4% to the
+// decoder, and the reply must say so rather than letting the operator read 20%
+// as the loss under test.
 TEST(control_loss_is_still_per_card) {
   LossSim s;
   std::string reply;
@@ -355,7 +354,7 @@ TEST(control_loss_is_still_per_card) {
         "ok s3 percard=20.00 eff=0.800 burst=1.0 ncards=3 note=eff-nominal");
 }
 
-// FINDING 1: `eff=` solves per-card = eff^(1/ncards). One card is the identity
+// `eff=` solves per-card = eff^(1/ncards). One card is the identity
 // case, two and three are the ones the bench actually meets.
 TEST(control_eff_solves_per_card) {
   LossSim s;
@@ -392,10 +391,9 @@ TEST(control_eff_solves_per_card) {
   CHECK(!s.enabled());
 }
 
-// FINDING 1: the whole planned sweep must round-trip -- every dialled
-// effective step has to come back out of the reply as the same number, on both
-// the ok reply and a follow-up status, or the sweep log records a level that
-// was never in force.
+// The whole planned sweep must round-trip -- every dialled effective step has
+// to come back out of the reply as the same number, on both the ok reply and a
+// follow-up status, or the sweep log records a level that was never in force.
 TEST(control_eff_round_trips_through_both_replies) {
   const double steps[] = {2.0, 5.0, 10.0, 20.0, 35.0, 50.0};
   for (const double eff : steps) {
@@ -430,7 +428,7 @@ TEST(control_eff_round_trips_through_both_replies) {
   }
 }
 
-// FINDING 1: dialling both at once is ambiguous -- token order would silently
+// Dialling both at once is ambiguous -- token order would silently
 // decide which knob moved. Reject, and change nothing.
 TEST(control_rejects_loss_and_eff_together) {
   LossSim s;
@@ -456,16 +454,15 @@ TEST(control_clamps_card_count) {
   CHECK(reply.find("ncards=8") != std::string::npos);
 }
 
-// Fix round 1, IMPORTANT 1: the reply strings Task 4's Python driver parses
-// mid-sweep were previously asserted only by prefix (`"ok s0="`), leaving
-// the `drops=%llu,...` tail -- the exact thing that driver reads to track
-// injected-drop counts across a sweep -- completely unpinned. A reformat of
-// status() could break Task 4 with this whole suite green. Distinct
-// loss/burst per stream plus a distinct, non-zero drop count on exactly one
-// stream (driven deterministically via loss=1.0's burst<=1 fast path, see
-// loss_one_drops_everything above) makes every field's position unambiguous:
-// a bug that reordered or reformatted status() would fail this even though
-// an all-zero state would not.
+// The reply strings the Python loss-sim driver parses mid-sweep were once
+// asserted only by prefix (`"ok s0="`), leaving the `drops=%llu,...` tail --
+// the exact thing that driver reads to track injected-drop counts across a
+// sweep -- completely unpinned. A reformat of status() could break that driver
+// with this whole suite green. Distinct loss/burst per stream plus a distinct,
+// non-zero drop count on exactly one stream (driven deterministically via
+// loss=1.0's burst<=1 fast path, see loss_one_drops_everything above) makes
+// every field's position unambiguous: a bug that reordered or reformatted
+// status() would fail this even though an all-zero state would not.
 TEST(control_status_full_reply_pinned) {
   LossSim s;
   s.configure(0, 0.0, 1.0);
@@ -486,13 +483,13 @@ TEST(control_status_full_reply_pinned) {
         "drops=0,5,0,0,0,0 note=eff-nominal");
 }
 
-// Fix round 1, IMPORTANT 2: loss=80/burst=3 is infeasible (80% exceeds the
-// burst/(1+burst) = 75% ceiling a burst-3 chain can deliver), so
-// LossSim::configure raises burst to the minimum feasible value -- here
-// loss/(1-loss) = 0.8/0.2 = 4.0. The whole point of reporting sim.burst(sid)
-// in the reply is that the operator sees what they actually got, not what
-// they typed; both the immediate "ok" reply and a follow-up "status" must
-// show the raised value, never the requested 3.0.
+// loss=80/burst=3 is infeasible (80% exceeds the burst/(1+burst) = 75% ceiling
+// a burst-3 chain can deliver), so LossSim::configure raises burst to the
+// minimum feasible value -- here loss/(1-loss) = 0.8/0.2 = 4.0. The whole
+// point of reporting sim.burst(sid) in the reply is that the operator sees
+// what they actually got, not what they typed; both the immediate "ok" reply
+// and a follow-up "status" must show the raised value, never the requested
+// 3.0.
 TEST(control_reports_effective_burst_on_saturation) {
   LossSim s;
   std::string reply;

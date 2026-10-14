@@ -1,7 +1,7 @@
 #include "hop_verdict.h"
 #include "mtest.h"
 using namespace maburgs;
-static HopCfg cfg() { HopCfg c; return c; }   // spec defaults
+static HopCfg cfg() { HopCfg c; return c; }   // config defaults
 static VerdictCardIn card(double rssi, double snr, double foreign_ps, double fa_ps, double crc_ps = 0) {
   VerdictCardIn c; c.valid = true; c.rssi_dbm = rssi; c.snr_db = snr;
   c.foreign = (uint32_t)(foreign_ps * 0.15 + 0.5); c.fa = (uint32_t)(fa_ps * 0.15 + 0.5);
@@ -170,11 +170,11 @@ TEST(ref_frozen_marks_the_impaired_episode) {
   t += 150;   // third consecutive healthy window: thaw
   CHECK(!v.window(t, {card(-61, 30, 0, 4), card(-61, 29, 0, 4)}, {0.0, 20}, 5).ref_frozen);
 }
-// reset() is spec section 2's other thaw rule ("or after a hop's verify
-// window ends"). It had zero callers in the tree until main.cpp gained
-// HopAction::VerifyPass; this pins what it has to clear, including the
-// latched persistence window -- a trigger built from windows measured on
-// the channel we have just left must not survive the hop.
+// reset() is the other thaw rule: a hop's verify window ending. It had zero
+// callers in the tree until main.cpp gained HopAction::VerifyPass; this pins
+// what it has to clear, including the latched persistence window -- a trigger
+// built from windows measured on the channel we have just left must not
+// survive the hop.
 TEST(reset_thaws_the_snapshot_and_clears_the_latched_trigger) {
   HopVerdict v(cfg(), BusyCfg{}, 2); double t = warm(v);
   auto o1 = v.window(t, {card(-55, 33, 237, 2), card(-55, 33, 237, 2)}, {0.06, 80}, 5);
@@ -188,11 +188,11 @@ TEST(reset_thaws_the_snapshot_and_clears_the_latched_trigger) {
   auto o3 = v.window(t + 300, {card(-61, 30, 0, 4), card(-61, 29, 0, 4)}, {0.0, 20}, 5);
   CHECK(!o3.trigger && !o3.ref_frozen && o3.v == Verdict::Healthy);
 }
-// Bench 2026-09-15: main.cpp fed the aggregator's RAW EMAs (RSSI ~64,
-// SNR ~66 half-dB) straight into rssi_dbm/snr_db, so `weak` (rssi < -78
-// dBm && snr < 12 dB) could never trip and Fade was unreachable on
-// hardware. The conversion lives next to the engine so scan.log V lines
-// and flightreport's medians read in dBm/dB like ctl.log does.
+// Bench: main.cpp fed the aggregator's RAW EMAs (RSSI ~64, SNR ~66 half-dB)
+// straight into rssi_dbm/snr_db, so `weak` (rssi < -78 dBm && snr < 12 dB)
+// could never trip and Fade was unreachable on hardware. The conversion lives
+// next to the engine so scan.log V lines and flightreport's medians read in
+// dBm/dB like ctl.log does.
 TEST(raw_units_convert_to_dbm_and_db) {
   CHECK(rssi_raw_to_dbm(64.0) == -46.0);
   CHECK(snr_raw_to_db(66.0) == 33.0);
@@ -336,9 +336,10 @@ static maburgs::VerdictCardIn busy_card(double busy, double own, bool valid = tr
   c.busy_valid = valid; c.nhm_busy_pct = busy; c.own_air_pct = own;
   return c;
 }
-// Run 1 of 2026-09-25: 80 % loss, no foreign/FA, strong signal, air 95 % busy.
-// blocked_pct default is 50 (hw spike findings, docs/nhm-airtime-spike-
-// findings-2026-09-25.md), not the spec's 30 -- 95-2=93 still clears it.
+// Bench run 1: 80 % loss, no foreign/FA, strong signal, air 95 % busy.
+// blocked_pct default is 50 (hw spike findings,
+// docs/findings/2026-09-25-nhm-airtime-spike.md), not 30 -- 95-2=93 still
+// clears it.
 TEST(long_frame_jam_is_interfered_via_blocked) {
   maburgs::HopCfg cfg;
   maburgs::HopVerdict v(cfg, BusyCfg{}, 1);
@@ -406,10 +407,10 @@ TEST(no_busy_reading_is_todays_verdict) {
   CHECK(o.v == maburgs::Verdict::Unknown);
   CHECK(!(o.evidence & maburgs::kEvBlocked));
 }
-// Final-review fix wave 2026-09-25: blocked is the MINIMUM foreign-busy
-// reading across cards that have one, not any-card's. Reverting to
-// any-card makes weak_diversity_card_alone_is_not_blocked fail (it would
-// see card A's foreign 65 alone and call Interfered).
+// Blocked is the MINIMUM foreign-busy reading across cards that have one, not
+// any-card's. Reverting to any-card makes
+// weak_diversity_card_alone_is_not_blocked fail (it would see card A's foreign
+// 65 alone and call Interfered).
 TEST(weak_diversity_card_alone_is_not_blocked) {
   maburgs::HopCfg cfg;
   maburgs::HopVerdict v(cfg, BusyCfg{}, 2);
@@ -441,13 +442,13 @@ TEST(card_without_reading_does_not_veto) {
   CHECK(o.v == maburgs::Verdict::Interfered);
 }
 
-// ---- Task 11 (b): a floor on the recovered-symbols impaired term --------
-// Bench 2026-09-26 (session 0232): on a clean channel whose trailing
-// recovered mean is ~0.2/window, 1-5 recovered symbols read "3x the
-// reference" and marked the window impaired with 0 % loss -- which, next
-// to 112's ambient FA background (`raised`), hopped a perfectly good link
-// into a blocked channel. recovered_min (default 8) removes ~97 % of those.
-// Revert (drop `&& recovered >= recovered_min` in hop_verdict.cpp):
+// ---- a floor on the recovered-symbols impaired term --------------------
+// Bench (session 0232): on a clean channel whose trailing recovered mean is
+// ~0.2/window, 1-5 recovered symbols read "3x the reference" and marked the
+// window impaired with 0 % loss -- which, next to 112's ambient FA background
+// (`raised`), hopped a perfectly good link into a blocked channel.
+// recovered_min (default 8) removes ~97 % of those. Revert (drop
+// `&& recovered >= recovered_min` in hop_verdict.cpp):
 // recovered_below_floor_is_not_impaired fails (impaired, not healthy).
 static double warm_quiet(HopVerdict& v, double t = 0) {
   // trailing recovered mean ~0.2/window: one recovered symbol every 5th window
@@ -479,7 +480,7 @@ TEST(recovered_min_zero_disables_floor) {
   CHECK(o.evidence & kEvImpaired);
 }
 
-// ---- Task 11 (c): a starved window is impaired --------------------------
+// ---- a starved window is impaired --------------------------------------
 // Earlier bench run: the drone was completely starved by a jam (zero own
 // frames on every card) and the verdict read `healthy` -- no frames means
 // no loss. main.cpp now sets VerdictLinkIn::starved.
@@ -506,10 +507,9 @@ TEST(starved_alone_is_unknown) {
   CHECK(o.evidence & kEvStarved);
   CHECK(!o.trigger);
 }
-// The reference-poisoning check the brief asks for: a starved window is
-// impaired, so it freezes the references and pushes nothing into the
-// trailing histories; after the starve ends, the recovered reference is
-// still the pre-starve one.
+// The reference-poisoning check: a starved window is impaired, so it freezes
+// the references and pushes nothing into the trailing histories; after the
+// starve ends, the recovered reference is still the pre-starve one.
 TEST(starved_windows_do_not_feed_the_trailing_references) {
   HopVerdict v(cfg(), BusyCfg{}, 2); double t = warm(v);   // recovered mean 20
   VerdictLinkIn s; s.starved = true;             // recovered 0 while starved
@@ -526,8 +526,8 @@ TEST(starved_windows_do_not_feed_the_trailing_references) {
   CHECK(!(ok.evidence & kEvImpaired));
 }
 
-// ---- Task 12 (e): an AU-rate collapse counts as starved -----------------
-// Bench 2026-09-26 (GS session 0232): a long-frame jam let a trickle of own
+// ---- an AU-rate collapse counts as starved -----------------------------
+// Bench (GS session 0232): a long-frame jam let a trickle of own
 // frames through (5-30/s vs ~3200/s), so the zero-own-frames rule missed
 // it and the loss tracker had nothing to measure yet: the second window
 // read `healthy` and broke the 2-of-3 persistence. The AU count against its

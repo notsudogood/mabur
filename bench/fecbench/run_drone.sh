@@ -4,7 +4,7 @@
 # them (bench rig; bring services back with restore_drone.sh or a reboot).
 set -e
 cd "$(dirname "$0")"
-DRONE=${DRONE:-root@192.168.10.152}
+DRONE=${DRONE:?set DRONE=root@<drone-ip>}
 MODE=${1:-all}
 SIM=${2:-6}
 

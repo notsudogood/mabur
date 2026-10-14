@@ -92,7 +92,7 @@ int ChannelScout::eff_min_rounds_() const {
 void ChannelScout::park_() {
   const uint8_t op = op_.load(std::memory_order_acquire);
   if (cfg_.link_width_mhz == 40) {
-    // Join the link at 40 (docs/bw40.md §3). A failure (dead or unready
+    // Join the link at 40 (docs/bw40.md "Boot scan scores every half"). A failure (dead or unready
     // card) is not retried here: the core loop's width resync
     // (width_resync.h) sets the card's width once it is ready again.
     if (!radio_.retune_width(op, 40))
@@ -122,7 +122,7 @@ void ChannelScout::run() {
   done_.store(true, std::memory_order_release);
 }
 
-// Final review I1: while the search is off (linked, or inside
+// While the search is off (linked, or inside
 // search_after_ms after a loss) op's own pair carries the drone's video.
 // At width 40 a 20 MHz observe cannot decode it (counted busy), and NHM
 // counts its airtime either way, so a linked visit would score op against
@@ -182,7 +182,7 @@ bool ChannelScout::run_once() {
       publish_();
       return true;   // the core reads the ranking, commits, then ack_prelude()s
     }
-    // Spec §5: the prelude ranking commits BEFORE the first DISC. Until the
+    // The prelude ranking commits BEFORE the first DISC. Until the
     // core has committed the pick (ack_prelude(), which sets op), no op
     // window runs: a window on the old op would carry DISCs the drone may
     // ack there, and the ack_override would discard the pick. Not while
@@ -317,7 +317,7 @@ bool ChannelScout::op_ranked() const {
   return op_ranked_locked_(eff_min_rounds_());
 }
 
-// Every member but op ranked (I1: a linked scout never visits op's pair, so
+// Every member but op ranked (a linked scout never visits op's pair, so
 // waiting for it would never end). While searching op is visited like any
 // other channel, so it is waited for too -- otherwise maturity could land a
 // dwell before op's last visit and an unlinked commit would compare against

@@ -7,7 +7,7 @@
 
 namespace maburgs {
 
-// Busy-airtime share of one NHM window (spec 2026-09-25-nhm-airtime §6):
+// Busy-airtime share of one NHM window:
 // the buckets whose LOWER edge is >= busy_dbm over all buckets. Bucket 0
 // sits below th[0]; bucket i (1..11) starts at th[i-1].
 inline bool busy_dbm_is_edge(int dbm) {

@@ -80,7 +80,7 @@ form over unknown seqs only, so it reads 0 exactly when nothing is missing.
    **Reminder when this phase starts (recorded 2026-10-09, revised the same
    day):** investigate per-slice H.265 to overlap the `fec` first-body →
    AU-complete window (9.8 ms p50, base 12.6 / enh 6.2 —
-   `docs/latency-budget-findings-2026-08-31.md`) and to contain losses. On
+   `docs/findings/2026-08-31-latency-budget.md`) and to contain losses. On
    the SSC338Q only the **ground** half is open: the drone cannot release a
    slice before the whole frame is encoded (first bullet), but the radio
    still spreads a frame's slices across that window, so the GS can decode
@@ -369,7 +369,7 @@ The adversarial counterpart: two flights, indoors, short. The stop condition
 so the repair loop's case rests on range flights, where marginal signal is
 the common case rather than a garage visit. Separately, the bottom rung
 matters more than repair for fades like these: the shipped ladder is all
-40 MHz, and `docs/bw40-sweep-findings-2026-09-23.md` measured 20/0 reaching
+40 MHz, and `docs/findings/2026-09-23-bw40-sweep.md` measured 20/0 reaching
 4–6 dB further than 40/0.
 
 ## Phase 2 as built: the turnaround bench
@@ -762,7 +762,7 @@ one. Where they differ:
 | scope | both layers; the goal is a lower FEC floor (phase 5) | base layer only; FEC and ladder unchanged ("option A") |
 | pacing | one cumulative status frame per AU period, repeated until filled (phase 3) | adaptive settle 4–24 ms, 2 tries, 12 ms minimum lead, a drone air bucket |
 
-Its bench (`docs/fec-nack-bench-findings-2026-10-06.md` there), pinned
+Its bench (`docs/findings/2026-10-06-fec-nack-bench.md` there), pinned
 mcs2/40 under a co-channel jammer: base truncated + dropped AUs 12 → 0,
 fill p90 10–16 ms, `air_pct` unchanged; but 35% of requests wasted (FEC got
 there first), uplink delivery 79% (96% without the jammer), and **at rung 0
@@ -787,9 +787,9 @@ His estimate, not a measurement. On our own numbers it is half right:
   repair airtime sits inside `fec` (first body → AU complete, ~8–10 ms p50
   in 2026-10 flights). At overhead 1.0 roughly half of that window is
   repair — base `fec` 12.6 vs enh 6.2 ms in the August budget, base flying
-  ~2× the air (`docs/latency-budget-findings-2026-08-31.md`) — and few
+  ~2× the air (`docs/findings/2026-08-31-latency-budget.md`) — and few
   frames need it: the repair tail was 1.3% of AUs
-  (`docs/handover-fec-latency-2026-08-31.md`). By that arithmetic dropping
+  (`docs/findings/2026-08-31-handover-fec-latency.md`). By that arithmetic dropping
   FEC takes roughly **4–6 ms** off a clean frame, more on large base
   frames, so 5–10 is the high side. Not measured.
 - **Wrong on lossy frames.** Without FEC every lost body costs a round

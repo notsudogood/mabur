@@ -10,8 +10,8 @@ namespace maburgs {
 namespace {
 // A monster gap is a link outage, not per-frame information — cap its
 // contribution so one outage doesn't dominate the delivery ratio (same
-// bounded-walk stance common/src/uep_decoder.cpp's note_delivery() used
-// before it was deleted 2026-09-02).
+// bounded-walk stance the since-deleted common/src/uep_decoder.cpp's
+// note_delivery() used).
 constexpr uint16_t kMaxSeqGap = 512;
 constexpr double kEmaAlpha = 0.1;
 
@@ -22,7 +22,7 @@ template <typename Track>
 static void fold_evm(Track& t, int8_t a, int8_t b) {
   // 0 = no phy status on this frame; -128 (int8 min) = the chip's
   // "not measured" sentinel for an absent spatial stream (every 1SS
-  // non-STBC frame carries evm[1] = -128 — bench-measured 2026-08-10,
+  // non-STBC frame carries evm[1] = -128 — bench-measured,
   // txagcbench sweep). Neither is a sample; folding -128 would peg the
   // EMA (and the best-of min below) at an impossible -64 dB.
   auto sampled = [](int8_t v) { return v != 0 && v != INT8_MIN; };
@@ -157,8 +157,8 @@ void Aggregator::on_rx_body(const mabur::node::RxBody& m) {
     // (RadioTx::seq_, control_seq) never reaches the air. The old walk
     // excluded MSP and RC on the belief that they carried their own
     // counters and booked one phantom lost frame per such frame (~0.3 % of
-    // loss_pct on the bench; measured 2026-09-03, both classes matched the
-    // missing seqs exactly — docs/gs-uplink-self-blanking-findings-2026-09-02.md).
+    // loss_pct on the bench; measured, both classes matched the
+    // missing seqs exactly — docs/findings/2026-09-02-gs-uplink-self-blanking.md).
     // Self-originated frames were diverted above and never reach here.
     const bool decoder_bound_seq = true;
     static const bool gaplog = std::getenv("MABUR_GAPLOG") != nullptr;
@@ -252,8 +252,8 @@ void Aggregator::on_rx_body(const mabur::node::RxBody& m) {
       if (m.phy_valid) fold_rf(ct, rssi, snr, m.rssi, m.snr);
       fold_evm(ct, m.evm[0], m.evm[1]);
 
-      // base+enh pooled track (spec 2026-08-15, re-scoped for the 2-stream
-      // split-rate ladder): the RF label source and the fade trigger read
+      // base+enh pooled track (scoped to the 2-stream split-rate
+      // ladder): the RF label source and the fade trigger read
       // this. Deliberately excludes msp and ctrl.
       if (class_idx == static_cast<int>(RfClass::S0) ||
           class_idx == static_cast<int>(RfClass::S1)) {
@@ -276,7 +276,7 @@ void Aggregator::on_rx_body(const mabur::node::RxBody& m) {
     return;
   }
   if (stream_id == mabur::kProbeStreamId) {
-    // Probe stream (spec 2026-09-04): scored by ProbeTrack, never decoded.
+    // Probe stream: scored by ProbeTrack, never decoded.
     // FCS-failed bodies still reach the sink — parse_probe_body salvages
     // CRC-clean sub-blocks exactly as the video decoder does, so probe loss
     // stays comparable to video loss.

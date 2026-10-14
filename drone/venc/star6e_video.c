@@ -28,8 +28,7 @@ size_t star6e_video_send_frame(Star6eVideoState *state,
 
 	state->frame_counter++;
 	/* No per-frame QP readback: h265Info.startQual is 0 on every frame
-	 * this firmware emits (2026-09-03 deploy), and there is no GetChnStat
-	 * QP on this SDK -- the plumbing that carried it was stripped the
-	 * same day. */
+	 * this firmware emits, and there is no GetChnStat QP on this SDK --
+	 * the plumbing that carried it was stripped. */
 	return star6e_output_send_frame(output, stream);
 }

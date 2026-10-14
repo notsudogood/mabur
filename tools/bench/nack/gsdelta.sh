@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # print s0/s1 abandoned, recovered and frames clean/trunc/drop deltas over $1 seconds from the GS stats lines
 D=${1:-60}
-snap() { ssh -o BatchMode=yes root@10.18.0.1 'grep "^stats:" /tmp/maburgs.log | tail -1' | python3 -c '
+GS=${GS:?set GS=root@<gs-ip>}
+snap() { ssh -o BatchMode=yes "$GS" 'grep "^stats:" /tmp/maburgs.log | tail -1' | python3 -c '
 import re,sys
 l=sys.stdin.read()
 m0=re.search(r"s0\[p=(\d+) abn=(\d+) rec=(\d+)",l); m1=re.search(r"s1\[p=(\d+) abn=(\d+) rec=(\d+)",l)

@@ -72,7 +72,6 @@ TEST(an_unknown_window_never_blanks_the_store) {
 
 // Pinned mode: the reactive layer is off, nothing is ever ordered and the
 // rung is never restored, so there is no hop to protect the store from.
-// (Until 2026-10-04 this was the hop.enable = false case.)
 TEST(pinned_never_blanks) {
   HopVerdict v(cfg(), BusyCfg{}, 2); double t = warm(v);
   auto o = jam(v, t);
@@ -129,7 +128,7 @@ MTEST_MAIN
 // cleared it when a hop landed, so the first verify window on the new
 // channel still carried the jam on the old one plus the hop's own retune
 // gap: 128 read 50.9 % loss with 0 foreign frames and failed its verify
-// (bench 2026-09-24, GS session 0207).
+// (bench, GS session 0207).
 #include "hop_controller.h"
 #include "s1_loss.h"
 TEST(verify_loss_window_blanks_when_the_hop_lands) {

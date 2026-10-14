@@ -2,9 +2,9 @@
 """Golden vectors for mabur, generated from devourer's Python references.
 Deterministic (no randomness, no time). Re-run + git diff must be clean.
 
-energy.json's power-model cases (gain/pa-index) diverge from the prototype
-since 2026-07-17. The airtime/rate/baseline-power dimensions are unchanged
-and still ride devourer's frozen energy_model.py."""
+energy.json's power-model cases (gain/pa-index) diverge from the
+prototype. The airtime/rate/baseline-power dimensions are unchanged and
+still ride devourer's frozen energy_model.py."""
 import json, os, struct, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -68,10 +68,10 @@ for window, ov in ((8, 1.0), (16, 0.5), (128, 0.25)):
                      "decode": decode})
 dump("sw.json", {"cases": sw_cases})
 
-# energy.json (gs/src's TX-energy golden vectors) was removed 2026-07-27
-# (SDD ladder-controller Task 5): the gs/src energy model and its only
-# consumers (the model-driven controller and link table) were deleted,
-# superseded by the measured-loss ladder controller.
+# energy.json (gs/src's TX-energy golden vectors) was removed with the
+# ladder controller: the gs/src energy model and its only consumers (the
+# model-driven controller and link table) were deleted, superseded by the
+# measured-loss ladder controller.
 
 # --- sbi (ver 1 with q_ms, enc_us latency fields; reference = tools/pyref/sbi.py) --
 pk = sbi.SubBlockPacker(75, 4, stream_id=2)
@@ -129,8 +129,8 @@ frames = [(VENC_FRAME_FLAG_IDR,
                   hevc_hdr(34, 0) + pat(12, 3),      # PPS
                   hevc_hdr(19, 0) + pat(3000, 4)))]  # IDR_W_RADL slice
 # P frames, tids 0,1,2, alternating BASE (TRAIL_R, type 1) and ENH (TRAIL_N,
-# type 0) so the standing e2e fixture exercises both UEP streams (spec
-# 2026-08-29-airtime-balance-uep; classify_frame routes TRAIL_N -> sid 1).
+# type 0) so the standing e2e fixture exercises both UEP streams
+# (airtime-balance-uep; classify_frame routes TRAIL_N -> sid 1).
 # Odd f -> enhance: the VENC_FRAME_FLAG_ENHANCE producer flag must be set
 # alongside the TRAIL_N payload, or maburd's scan/flag agreement check
 # demotes the frame back to sid 0.
@@ -175,7 +175,7 @@ dump("uep.json", {"symbol_size": 64, "blocks_per_body": 4,
 # Plain dicts, not rc_proto.Rcf: the frozen Python dataclass still carries the
 # ack_seq/score/layer_delivery/flags fields mabur deleted from the wire in
 # RC_VERSION 3, and constructing it here would only invite them back. RCF
-# v5 (2026-08-30, same-rate-fixed-pairs) split the single literal-overhead
+# v5 (same-rate-fixed-pairs) split the single literal-overhead
 # byte into a per-stream pair (fec_overhead_base/fec_overhead_enh); the
 # first two cases are equal pairs (prod's default shape, one value
 # duplicated into both fields) and the third is a genuine asym pair
@@ -199,12 +199,12 @@ discs = [rc_proto.Disc(vtx_id=1, vrx_nonce=0xCAFE0001, op_channel=149,
                        op_width=20, init_profile=0, seq=2)]
 acks = [rc_proto.DiscAck(vtx_id=1, vrx_nonce=0xCAFE0001, chip_caps=0x0003,
                          agreed_channel=149, agreed_width=20, seq=1)]
-# RC_VERSION 14 (2026-10-01 link-pairing): vtx_nonce + flags added to
-# DISC_ACK (Task 3). The frozen devourer DiscAck dataclass has neither, so
+# RC_VERSION 14 (link pairing): vtx_nonce + flags added to
+# DISC_ACK. The frozen devourer DiscAck dataclass has neither, so
 # these are supplied here rather than read off the Python object.
 ACK_VTX_NONCE = 0xBEEF0002
 ACK_FLAGS = 0
-# mabur owns its RC wire bytes as of 2026-08-12. devourer's frozen
+# mabur owns its RC wire bytes. devourer's frozen
 # tools/precoder/rc_proto.py is pinned at RC_VERSION 1 and still packs a
 # pwr_idx byte, so it can no longer serve as a wire oracle across mabur's
 # RC_VERSION 2 change (nor the RC_VERSION 3 RCF shrink after it). The field
@@ -224,8 +224,8 @@ dump("rc.json", {
                            "flags": ACK_FLAGS, "seq": a.seq}} for a in acks]})
 
 # --- profile / ladder / phy rate -----------------------------------------
-# The per-seq bandwidth-probe-schedule vectors were removed 2026-07-27 (SDD
-# ladder-controller Task 5): the ladder controller never varies bw
+# The per-seq bandwidth-probe-schedule vectors were removed with the
+# ladder controller: the ladder controller never varies bw
 # independently of the commanded rung, so mabur's probe-schedule port and
 # its golden vectors are dead. devourer's own reference is untouched — this
 # just stops mirroring it into mabur's vectors.
@@ -239,7 +239,7 @@ rate_cases = [{"mode": m, "mcs": mc, "bw": bw, "sgi": sgi,
                                      ("ht", 7, 40, True), ("vht", 8, 80, False),
                                      ("vht", 4, 40, True)]]
 # profiles[].ladder (a DEVOURER_SVC_LADDER-style string mirrored by
-# mabur's ladder_spec_str()) was dropped 2026-10-01 with that function:
+# mabur's ladder_spec_str()) was dropped with that function:
 # nothing in mabur used it, and it still encoded the retired base = mcs-1
 # rule.
 dump("profile.json", {"profiles": prof_cases,

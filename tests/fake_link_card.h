@@ -78,7 +78,7 @@ struct FakeCard : maburgs::LinkCard {
   }
   maburgs::ScoutEnergy read_energy_scout() override { maburgs::ScoutEnergy e; e.fa_valid = true; e.fa_ofdm = fa_next; fa_next = 0; return e; }
   maburgs::ScoutFrames frames() const override { return fr; }
-  // Relay sweep / survey programmability (spec 2026-10-05 §3).
+  // Relay sweep / survey programmability.
   bool sweep_ok = true;
   std::vector<std::vector<uint8_t>> sweeps;         // channel lists passed to start_sweep
   std::optional<maburgs::SweepResult> pending_result;   // returned once by take_sweep_result

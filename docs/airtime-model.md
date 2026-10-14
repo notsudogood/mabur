@@ -22,12 +22,12 @@ formula above became per-stream and measurement-anchored rather than
 nominal, because the naive `len·(1+ov)` model measured a reproducible
 ~2× gain error at large frames (SBI/frag framing + repair quantization
 it doesn't account for — spike 2,
-`docs/airtime-balance-spike-findings-2026-08-29.md`). The split had a
+`docs/findings/2026-08-29-airtime-balance-spike.md`). The split had a
 structural limit: at 2:1 rate ratios (the mcs1 rung) the balancer's
 rails could not reach air balance — 3.3 ms/pair structural residual —
 which motivated a same-rate counter-study (flat vs asymmetric overhead
 per rung, static and under motion,
-`docs/same-rate-uep-findings-2026-08-30.md`). The drone's `AirBalancer`
+`docs/findings/2026-08-30-same-rate-uep.md`). The drone's `AirBalancer`
 tracked the true per-stream multiplier from what actually got
 serialized, `m_s = emit_s / len_s` (`emit_s`/`len_s` are α=1/16 EWMAs of
 emitted body bytes and frame-unit bytes, IDR frames excluded as 2–10×
@@ -106,7 +106,7 @@ solver:
 `docs/superpowers/specs/2026-08-29-airtime-balance-uep-design.md` §2;
 current architecture and GS-side ladder/attribution consequences:
 `docs/link-adaptation.md`; same-rate measurement basis:
-`docs/same-rate-uep-findings-2026-08-30.md`.
+`docs/findings/2026-08-30-same-rate-uep.md`.
 
 Measured calibration: completion delay ≈ **4.2 ms + 0.85 µs per payload
 byte** (≈ 9.4 Mbit/s effective payload drain at this op point). The
@@ -236,11 +236,11 @@ their variance into jitter. Knobs, in order of proven usefulness:
   3.2 kB from the next frame, keyframe-free, 0 drops. **The RC re-plans
   well under the cap**, so this is a quality lever as much as a bound —
   the 2026-09-03 bench motivates it (scene-cut P frames at 2–6× budget,
-  `docs/handover-venc-overshoot-2026-09-03.md`); sweep before shipping
+  `docs/findings/2026-09-03-handover-venc-overshoot.md`); sweep before shipping
   non-zero. Ported 2026-09-03, default 0.
 - **`venc.min_qp` / `u32MinQp` — DELETED 2026-09-03, same day it was
   added.** It was the bench knob for the quiet-scene QP-floor hypothesis
-  in `docs/handover-venc-overshoot-2026-09-03.md`; the bench refuted the
+  in `docs/findings/2026-09-03-handover-venc-overshoot.md`; the bench refuted the
   hypothesis before the knob was ever run (the burst is scene content,
   not rate-control recovery), and upstream waybeam's characterisation is
   that `u32MinQp` acts as a bit *ceiling* that collapses the rate past
@@ -336,7 +336,7 @@ probe commanded, `probe_rung() == -1`) the cost is zero, not 1 %.
 
 ## 7. Per-MCS capacity and per-rung A-MPDU (2026-09-17)
 
-`docs/bandwidth-sweep-findings-2026-09-17.md` measured the real delivered
+`docs/findings/2026-09-17-bandwidth-sweep.md` measured the real delivered
 air per MCS at saturation (linkbench, prod geometry, three channels, all
 within 0.5 %): **0.87 / 0.78 / 0.71 / 0.76 / 0.76 / 0.76 / 0.78 / 0.76 of
 nominal at mcs0-7 with agg6**, and 0.93 / 0.88 / 0.84 / 0.80 with singles

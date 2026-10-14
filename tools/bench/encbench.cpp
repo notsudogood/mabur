@@ -4,14 +4,14 @@
 // and reports the
 // sustainable single-thread throughput. Built to compare FEC geometries ON
 // the SSC338Q after the per-layer big-symbol config pinned the waybeam ring
-// full (2026-07-15): capacity below the commanded feed means ring overflow ->
+// full: capacity below the commanded feed means ring overflow ->
 // seq-invisible slice-tail aborts no transport counter sees.
 //
 //   encbench sweep [sim_seconds]              # overhead + bitrate sweep (default)
 //   encbench <scalar|perlayer> [ov] [kb_per_frame_x1400] [sim_seconds]
 //
 // ov is the literal air overhead (source:repair ratio actually put on air),
-// not a scaled command value — Task 3 (airtime-balance-uep) deleted the
+// not a scaled command value — airtime-balance-uep deleted the
 // uep_layer_overhead ladder translation this tool used to route through.
 //
 // The sweep answers one question: is the drone drain ceiling a fixed AIR-BYTE

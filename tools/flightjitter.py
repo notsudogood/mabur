@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # Post-flight jitter/stutter attribution over a debug-log session directory
 # (docs/observability.md): au.log per-AU rows, written in-process by
-# maburgs itself since the 2026-09-06 debug-log consolidation (formerly
-# tools/gs/flightrec.py, an external ring reader, deleted that day), plus
+# maburgs itself since the debug-log consolidation (formerly
+# tools/gs/flightrec.py, an external ring reader, deleted then), plus
 # the matching flight.jsonl 1 Hz sideport recording when present.
 #
 # Method (docs/airtime-model.md §4 "decomposition trick"): inter-arrival
@@ -27,8 +27,8 @@
 #
 # Row format: v1 (7 columns, no header marker), v2 (11 columns behind a
 # "# aulog 2" marker — SlotHdr v2's t_first/t_complete/enc_us/dq_ms
-# appended, 2026-08-31 latency-accounting task 13), v3 (12 columns behind
-# "# aulog 3" — a trailing air_ms column, 2026-09-06 air clock, ignored
+# appended, latency accounting), v3 (12 columns behind
+# "# aulog 3" — a trailing air_ms column, the air clock, ignored
 # here), or v4 (same 12 columns behind "# aulog 4" — the debug-log
 # consolidation: t_us now runs on ONE session-wide CLOCK_MONOTONIC shared
 # with ctl/probe/lat, so it needs no wall-clock bridge; "# sync" lines are
@@ -308,7 +308,7 @@ def load_au_log(path):
 
 def load_jsonl(path):
     # Binary read: a power-off mid-write leaves the DVR's tail as garbage
-    # bytes (flight-0023, 2026-09-05), and a text-mode iterator raises
+    # bytes (flight-0023), and a text-mode iterator raises
     # UnicodeDecodeError before json ever sees the line.
     out = []
     with open(path, "rb") as f:

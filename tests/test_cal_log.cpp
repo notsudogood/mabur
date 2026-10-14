@@ -104,7 +104,7 @@ TEST(cell_record_round_trips_every_field) {
 
 TEST(a_minus_one_wall_is_written_verbatim) {
   // Relative walls: -1 is an ORDINARY wall one index below the chip's
-  // anchor, not a sentinel -- mcs7 measured -4 on the 2026-09-13 bench.
+  // anchor, not a sentinel -- mcs7 measured -4 on the bench.
   // (This test used to pair -1 with kCalUndetermined, which is a
   // contradiction under the relative model: an undetermined row carries
   // kNoWall/kWallUndetermined, never a real index. The undetermined
@@ -173,7 +173,7 @@ TEST(header_is_due_only_until_the_file_itself_exists) {
 }
 
 TEST(a_rejoined_session_directory_with_no_cal_log_is_still_due_a_marker) {
-  // Regression (hardware, 2026-09-11): maburgs keyed header() on
+  // Regression (hardware): maburgs keyed header() on
   // DebugSession::rejoined(), so the first calibration in a session
   // directory that maburgs had merely RESTARTED into -- the ordinary case,
   // since deploying a new binary restarts the daemon and it rejoins the

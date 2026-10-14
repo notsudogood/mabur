@@ -69,13 +69,12 @@ void CalSweep::on_cmd(const rc::CalCmd& c, uint64_t now_ms, PowerCtl& pwr) {
       pending_result_.reset();
       has_session_ = false;
       zeroed_for_session_ = false;
-      // Final review, finding 2: the pwr.zero_rate_diffs() above already
-      // happened and nothing here undoes it -- this class's PowerCtl has
-      // no concept of the operating plan (see close_session()'s note), so
-      // only the caller can put the real table back. has_session_ is
-      // false, so the caller's cal_active falling edge will never fire;
-      // this flag is the only signal it gets. Un-drained, the drone flies
-      // a flat table forever.
+      // The pwr.zero_rate_diffs() above already happened and nothing here
+      // undoes it -- this class's PowerCtl has no concept of the operating
+      // plan (see close_session()'s note), so only the caller can put the
+      // real table back. has_session_ is false, so the caller's cal_active
+      // falling edge will never fire; this flag is the only signal it gets.
+      // Un-drained, the drone flies a flat table forever.
       pending_refusal_ = true;
       return;
     }
@@ -85,17 +84,17 @@ void CalSweep::on_cmd(const rc::CalCmd& c, uint64_t now_ms, PowerCtl& pwr) {
   } else if (static_cast<int>(c.phase) == last_started_phase_) {
     // An exact repeat of the phase already running -- the GS resends its
     // CalCmd every 200 ms and gives up at 3000 ms (gs/src/cal_session.cpp),
-    // over an uplink that loses 30-50% of frames. Ruling (Task 11 review):
-    // re-arm the ack every time this happens, not just once per phase. The
-    // ack is the only non-redundant frame in this protocol -- a single
-    // lost ack Telem otherwise costs the GS the WHOLE phase (it never
-    // leaves AwaitAck, so it never stops transmitting retries into the
-    // live sweep, which is precisely the airtime contamination the
-    // radio-silence rule exists to prevent) -- and CalSession::on_ack() is
-    // a no-op outside AwaitAck (gs/src/cal_session.h), so answering a
-    // retransmission a second (or fifth) time is harmless. This does NOT
-    // restart the phase: cells_/cursor_/frames_per_cell_ etc. are left
-    // exactly as they are, only the ack gets re-armed.
+    // over an uplink that loses 30-50% of frames. Rule: re-arm the ack every
+    // time this happens, not just once per phase. The ack is the only
+    // non-redundant frame in this protocol -- a single lost ack Telem
+    // otherwise costs the GS the WHOLE phase (it never leaves AwaitAck, so it
+    // never stops transmitting retries into the live sweep, which is
+    // precisely the airtime contamination the radio-silence rule exists to
+    // prevent) -- and CalSession::on_ack() is a no-op outside AwaitAck
+    // (gs/src/cal_session.h), so answering a retransmission a second (or
+    // fifth) time is harmless. This does NOT restart the phase:
+    // cells_/cursor_/frames_per_cell_ etc. are left exactly as they are, only
+    // the ack gets re-armed.
     pending_ack_ = true;
     return;
   } else if (static_cast<int>(c.phase) < last_started_phase_) {
@@ -123,10 +122,10 @@ void CalSweep::on_cmd(const rc::CalCmd& c, uint64_t now_ms, PowerCtl& pwr) {
   gap_ms_ = c.gap_us / 1000;
   state_ = State::Sweeping;
   pending_result_.reset();
-  // Task 11: arm this phase's ack -- a plain flag now (the anchor,
-  // captured once above or by an earlier phase of this same session, never
-  // rides the ack -- see take_ack()'s header comment for why a fresh read
-  // here would be wrong for any phase after the first anyway).
+  // Arm this phase's ack -- a plain flag (the anchor, captured once above or
+  // by an earlier phase of this same session, never rides the ack -- see
+  // take_ack()'s header comment for why a fresh read here would be wrong for
+  // any phase after the first anyway).
   pending_ack_ = true;
 }
 
@@ -163,7 +162,7 @@ void CalSweep::on_result(const rc::CalResult& r, uint64_t now_ms) {
   // arrive with its own now_ms already past a stale await_deadline_ms_
   // (pump() just hasn't been called with a time that late yet), and
   // leaving the old value in place would let the very next pump() close
-  // the session before Task 11 gets a chance to drain this result and
+  // the session before the caller gets a chance to drain this result and
   // drive the verify phase.
   await_deadline_ms_ = now_ms + cfg_.await_next_ms;
 }
@@ -172,11 +171,11 @@ std::optional<rc::CalResult> CalSweep::take_pending_result() {
   if (!pending_result_.has_value()) return std::nullopt;
   auto r = pending_result_;
   pending_result_.reset();
-  // Nothing left to apply: fall back to the same "awaiting the next
-  // session event" limbo a finished phase leaves behind. await_deadline_ms_
-  // was already set fresh by on_result() at acceptance time, so the window
-  // for Task 11 to drive the verify-phase CalCmd is well-defined regardless
-  // of how long the result took to arrive.
+  // Nothing left to apply: fall back to the same "awaiting the next session
+  // event" limbo a finished phase leaves behind. await_deadline_ms_ was
+  // already set fresh by on_result() at acceptance time, so the window for
+  // the caller to drive the verify-phase CalCmd is well-defined regardless of
+  // how long the result took to arrive.
   if (state_ == State::Applying) state_ = State::Idle;
   return r;
 }
@@ -220,10 +219,10 @@ void CalSweep::pump(uint64_t now_ms, RadioTx& tx, PowerCtl& pwr) {
 void CalSweep::pump_sweeping(uint64_t now_ms, RadioTx& tx, PowerCtl& pwr) {
   // Global constraint ("per-rate walls must be measured against a common
   // base"): the wall-equalized diff table comes off, and anchor_idx_ is
-  // captured, once per session -- but now inside on_cmd() at acceptance
-  // (Task 11), not here. By the time this is ever reached, on_cmd() has
-  // already run at least once for this session and zeroed_for_session_ is
-  // therefore already true; nothing left to do here.
+  // captured, once per session -- inside on_cmd() at acceptance, not here. By
+  // the time this is ever reached, on_cmd() has already run at least once for
+  // this session and zeroed_for_session_ is therefore already true; nothing
+  // left to do here.
   if (!cell_entered_) {
     if (cursor_ >= cells_.size()) {
       // Phase exhausted. Session stays open -- fine follows coarse, and
@@ -299,13 +298,10 @@ void CalSweep::pump_sweeping(uint64_t now_ms, RadioTx& tx, PowerCtl& pwr) {
 void CalSweep::close_session(PowerCtl& pwr) {
   // zeroed_for_session_ is set unconditionally inside on_cmd()'s
   // new_session branch, before this class's caller could ever call
-  // pump() -- and therefore this function -- for the session (Task 11
-  // moved it there from a lazy once-per-session guard in pump_sweeping).
-  // So by the time close_session() can run for any session that ever set
-  // has_session_, this is always true; the stale comment this replaced
-  // described a "hard-caps out before ever touching the radio" case that
-  // predates that move and is no longer reachable. Kept as a defensive
-  // check, not because the false branch still happens.
+  // pump() -- and therefore this function -- for the session. So by the
+  // time close_session() can run for any session that ever set
+  // has_session_, this is always true. Kept as a defensive check, not
+  // because the false branch still happens.
   //
   // NOTE this restores a FLAT INDEX OVERRIDE parked at the anchor, not "no
   // override at all" -- main.cpp's cal_active falling edge is what

@@ -2,7 +2,7 @@
 # host-side orchestrator: iqpab.sh <cycles-per-arm> <pulse_s> <eff> <climb_wait_s> [armA armB]
 # one cycle = set min_iqp on the drone, s0 loss pulse on the GS (cascade down), off, wait for the climb back
 N=${1:-4}; D=${2:-3}; EFF=${3:-30}; W=${4:-40}; A=${5:-44}; B=${6:-12}
-DR="root@192.168.10.152"; GS="root@10.18.0.1"
+DR="${DRONE:?set DRONE=root@<drone-ip>}"; GS="${GS:?set GS=root@<gs-ip>}"
 sshq(){ ssh -o ConnectTimeout=5 -o BatchMode=yes "$@" 2>&1 | grep -v "^\*\*"; }
 OUT=${OUT:-cycles.txt}; : > "$OUT"
 i=0

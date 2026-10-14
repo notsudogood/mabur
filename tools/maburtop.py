@@ -2,9 +2,7 @@
 """maburtop — fullscreen console for the maburgs stats sideport.
 
 Binds the sideport UDP port and renders the JSON feed as a full-screen,
-panel-based, color-aware layout grouped by link (spec:
-docs/superpowers/specs/2026-07-25-gs-stats-sideport-design.md +
-docs/superpowers/specs/2026-07-26-drone-telemetry-design.md).
+panel-based, color-aware layout grouped by link.
 Usage: maburtop.py [--port 8300] [--bind 0.0.0.0] [--interval 1.0]
 
 Render architecture: every render function returns styled rows —
@@ -50,12 +48,12 @@ RADIO_COLS = [("pps", 5), ("kbps", 6), ("rssi", 6), ("rssiA", 6), ("rssiB", 6),
 # Sticky class rows render in this fixed order regardless of dict/arrival
 # order; "ctrl" gets the short display label "ctl" (cls column is 4 wide,
 # compact renderer only).
-# 2-stream video (2026-08-29 airtime-balance-uep): s0 = BASE, s1 = ENH,
-# both at the ladder rung's mcs (same-rate-fixed-pairs 2026-08-30). probe is
-# the stream-5 candidate-mcs canary (spec 2026-09-04). s2/s3 are gone from
-# the wire — class_seen_ never lights them up GS-side — but the string
-# space stays sparse-safe: an unrecognized class key from an old recording
-# would just never match here, not crash.
+# 2-stream video (airtime-balance-uep): s0 = BASE, s1 = ENH, both at the
+# ladder rung's mcs (same-rate fixed pairs). probe is the stream-5
+# candidate-mcs canary. s2/s3 are gone from the wire — class_seen_ never
+# lights them up GS-side — but the string space stays sparse-safe: an
+# unrecognized class key from an old recording would just never match
+# here, not crash.
 CLASS_ORDER = ["s0", "s1", "probe", "msp", "ctrl"]
 CLASS_LABELS = {"ctrl": "ctl"}
 
@@ -172,9 +170,9 @@ GRID_WIDTH = max(_grid_width(CARD_COLS), _grid_width(LNKSIG_COLS),
 def _ov_cmd_cell(cmd_base, cmd_enh):
     """Prose-style (top bar / compact header) overhead cell: the
     GS-commanded pair the ladder currently sends
-    (link.op.overhead_base/overhead_enh — same-rate-fixed-pairs, Task 5).
+    (link.op.overhead_base/overhead_enh — same-rate fixed pairs).
     The drone's applied-overhead echo that used to sit beside it in
-    parentheses left telemetry 2026-09-30."""
+    parentheses has left telemetry."""
     return f"ov cmd b{_s(cmd_base, 2)}/e{_s(cmd_enh, 2)}"
 
 
@@ -328,17 +326,15 @@ def render_rows_compact(model, wall, width):
                 _f(c.get("self_pps"), CARD_COLS[8][1], 1),
                 _f(c.get("tx_pps"), CARD_COLS[9][1], 0),
                 _f(c.get("tx_fail"), CARD_COLS[10][1]),
-                # cards[i].energy (spec 2026-09-13-auto-channel-select): fed
-                # from a 1 Hz A-record poll pre-2026-09-14, now refreshed
-                # every ~150 ms verdict window in-session (in-flight-
-                # channel-hop, spec 2026-09-14) -- the "busy" number is
-                # noisier tick-to-tick but never goes stale for a minute
-                # between two dwell-period cycles the way the old poll did.
+                # cards[i].energy (auto channel select): refreshed every
+                # ~150 ms verdict window in-session (in-flight channel hop)
+                # -- the "busy" number is noisier tick-to-tick than a 1 Hz
+                # A-record poll would be, but never goes stale for a minute
+                # between two dwell-period cycles the way such a poll did.
                 _f((e.get("cca", 0) - min(e.get("cca", 0), e.get("own", 0))) + e.get("fa", 0) + e.get("foreign", 0)
                    if (e := c.get("energy")) else None, CARD_COLS[11][1], 0),
-                # NHM busy airtime minus our own video's airtime (spec
-                # 2026-09-25-nhm-airtime): what's left for someone else to
-                # be blocking us with. None (blank cell) when the card's
+                # NHM busy airtime minus our own video's airtime: what's
+                # left for someone else to be blocking us with. None (blank cell) when the card's
                 # NHM window didn't cover the last verdict window; clamped
                 # at 0 since own_air is measured over a different (wider)
                 # span than the NHM bucket read and can outrun busy_pct.
@@ -444,7 +440,7 @@ def render_rows_compact(model, wall, width):
     residual = link.get("residual_loss")
     residual_pct = None if residual is None else residual * 100.0
     air = link.get("air_pct")
-    # link.rtt (link-rtt 2026-09-02): control-path RTT — telem queues behind
+    # link.rtt: control-path RTT — telem queues behind
     # video on the drone TX, so this reads high under saturation. flr is the
     # absolute network floor (anchor + pts offset).
     rtt = link.get("rtt") or {}
@@ -593,10 +589,10 @@ def panel_topbar(model, wall):
 def _shed_cell(drone):
     """Which shed holds the enh layer: FS (failsafe, rung 0 / lost link)
     wins over CONG (drone-local TxQueue-pressure or USB-failure shed,
-    sideport drone.congestion_shed, 2026-09-03), else "off". None when the
-    recording predates the congestion key, so it renders as dashes. The
-    air-clock tier (drone.air_shed, "AIR") left the sideport 2026-09-30:
-    per-frame air_ms in au.log carries it now."""
+    sideport drone.congestion_shed), else "off". None when the recording
+    predates the congestion key, so it renders as dashes. The air-clock
+    tier (drone.air_shed, "AIR") has left the sideport: per-frame air_ms in
+    au.log carries it now."""
     if drone.get("failsafe_shed"):
         return "FS"
     cong = drone.get("congestion_shed")
@@ -607,9 +603,8 @@ def _shed_cell(drone):
 
 def _radio_rx_ok(drone):
     """Did the drone's receiver hand over ANY frame last telemetry period?
-    Derived from drone.radio.rx (own + foreign + crcfail) since the
-    radio_rx_ok flag left the wire 2026-09-30. None when the recording
-    carries no rx split."""
+    Derived from drone.radio.rx (own + foreign + crcfail); the radio_rx_ok
+    flag has left the wire. None when the recording carries no rx split."""
     rx = (drone.get("radio") or {}).get("rx")
     if not rx:
         return None
@@ -623,7 +618,7 @@ _REC_ERR = {1: "OFF", 2: "NOSLOT", 3: "NOCARD", 4: "NOMNT", 5: "FULL", 6: "WRERR
 
 
 def _rec_cell(drone):
-    """VTX onboard recorder cell from drone.rec (spec 2026-09-26):
+    """VTX onboard recorder cell from drone.rec:
     "VREC" recording, "VREC!<why>" error, None otherwise or when the key
     predates the recorder."""
     rec = drone.get("rec")
@@ -1057,8 +1052,8 @@ def panel_ladder(model, wall):
     body.extend(_ladder_footer_rows(ctl, d.get("t_ms")))
     at = (d.get("link") or {}).get("attrib")
     if at:
-        # `suppressed` was deleted 2026-09-02 with the packet-level delivery
-        # window it was defined against; residual_cur is the current-rung
+        # `suppressed` was deleted with the packet-level delivery window it
+        # was defined against; residual_cur is the current-rung
         # (attributed) post-FEC loss the ladder actually demotes on.
         rc = at.get("residual_cur")
         rc_pct = None if rc is None else rc * 100.0
@@ -1071,7 +1066,7 @@ def panel_ladder(model, wall):
     pb = (d.get("link") or {}).get("probe") or {}
     if pb.get("on"):
         cards = " ".join(f"c{i} {_s(c.get('loss'), 2)}" for i, c in enumerate(pb.get("cards") or []))
-        # streak_bodies (probe per AU, 2026-09-16): the clean streak in probe
+        # streak_bodies (probe per AU): the clean streak in probe
         # bodies, the unit link.probe.clean_bodies is set in.
         streak = pb.get("streak_bodies") or 0
         body.append((f" probe: r{_s(pb.get('rung'))} mcs{_s(pb.get('mcs'))} {pb.get('state', '?')}"

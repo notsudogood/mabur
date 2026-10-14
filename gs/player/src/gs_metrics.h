@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <optional>
 
-#include "gs_overlay.h"  // RecState
+#include "gs_layer.h"  // RecState
 
 namespace maburplay {
 
@@ -85,7 +85,7 @@ class RecTracker {
   bool started_ = false;
 };
 
-// The VTX leg of the recording indicator (spec 2026-09-26): what the
+// The VTX leg of the recording indicator: what the
 // drone's recorder reports (drone.rec over the 8302 sideport), turned into
 // RecState::Vtx plus a clock that counts from the drone's first
 // "recording" report of this press.

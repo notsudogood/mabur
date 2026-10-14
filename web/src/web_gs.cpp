@@ -90,7 +90,7 @@ WebGs::WebGs(const maburgs::Config& cfg, Mode mode, uint8_t start_ch, int width,
       agg_(cfg.uep_layers(), static_cast<uint32_t>(cfg.fec.seq_horizon), 1,
            static_cast<uint32_t>(cfg.link.arrival_guard_syms)),
       fs_({static_cast<uint64_t>(cfg.video.frame_gap_timeout_ms), cfg.video.frame_lookahead},
-          {[this](const mabur::framewire::FrameHdr& h, uint8_t sid) {
+          {[this](const mabur::framewire::FrameHdr& h, uint8_t sid, uint8_t /*nslices: no streamed decode in the browser*/) {
              cur_ = Au{};
              cur_.pts_us = h.pts_us;
              cur_.sid = sid;
@@ -130,8 +130,8 @@ WebGs::WebGs(const maburgs::Config& cfg, Mode mode, uint8_t start_ch, int width,
       start_ch_(start_ch) {
   // The radio is tuned by the glue. A spotter's link setting is just the
   // configured width: it drives no ladder, so it needs no MCS (the readout
-  // comes off the air, air_mcs_), and the drone's applied-op echo left
-  // Telem 2026-09-30.
+  // comes off the air, air_mcs_), and the drone's applied-op echo has left
+  // Telem.
   spotter_op_.bw = width;
   key_fp_ = mabur::key_fingerprint(cfg.link.key);
   if (mode_ == Mode::Gs) {
@@ -210,7 +210,7 @@ WebGs::WebGs(const maburgs::Config& cfg, Mode mode, uint8_t start_ch, int width,
     }
     if (!vrx_) {
       // Spotter: the real GS's RCF carries the standing hop order in the
-      // clear; follow it without verifying the tag (spec §6.2). on_rx already
+      // clear; follow it without verifying the tag. on_rx already
       // fed this body to on_frame (every CRC-good body, DISC included).
       if (follow_ && mabur::rc::frame_type(f.data(), f.size()) == mabur::rc::T_RCF)
         if (const auto r = mabur::rc::parse_rcf(f.data(), f.size()))
@@ -219,7 +219,7 @@ WebGs::WebGs(const maburgs::Config& cfg, Mode mode, uint8_t start_ch, int width,
     }
     const bool was_session = vrx_->link_state() == maburgs::VrxState::SESSION;
     vrx_->on_rc_frame(f.data(), f.size(), static_cast<double>(us) / 1000.0);
-    // main.cpp (final review C1): the ack that OPENED the session links
+    // As in main.cpp: the ack that OPENED the session links
     // where it was heard (on_rc_body() handed the core its rx channel).
     if (chan_ && !was_session && vrx_->link_state() == maburgs::VrxState::SESSION &&
         mabur::rc::frame_type(f.data(), f.size()) == mabur::rc::T_DISC_ACK)
@@ -317,7 +317,7 @@ void WebGs::reset_video_() {
   ++resets_;
 }
 
-// maburgs main.cpp's NACK block (spec 2026-10-05 fec-nack §3): base-layer
+// maburgs main.cpp's NACK block: base-layer
 // selective repeat. Direct send, mid-burst -- never the RcfSlotter (bench:
 // slotted fill p50 44 ms, past the gap timeout). Option A: the retransmit
 // fixes the video only; every ladder input still books the loss. No

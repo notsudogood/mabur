@@ -104,7 +104,7 @@ TEST(deadline_drops_without_retry) {
 }
 
 TEST(request_needs_min_lead_before_the_deadline) {
-  // Flight 0026 (2026-10-06): in a demote cascade the oldest, deadline-doomed
+  // Flight 0026: in a demote cascade the oldest, deadline-doomed
   // seqs were packed first and ate the drone's air bucket ahead of seqs that
   // could still have been filled. A request (first try or repeat) whose
   // answer cannot land min_lead_ms before the entry's deadline is not sent;

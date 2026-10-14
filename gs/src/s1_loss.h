@@ -23,7 +23,7 @@ class S1LossWindow {
   // decision, call this at a rung transition with t_ms = now + settle: the
   // debris already booked must not outlive the rung it was measured on, and
   // the abandonment horizon books old-rung loss up to ~80 ms late, so the
-  // settle tail has to be swallowed too (flight ctl-0160, 2026-09-02: one
+  // settle tail has to be swallowed too (flight ctl-0160: one
   // residual event cascaded mcs5->mcs0 at one demote per 50 ms tick).
   void blank_until(double t_ms) {
     clear_window_();

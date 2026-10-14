@@ -1,6 +1,6 @@
 // Readiness of the SigmaStar MI kernel modules maburd's venc dlopens against.
 //
-// Boot-path context (docs/boot-time-findings-2026-09-07.md, "rcS, stamped"):
+// Boot-path context (docs/findings/2026-09-07-boot-time.md, "rcS, stamped"):
 // the MI insmod chain (load_sigmastar: mhal, mi_common, mi_sys, ... mi_venc,
 // sensor detect, sensor driver) is ~0.7 s on a cold boot, and maburd's own
 // first ~1.2 s -- exec + shared-library page-in, the USB port reset,

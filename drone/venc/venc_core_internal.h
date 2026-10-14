@@ -1,6 +1,6 @@
 /* venc_core internal seam — mabur-local, no waybeam_venc counterpart.
  *
- * The encoder is a pure mechanism (spec 2026-08-28 §4): when a frame-shm
+ * The encoder is a pure mechanism: when a frame-shm
  * ring-full drop breaks the decoder's reference chain, star6e_output does
  * NOT decide to spend an IDR on it.  It reports the fact upward and the
  * facade owns the policy (the 1 s chain-break holdoff on top of the

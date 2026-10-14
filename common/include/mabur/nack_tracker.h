@@ -1,5 +1,5 @@
 #pragma once
-// NackTracker (fec-nack, spec 2026-10-05): decides which base-layer (sid 0)
+// NackTracker (fec-nack): decides which base-layer (sid 0)
 // FEC source symbols the GS asks the drone to re-send.
 //
 // Two triggers admit a wire seq:
@@ -18,7 +18,7 @@
 // terminal, so the erasure set cannot re-admit it. A request (first try or
 // repeat) that would go out with less than min_lead_ms left before that
 // deadline is withheld and the entry is dead on the spot (`lead_skipped`):
-// flight 0026 (2026-10-06) packed deadline-doomed seqs first in every
+// flight 0026 packed deadline-doomed seqs first in every
 // cascade, and they ate the drone's air bucket ahead of fillable ones. A requested entry books
 // one resolution (filled / late_fill / wasted) when its state turns
 // terminal, and dropped_deadline once if it is still unknown at the

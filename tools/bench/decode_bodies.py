@@ -20,8 +20,8 @@ FLAG_ENHANCE = 0x04
 def parse_symbol_size(text):
     """Accepts a single int (shared by both streams) or a comma-separated
     2-list, one per UEP stream (e.g. "164,1312"), mirroring the GS/drone
-    bundle's scalar-or-array fec.symbol_size (2-stream space, spec
-    2026-08-29-airtime-balance-uep)."""
+    bundle's scalar-or-array fec.symbol_size (2-stream space,
+    airtime-balance-uep)."""
     parts = [p.strip() for p in text.split(",")]
     if len(parts) == 1:
         return [int(parts[0])] * 2
@@ -64,7 +64,7 @@ def read_fixture(path):
 def classify_frame(annexb):
     """Mirror of mabur classify_frame (common/src/nal.cpp), extended to also
     report TRAIL_N-ness (mabur's frame_is_trail_n): returns (sid, trail_n).
-    2-stream space (spec 2026-08-29-airtime-balance-uep): critical NALs
+    2-stream space (airtime-balance-uep): critical NALs
     (VPS/SPS/PPS 32-34, IRAP 16-23) and any non-TRAIL_N VCL -> sid 0 (base);
     TRAIL_N (type 0) -> sid 1 (enh). trail_n is only meaningful when
     sid == 1, since sid 1 is reached exclusively via TRAIL_N under this
@@ -89,7 +89,7 @@ def expected_unit(rec, frame_id):
     is stripped by mask_discont() before comparing: the flag rides on every
     frame for kDiscontStickyMs after start, so which frames carry it depends
     on wall-clock timing, not fixture content. Byte 3 carries slice_rows (wire
-    flag day 2026-10-10), which maburd stamps as 0 for unsplit frames."""
+    flag day), which maburd stamps as 0 for unsplit frames."""
     flags = FLAG_IDR if rec["flags"] & FLAG_IDR else 0
     return FRAME_HDR.pack(frame_id, flags, 0, rec["pts"]) + rec["annexb"]
 
@@ -158,8 +158,8 @@ def main():
 
     fixture = read_fixture(a.fixture)
     # Recovered units are keyed by the frame_id maburd stamped. maburd's
-    # FramePipeline now allocates frame_id AFTER the shed check (spec
-    # 2026-07-26 svct-enable: "shed before frame_id"), so a shed frame burns
+    # FramePipeline now allocates frame_id AFTER the shed check (svct-enable:
+    # "shed before frame_id"), so a shed frame burns
     # no id -- frame_id is no longer the fixture index, it is the frame's
     # position among the frames maburd actually encodes (see "reach" below).
     got = {}

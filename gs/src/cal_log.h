@@ -11,17 +11,16 @@ namespace maburgs {
 struct CalCell;
 struct RateWall;
 
-// Raw per-cell record of a TX-power calibration run (spec
-// docs/superpowers/specs/2026-09-10-tx-power-calibration-design.md). Writes
-// `cal.log` inside the session directory (DebugSession::dir()) via a
-// private LogWriter -- unlike ctl.log/probe.log/au.log this does not share
+// Raw per-cell record of a TX-power calibration run. Writes `cal.log` inside
+// the session directory (DebugSession::dir()) via a private LogWriter --
+// unlike ctl.log/probe.log/au.log this does not share
 // main.cpp's one session writer, because a calibration run is rare and
 // short-lived (a handful of sweeps, not a per-frame hot path), so there is
 // nothing to gain from wiring it into the fixed-slot session writer and
 // every caller that wants one just constructs it from a directory.
 //
-// This file exists because Task 13 deleted bench/txagcbench/ (the old
-// sweep tooling) along with its Python analyzer. cal.log plus the
+// This file exists because bench/txagcbench/ (the old sweep tooling) was
+// deleted along with its Python analyzer. cal.log plus the
 // `maburcal report` reader is what replaces that capability -- without it,
 // deleting the old tool would cost the ability to examine a run's
 // underlying data after the fact.
@@ -99,7 +98,7 @@ struct RateWall;
 // question with a different answer: restarting maburgs rejoins the live
 // session directory, and if that directory had never held a calibration, the
 // first run wrote a headerless cal.log that gs/bundle/maburcal then refused
-// to read at all. Seen on hardware 2026-09-11, on the most ordinary path
+// to read at all. Seen on hardware, on the most ordinary path
 // there is (deploy a binary, then calibrate).
 bool cal_log_header_due(const std::string& dir);
 

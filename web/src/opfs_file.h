@@ -2,10 +2,9 @@
 #define WEBGS_OPFS_FILE_H_
 
 // A file in the browser's Origin Private File System, written from the core
-// pthread -- a dedicated Worker, where FileSystemSyncAccessHandle exists
-// (spec 2026-09-28-web-local-recording §1.3). Page build only. open() and
-// remove() await promises through ASYNCIFY: call them from the core loop,
-// never from inside an AU callback. write()/flush()/close() are synchronous.
+// pthread -- a dedicated Worker, where FileSystemSyncAccessHandle exists.
+// Page build only. open() and remove() await promises through ASYNCIFY:
+// call them from the core loop, never from inside an AU callback. write()/flush()/close() are synchronous.
 
 #include <cstddef>
 #include <cstdint>

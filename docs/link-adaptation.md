@@ -1,1060 +1,683 @@
 # Link adaptation — ladder, attribution, fade
 
-How maburgs decides the operating point: the measured-loss ladder, s3
-probe-before-promote, transition attribution, the fade regime and its
-predictive RF trigger, and the drone-side RCF drain that actuates it.
+How maburgs decides the operating point and how maburd acts on it. Covers
+the measured-loss ladder, the probe-stream promote gate, transition
+attribution, the fade regime and its predictive RF trigger, the drone-side
+sheds, the RCF drain, and RcAgent's encoder verbs.
 
-Read `docs/data-provenance.md` before comparing any two recordings across
-dates, and `docs/observability.md` for how to record one in the first
-place. Specs (local, gitignored):
-`docs/superpowers/specs/2026-08-05-s3-probe-promote-design.md`,
-`docs/superpowers/specs/2026-08-15-pooled-rf-and-instant-s3-design.md`.
+Before comparing two recordings from different dates, read
+`docs/data-provenance.md`. To record one in the first place, see
+`docs/observability.md`. Specs are local and gitignored, under
+`docs/superpowers/specs/`: `2026-08-05-s3-probe-promote-design.md`,
+`2026-08-15-pooled-rf-and-instant-s3-design.md`,
+`2026-09-04-probe-stream-design.md` and
+`2026-09-06-air-clock-enh-shed-design.md`.
 
-## 2-stream UEP + air balancer (2026-08-29, superseded 2026-08-30 — see below)
+## Same-rate fixed pairs
 
-The video link collapsed from 4 UEP streams (CRIT/T0/T1/T2, wire sids
-0-3) to 2: BASE (sid 0) and ENH (sid 1). BASE rode `mcs−1` of the
-ladder's scored rung — an always-on, fixed UEP-via-rate rule mirrored
-identically on drone and GS (RC_VERSION 4) — while ENH rode the scored
-mcs itself; nothing flew above the scored mcs (2026-07-26 rule, still in
-force). FEC overhead was LITERAL: the config/wire `overhead` value
-*was* the command overhead (`repair/data`), not a per-layer scaling
-(the old `uep_layer_overhead`) of it — a single `budget()`/`budget_for(rung)`
-pair derived directly as `overhead / (1 + overhead)`, the identical
-formula for both sids; `budget3_for()` was gone, `budget_for()` alone
-covered what it used to do (the enh/probe rung's budget).
+The video link has two UEP streams: BASE (sid 0) and ENH (sid 1, the
+droppable SVC-T layer). Both ride the same scored rung (`ladder_from` in
+`common/src/profile.cpp`). UEP is expressed only through FEC overhead.
+That overhead is a fixed **per-rung config pair**,
+`[[link.ladder]] overhead_base`/`overhead_enh`, carried in every RCF. The
+operator rule `overhead_base >= overhead_enh` is enforced at config load.
 
-The drone's `AirBalancer` redistributed that one commanded overhead
-between BASE and ENH every frame, anchored on ACTUAL emitted bytes
-rather than the nominal `len*(1+ov)/rate` model (which measured a
-reproducible ~2x gain error at large frames). See
-`docs/airtime-balance-spike-findings-2026-08-29.md` for the bench spikes
-behind that design. The rate split had a structural floor, though: at
-the mcs1 rung's 2:1 base/enh rate ratio the balancer's rails could not
-reach air balance (3.3 ms/pair residual alternation) — the motivation
-for the same-rate counter-study below.
+A rung is `(bw, mcs)`. `[[link.ladder]] bw` is required on every rung
+(`docs/bw40.md`).
 
-## Same-rate fixed pairs (2026-08-30) — current architecture
+`LadderController` (`gs/src/ladder_controller.h`) scores each sid against
+its own budget:
+- sid 0 (base): `budget_base()` / `budget_base_for(rung)`.
+- sid 1 (enh) and the probe: `budget_enh_for(rung)`.
 
-Both streams now ride the SAME scored mcs; the mcs−1 base-rate split
-above is gone (`ladder_from` in `common/src/profile.cpp`, 2026-08-30
-RULING). UEP is expressed only through FEC overhead, and that overhead
-is a fixed **per-rung config pair** — `overhead_base`/`overhead_enh` —
-carried in the v5 RCF (RC_VERSION 5), not a single scalar the drone
-reallocates at runtime. `LadderController` scores each sid against its
-own budget: `budget_base()`/`budget_base_for(rung)` for sid 0 (base),
-`budget_enh_for(rung)` for sid 1 (enh/probe/s3) — see
-`gs/src/ladder_controller.h`. There is no shared `budget()`/
-`budget_for()` anymore.
+The drone applies the commanded pair to UEP as it arrives. There is no
+runtime redistribution between the streams. Bench record of the deleted
+`AirBalancer` design: `docs/findings/2026-08-29-airtime-balance-spike.md`.
+Measurements behind the same-rate decision:
+`docs/findings/2026-08-30-same-rate-uep.md`.
 
-Since 2026-09-24 a rung is `(bw, mcs)`, not just `mcs`: `[[link.ladder]] bw`
-is a required per-rung key and the RCF profile byte already carried width,
-so this cost no wire change (`docs/bw40.md`).
+`run_bitrate_policy` is a pure function of the operating point: a held rung
+commands a held bitrate. That includes a rung held *under probe*: the probe
+stream's MCS is deliberately excluded from the formula
+(`docs/airtime-model.md`), so a probe costs zero encoder writes and zero
+IDRs.
 
-**The runtime `AirBalancer` solver is deleted, and so is `AirFeed`.**
-The drone applies the commanded overhead pair directly to UEP; there is
-no per-frame redistribution or solve. `AirFeed`, the solver's
-measurement-only successor, kept per-stream EWMAs of frame-unit bytes
-vs. emitted body bytes and published `share_base`/`excess_base`/
-`excess_enh` into `run_bitrate_policy`'s blended target; it was deleted
-on 2026-09-01 when that blend became a fixed per-rung formula, because
-every bitrate write it provoked cost a keyframe (see
-`docs/airtime-model.md` §1). `run_bitrate_policy` is once again a pure
-function of the operating point: a held rung commands a held bitrate,
-and (since 2026-09-03) so does a held rung *under probe* — the enh
-probe slot's candidate mcs is deliberately excluded from the bitrate
-formula (`docs/airtime-model.md`), so a probe costs zero encoder writes
-and zero IDRs; the probe changes MCS only, as the 2026-08-05 spec says.
+The drone's `:8301` `ov_base_pct`/`ov_enh_pct` HTTP override is bench
+tooling, not a production control. It is the only way applied overhead can
+differ from commanded. Telem carries no applied-overhead echo, so the GS
+cannot see an armed override. maburtop's `_ov_cmd_cell` shows the commanded
+pair only.
 
-The drone's `:8301` `ov_base_pct`/`ov_enh_pct` HTTP override (bench
-tooling, not a production control) is now the ONLY source of
-commanded-vs-applied divergence: with no override armed, applied always
-equals commanded. `tools/maburtop.py`'s DRONE and LADDER panels reflect
-this (`_ov_cmd_cell`/`_ov_applied_cell`) — a mismatch there means an
-armed override or a stale/old-daemon snapshot, not a balancer at work.
+Vocabulary: "s1" and "s3" in config keys, demote-input names and ctl-log
+reason strings (`s3_settle_ms`, `s3_residual`, `s3_util`) mean sid 0 (BASE)
+and sid 1 (ENH). The names were kept rather than renamed (see
+`gs/src/ctl_log.h`'s ctllog 7 note). The enh layer always rides the op MCS.
+The candidate-MCS canary is the separate probe stream (sid 5, below).
 
-Measurement basis for the same-rate decision: ten static operating
-points plus a motion sweep, `docs/same-rate-uep-findings-2026-08-30.md`.
+## RCF slotting
 
-Everywhere below that still says "s1" or "s3" is pre-2026-08-29
-vocabulary for what is now sid0 (BASE) and sid1 (ENH — still the
-probe/canary layer the ladder attributes demotes to). The demote-input
-names, the surviving config key `s3_settle_ms`, and ctl-log reason
-strings (`s3_residual`, `s3_util`) were kept as-is rather than renamed
-(see `gs/src/ctl_log.h`'s ctllog 7 note) — read every s1/s3 mention past
-this point as sid0/sid1. (`s3_residual_confirm_ms` itself is gone, but
-that removal predates this change — see the pooled-RF note below.)
-⚠ SUPERSEDED 2026-09-04: sid1 (ENH) never changes MCS any more. The probe stream (below) carries the
-candidate-MCS canary on its own SBI stream (id 5) now, so "sid1 — still
-the probe/canary layer" is accurate only for recordings dated before
-2026-09-04; from this date sid1 always rides the op MCS and every
-mention of "the enh layer diverting to a candidate rate" in older
-material is historical.
+The GS holds every RCF and DISC keepalive send until the drone is between
+bursts (`RcfSlotter`, `gs/src/rcf_slot.h`, `link.rcf_slot_hold_ms`). The
+mechanism, its constants and its limits are documented once, in
+`docs/tx-rx-timing.md` §3.2.
 
-## RCF slotting into the inter-AU idle (2026-09-03)
+Two things matter for the ladder:
+- **Control latency.** A commanded op change reaches the drone up to one AU
+  period later than an unslotted send would.
+- **Probe-arrival release.** While a probe is commanded, the slotter
+  releases on the probe body's arrival, not on the AU completion. So the
+  probe is the one PPDU the GS uplink blast can never hit.
 
-Every GS control-frame send (RCF, DISC keepalive) blasts the
-sibling RX card at ~−4 dBm and deafens the TX card, so a drone PPDU whose
-preamble starts within ~180 µs of the send is lost on BOTH cards — one
-whole aggregate per hit, the source of the bench's ~0.35 %/PPDU loss and
-the 34 ms tail-repair stalls (`docs/gs-uplink-self-blanking-findings-2026-09-02.md`).
-The chip already holds the TX until the PPDU it is receiving ends; what
-kills is the NEXT PPDU starting right behind the blast, i.e. sends inside
-an AU burst.
+Sideport: `link.rcf_slot.{au,probe,timeout,passthru,tail_ub_ms}`
+(`docs/observability.md`).
 
-`RcfSlotter` (`gs/src/rcf_slot.h`) sits between `VrxController` and
-`send_control`: while video flows, a control frame waits for an AU
-completion at which the send will be on air before the next AU's burst is
-due — predicted from the first-body arrival cadence (`t_first` of
-consecutive AUs is flat to <1 ms; completion is not, it moves with frame
-size and FEC repair). Completions too close to the next burst are skipped;
-a frame offered within 2 ms after a good completion goes out at once; a
-hold longer than `link.rcf_slot_hold_ms` (default 30, 0 = off) is released
-anyway. With no AU in the last 100 ms (rendezvous, stalled video)
-everything passes through, which is why DISC needs no bypass.
+## Probe stream — the promote gate
 
-Bench A/B (mcs5 park, 11 Mb/s, agg 6, 100 s windows, gap-log instrument):
+**What it is.** The drone trails every video AU with one extra body: SBI
+stream id 5 (`kProbeStreamId`, `common/include/mabur/probe_wire.h`). This
+applies to base and enh AUs alike (`probe_follows()` in
+`drone/src/probe_source.h`), and never to a shed layer's AU, which never
+went on air.
+- **Rate.** That is 60 probes/s at 60 fps SVC-T, and the AU rate in
+  general.
+- **Size.** Each probe body is exactly one video-body length:
+  `13 + bpb*(2 + kSwHeaderLen + symbol_size)`, which is 1405 B at the
+  shipped 332/bpb 4 geometry. It is derived from the same `FecCfg` as
+  video and never configured separately.
+- **Profile.** It flies at the profile of rung
+  `current + link.probe.rung_offset` (default 1). That profile is commanded
+  fresh in every RCF as `Rcf::probe_profile`. `0xFF` (`kNoProbeProfile`)
+  means no probe: either `link.probe.enable = false` or the link is already
+  on the top rung.
 
-| | real losses/s | frames lost/s | RCF rx at drone | `close_ms` |
-|---|---|---|---|---|
-| slotter off | 1.03 | 3.9 | 18.5/s | 5 |
-| slotter on | 0.11 | 0.4 | 19.4/s | 22 |
+Every sub-block repeats a 9-byte header: magic, seq, profile, `enh_fid`.
+So a body with one surviving block is still attributed rather than booked
+as `bpb` lost blocks. An FCS-failed probe PPDU still reaches `ProbeTrack`:
+`parse_probe_body` salvages the CRC-clean sub-blocks exactly as the video
+decoder does. Gating the probe sink on `crc_ok` would book every FCS-failing
+PPDU as a full `bpb`-block loss and bias the gate toward Lossy.
 
-Sends: 88 % released by an AU completion (hold p50 6 ms, p90 17 ms), 12 %
-in-grace immediate, 0.5 % hold-timeout. Cost: a commanded op change now
-reaches the drone up to one AU period later (`link.attrib.close_ms`
-5 → 22 ms). Player `fec` p99 ≥ 20 ms windows: 31/90 → 7/100.
-Sideport counters: `link.rcf_slot.{au,probe,timeout,passthru,tail_ub_ms}`.
+**Scoring rule: union across cards, AU count for expected, never seq gaps.**
+`ProbeTrack` (`gs/src/probe_track.h`, `on_au(sid, fid)`) books one
+expectation of `bpb` blocks per video AU that begins. It does NOT book from
+probe sequence numbers. A wholly-lost probe stream carries its `seq` inside
+the lost bodies. Scoring from seq gaps would therefore read a 100 %-lost
+interval as silence (NoInfo) instead of loss, which is exactly the case
+this gate exists to catch.
+- **Counters.** `expected_blocks`, `arrived_blocks` and `bodies_rx` are kept
+  for the COMMANDED profile only. A body that finalizes carrying a
+  different profile (the RCF-lag tail after a rung change) increments one
+  monotonic `off_profile` counter. It is "not scored", not "lost".
+- **Union.** `arrived_blocks` is the union (OR of survivor bitmaps) across
+  GS cards, because that is what video gets through the multi-card FEC
+  dedup.
+- **No subtraction.** Every counter is non-decreasing. An off-profile body
+  cancels its own AU's still-pending expectation. The AU is keyed by frame
+  id, which is the id the probe carries as `enh_fid`; base and enh share
+  one frame-id counter.
+- **Finalize together.** A pending AU is matched to its body on first
+  sight and finalizes in the same `tick()` as the body. So only a genuinely
+  lost probe opens an `expected` gap.
+- **Per card.** Per-card cumulative counters exist alongside the union,
+  for "which card collapsed at range".
 
-**Probe-arrival release (2026-09-05).** While a probe is commanded, the
-probe body is the last PPDU of every ENH burst and it lands 0.9 ms p50 /
-4 ms p99 *after* the completion stamp (bench, probelog 2 `first_ms` vs
-`t_complete`); a send's USB+chip latency is 1–1.5 ms, so a release at the
-ENH completion put the blast exactly on the probe — the probe lost ~2.5×
-the enh stream's own symbol loss, 45 of 55 lost probes had a GS send
-inside the collision window (22 % baseline), and a fixed one-body tail
-(`bee51c6`) was a measured null. An ENH completion now releases nothing
-itself: the probe sink's `on_probe_tail` is the release
-(`SlotReason::Probe`), with the idle-ahead check made at that instant.
-A lost probe falls back to a deadline at completion + `tail_ub_ms`, a
-decaying max of the observed completion→probe offsets floored at the
-probe body's airtime, +1 ms. Base-AU completions release at once as
-before (no probe trails a base burst). Interleaved A/B, pinned mcs4 /
-probe mcs4 / `feedback_ms` 50, 8 min arms:
-`docs/probe-blanking-fix-findings-2026-09-05.md` — probe loss 0.21 % →
-0.06 %, below the enh stream's 0.08 %, enh unchanged.
+**Gate (spec §4.4).** Every ordinary promote condition still applies:
+- `u < up_util` sustained for `link.clean_ms`;
+- `hold_after_down_ms` and `min_between_changes_ms`;
+- a next rung that exists and is not penalized.
 
-## Probe stream (2026-09-04) — current promote gate
-
-Replaces the s3 probe-before-promote design entirely (the 2026-08-05
-paragraphs below are marked superseded). RC_VERSION 5 → 6. Spec
-`docs/superpowers/specs/2026-09-04-probe-stream-design.md`.
-
-**What it is.** The drone appends one extra body — SBI stream id 5
-(`kProbeStreamId`, `common/include/mabur/probe_wire.h`), exactly one
-video-body length (1405 B at the shipped 332/bpb4 geometry since SBI
-header ver 2 (`air_ms`, 2026-09-06; was 1403 B on the 11-byte ver-1
-header),
-`13 + bpb*(2 + kSwHeaderLen + symbol_size)`, derived from the same
-`FecCfg` as video and never independently configured) — after every
-video access unit, base and enh alike (since 2026-09-16, see "Probe per
-AU" below; enh-only before), all the time the link is LINKED. It flies at the profile of
-rung `current + link.probe.rung_offset` (default 1), commanded fresh on
-every RCF (`Rcf::probe_profile`, 0xFF = no probe: disabled, or already
-on the top rung). Every sub-block repeats a 9-byte header (magic, seq,
-profile, `enh_fid`) so a body with one surviving block is still
-attributed rather than booked as `bpb` lost blocks. An FCS-failed probe
-PPDU still reaches `ProbeTrack`: `Aggregator::on_rx_body` routes every
-probe body to the sink regardless of `crc_ok`, and `parse_probe_body`
-salvages the CRC-clean sub-blocks exactly as the video decoder does for
-an FCS-corrupt video body — gating the probe sink on `crc_ok` would book
-every FCS-failing PPDU as a full `bpb`-block loss instead of just its
-dead sub-blocks, biasing the gate ~4x pessimistic toward Lossy.
-
-**The enh tail and the GS uplink blast (corrected 2026-09-05).** The
-2026-09-04 design assumed a send released at the ENH completion is on
-air ≥ `lead_ms` (3 ms) later, long after the probe. Measured: the probe
-lands 0.9 ms p50 / 4 ms p99 after the completion stamp and the send's
-real USB+chip latency is 1–1.5 ms, so the slotter aimed the blast at the
-probe (~2.5× the enh stream's own loss, GS-inflicted, vanishing at
-`feedback_ms` 200). Fixed by releasing on the probe's arrival instead —
-"RCF slotting" above, `docs/probe-blanking-fix-findings-2026-09-05.md`.
-A probe sent at a random time would land inside the ~180 µs blast
-~0.35 %/PPDU of the time; with the probe-arrival release it is the one
-PPDU the slotter can never hit, and on the bench it now loses *less*
-than the enh stream it predicts.
-
-**Scoring rule — union across cards, AU count for expected, never seq
-gaps.** `ProbeTrack` (`gs/src/probe_track.h`) books one expectation of
-`bpb` blocks per ENH AU that begins — NOT from probe sequence numbers.
-A wholly-lost probe stream carries its `seq` counter inside the lost
-bodies, so scoring "expected" from arrival-side seq gaps could never
-book an expectation for a 100 %-lost interval; it would read as silence
-(no data, ladder ignores it) instead of loss (data, score it zero) —
-exactly the case this gate exists to catch. Counters (`expected_blocks`,
-`arrived_blocks`, `bodies_rx`) are kept for the COMMANDED profile only,
-plus a single monotonic `off_profile` count for bodies that finalize
-carrying a different profile (the RCF-lag tail, ~20-65 ms after a rung
-change) — those bodies are "not scored", not "lost". `arrived_blocks` is
-the union (OR of survivor bitmaps) across GS radio cards, because that
-is what video gets through the two-card FEC dedup — scoring anything
-else would not predict what a promote actually delivers. Every counter
-is strictly non-decreasing: an off-profile body cancels its OWN enh AU's
-still-pending expectation (keyed by the AU's frame id, the same id the
-probe body carries as `enh_fid`) rather than an "un-book" of an already
-counted total — there is no subtraction path. Per-card cumulative
-counters exist alongside the union purely for the "which card collapsed
-at range" question (flight-0016).
-
-⚠ 2026-09-04 bench finding: a delivered body's AU used to finalize on
-its own timer, ~5-30 ms before the body's own finalize instant, so a
-one-body `expected` deficit sat open between the two and the 500 ms
-`S1LossWindow` (sampled every 50 ms) read a fraction of samples as a
-phantom `probe_u` 0.2 quantum against a real per-body loss of ~0.2 %.
-Fixed by tying a matched AU's finalize to its body's: a still-pending
-AU is matched to its body on the body's first sight and now finalizes
-in the same `tick()` as the body, so only a genuinely lost probe ever
-opens a gap.
-
-**Gate table (spec §4.4).** Every existing promote condition stays
-(`u < up_util` sustained `clean_ms`, `hold_after_down_ms`,
-`min_between_changes_ms`, next rung exists and unpenalized); the probe
-gate is consulted on top, only once a probe is commanded:
+The probe gate is consulted on top, whenever a probe is commanded:
 
 | gate | action |
 |---|---|
-| Clean, streak ≥ `probe.clean_bodies` (bodies, since 2026-09-16; was `clean_ms`) | promote now; probation as today; `++promotes_probed`; reason `promote_probed` |
-| Clean, streak short | wait — the promote lands the tick the streak reaches `clean_bodies` |
-| Lossy | **hold**, no penalty (nothing was tried, the probe keeps measuring for free); `++probe_holds` once per hold episode |
-| NoInfo | **hold**, same counter — a commanded-but-absent probe (enh shed, drone not sending) is precisely the blind promote this design exists to prevent |
+| Clean, streak ≥ `link.probe.clean_bodies` | promote now, probation applies, `++promotes_probed`, reason `promote_probed` |
+| Clean, streak short | wait; the promote lands on the tick the streak reaches `clean_bodies` |
+| Lossy | **hold**, no penalty; `++probe_holds` once per hold episode |
+| NoInfo | **hold**, same counter: a commanded-but-absent probe is the blind promote this gate exists to prevent |
 
-`promote_probed` vs plain `promote`: the legacy direct promote (reason
-`promote`) survives ONLY when no probe is commanded at all
-(`link.probe.enable: false`, or already on the top rung, which cannot
-promote anyway). Demotes always win and are untouched — there is no
-probe state to abort, since there is no probe state machine any more.
+Plain reason `promote` happens only when no probe is commanded. Demotes
+always win. There is no probe state machine to abort.
 
-`u_probe` is scored against the CANDIDATE rung's own enh budget
-(`budget_enh_for(idx + 1)`) — the tighter of the base/enh pair under the
-base ≥ enh operator rule — never the current rung's. `RungStore::
-observe_probe()` labels the sample by the PROBED rung, so
-`link.rungs[].probe_u` at rung r means "loss measured at r, scored
-against r's own enh budget" at the default `rung_offset` — with
-`rung_offset > 1` the sample is scored against the budget of
-`r − rung_offset + 1` instead, which is the extra margin the knob buys.
+**Gate inputs.**
+- **Loss.** `u_probe` is the probe stream's union loss over a 500 ms
+  `S1LossWindow`, scored against the CANDIDATE rung's enh budget
+  (`budget_enh_for(idx + 1)`), never the current rung's.
+- **Threshold.** A sample is Clean at `u_probe <= link.probe.max_util`.
+  When the key is absent, the threshold is `down_util`.
+- **Sample floor.** A sample needs at least `link.probe.min_syms` expected
+  symbols to count.
+- **Silence.** With no usable sample for `link.probe.silence_ms`, the gate
+  reads NoInfo.
+- **Streak.** The streak is counted in expected probe BODIES:
+  `LinkHealth::probe_bodies_total` (ProbeTrack union
+  `expected_blocks / bpb`) feeds `ProbeGate::streak_bodies`, starting from
+  the streak's first Clean sample. A body count fixes the gate's confidence
+  regardless of fps or layer split. The gate is a zero-loss run test: a
+  streak of n bodies passes with probability (1−p)^n.
+- **Loss quantum.** One lost body over the 500 ms window reads as 0.1 at
+  60 probes/s. The bundle's `max_util` 0.05 therefore means "zero loss
+  allowed" at any frame rate. A value between 0.1 and 0.199 would allow
+  one loss.
+- **RungStore.** `RungStore::observe_probe()` labels each sample by the
+  PROBED rung. At the default `rung_offset`, `link.rungs[].probe_u` at
+  rung r therefore means loss measured at r against r's own enh budget.
+  With `rung_offset > 1` the sample is scored against the budget of
+  `r − rung_offset + 1` instead; that is the extra margin the knob buys.
+- **Bench pin.** `link.probe.pin_mcs` (bench only) forces the probe MCS.
 
-**v2 hook.** The gate state at `rung_offset 1` is a leading indicator
-for demotes but does not drive one yet — the design's §10 keeps
-probe-driven demote explicitly out of scope. `flightreport.py`'s
-probe-lead report (`docs/observability.md`) is the input a v2 threshold
-would be tuned against.
-First flights 2026-09-05: `docs/probe-stream-flight-findings-2026-09-05.md`
-— the gate's loss quantum is 0.2 per lost body, so `max_util` must sit
-below 0.2 (0.15 flown: rung-5 median hold 16 s vs 1 s at 0.2).
+Shipped values (`gs/bundle/maburgs.default.toml`):
 
-### Probe per AU (2026-09-16) — 60 probes/s, streak in bodies
+| key | value |
+|---|---|
+| `link.clean_ms` | 1500 |
+| `link.probe.rung_offset` | 1 |
+| `link.probe.clean_bodies` | 90 |
+| `link.probe.max_util` | 0.05 |
+| `link.probe.min_syms` | 16 |
+| `link.probe.silence_ms` | 500 |
 
-**Why.** The gate is a zero-loss run test: a streak of n bodies passes
-with probability (1−p)^n at candidate-rung PPDU loss p, so its resolution
-is a body count. The 2026-09-06 flights held 90 bodies (3 s at 30/s) and
-18 % of probed promotes still failed inside 2 s, all after a 90/90-clean
-streak — 90 bodies can only reject ≈3.3 % PPDU loss at 95 % (rule of
-three) and rung 5 fails below 1 %. The goal here is not more resolution
-but the SAME resolution in half the wall time: the promote latency is
-bounded by `probe.clean_bodies` and `link.clean_ms` together (block 6
-requires both streaks), so both came down.
+Promote latency is about 1.5 s plus RCF lag at 60 fps.
 
-**What changed.**
-- The drone trails EVERY video AU with a probe, base and enh
-  (`probe_follows()` in `drone/src/probe_source.h`: any video sid while a
-  probe is commanded, never a shed layer's AU). 60 fps SVC-T ⇒ 60
-  probes/s; 30 fps ⇒ 30/s; enh shed ⇒ base still probes, so the gate no
-  longer drops to NoInfo whenever the enh layer is absent (30 fps with
-  SVC-T off used to mean no probe at all, and NoInfo holds every promote).
-- `ProbeTrack::on_au(sid, fid)` books one expectation per video AU
-  (`sid < UepEncoder::kNumStreams`); base and enh share one frame-id
-  counter, so the off-profile cancel path is unchanged.
-- The RcfSlotter treats a base completion like an enh one while a probe is
-  commanded (`probe_follows = true`): the release is the probe's arrival,
-  or the learned tail deadline if it is lost. Releasing at the base
-  completion would put the RCF blast exactly on the base-tail probe — the
-  2.5× GS-inflicted probe loss of 2026-09-04 again.
-- `link.probe.clean_ms` → `link.probe.clean_bodies` (default 90; the old
-  key fails boot). `LinkHealth::probe_bodies_total` (ProbeTrack union
-  `expected_blocks / bpb`) feeds `ProbeGate::streak_bodies`, counted from
-  the streak's first Clean sample. Sideport `link.probe.streak_bodies`
-  replaces `streak_ms`; maburtop prints `54b`.
-- The loss quantum halves: one lost body over the 500 ms window is
-  1/30 / 0.333 = **0.1** at 60/s (0.2 at 30/s). `max_util` 0.15 → **0.05**
-  in the bundle config so it still means "zero loss allowed" at any frame
-  rate; 0.1–0.199 would now allow one loss, the setting flight 20 showed
-  fails in ~1 s.
-- Bundle config: `link.clean_ms` 3000 → 1500, `link.probe.clean_bodies`
-  90, `link.probe.max_util` 0.05. Promote latency ≈ 1.5 s + RCF lag at
-  60 fps, unchanged confidence.
+Probe air cost:
+- One body per AU, so it is a larger share of air at the bottom rungs.
+  `link.air_pct` sums streams 0/1 only and cannot see it
+  (`docs/airtime-model.md` §6).
+- The probe is one short PPDU while video flies as A-MPDU aggregates, so it
+  underestimates per-aggregate loss. That bias is the remaining fast-fail
+  lever: an SNR floor at the candidate rung, or `rung_offset 2`.
 
-**Costs.** Probe airtime doubles: ≈0.8 % of air at rung 4 (probe at mcs5),
-≈2.8 % at rung 0 (probe at mcs1), where the budget already runs tight —
-the bench "nil cost" of 2026-09-04 was measured at mcs5 only. Twice as
-many bodies are in flight across each RCF lag, so `off_profile` per rung
-change should read ~2–12, not 2–6. Mismatched pair: new drone + old GS
-reads arrived > expected (loss clamps to 0, blind gate); old drone + new
-GS reads 50 % loss and never promotes — deploy both ends together, no
-wire bytes change. What this does NOT fix: the probe is one short PPDU
-while video flies as agg6 aggregates ~6× longer on air, so it
-underestimates per-aggregate loss; that bias is the remaining fast-fail
-lever (SNR floor at the candidate rung, or `rung_offset 2`).
+The gate does not drive demotes (spec §10). `flightreport.py`'s probe-lead
+report (`docs/observability.md`) is the input a v2 threshold would be tuned
+against.
 
-**Bench 2026-09-16 (deployed both ends, commit 61f19e7).** Session
-`/media/dvr/log/0104` (the ctl.log's second `ctllog` header is the new
-pair; the first two climbs in that file are the boot-time old binaries —
-both boards had been power-cycled ~10 min before the deploy).
-- Cold climb 0→5, all `promote_probed`, **1.85 s/rung** (was ~3.1–3.5):
-  `noinfo` at the rung change, `clean` at +0.30–0.36 s, promote +1.5 s
-  later = 90 bodies at 60/s. Repeated on a second adaptive restart.
-- `ausniff` 60.5 fps, 0 fid gaps, 908/908 (twice); `aucadence` +2.78 ms
-  (inside the 2.4–2.9 band).
-- Pinned mcs4 / probe mcs4, 254 s, 15 255 probe bodies at **59.9/s**
-  (7628 base-tail, 7627 enh-tail, joined to au.log by fid): probe body
-  loss **0.052 % on base tails, 0.066 % on enh tails**, no partial
-  bodies, vs the enh stream's own 0.17 % symbol loss — the base-tail
-  probe is not blasted by the RCF slotter.
-- `off_profile` 10 over one 5-rung climb (2/change, inside 2–12).
-- Rung-0 air: pinned mcs0 with the probe at mcs1 (60/s) vs no probe —
-  drone `air_backlog_max_ms` ≤ 6, `air_shed` never, `txq` depth ≤ 2.
-  ⚠ The sideport `link.air_pct` (60.1 vs 60.4 %, n 100 each) sums only
-  streams 0/1, so it cannot see the probe's share; analytically the
-  probe costs ≈ 60 × 0.91 ms = **5.5 % of air at rung 0** (2.7 % before),
-  ≈ 1.6 % at rung 4.
+Bench and flight records:
+- `docs/findings/2026-09-04-probe-stream.md`
+- `docs/findings/2026-09-05-probe-blanking-fix.md`
+- `docs/findings/2026-09-05-probe-stream-flight.md` (why `max_util` must
+  sit below one loss quantum)
+- `docs/findings/2026-09-16-probe-per-au-bench.md` (probe per AU)
 
-## Drone congestion shed (2026-09-03)
+## Drone congestion shed
 
-The GS ladder never consumes drone telemetry (`T_TELEM` is display-only,
-`gs/src/main.cpp`); every demote input is measured on the GS from the
-video it receives. So a body the drone's TxQueue throws away before it is
-ever sent looks exactly like an RF loss — expected symbol, never arrived,
-abandoned at the horizon — and the ladder demotes for it. flight-0011
-showed the loop: an encoder scene burst over its command (17–22 Mb/s vs
-16) filled the queue to its cap at 36 dB SNR, drop-oldest booked ~330
-drops, the GS scored them as residual and stepped 5→4→3→2 in 450 ms
-with an IDR on every step into a queue that was already full. All 722
-TxQueue drops of that flight sat in three such events.
+The GS ladder never consumes drone telemetry. `T_TELEM` is display-only,
+and every demote input is measured on the GS from the video it receives.
+A body the drone's TxQueue throws away before sending therefore looks
+exactly like an RF loss, and the ladder would demote for it.
 
-The fix is drone-side and instant: `RcAgent::run_congestion_guard` now
-sheds the enh layer when the TxQueue is at or past **half its cap**
-(level-triggered, sampled on the 100 ms tick, via `RadioHealth::
-txq_depth`/`txq_cap`), in addition to its original USB-failure trigger.
-A shed is applied at the UEP encoder before anything is queued — no
-frame id, no expected symbol — so the GS sees enh silence, which
-`s3_usable()` treats as "no information", not loss. Recovery is the
-existing 2 s-clean step-down per level. `txq.drops` stays a telemetry
-counter: by the time it moves the damage is done, and at 1 Hz it would
-reach the GS after the cascade anyway. The remaining half of the problem
-— why the encoder overshoots its command by up to 40 % — is a venc
-rate-control question, not a ladder one.
+`RcAgent::run_congestion_guard` therefore sheds the enh layer when the
+TxQueue is at or past **half its cap**:
+- It is level-triggered, sampled on the agent tick, and reads
+  `RadioHealth::txq_depth`/`txq_cap` (`kTxqShedNum/kTxqShedDen` = 1/2 in
+  `drone/src/rc_agent.cpp`).
+- It also fires on a USB-failure trigger.
+- The shed is applied at the UEP encoder before anything is queued, so
+  there is no frame id and no expected symbol. The GS sees enh silence,
+  which `s3_usable()` treats as no information, not loss.
+- Recovery is a 2 s clean window per shed level.
+- Telem flags bit4 → sideport `drone.congestion_shed`; maburtop shows
+  `CONG`.
 
-## Drone air clock (2026-09-06)
+`txq.drops` is a telemetry counter only: by the time it moves the damage
+is done. Flight record of the cascade that motivated the shed:
+`docs/findings/2026-09-03-handover-venc-overshoot.md`.
 
-The post-demote latency spike (`docs/probe-stream-flight-findings-2026-09-05.md`
-§9) is a drain: 2–3 IDRs plus the encoder still producing the OLD rung's
-bitrate for ~0.4–1 s after the RCF dropped the MCS, served at the new,
-lower rate. The backlog sits past the TxQueue pop, where the congestion
-shed above cannot see it. The drone now models it directly
-(`drone/src/air_clock.h`, spec `2026-09-06-air-clock-enh-shed-design.md`):
-every body pushed to the TxQueue books `bytes × 8 / (phy_rate(layer) ×
-air_clock.efficiency_<bw>[mcs]) + air_clock.body_us` on a virtual air clock
-(`efficiency` is a per-MCS table since 2026-09-17 — the bench-measured
-delivered/nominal fraction, `drone/src/air_rate.h`, and `run_bitrate_policy`
-prices off the same table, see `docs/airtime-model.md` §7), priced
-at the APPLIED op's per-layer rate (re-priced on every AppliedOp, so the
-clock drops to the new rate the instant a demote lands), leaky at zero.
-`backlog = free_at − now` is read at every frame's arrival, stamped on the
-AU's bodies (SBI `air_ms`) and, when `air_clock.shed_ms` > 0 and the
-backlog is at/past it, the enh AU is dropped at `FramePipeline` before a
-frame_id exists (no id gap; base and IDR are never dropped; the probe body
-rides only after a shipped enh AU, so it goes too). `shed_ms` 0 — the
-shipped default — is observe-only.
+## Drone air clock
 
-The gate in `frame_pipeline.cpp` runs before `drop_if_shed`, so when the
-congestion shed and the air gate are both active on sid 1 the drop is
-booked in `air_dropped()`, not `UepEncoder::dropped(1)` — maburtop's
-`_shed_cell` shows `CONG` over `AIR` for the same reason. `air_shed_drops`
-therefore equals ausniff's missing-enh count only while CONG is off; with
-CONG also on, some of ausniff's missing enh bodies are attributed to the
-congestion shed instead. The dry-run replay path (`main.cpp`'s
-`run_dry_run` pump) calls `apply_op_to_uep` only, never
-`apply_op_to_clock` — this is intentional, not a gap: dry-run does not
-price the clock, so replayed bodies always carry `air_ms` 0 and the gate
+`drone/src/air_clock.h` models the drone's air backlog, which sits past
+the TxQueue pop where the congestion shed cannot see it.
+
+**Pricing.** Every body pushed to the TxQueue books
+`bytes × 8 / (phy_rate(layer) × air_clock.efficiency_<bw>[mcs]) + air_clock.body_us`
+on a virtual air clock.
+- `efficiency_20`/`efficiency_40` are per-MCS tables of bench-measured
+  delivered/nominal rate (`drone/src/air_rate.h`). `run_bitrate_policy`
+  prices off the same tables (`docs/airtime-model.md` §7).
+- The clock is priced at the APPLIED op's per-layer rate and re-priced on
+  every AppliedOp (`apply_op_to_clock`). It drops to the new rate the
+  instant a demote lands, and it is leaky at zero.
+
+**Backlog and gate.** `backlog = free_at − now` is read at every frame's
+arrival and stamped on the AU's bodies (SBI `air_ms`, carried into
+`au.log`). When `air_clock.shed_ms` > 0 and the backlog is at or past it,
+the enh AU is dropped in `FramePipeline` before a frame id exists. That
+leaves no id gap, and base AUs are never dropped. A dropped AU never goes
+on air, so no probe trails it.
+- **Defaults.** `shed_ms` 0 (the code default) is observe-only. The bundle
+  ships **`shed_ms = 25`**, so the gate is armed in production.
+- **Budget pairing.** The gate is calibrated together with
+  `encoder.airtime_budget`. With the budget too high, the model runs near
+  100 % utilisation and the gate turns into a steady-state enh throttle.
+
+**Shed priority.** The air gate runs before `drop_if_shed`
+(`drone/src/frame_pipeline.cpp`). When the congestion shed and the air gate
+are both active on sid 1, the drop is booked in `FramePipeline::air_dropped()`,
+not `UepEncoder::dropped(1)`. `air_dropped()` is drone-local; the air-clock
+shed left the sideport and Telem on 2026-09-30, and `au.log`'s `air_ms` is
+how to see it now.
+
+**Dry-run.** The dry-run replay path (`run_dry_run` in
+`drone/src/main.cpp`) calls `apply_op_to_uep` only, never
+`apply_op_to_clock`. Replayed bodies always carry `air_ms` 0 and the gate
 never closes there.
 
-Ladder-side this is the same contract as the congestion shed: enh
-silence is `NoInfo` to `s3_usable()` and the probe gate, never loss; the
-base `residual` path stays live. It ORs with, and never touches,
-`failsafe_shed_` / `shed_level_`. `efficiency` and `body_us` are
-calibration knobs, not derivations — `tools/bench/airdrain.py --model`
-fits them against the player's measured air excess per frame
-(Stage A of the spec) before the gate is armed (Stage B).
+Ladder-side, this is the same contract as the congestion shed: enh silence
+is NoInfo to `s3_usable()` and the probe gate, never loss. It ORs with, and
+never touches, `failsafe_shed_` / `shed_level_`. `efficiency` and `body_us`
+are calibration knobs, fitted with `tools/bench/airdrain.py --model`.
+Flight record and the budget/efficiency fit:
+`docs/findings/2026-09-06-air-clock-flight.md`.
 
-**Flown 2026-09-06, three flights
-(`docs/air-clock-flight-findings-2026-09-06.md`).** The model is only
-calibratable when the link has headroom: at `encoder.airtime_budget`
-0.6 the bitrate policy's `rate/3` command plus uncounted framing puts
-~70 % of nominal on air, which is 100 % of the model's capacity at
-efficiency 0.7 — the clock ran at 0.9–0.95 utilisation, integrated
-every burst and over-predicted ~2.5× with a knife-edge fit. **Budget
-0.5 removed the post-demote drain at the source** (cascade peak 47 →
-20 ms, settle 1.9 → 0.3 s, steady-state p99 ~10 ms every rung) and
-brought the model to 0.74–0.81 utilisation, where it tracks the GS.
-Flight-fitted efficiency is ~0.73 at rungs 1–4 (rung 0 still
-over-priced). **Shipped production values: budget 0.5, `shed_ms` 25,
-`efficiency` 0.73** — armed, the gate dropped 14 enh AUs in a 344 s
-flight, all at transitions (demote drains and promote IDRs, a ~60 kB
-IDR alone is ~25 ms at mcs3), zero phantoms, air tail clipped at 35 ms.
-Do not arm it with the budget back at 0.6: there it becomes a
-steady-state enh throttle. The remaining > 100 ms tails are FEC repair
-waits at loss-driven demotes, not air.
+## Demote inputs and transition handling
 
-## Tuning invariant
+`LadderController::update()` checks in this order (a spec contract):
+1. **Starved.** No video for `starved_confirm_ms` → straight to rung 0.
+2. **s1 residual.** Base post-FEC loss > 0 → instant demote.
+3. **Fade predict.** See the next section.
+4. **s3 residual.** Enh post-FEC loss > 0 while s3 is live → instant
+   demote.
+5. **s1 util.** `u = pre_fec_loss / budget_base()` over `down_util`, held
+   for the confirm window.
+6. **s3 util.** `u3` over `s3_down_util`, held for the confirm window.
+7. **Promote.** Clean margin and the probe gate.
 
-Tuning invariant: the controller's s3 loss/residual
-windows are 500 ms wide, while the post-transition blanking
-(`s3_settle_ms`, default 300) and probe settle (`probe_settle_ms`, 150)
-are shorter — so up to ~200 ms of pre-transition symbols remain in view
-after blanking expires. ⚠ SUPERSEDED 2026-09-04 — see "Probe stream"
-above: `probe_settle_ms` and the discrete probe state machine it
-blanked are DELETED (the key now FAILS BOOT); the probe stream is
-always-on and has no settle blackout of its own to tune. The
-`s3_settle_ms` half of this paragraph (the ENH/base rung-transition
-blanking) is UNCHANGED and still governs real rung changes. Shipped
-defaults are safe (stale weight decays
-fast against the 250/500 ms confirm windows), but do NOT lower
-`s3_settle_ms`/`s3_residual_confirm_ms` toward their floors together: a
-rung transition's FEC re-key artifacts could then satisfy the s3-residual
-confirm and self-demote on every promote. ⚠ 2026-09-05: that self-demote
-DID happen, from the other direction — `s3_settle_ms` only gated the
-controller's READ; the 500 ms `s3_resid_cur` window behind it was never
-cleared at the edge (the base window got its 150 ms `blank_until` on
-2026-09-02, the enh one did not), so the abandonment horizon's ~80 ms
-late booking of old-rung loss re-fired an `s3_residual` demote the tick
-the 300 ms gate opened, on a 0 ms confirm. Flights 20/21: 13 of 14
-s3_residual cascades double-stepped at exactly 300–310 ms and were
-promoted straight back ~3 s later. Fixed by `gs/src/transition_edge.h`,
-which settle-blanks only the two RESIDUAL decision windows (base and
-enh; pinned by `tests/test_transition_edge.cpp`) at every op edge. The
-util windows (pre-FEC, base and enh) briefly joined the same blank later
-that day (51dd79e), for the same reason: with only the residual windows
-blanked the bench still took an `s3_util` step at +400 ms on stale loss,
-because every demote opens the fade regime and in-regime the util
-confirm is `fade.confirm_ms`, not the 250 ms the "util needs no blank"
-paragraph above assumed. That util blank was itself reverted the same
-day (2026-09-05) when the two util inputs moved to arrival-time booking
-— see "**Since 2026-09-05 (arrival tracker, ctllog 11)…**" further down
-this file: the ArrivalTracker never books old-rung loss against the new
-rung, so its denominator does not collapse after a re-key and no blank
-is needed there any more; `TransitionEdge` today blanks only the two
-residual windows. `flightreport.py` prints an
-"s3-settle-refire canary" that must read ~0 on any recording after this.
-See `docs/probe-stream-flight-findings-2026-09-05.md` §9. ⚠ SUPERSEDED 2026-08-15 — see
-the pooled-RF note below: `s3_residual_confirm_ms` is REMOVED and FAILS
-BOOT, so there is no longer a config knob to lower — the s3-residual
-confirm window this paragraph warns about is now permanently at 0 ms
-(its floor), unconditionally, for every deployment. That is deliberately
-NOT the unsafe floors-together configuration described here: it is safe
-only because attribution is exact rather than fast (the watermark is in
-symbol-sequence space, so debris is absent from the input rather than
-outrun by a shorter window) — see the 2026-08-15 note for the residual
-risk that distinction does not cover.
+The residual demotes ignore `min_between_changes_ms`. During probation, a
+util excess demotes at once (reason `probation`). A residual or util
+demote from a rung on probation books a penalty; a fade demote does not. A sample with `sample_valid = false` decides
+nothing and does not count as feedback; `feedback_timeout_ms` covers that
+case.
 
-Since 2026-08-14 the ladder's demote inputs are transition-attributed
-(kill switch `link.attrib`, default true. ⚠ SUPERSEDED 2026-08-15 — see
-the pooled-RF note below: `link.attrib` is REMOVED and now FAILS BOOT,
-attribution is unconditional, and this is no longer a kill switch):
-per-stream watermarks — with
-the RX PHY rate as the generation boundary — split every loss counter
-into current-rung vs pre-transition debris, and all four demote inputs
-(instant s1 residual, s3 residual, both utils) read the current-only
-side, so a rung change's own FEC debris can no longer fire a follow-up
-demote. The sideport reports `link.streams[].abandoned_stale`; the ctl log
-went `ctllog 1` → `ctllog 2` (S line gained `resid_cur`; `resid` stays the
-total). ⚠ It also reported `link.attrib.suppressed` until 2026-09-02, when
-that counter was deleted along with the packet-level delivery window it was
-defined against — it counted windows where the packet total and attributed
-views disagreed, which the symbol-based measure cannot ask.
-`flightreport.py` parses every version. Date recordings against this
-line: pre-2026-08-14
-residual/util figures include transition debris that later recordings
-attribute away. `link.attrib: false` reverts the decisions (not the
-bookkeeping) to the old totals. ⚠ SUPERSEDED 2026-08-15 — see the
-pooled-RF note below: `link.attrib` no longer exists, so this revert path
-is gone too — the config key FAILS BOOT and the only way back to
-pre-attribution decisions is a binary rollback.
+**Inputs.**
+- **Residual inputs** are post-FEC abandonment (`syms_abandoned`, via
+  `gs/src/ladder_residual.cpp`): base only for s1, enh for s3. A symbol
+  filled by a NACK retransmit still counts as abandoned, so the ladder sees
+  the loss even when the video does not (`docs/fec-nack.md`).
+- **Util inputs** are pre-FEC source-symbol loss booked at ARRIVAL by
+  `SwDecoder`'s `mabur::ArrivalTracker`. Each source seq is booked once,
+  when it crosses a settle line `link.arrival_guard_syms` (default 192)
+  behind the newest seq heard. Expected comes from the sequence advance,
+  arrived means heard. These feed 500 ms `S1LossWindow`s (`s1_loss_cur`,
+  `s3_loss_cur`). Arrival booking keeps the denominator independent of
+  decoder progress after a re-key, so a post-promote window cannot read a
+  near-empty bucket as 100 % loss.
+- **s3 liveness.** s3 is live only with at least `link.s3_min_syms`
+  expected enh symbols in the window, and only after `s3_settle_ms`
+  (default 300) has passed since the last transition. Enh silence (a shed,
+  the air gate) is therefore no information, not loss.
 
-**Since 2026-08-14 (same day, second wave) demotes are fade-aware.** Two
-independent pieces, both default-on, both killable, and the whole
-`link.fade` block is optional with working defaults. Every loss-driven
-demote — residual, s3 residual, s3 util, confirmed util, and a fade
-demote itself, but NOT probation, starved or timeout — arms a 2.5 s fade
-regime (`hold_ms`), and arms it UNCONDITIONALLY so that the exported
-regime state stays truthful. `link.fade.cascade` gates only the effect:
-while the regime is open and the cascade is on, the demote confirm
-windows drop 250/500 ms to 100 ms (`confirm_ms`), so a real fade steps
-down at fade speed rather than at steady-state speed. Kill the cascade
-and the regime is still armed and still reported — it just stops
-shortening anything. ⚠ SUPERSEDED 2026-08-15 — see the pooled-RF note
-below: `link.attrib` is gone and so is this gate. The paragraph below
-describes 2026-08-14 second-wave behaviour only; since 2026-08-15 the s3
-residual path has no confirm window to gate at all (it demotes instantly,
-unconditionally), and the s3 util confirm — the only one left — always
-runs at `in_fade_regime(now_ms) ? fade.confirm_ms : confirm_ms`, with no
-attrib-off branch. Both s3 confirms were additionally gated on
-`link.attrib`: with attribution OFF the regime kept the full
-`s3_residual_confirm_ms` / `confirm_ms` there, because a 100 ms confirm
-behind the unshortened 300 ms `s3_settle_ms` is exactly the
-floors-together configuration the tuning invariant above forbids — the
-~200 ms of debris that outlives the blank satisfies 100 ms and not the
-legacy window. Measured in review, a single genuine demote then cascaded
-rung 4 → 0 in 1.6 s on nothing but its own FEC debris. So `attrib: false`
-used to revert Part A's s3 paths along with everything else. (The s1 util
-confirm is NOT gated: it has no blanking at all, so its legacy 250 ms
-window already sits inside the same 500 ms loss window the debris
-occupies — amplitude decides it there, not duration.)
+**Transition attribution.** Every loss counter is split into current-rung
+and pre-transition (stale) parts by a per-stream watermark in
+symbol-sequence space. The RX PHY rate is the generation boundary, and the
+mark is set by `UepDecoder::mark_transition`. All four demote inputs read
+the current-only side, so a rung change's own FEC debris cannot fire a
+follow-up demote. This is unconditional; there is no config switch.
+- Sideport: `link.streams[].abandoned_stale`,
+  `link.attrib.residual_cur`, and `link.attrib.close_ms` (the boundary
+  close latency).
+- On the ctl-log S line, `resid` is the total and `resid_cur` the
+  attributed value.
 
-`link.fade.predict` adds an RF trigger ahead of any loss: both `rssi_db`
-(8 dB) AND `snr_db` (4 dB) below their slow baselines, sustained
-`trigger_ms` (300 ms), demotes one rung with reason `fade`. Those
-baselines are a dual-timescale EWMA — fast tau 300 ms, slow tau
-asymmetric at 2 s rising / 20 s falling; structural constants, not config
-— so a multi-second fade cannot drag its own baseline down and erase its
-own delta. ⚠ **Those two numbers are thresholds on a high-pass response,
-not fade depths, so they are NOT trip points.** A step of depth D reaches
-`delta = D·(e^−t/20000 − e^−t/300)`, which peaks at 0.92·D at 1.28 s and
-is down to 0.74·D by 6 s, so the smallest step that fires is ≈1.08× the
-configured number: `rssi_db: 8.0` trips on a ≈8.7 dB fade, `snr_db: 4.0`
-on a ≈4.3 dB one, and a fade of exactly 8/4 dB never fires. A fade that
-stops descending falls back under threshold as the baseline catches up
-(this detects fading, not faded), and on a steady ramp the response is
-slope-driven — ~19.7 dB of delta per dB/s — so ramps under ~0.45 dB/s
-never reach `rssi_db` 8 however deep they eventually get. `trigger_ms` is
-not the binding constraint either: the delta needs ~0.8–1.3 s to climb to
-its peak, so the 300 ms fast tau sets the reaction time. Those are
-harness/model figures (they reproduce the review's measured deltas
-exactly) — and the defaults are deliberately unchanged, since tightening
-them without bench data is what the spec's tuning invariant forbids.
-**First flight validation, 2026-08-14 (flight-0017/0018 + ctl-0054/0055,
-two ~6 min flights):** exactly the predicted behavior. 26 loss-driven
-demote episodes, all ramp-type range fades; the predictive trigger
-correctly never fired (deepest deltas drssi −7.8 / dsnr −4.4, never
-jointly over threshold — slope-blind on ramps as the transfer function
-says), zero false fades, zero attribution-miss canary hits, in-regime
-cascades stepping multi-rung episodes at ~410–440 ms, and zero
-mid-flight video-damage windows. A genuine FAST fade (obstruction,
-multipath null) has still never been recorded against this trigger. Three things to know before reading any of it: (i) the
-predictive trigger is LATCHED — exactly ONE predictive demote per fade
-EVENT, and the latch releases only on an *observed* recovery, a tick where
-both deltas are measurably back under threshold. A NaN window (absent
-evidence) deliberately does NOT release it, so further steps during a
-continuing fade are the cascade's job, on measured loss at the shortened
-in-regime confirms; `link.ctl.counters.demotes_fade` therefore counts fade
-events that produced a step, not rungs lost to fade. (ii)
-`link.fade.min_rung` (default 2) is the lowest rung the trigger fires
-FROM, not a floor — the effective floor is `min_rung - 1`, so the shipped
-default can land the link on rung 1. (iii) fade demotes are RF evidence,
-not rung evidence: they never book a probation failure or a penalty and
-never count in the RungStore's `exits_bad`.
+**The edge (`gs/src/transition_edge.h`).** On every COMMANDED op change
+(mcs, bw, or base overhead), `TransitionEdge::on_tick` does three things
+(pinned by `tests/test_transition_edge.cpp`):
+1. Marks the decoder's per-sid watermark.
+2. **Settle-blanks both residual decision windows** (`s1_resid_cur`,
+   `s3_resid_cur`) for `kResidSettleMs` = 150 ms. Abandonment books about
+   80 ms late, and an A-MPDU burst can kill the old-rate tail above the
+   watermark. Without the blank, loss that already produced a demote would
+   re-fire the instant path on every tick. The blank both clears the window
+   and swallows deltas booked during the settle. 150 ms is one 50 ms
+   edge-detect tick, plus the horizon lag, plus margin.
+3. **Clears both util decision windows** (`s1_loss_cur`, `s3_loss_cur`,
+   `blank_until(now)`, no swallow). Old-rung loss booked before the edge has
+   already produced its demote. Without the clear, the fade regime's 100 ms
+   confirm would re-decide on it every `min_between_changes_ms`. As a
+   result, the new rung is judged on its own entries only, and a genuine
+   continuing fade steps about 250 ms per rung.
 
-Observability for that wave: the sideport adds `link.ctl.fade` = {active,
-drssi, dsnr} plus `counters.demotes_fade` (additive under `v: 1`;
-drssi/dsnr serialize as `null` when NaN). `fade.active` is the RAW regime
-state and is deliberately NOT gated on `cascade`, so the regime stays
-visible with the cascade killed. The ctl log went `ctllog 2` → `ctllog 3`,
-the S line gaining `drssi dsnr` after `resid_cur`; `flightreport.py`
-parses v1, v2 and v3 and gained an episode analyzer (`find_episodes()`,
-`print_episode_report()`): first-demote reason per episode, fade lead
-times, false fades with time-to-repromote, plus an attribution-miss canary
-(`attribution_misses()` — a `residual` demote within 200 ms of any
-previous transition, which should be ~zero with `link.attrib` on). The
-jsonl branch also prints the flight-wide `link.attrib.suppressed` delta for
-recordings old enough to carry that key (removed 2026-09-02).
-⚠ The s1 RF labels are now freshness-gated per card
-(`gs/src/rf_labels.h`, `select_label_card()`, unit-tested in
-`tests/test_rf_labels.cpp`): the best-card argmax only considers cards
-whose s1 frame count advanced in the current feedback window, so
-`s1_snr_db`, `s1_evm_db` and `s1_rssi_dbm` read NaN — and the ctl log
-prints `nan` — whenever no card measured s1 that window, where a frozen
-EMA previously printed a stale-but-present number. Because `s1_evm_db`
-now NaNs on stale windows, per-rung EVM sample counts in the RungStore
-drop on a marginal link: that is a deliberate honesty improvement, but it
-means EVM sample counts are NOT comparable across this date.
+Only the decision inputs are blanked. The S-line `resid`/`resid_cur`, the
+sideport and the RungStore still see the loss. The controller's own
+`s3_settle_ms` additionally gates when s3 may be READ after any transition.
 
-**The expected false-fade source is a label-source card hop, and it is
-what to look for when a `fade` demote has no fade behind it.** That
-argmax does not stick: a front-end that wedges for ~1 s (a documented,
-recovering failure mode on the two-card bench GS) hands the labels to a
-weaker sibling, and `s1_rssi_dbm`/`s1_snr_db` then step down TOGETHER —
-bit for bit the trigger's joint condition, so a ≥9 dB RSSI / ≥4.3 dB SNR
-gap between cards is a spurious `fade`. ⚠ SUPERSEDED 2026-08-15 — see the
-pooled-RF note below: the defence described in the rest of this paragraph
-is DELETED, not merely inactive. The operational guidance (how to
-recognise and correlate a card-hop false fade) below is unchanged and, if
-anything, matters more now, because this branch makes a hop-driven false
-fade possible for the first time — read it as "what to look for", not
-"why it can't happen". ~~The controller defends itself: the selected card
-index rides along in `LinkHealth` and a change re-baselines both EWMAs
-(so a hop reads as a new reference, not a fade), at the cost of making a
-fade already in progress re-accumulate its delta on the new card —
-conservative in the direction everything else here is.~~ The latch is
-deliberately NOT released by a hop. If a false fade shows up anyway,
-correlate the ctl log's `drssi`/`dsnr` step against per-card
-`classes.s1.*` in the sideport: a hop moves both by the card GAP in one
-window, a real fade moves them along the transfer function above.
+**Adaptive open-boundary blank.** While `SwDecoder`'s `wm_open_` is true,
+`arr_stale_end()` returns `~0ull`. Every seq booked in that interval is
+therefore stale, and `s1_loss_cur`/`s3_loss_cur` get no new entries until
+the boundary closes on the first post-transition body. That normally takes
+the drone's real switch latency.
+- **Degraded case.** If `rx_mcs` is `kMcsUnknown`, no body is ever marked
+  post-transition. The boundary then stays open until `kBoundaryExpiryMs`
+  (1000 ms, `common/src/uep_decoder.cpp`).
+- **What the ladder sees meanwhile.** The 500 ms util window empties and
+  `s1_cur_sample.valid` goes false. `gs/src/link_health.cpp` defaults
+  `health.pre_fec_loss` to 0.0 (promote-permissive), and `link.pre_fec_loss`
+  reads null. The ladder sees `u` = 0 for as long as this lasts, so
+  `clean_start` accrues through it.
+- **What to watch.** `link.attrib.close_ms` shows how long the adaptive
+  blank actually ran.
 
-**Since 2026-08-15 the RF labels are s1+s3 pooled, the card-hop
-re-baseline is gone, attribution is unconditional, and s3 residual
-demotes instantly.** Four coupled changes, spec
-`docs/superpowers/specs/2026-08-15-pooled-rf-and-instant-s3-design.md`.
-(i) `s1_snr_db`/`s1_evm_db`/`s1_rssi_dbm` became `rf_*` and are sourced
-from a new per-card s1+s3 pooled track (97% of frames at one PHY rate);
-`msp`/`ctrl` are excluded because per-rate TX power makes their
-contribution depend on a mix ratio that drifts with rung and shed state.
-⚠ This is a second discontinuity in RungStore's per-rung EVM baselines,
-on top of the 2026-08-14 freshness gate — EVM sample populations are NOT
-comparable across either date. ⚠ The jsonl sideport carries no version
-marker at all (the ctl log's header bump doesn't reach it): the same
-pooled-track change silently flips the meaning of
-`link.ctl.last_event.snr`/`.evm` and `link.ctl.last_probe.snr`/`.evm` from
-s1-only to s1+s3 pooled, with nothing in the jsonl itself to say so — date
-any jsonl recording against 2026-08-15 the same way you would a ctl log's
-`ctllog` header. (ii) The card-hop EWMA re-baseline is
-deleted: it was zeroing `drssi`/`dsnr` on 25% of ticks (372 of 1483
-across flight-0017/0018), so **every fade delta recorded before this date
-is suppressed and must not be pooled with later ones** — the trigger
-could not fire regardless of fade depth, which is a second explanation
-for its silence alongside ramp slope-blindness. Its premise was also
-wrong: the argmax runs on SNR, so the SNR label is `max(snr)` over live
-cards and is continuous across a hop; only RSSI stepped, and measured hop
-steps were indistinguishable from ordinary variation. (iii) `link.attrib`
-is REMOVED and now FAILS BOOT; attribution is unconditional and there is
-no config rollback, only a binary one. `residual_cur` / `close_ms` remain
-on the sideport (`suppressed` was removed later, 2026-09-02), but
-`link.attrib.on` is REMOVED — a `v: 1` schema removal in the same class as the 2026-08-12
-`offset_qdb` removals, with `maburtop.py` updated in the same wave.
-(iv) `link.s3_residual_confirm_ms` is REMOVED and FAILS BOOT: s3 residual
-now demotes on the first window, exempt from `min_between_changes_ms`,
-like s1's. That is safe only because attribution is EXACT rather than
-fast for debris the transition watermark actually classifies as stale —
-the watermark is in symbol-sequence space, so that debris is absent from
-the input rather than outrun — and `s3_settle_ms` blanking is retained.
-⚠ That does NOT cover every pre-transition case: genuine current-rung s3
-abandonment that was correctly attributed to the OLD rung can still sit
-inside `s3_residual_loss`'s underlying 500 ms sliding window (never
-cleared at a transition, only blanked from the decision) and fire a
-follow-up instant demote at the tick `s3_settle_ms` expires — pre-existing
-behaviour, bounded to ~2 firings, not something this branch changed but
-worth knowing when reading `demotes_s3_residual`. Predicted cost ~4× that
-path's demote rate (~19 events per two 6-minute flights vs the 5
-observed); materially above that on the first flight has two candidate
-causes that want different responses — the estimate's 500 ms sampling
-hiding back-to-back firing (confirm window returns in reduced form), or
-the sliding-window mechanism just described (bound/blank the window at a
-transition instead). Count s3-residual demotes landing within roughly
-`s3_settle_ms` + one tick of a PREVIOUS transition separately to tell
-them apart; `flightreport.py`'s `find_episodes()` already has the
-machinery. The ctl log went
-`ctllog 3` → `4` (formats byte-identical, meanings changed);
-`flightreport.py` parses v1–v4 and warns on pre-v4. Deploy is GS-only and
-config-before-binary: `grep -nE '"(attrib|s3_residual_confirm_ms)"'
-/etc/maburgs.toml` and delete any hit before starting the new binary,
-or maburgs crash-loops at 2 s. **Also swap `tools/maburtop.py` in the same
-step, not as an afterthought:** an old maburtop against a new maburgs
-renders the now-absent `link.attrib.on` as `attrib:OFF` — indistinguishable
-from a real problem, and exactly the kind of thing that sends someone
-hunting for a switch (`link.attrib`) that no longer exists and would fail
-boot if they tried to set it. Deploy maburtop alongside the binary, not
-after. Rollback for this wave happens to be binary-only: both `attrib`
-and `s3_residual_confirm_ms` were optional with live defaults on the old
-binary too, so the stripped config boots either way and there is nothing
-to restore alongside the binary.
+**Tuning caution.** `s3_settle_ms` and the 500 ms windows interact: a
+transition's FEC re-key artifacts must not be able to satisfy an s3 confirm
+right after the gate opens. Do not lower `s3_settle_ms` without a bench
+A/B. `flightreport.py`'s "s3-settle-refire canary" and attribution-miss
+canary (`attribution_misses()`) should both read about zero on any
+recording.
 
-**Since 2026-09-02 (second wave, same day as ctllog 9) the s1 residual
-demote input carries a 150 ms post-transition settle blank**
-(`S1LossWindow::blank_until`, wired at `main.cpp`'s sid-0 transition
-edge-detect next to `mark_transition`; the constant is `kResidSettleMs`,
-not config). Root cause, from flight ctl-0160: the ctllog-9 rewrite fed
-block 4 from a 500 ms sliding window over the cumulative abandonment
-counters and deleted the old measure's per-step `reset_window()`, so loss
-correctly booked as current-rung stayed `> 0` across the demote it caused
-and — block 4 being instant, threshold-free and exempt from
-`min_between_changes_ms` — re-fired every 50 ms tick until rung 0. Every
-`first=residual` episode in that flight ran 4-5 rungs to the floor, one
-at 26-32 dB SNR; flightreport's attribution-miss canary read 14.
-Attribution itself was innocent (it classifies at booking time; already-
-booked current loss is never reclassified). The blank clears the window
-at the transition AND swallows deltas booked during the settle — the
-~80 ms abandonment-horizon lag books old-rung loss late, and an A-MPDU
-burst can kill the in-flight old-rate tail ABOVE the watermark, which
-books non-stale. 150 ms = one edge-detect tick + horizon lag + margin,
-half of `s3_settle_ms`; the s1 UTIL path keeps its no-blank design
-(amplitude decides it) and still carries a genuine sustained fade down at
-in-regime speed. This is the same window-outlives-the-blank hazard the
-s3 note above bounds with `s3_settle_ms` — s3's window is deliberately
-NOT blanked here (its ~2-firing bound is documented, accepted behaviour).
-Only the decision input is blanked: S-line `resid`/`resid_cur`, the
-sideport and the RungStore observability all still see the loss.
-Bench-validated 2026-09-02 (ctl-0165, loss-sim build): a 500 ms
-eff=20/burst=4 s0 pulse = ONE residual demote + two measured-util steps
-at ~155 ms, floor at rung 2, repromote — where ctl-0160's equivalent was
-a 50 ms/rung drop to rung 0; sustained eff=15 still walks 5→0 (util,
-150-320 ms/rung) and recovers; ausniff 60.0 fps / 0 gaps. Expect
-`residual` E-line pairs closer than 150 ms never again; a demote storm
-now shows `util` reasons and real per-rung `u`.
+History of the blanks and of attribution:
+- `docs/findings/2026-08-14-ladder-attribution-fade-wave.md`
+- `docs/findings/2026-09-02-ladder-settle-blank.md`
+- `docs/findings/2026-09-05-arrival-loss.md`
+- `docs/findings/2026-09-05-probe-stream-flight.md` §9
+- `docs/findings/2026-10-06-util-window-clear.md`
 
-**Since 2026-09-05 (arrival tracker, ctllog 11) the two util inputs are
-booked at arrival time**, not from the decoder's completion counters:
-`SwDecoder` owns a `mabur::ArrivalTracker` that books every source seq
-once when it crosses a settle line 32 seqs behind the newest seq seen
-(expected = sequence advance, arrived = heard; a repair's window end
-advances the expectation), splitting both into stale/current with the
-same watermark boundary abandonment uses. `main.cpp` feeds
-`s1_loss_cur`/`s3_loss_cur` from the current-only side. Two things
-follow. (1) The util blank added the same day (51dd79e) is REMOVED —
-`TransitionEdge` blanks only the two residual windows — because the
-tracker never books old-rung loss against the new rung and its
-denominator does not collapse after a re-key. (2) The post-promote
-`probation` bounce class (flight-0023: u = 1.0/0.8 on the first
-post-blank tick; bench ctl-0299: 1.125) cannot occur: the offending
-sample was a ~60 ms bucket with near-zero completions. What did NOT
-change: the residual inputs (abandonment + 150 ms `kResidSettleMs`), the
-thresholds, the budgets (`u` is still source-symbol loss over the parity
-fraction). Bench and flight numbers before this line are
-completion-booked (`docs/data-provenance.md`).
-**Bench-validated ctl-0305..0339, deployed to the GS 2026-09-05**
-(rollback `maburgs.pre-arrival`, the `ctllog 10` completion-booked build;
-no config change); campaign-1 sweep inconclusive within bench noise — see
-`docs/arrival-loss-findings-2026-09-05.md`. What passed: the pulse
-campaign and the restart climbs — every demoting pulse `steps=1`, both
-canaries 0, **no util sample above `down_util` within 200 ms of any
-transition** now that the blank is gone, drone-switch p50 42 ms (control
-57), 10/10 cold climbs reach rung 5 with `probation=0` — and the standing
-gates on the deploy artifact (ausniff 60.0 fps / `fid_gaps=0` /
-`incomplete={}`, aucadence offset 2.87 ms inside the 4.0 ms gate), plus
-post-deploy ctl-0341 (clean 0→5, no `probation`, ausniff 1800 AUs /
-`fid_gaps=0` / 60.0 fps). The steady-loss sweep decided nothing: on 200 ms
-sideport buckets its run-to-run variance exceeds the control-candidate
-difference (two runs of the same control binary disagree by 1.0 pp at
-eff 20 %), so its accuracy criterion fails control-vs-control too; the one
-repeatable per-step difference is a +0.7 pp over-read at eff 10 %, which
-errs toward an earlier demote. The bench does not reproduce the probation
-bounce this change targets (the control is `probation=0` on 10/10 too), so
-the flight remains the real test.
+## Fade regime and predictive trigger
 
-Since 2026-10 (fec-nack) a symbol filled by a NACK retransmit counts as
-abandoned for both residual paths and never reaches the arrival tracker:
-the ladder sees the loss, only the video does not (`docs/fec-nack.md`).
+Two independent pieces, both in `[link.fade]` (optional; code defaults
+apply when the table is absent).
 
-**2026-10-06 (flight 0026, first NACK flight): the util decision windows
-are CLEARED at a commanded op change again** (`gs/src/transition_edge.h`,
-`s1_loss_cur`/`s3_loss_cur`, `blank_until(now)` with no swallow). The
-adaptive blank below keeps post-edge old-rung bookings out of them, but
-nothing emptied the 500 ms of old-rung loss legitimately booked before the
-edge, and in the fade regime (100 ms confirm, 150 ms
-`min_between_changes_ms`) one real demote kept re-deciding on it every
-150 ms: in all four 5→0 cascades traced, `u` collapsed to 0 in ONE tick
-exactly 500 ms after the booking that started the cascade, two or three
-rungs below where the fade stopped, with SNR already back at 14–17 dB and
-the re-promote 1.8 s later; 17 of the flight's 82 cascade steps rode on a
-booking at least two steps old. That loss already produced its demote; the
-new rung is judged on its own entries only. Cost: a genuine continuing fade
-steps ~250 ms/rung (confirm on fresh entries) instead of 150. Bench gate
-before flight: a fade-arm A/B on cascade depth and re-promote time.
+**Regime and cascade.** Every loss-driven demote opens a fade regime for
+`link.fade.hold_ms` (2500). Loss-driven means residual, s3 residual, util,
+s3 util, or a fade demote itself; probation, starved and timeout do not
+count.
+- The regime is always armed, so the exported state stays truthful.
+- `link.fade.cascade` (default true) gates only its effect: while the
+  regime is open, both util confirm windows drop from `link.confirm_ms`
+  (250) to `link.fade.confirm_ms` (100). A real fade therefore steps down
+  at fade speed.
+- The instant residual paths, `s3_settle_ms` and `min_between_changes_ms`
+  are not shortened.
+- Sideport `link.ctl.fade.active` is the RAW regime state, not gated on
+  `cascade`.
 
-The open-boundary path is itself an adaptive blank, not an absence of
-one. While `SwDecoder`'s `wm_open_` is true, `arr_stale_end()` returns
-`~0ull`, so every seq the tracker books during that time is stale and
-the current-only side (`arr_expected − arr_expected_stale`) stays flat
-— `s1_loss_cur`/`s3_loss_cur` receive no new entries until the boundary
-closes on the first `kPost` body. Normally that lasts the drone's real
-switch latency (bench: p50 42 ms, p90 65 ms), so the fixed 150 ms blank
-this section describes for residual has effectively been replaced, on
-the util side, by an adaptive blank scoped to the transition's true
-length rather than a fixed guess. Degraded case: if `rx_mcs` is
-`kMcsUnknown` no body ever carries `kPost`, and the boundary stays open
-until `kBoundaryExpiryMs` (1000 ms, `common/src/uep_decoder.cpp`) —
-during which the 500 ms util window empties, `s1_cur_sample.valid` goes
-false and `gs/src/main.cpp` defaults `health.pre_fec_loss` to 0.0
-(promote-permissive), and `link.pre_fec_loss` reads null. The ladder
-reads a clean link (`u` = 0) for as long as this lasts, so
-`clean_start` accrues through it. Watch `link.attrib_close_ms` (the
-boundary close latency gauge) on a flight to see how long the adaptive
-blank actually ran and whether it ever hit the 1 s worst case.
+**Predictive trigger.** With `link.fade.predict` on (default true), the
+trigger demotes one rung with reason `fade` when both deltas are over
+their thresholds and stay there for `trigger_ms` (300):
+- the RSSI delta reaches `rssi_db` (code default 8.0), and
+- the SNR delta reaches `snr_db` (code default 4.0).
 
-On the drone, RCF drain is decoupled from the agent tick
-(`link.rc_drain_ms`, optional, default 5, bounds 1–1000): the agent loop
-wakes every `rc_drain_ms` to drain queued RC frames, with ALL per-tick
-housekeeping (USB health polls, `RcAgent::tick()`, watchdog, 1 Hz
-stats/telem) behind a `TickGate` deadline so its cadence is bit-for-bit
-unchanged, and `rc_drain_ms == tick_ms` reproduces the legacy loop
-exactly. `link.tick_ms` is now bounded 1–1000 as well, and
-`rc_drain_ms > tick_ms` FAILS BOOT (it would silently retime every
-per-tick job to the drain period): the gate turned a bad `tick_ms` from
-the old "spins at 100% CPU but works" into a ~1.8e19 ms period that fires
-once at startup and never again — no failsafe, no rendezvous fallback, no
-watchdog, no telemetry, nothing logged. Both bounds are new on
-2026-08-14; note that a config setting `tick_ms` under 5 without also
-setting `rc_drain_ms` now fails boot, since the default drain of 5 would
-exceed it (nothing deployed does this). Op actuation used to be U(0, `tick_ms` = 100) ms, and
-`link.attrib.close_ms` measured a ~110 ms median with tails at 295 and
-971 ms. **Measured 2026-08-14 (follow-up session): the drain runs at 5 ms
-on the device (verified via /proc thread wake rates), but close_ms median
-is ~65 ms at n=24, not ≤30 — because 30–50% of uplink RCFs are lost to
-the drone's own half-duplex TX airtime (CCA off at the time — ON again
-since 2026-09-23, `docs/cca-on-findings-2026-09-23.md`; GS injects blind into
-the drone's bursts; loss tracks `link.air_pct`, 51–59% delivery at climb
-rungs 0–4, 69% parked). A lost commit-RCF costs one `feedback_ms` (50 ms)
-quantum, so close_ms = an 11–28 ms fast path (Part C working, target met)
-plus a geometric +50 ms ladder that Part C cannot touch. The ≤30 ms
-acceptance criterion is unreachable without an uplink-delivery fix
-(candidates, none built: repeat the RCF after an op change until
-`drone.applied` echoes it; time injection into post-frame-burst gaps).
-The same loss applies to ALL uplink control — probe RCFs, keepalive DISC,
-IDR requests — and `feedback_ms` is effectively the uplink retry quantum.
-Full analysis: `docs/rcf-uplink-loss-findings-2026-08-14.md`.** `link.fade`
-and `link.rc_drain_ms` are optional with live defaults, so the new binary
-runs against an untouched config on either device. Once either is
-hand-tuned into `/etc/maburgs.toml` or `/etc/mabur.toml` — and the bench
-GS is exactly the machine that will tune `link.fade.rssi_db` — that config
-stops loading on an older binary (`unknown key` → the 2 s crash-loop
-described further down). Write the key anyway when tuning wants it; that
-is a rollback cost, and rolling forward is the answer. The former rule
-that `bundle/mabur.default.toml` must NOT list `rc_drain_ms` was purely an
-old-binary concession and no longer applies.
+It also respects `min_between_changes_ms`.
 
+**The thresholds are code defaults; the bundle ships `rssi_db = 14.0`,
+`snr_db = 6.0`.**
 
+The deltas are slow − fast of a dual-timescale EWMA in
+`gs/src/ladder_controller.h` `FadeEwma`. These are structural constants,
+not config:
+- fast tau 300 ms;
+- slow tau 2 s rising, 20 s falling.
 
-## RcAgent owns the encoder (venc fold-in, 2026-08-29)
+So a multi-second fade cannot drag its own baseline down.
 
-The drone-side actuator used to be an HTTP client against `waybeam`. Since the
-fold-in the encoder runs inside `maburd`, so `RcAgent`'s three verbs
+The thresholds act on a high-pass response, so they are not trip points:
+- **Step response.** A step of depth D gives
+  `delta = D·(e^−t/20000 − e^−t/300)`, peaking at 0.92·D at 1.28 s. The
+  smallest step that fires is about 1.08× the threshold: 8 dB trips on
+  about 8.7 dB.
+- **Fading, not faded.** A fade that stops descending falls back under
+  threshold as the baseline catches up.
+- **Ramps.** On a steady ramp the response is slope-driven, about 19.7 dB
+  of delta per dB/s. A ramp below about 0.45 dB/s never reaches an 8 dB
+  threshold.
+- **Reaction time.** The delta needs about 0.8–1.3 s to peak, so the
+  fast tau, not `trigger_ms`, sets the reaction time.
+
+Do not retune these without bench data.
+
+Three properties to know before reading a recording:
+1. **Latched.** There is exactly one predictive demote per fade EVENT. The
+   latch releases only on an *observed* recovery, a tick where both deltas
+   are measurably back under threshold. A NaN window does not release it.
+   Further steps during a continuing fade are the cascade's job.
+   `link.ctl.counters.demotes_fade` counts fade events, not rungs lost.
+2. **`min_rung` is not a floor.** `link.fade.min_rung` (default 2) is the
+   lowest rung the trigger fires FROM. The effective floor is
+   `min_rung − 1`.
+3. **Not rung evidence.** Fade demotes are RF evidence, not evidence about
+   the rung. They never book a probation failure or a penalty, and never
+   count in the RungStore's `exits_bad`.
+
+**RF labels.** `rf_snr_db`, `rf_evm_db` and `rf_rssi_dbm` come from ONE
+card, as a coherent snapshot. That card's per-card pooled sid0+sid1 track
+supplies all three. The card is chosen by `select_label_card()`
+(`gs/src/rf_labels.h`, `tests/test_rf_labels.cpp`): the SNR argmax over
+cards whose pooled frame count advanced in the current feedback window.
+With no fresh card, all three read NaN (`nan` in the ctl log), which is
+inert for the trigger.
+
+**Card-hop false fades.** The argmax does not stick. A front-end that
+wedges for about 1 s hands the labels to a weaker sibling. RSSI then steps
+by the card gap, and nothing re-baselines on a hop. If a `fade` demote has
+no fade behind it, correlate the ctl log's `drssi`/`dsnr` step against
+per-card `classes.*` in the sideport:
+- a hop moves them by the card gap in one window;
+- a real fade moves them along the transfer function above.
+
+Observability:
+- Sideport `link.ctl.fade` = {active, drssi, dsnr}, plus
+  `counters.demotes_fade`. drssi and dsnr are `null` when NaN.
+- Ctl-log S line `drssi dsnr`.
+- `flightreport.py`'s episode analyzer (`find_episodes()`,
+  `print_episode_report()`) gives first-demote reason per episode, fade
+  lead times, false fades, and the attribution-miss canary.
+
+## Drone RCF drain
+
+On the drone, the agent loop wakes every `link.rc_drain_ms` (default 5,
+bounds 1–1000) to drain queued RC frames. All per-tick housekeeping sits
+behind a `TickGate` deadline of `link.tick_ms` (default 100, bounds
+1–1000, `drone/src/tick_gate.h`): USB health polls, `RcAgent::tick()`, the
+watchdog, and 1 Hz stats/telem. Op actuation latency is therefore
+U(0, `rc_drain_ms`).
+
+`rc_drain_ms > tick_ms` fails boot: it would silently retime every
+per-tick job to the drain period. A `tick_ms` under 5 therefore needs an
+explicit `rc_drain_ms`. `rc_drain_ms == tick_ms` reproduces a
+single-cadence loop.
+
+End-to-end op-change latency (`link.attrib.close_ms`) is dominated by
+uplink delivery, not the drain. A lost RCF costs one `feedback_ms`.
+Records:
+- `docs/findings/2026-08-14-rcf-uplink-loss.md`
+- `docs/findings/2026-08-14-handover-rc-drain-close-ms.md`
+- uplink timing: `docs/tx-rx-timing.md`
+
+## RcAgent owns the encoder
+
+The encoder runs inside `maburd`. `RcAgent`'s three verbs
 (`set_bitrate_kbps`, `set_roi_qp`, `request_idr`) are direct calls into
-`venc_core` on the agent thread. Nothing about the *policy* moved: the venc
-core is a pure mechanism with zero encoder-local policy, and there is no
-`venc.bitrate` config key — the commanded rate is only ever the output of
-`run_bitrate_policy()`, i.e. `phy_rate(T0) × encoder.airtime_budget /
-(1 + overhead)`, clamped to `encoder.bitrate_min_kbps`/`bitrate_max_kbps`.
+`venc_core` on the agent thread. The venc core is a pure mechanism with no
+encoder-local policy, and there is no `venc.bitrate` config key. The
+commanded rate is only ever the output of `run_bitrate_policy()`
+(`drone/src/rc_agent.cpp`):
 
-What the fold-in did change:
+    kbps = 1000 × encoder.airtime_budget
+           / [ 0.60·(1+ov_base)/rate_b + 0.40·(1+ov_enh)/rate_e ]
 
-- **Failed verbs are now visible and retried.** Each verb returns real status
-  and RcAgent latches "what the encoder is running" only on success, so one
-  dropped MI call is re-issued on the next policy tick instead of wedging the
-  rate for the rest of the flight (that wedge was the old waybeam failure
-  mode, and it is why the latch is conditional).
-- **RcAgent is the only IDR authority, and it paces.** Every producer —
-  GS-requested IDRs, the entering-LINKED heal, and the encoder's own
-  chain-break signal — goes through one pacer: a 100 ms floor between any two
-  IDRs, plus a 1 s holdoff between chain-break IDRs specifically. A refused
-  request is DROPPED, not queued; the next real break re-raises it. The
-  chain-break path is an atomic flag set from the venc callback and consumed
-  at the top of `tick()`, evaluated against the state as of tick entry so a
-  break that arrives on the same tick as a missed feedback deadline still
-  heals. Dropping rather than deferring is affordable only because the
-  encoder's GOP is the backstop: at the shipped `venc.gop_s = 2.0` an
-  unhealed break self-clears within ~2 s, so raising `gop_s` stretches that
-  safety net and the drop-vs-defer choice needs re-arguing. Measured on
-  hardware 2026-08-29 under a deliberate ring-full storm (~24 drops/s): 0.596
-  IDR/s, minimum observed spacing 919 ms — an unpaced path would have emitted
-  roughly one IDR per drop.
-  The one exception is a **GS-requested** IDR (RCF `idr_epoch`, RC_VERSION
-  12, spec 2026-09-28): an epoch change raises a pending request that
-  survives a pacer refusal and goes out on the first tick past the floor.
-  The requester (the web GS page) is frozen and waiting on it, and its own
-  retry is 300 ms, so dropping would turn a ≤100 ms wait into a 300 ms one.
-  Session edges (DISC, unconfirmed move, FAILSAFE) clear it. When an RCF
-  brings the link back from FAILSAFE/RENDEZVOUS, the entering-LINKED IDR
-  also clears the pending GS request — FAILSAFE reset the seen epoch, so
-  without this a redundant second IDR would otherwise follow 100 ms later.
-  Served count: `RcAgent::idr_gs_total()` (on the wire as
-  `drone.enc.idr_gs` until the 2026-09-30 telem diet).
-- **The ring is now visible from both ends.** `drone.enc.venc_ring_fill_pct`
-  and `drone.enc.venc_full_drops` report the PRODUCER side (the encoder
-  discarding AUs because maburd had not drained), against the existing
-  consumer-side `drone.enc.ring_drops`. (All three left the wire in the
-  2026-09-30 telem diet.) See `docs/observability.md`.
+where:
+- `rate_b`/`rate_e` are each layer's DELIVERED rate in Mb/s
+  (`delivered_mbps()`, nominal × `air_clock.efficiency_<bw>[mcs]`);
+- 0.60 is the fixed base byte share `kShareBase`;
+- `ov_base`/`ov_enh` is the commanded pair, or the :8301 override when it
+  is armed.
+
+The result is clamped to `encoder.bitrate_min_kbps`/`bitrate_max_kbps`,
+`min()`-capped by low-power mode, and rounded to 100. Bundle values are
+budget 0.65 and 1000–24000 kbps. Code defaults are 0.60 and 2000–10000.
+See `docs/airtime-model.md` §1 and §7.
+
+- **Failed verbs are visible and retried.** Each verb returns real status,
+  and RcAgent latches "what the encoder is running" only on success. One
+  dropped MI call is therefore re-issued on the next policy run instead of
+  wedging the rate for the rest of the flight.
+- **RcAgent is the only IDR authority, and it paces.** Every producer goes
+  through one pacer: GS-requested IDRs, the entering-LINKED heal, and the
+  encoder's own chain-break signal.
+  - The pacer enforces a 100 ms floor between any two IDRs, plus a 1 s
+    holdoff between chain-break IDRs.
+  - A refused request is DROPPED, not queued; the next real break
+    re-raises it.
+  - The chain-break path is an atomic flag set from the venc callback and
+    consumed at the top of `tick()`. It is evaluated against the state as
+    of tick entry, so a break arriving on the same tick as a missed
+    feedback deadline still heals.
+  - Dropping rather than deferring is affordable because the GOP is the
+    backstop: an unhealed break self-clears within one `venc.gop_s`. The
+    bundle ships 0.5; the code default is 2.0. Raising `gop_s` stretches
+    that safety net, and the drop-vs-defer choice would need re-arguing.
+  - The one exception is a **GS-requested** IDR (RCF `idr_epoch`). An epoch
+    change raises a pending request that survives a pacer refusal and goes
+    out on the first tick past the floor. The requester (the web GS page)
+    is frozen waiting on it, and its own retry is 300 ms.
+  - Session edges (DISC, unconfirmed move, FAILSAFE) clear the pending
+    request. The entering-LINKED IDR on a return from FAILSAFE/RENDEZVOUS
+    also clears it, so no redundant second IDR follows.
+  - Served count: `RcAgent::idr_gs_total()`, drone-local.
 
 ### The bitrate policy pushes on CHANGE, plus a 5 s re-assert
 
 `run_bitrate_policy()` only calls the encoder when its computed target
-differs from the last value actually applied (decreases always go out
-immediately; non-decreases are throttled to 1 Hz; state transitions force).
+differs from the last value actually applied:
+- decreases always go out immediately;
+- non-decreases are throttled to 1 Hz;
+- state transitions force.
 
 On top of that, `RcAgent::tick()` **re-asserts** the current computed target
-every `RcAgent::kReassertMs` = **5000 ms**, with `force=true` (a `force=false`
-re-assert would be a no-op by construction — an unchanged target is exactly
-what the change gate suppresses). The clock runs from the last bitrate the
-encoder actually *accepted*, so a link that keeps genuinely changing rung
-never adds a re-assert on top of its own pushes; a parked one gets one every
-5 s. The re-assert is gated to LINKED and FAILSAFE — RENDEZVOUS is the
-pre-link state with nothing to defend the value against.
+every `RcAgent::kReassertMs` = **5000 ms**, with `force=true`. A
+`force=false` re-assert would be a no-op by construction.
+- **Clock.** The clock runs from the last bitrate the encoder actually
+  *accepted*. A link that keeps genuinely changing rung never adds a
+  re-assert on top of its own pushes; a parked one gets one every 5 s.
+- **States.** The re-assert is gated to LINKED and FAILSAFE. RENDEZVOUS is
+  the pre-link state, with nothing to defend the value against.
 
 This closes two holes:
 
-- **A failed verb in FAILSAFE is now retried.** `run_bitrate_policy()` latches
-  its "last commanded" state only on a `true` return, so a failed apply is
-  retried on the next policy run — but the only policy runs are on RCF, DISC
-  and max-range entry. In FAILSAFE there are no RCFs by definition, so a verb
-  that failed *on the failsafe entry itself* went unrepaired for up to
-  `rendezvous_ms` (30 s) with the encoder flooding an mcs0-sized pipe at the
-  previous rung's rate. A failed apply now short-circuits the interval and
-  retries on the next tick.
+- **A failed verb in FAILSAFE is retried.** Policy runs happen only on
+  RCF, DISC and max-range entry, and FAILSAFE has no RCFs. A verb that
+  failed on the failsafe entry itself would otherwise go unrepaired for up
+  to `rendezvous_ms` (30 s) while the encoder floods an mcs0-sized pipe. A
+  failed apply short-circuits the interval and retries on the next tick.
 - **Overrides are bounded.** Anything that moves the encoder rate behind
-  RcAgent's back used to win until the ladder happened to change rung — the
-  debug endpoint's `POST /venc/set?bitrate=` held for 20 s+ on a parked link
-  in the 2026-08-29 bench run, and the same gap is the root of the historical
-  waybeam-restart wedge (`docs/deploy.md`, rollback runbook). Such an override
-  now survives **at most one re-assert interval (5 s)**. Bench procedures that
-  relied on an override sticking need to re-POST inside that window.
+  RcAgent's back would otherwise win until the ladder changed rung. That
+  includes the debug endpoint's `POST /venc/set?bitrate=`. Such an
+  override survives **at most one re-assert interval (5 s)**. Bench
+  procedures that need an override to stick must re-POST inside that
+  window.
 
 ### Encoder faults are process faults — there is no in-process rebuild
 
-If the MI pipeline dies or has to be rebuilt (a resolution/sensor-mode change,
-a wedged ISP), `maburd` must **exit and let `S96mabur` respawn it**.
-`venc_core_stop()` + `venc_core_start()` in the same PID can never recover it,
-and no amount of care in mabur's code changes that. Upstream implemented and
-bench-tested every in-process reset lever on this SoC — disabling userspace
-3A before VPE destroy, `MI_SYS_Exit`/`MI_SYS_Init` in-PID, closing the
-`/dev/mi_vif` and `/dev/mi_vpe` fds, even `dlclose`/`dlopen` of the whole MI
-vendor library set — and each one either wedges or comes back with a dead
-stream (`ISP channel readiness timeout after 2000 ms` → `CmdLoadBinFile
-failed -1` → `not sync err` floods → no frames). The residual state the
-rebuild needs is per-task VIF/VPE/ISP channel state in the kernel driver,
-released only by `execv`; userspace cannot reach it. Closed as a negative
-result 2026-06-07 in `../waybeam_venc/documentation/STAR6E_SINGLE_PID_REINIT_FINDINGS.md`
-— do not re-attempt without new SigmaStar SDK/kernel insight. In mabur this
-is why fold-in bring-up failure is fatal-by-design (exit, respawn, cold
-bring-up ~14–17 s measured, 5/5 unaided) rather than something the daemon
-tries to heal in place.
+If the MI pipeline dies or has to be rebuilt (a resolution/sensor-mode
+change, a wedged ISP), `maburd` must **exit and let its init wrapper
+(`/etc/init.d/S00mabur`, repo file `bundle/S96mabur`) respawn it**. `venc_core_stop()` + `venc_core_start()` in the same PID can never
+recover it.
 
-### Low-power (disarmed) mode (2026-09-20)
+Upstream implemented and bench-tested every in-process reset lever on this
+SoC, and each one either wedges or comes back with a dead stream
+(`ISP channel readiness timeout after 2000 ms` → `CmdLoadBinFile failed -1`
+→ `not sync err` floods → no frames). The levers were:
+- disabling userspace 3A before VPE destroy;
+- `MI_SYS_Exit`/`MI_SYS_Init` in the same PID;
+- closing the `/dev/mi_vif` and `/dev/mi_vpe` fds;
+- `dlclose`/`dlopen` of the whole MI vendor library set.
+
+The residual state is per-task VIF/VPE/ISP channel state in the kernel
+driver, released only by `execv`. The negative result is recorded in the
+sibling checkout,
+`../waybeam_venc/documentation/STAR6E_SINGLE_PID_REINIT_FINDINGS.md`. Do
+not re-attempt without new SigmaStar SDK/kernel insight. This is why a
+fold-in bring-up failure is fatal by design: exit, respawn, cold bring-up
+in about 14–17 s.
+
+### Low-power (disarmed) mode
 
 While the FC reports DISARMED, `RcAgent` runs the encoder at
-`low_power.bitrate_kbps` / `low_power.fps` (bundle: 1 Mb/s, 15 fps); an
-ARMED report returns full power. The mode tracks the FC's **current** arm
-state both ways — it is not a one-shot pre-arm latch — so a DISARMED report
-re-enters it however many times the aircraft has armed before.
-Spike: `docs/low-power-spike-findings-2026-09-19.md` (bitrate is the
-thermal lever for SoC and radio alike, fps second-order, CPU clock not a
-lever at all).
+`low_power.bitrate_kbps` / `low_power.fps`. The bundle ships 1 Mb/s and
+30 fps; the code defaults are 1000 kbps and 15 fps. An ARMED report
+returns full power.
 
-The second case this buys, after the pre-arm thermal one, is **recovery
-video**: an aircraft that is down but still powered keeps answering
-MSP_STATUS with DISARMED, so it drops back to the thin stream. At the mcs0
-the ladder will have fallen to, 15 fps at 1 Mb/s is far likelier to reach
-the GS than full rate — fewer FEC generations, more airtime budget per
-frame. `armed_latched()` still records whether this process ever saw the FC
-armed, which is what separates a pre-flight drone from a downed one on the
-`stats:` line; it is observability only and deliberately does not gate the
-mode.
+The mode tracks the FC's **current** arm state both ways. It is not a
+one-shot pre-arm latch, so a DISARMED report re-enters it however many
+times the aircraft has armed before. Spike:
+`docs/findings/2026-09-19-low-power-spike.md` (bitrate is the thermal
+lever, fps is second-order, CPU clock is not a lever).
 
-- **Trigger.** The MSP thread polls `MSP_STATUS` (cmd 101) at 2 Hz on the
-  OSD UART — the FC pushes only DisplayPort on its own — and hands BOXARM
-  (flightModeFlags bit 0) to `RcAgent::note_arm_state()`, one atomic like
-  the chain-break signal, consumed on the tick.
+The second case this covers, after pre-arm thermal, is **recovery video**.
+An aircraft that is down but still powered keeps answering MSP_STATUS with
+DISARMED, so it drops back to the thin stream. At the bottom rung, the
+thin stream is far likelier to reach the GS than full rate. `armed_latched()`
+records whether this process ever saw the FC armed, which separates a
+pre-flight drone from a downed one on the `stats:` line. It is
+observability only and does not gate the mode.
+
+- **Trigger.** The MSP thread polls `MSP_STATUS` (cmd 101) every 500 ms
+  (`kArmPollMs`) on the OSD UART; the FC pushes only DisplayPort on its
+  own. It hands BOXARM (flightModeFlags bit 0) to
+  `RcAgent::note_arm_state()`, an atomic consumed on the tick.
 - **Fail open.** `low_power_active_` = enabled ∧ the last arm report says
-  DISARMED ∧ that report is fresher than `low_power.stale_ms` (2 s).
-  Silence, a dead UART, `msp.enable = false`: full power. A maburd respawn
-  in flight boots full power and follows the first reply.
-  Freshness is the whole safety property now that the arm latch no longer
-  gates the mode: **a crash that kills the FC or its UART gives full-rate
-  video, not this mode**, because the reports stop. Recovery video only
-  works while the FC survives and keeps answering. The cost of dropping the
-  latch is that a spurious DISARMED — an MSP desync, a corrupt frame whose
-  XOR checksum happens to pass — throttles to 15 fps in flight until the
-  next poll corrects it 500 ms later. Judged acceptable: a *real* in-flight
-  disarm means the aircraft is already coming down. There is deliberately
-  no debounce; one bad frame costs two rebinds and self-corrects.
-- **What changes.** `run_bitrate_policy()` gains a target fps next to the
-  target bitrate; the bitrate is additionally `min()`-clamped to the cap.
-  fps goes out first, then the bitrate — its `SetChnAttr` IDR seeds the
-  stream at the new rate, so the verb itself never requests one. Both
-  follow the existing rules: latched on success only, retried on refusal
-  (now in RENDEZVOUS too — on the ground there is no RCF to carry a
-  retry), restated by the 5 s re-assert, so an fps set behind RcAgent's
-  back is bounded like a bitrate override. Transitions run in any state.
-- **The fps verb** (`venc_set_fps`, a port of waybeam f956a52 `apply_fps`)
-  is a VPE→VENC unbind/rebind at `sensor_fps:fps` plus an RC `fpsNum` and
-  GOP rewrite plus a SuperFrame re-derive. The RC `fpsNum` alone drops
-  nothing: it is the CBR budget divisor, and writing 15 with the bind at
-  60 measured 60 fps at 3.7x the commanded bitrate with the venc ring full
-  (probe 2026-09-20). The rebind takes live in both directions on the
-  running channel: 16.1 / 61.1 fps, 0 frame-id gaps, bitrate holding, one
-  incomplete enh AU on the way down and none up. The verb logs
-  `> FPS delivered N ... in M us`.
-- **What the ladder does under the thin stream — measured on the bench,
-  2026-09-20 (GS session 0147, drone log).** Three things, in the order
-  they were found:
-  1. **The probe gate held every promote for the whole pre-arm period.**
-     The per-AU probe books 15 AU/s × bpb 4 = 30 expected symbols in the
-     gate's 500 ms window (S lines read `probe_n` 28-32), and
-     `link.probe.min_syms` was 40 — sized against 60 fps = 120 per window.
-     Under the floor every sample is unusable, the gate reads NoInfo, and
-     NoInfo *holds* the promote (spec §4.4). The first gate edge of the
-     session is `P 9614278 1 clean … 115446`: 115 s of NoInfo from boot,
-     ending the instant the FC armed and the stream went to 60 fps, after
-     which the ladder climbed 0→5 in 8 s. **Fixed by lowering the floor
-     to 16** (four AUs' worth — the true no-traffic floor; code default,
-     `gs/bundle`, and the GS's `/etc/maburgs.toml`). With it the promote
-     needs the same 90-body clean streak, which takes ~6 s at 15
-     bodies/s instead of 1.5 s (`probe_gate_has_information_at_the_low_
-     power_au_rate` pins both halves). Keep `min_syms` under
-     `low_power.fps × 2` if either moves.
-  2. **The thin stream makes the loss ratios hypersensitive.** After a
-     disarm from rung 5 the ladder cascaded 4→3→2→1→0 on `s3_util` in
-     50 s (dwells 27/32/11/6 s) with the bench's usual ~2 FEC repair
-     episodes/s (`fec.log`: 44 in that window, the GS-uplink self-blanking
-     class). At 60 fps one lost aggregate is ~1-2 % of a 500 ms window; at
-     15 fps × 1 Mb/s the enh window holds ~15-30 symbols, so the same
-     single loss reads `u3` 0.22-0.29 against `s3_down_util 0.15` and
-     demotes after `confirm_ms`. Expect the low-power ladder to saw-tooth
-     on a lossy bench rather than hold a rung; NOT fixed — it is the
-     window/threshold design meeting a 4-8x thinner stream, and the
-     right answer (a window in AUs, or a per-loss-event floor) is a
-     separate spec.
-  3. **A live fps drop booked phantom vanishes.** `FramePipeline`'s vanish
-     period is an EMA over "normal" deltas only, so after the 60→15 fps
-     rebind every 66.7 ms step read as a 4x hole: `vanished` ran 3/4 →
-     5578/5582 in four minutes at a flat 15 reads/s (3 per frame), and
-     the Telem counters saturate. Link-inert (the self-IDR latch has no
-     consumer), telemetry-corrupting. **Fixed:** `set_fps` raises a
-     flag the hot thread consumes to `note_rate_change()` before scoring
-     the next pts (`frame_pipeline_rate_change_reanchors_the_period_
-     instead_of_booking_holes`).
+  DISARMED ∧ that report is fresher than `low_power.stale_ms` (2000).
+  - Silence, a dead UART, or `msp.enable = false` all mean full power. A
+    maburd respawn in flight boots at full power and follows the first
+    reply.
+  - **A crash that kills the FC or its UART gives full-rate video**,
+    because the reports stop.
+  - A spurious DISARMED (an MSP desync, a corrupt frame that passes the
+    XOR checksum) throttles to the low-power rate in flight until the next
+    poll corrects it. There is deliberately no debounce.
+- **What changes.** `run_bitrate_policy()` computes a target fps next to
+  the target bitrate, and the bitrate is additionally `min()`-capped.
+  - fps goes out first, then the bitrate. The bitrate write's `SetChnAttr`
+    IDR seeds the stream at the new rate, so the fps verb never requests
+    one.
+  - Both are latched on success only and retried on refusal, in every
+    state including RENDEZVOUS. Both are restated by the 5 s re-assert.
+- **The fps verb** (`venc_set_fps`, `drone/venc/venc_core.c`) is three
+  steps:
+  1. a VPE→VENC unbind/rebind at `sensor_fps:fps`;
+  2. an RC `fpsNum` and GOP rewrite;
+  3. a SuperFrame re-derive.
 
-  Follow-up the same night: `low_power.fps` raised **15 → 30** in the
-  bundle (and on the drone). At 30 fps the windows hold twice the symbols,
-  the single-loss quantum halves, and the bench ladder climbed to mcs 5
-  and held instead of saw-toothing — item 2 mitigated by config, the
-  windowing question itself still open.
+  The RC `fpsNum` alone drops nothing: it is only the CBR budget divisor.
+  The verb logs `> FPS delivered N ... in M us`. `set_fps` also raises a
+  flag the hot thread consumes to `FramePipeline::note_rate_change()`
+  before scoring the next pts. That re-anchors the vanish period instead
+  of booking every longer frame interval as a hole
+  (`frame_pipeline_rate_change_reanchors_the_period_instead_of_booking_holes`).
+- **What the ladder needs under the thin stream.**
+  1. **The probe gate's sample floor must stay under the thin stream's
+     window.** At `low_power.fps` × bpb 4 the gate's 500 ms window holds
+     `fps × 2` expected probe symbols. Keep `link.probe.min_syms` (16)
+     below `2 × low_power.fps`, or the gate reads NoInfo and holds every
+     promote while disarmed. The 90-body clean streak simply takes longer
+     at the lower AU rate. Pinned by
+     `probe_gate_has_information_at_the_low_power_au_rate`.
+  2. **The loss ratios are more sensitive.** A thin stream puts fewer
+     symbols in each 500 ms window, so one lost aggregate reads as a
+     larger `u`/`u3`. On a lossy link the low-power ladder can saw-tooth
+     rather than hold. This is open: the fix would be a window measured in
+     AUs, or a per-loss-event floor. 30 fps rather than 15 halves the
+     effect.
+  3. **The arm step is one write.** At ARM, `run_bitrate_policy(force=true)`
+     raises the encoder from the cap to the current rung's full budget in
+     a single write. Whether that provokes a demote is unmeasured. Read the
+     rung at the `drone.low_power` false-edge (or `rc: low_power EXIT
+     (armed)` in the drone log) and check for a demote within about 5 s.
 
-  What is still unmeasured is the arm step itself: at ARM,
-  `run_bitrate_policy(force=true)` raises the encoder from 1 Mb/s to the
-  current rung's full budget in one write. On the bench the ladder was at
-  rung 0 at arm (item 1), so the step was small; with item 1 fixed the
-  rung at arm can be anything the thin stream converged on, never loaded
-  at full rate. Read post-flight: the rung at the `drone.low_power`
-  false-edge (or `rc: low_power EXIT (armed)` in the drone log) and
-  whether a demote follows within ~5 s. If real, the fix is a ramp, or
-  holding the ladder down until the first full-rate windows have scored.
-- **ROI interaction.** Entering low power trips `roi_low_` — 1000 kbps is
-  under `encoder.roi_threshold_kbps` (3000) — so RcAgent issues
-  `set_roi_qp(-24)` on the way in and `set_roi_qp(0)` on the way out.
-  That is harmless *today* only because `[venc.roi] enabled = false`
-  short-circuits in `apply_roi_qp`. Re-enable ROI and the low-power
-  transition silently inherits the 2026-09-06 rung-0-demote-IDR hazard
-  (an IDR encoded at `roi_qp_low`); note also that Telem/maburtop will
-  read `roi -24` for the whole pre-arm period while ROI does nothing.
-- **Observability.** Telem flags bit7 → sideport `drone.low_power`,
-  maburtop `LP` (SYS row and the DRONE panel's SoC line), the compact
-  OSD's fps cell in caution colour while the sideport is fresh; stderr
-  `rc: low_power ENTER fps=15 cap=1000 kbps` / `EXIT (armed|stale)`; the
-  `stats:` line carries `lp= armed=`. Every recording now opens with a
-  low-power segment that `flightreport.py` cannot see — see
-  `docs/data-provenance.md`, 2026-09-20.
+  Bench record: `docs/findings/2026-09-20-low-power-ladder-bench.md`.
+- **ROI interaction.** Entering low power trips `roi_low_`, because
+  1000 kbps is under `encoder.roi_threshold_kbps` (3000). RcAgent therefore
+  issues `set_roi_qp(-24)` on the way in and `set_roi_qp(0)` on the way
+  out.
+  - This is harmless only because the bundle's `[venc.roi] enabled = false`
+    makes the ROI apply a no-op.
+  - Re-enable ROI and the low-power transition inherits the
+    rung-0-demote-IDR hazard: an IDR encoded at `roi_qp_low`.
+  - Telem/maburtop read `roi -24` for the whole disarmed period while ROI
+    does nothing.
+- **Observability.**
+  - Telem flags bit7 → sideport `drone.low_power`.
+  - maburtop shows `LP` on the SYS row and the DRONE panel's SoC line.
+  - The compact OSD's fps cell turns caution colour while the sideport is
+    fresh.
+  - stderr logs `rc: low_power ENTER fps=N cap=N kbps` and
+    `rc: low_power EXIT (armed|stale)`.
+  - The `stats:` line carries `lp=` and `armed=`.
+  - Every recording opens with a low-power segment
+    (`docs/data-provenance.md`, 2026-09-20).

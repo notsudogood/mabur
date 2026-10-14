@@ -24,7 +24,11 @@ BIN=${2:-out/arm64/maburgs}
 # with "Text file busy". Downtime spans the copy, which is fine here.
 ssh "$HOST" '
   [ -f /usr/local/bin/maburgs ] && cp -a /usr/local/bin/maburgs /usr/local/bin/maburgs.prev
-  /etc/init.d/S96maburgs stop
+  # The device may carry an older wrapper whose stop exits nonzero when
+  # maburgs is not running, or no wrapper yet: never let that abort the
+  # install before anything is copied.
+  [ -x /etc/init.d/S96maburgs ] && /etc/init.d/S96maburgs stop
+  true
 '
 
 # -O forces the legacy SCP transfer protocol so this works against targets with

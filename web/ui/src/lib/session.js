@@ -1,15 +1,14 @@
-// WASM module lifecycle (spec 2026-09-27-web-ui §3.1/§4.1):
+// WASM module lifecycle:
 // idle -> connecting -> live -> stopping -> idle, plus error. Disconnect is
 // in-page: Module._webgs_stop() ends the core loop, main returns and
 // Module.onExit fires; Connect then builds a FRESH module. If onExit never
 // comes (stopTimeoutMs), the caller-supplied reload() is the recovery path.
 //
 // onError and onExit can arrive in EITHER order (onError is posted via
-// MAIN_THREAD_ASYNC_EM_ASM, onExit via the proxied runtime exit -- see the
-// Task 3 review ruling). Every connect attempt gets its own `token` object;
-// the module's callbacks are closed over that token and only act while it
-// is still `this.token`, so a stale/superseded module's late callbacks are
-// inert. Within one attempt: an unexpected onExit (not the result of our
+// MAIN_THREAD_ASYNC_EM_ASM, onExit via the proxied runtime exit). Every
+// connect attempt gets its own `token` object; the module's callbacks are
+// closed over that token and only act while it is still `this.token`, so a
+// stale/superseded module's late callbacks are inert. Within one attempt: an unexpected onExit (not the result of our
 // own disconnect()) puts the session in 'error' immediately with a generic
 // fallback message; a later onError always overwrites that error's text
 // with the mapped one, whichever callback happened to fire first. Only
@@ -169,11 +168,11 @@ export class Session {
     this.set({ recWish: !!on });
   }
 
-  // GS-requested IDR (spec 2026-09-28). GS mode only: a spotter has no
+  // GS-requested IDR. GS mode only: a spotter has no
   // send path, so asking would only count. Returns true iff the module was
   // actually called, so IdrRequester (video.js pollIdr) can tell a real
   // send from one swallowed by state (e.g. still 'connecting') and not
-  // count it against its own retry pacing (final review finding 2).
+  // count it against its own retry pacing.
   requestIdr() {
     if (this.snapshot.state !== 'live' || this.snapshot.mode !== 'gs' || !this.mod) return false;
     this.mod._webgs_request_idr();
@@ -254,7 +253,7 @@ export function isWorkerFailure(line) {
 // rethrows the worker's ErrorEvent on the page, so one exit fires TWO events:
 // message "Uncaught [object ErrorEvent]" with e.error = that ErrorEvent (its
 // own .message is "Uncaught unwind"), then a bare "Uncaught unwind" -- both
-// with filename .../webgs.js (bench, headless Chrome 146, 2026-09-29).
+// with filename .../webgs.js (bench, headless Chrome 146).
 export function isWindowWorkerFailure(e) {
   const msg = String((e && e.message) || '');
   const inner = e && e.error && typeof e.error === 'object' ? String(e.error.message || '') : '';

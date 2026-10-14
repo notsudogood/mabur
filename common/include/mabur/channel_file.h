@@ -1,9 +1,8 @@
 #pragma once
-// The remembered channel (spec 2026-10-03-auto-channel-set §2 "State
-// files"): one decimal channel number and a newline. Written via a temp
-// file in the same directory, fsync()ed, + rename() so a power cut
-// mid-write leaves the old value, never a torn or empty one. Paths are compiled-in: there is nothing
-// to configure.
+// The remembered channel: one decimal channel number and a newline.
+// Written via a temp file in the same directory, fsync()ed, + rename() so
+// a power cut mid-write leaves the old value, never a torn or empty one.
+// Paths are compiled-in: there is nothing to configure.
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>

@@ -41,10 +41,10 @@ using NalSink =
 // Rockchip MPP H.265 encoder with the hardware (vepu540) OSD attached: the
 // burned-DVR half of Phase 2. Cross build only (MABUR_PLAYER_HW).
 //
-// Proven call sequence and every trap below come from the spike at
-// docs/superpowers/specs/2026-08-04-mpp-enc-osd-spike.md (bench GS, RK3566,
-// 1200 frames / 0 errors / 73.3 fps concurrent with the live decoder); its
-// working reference is bench/encosd/encosd_main.cpp.
+// Proven call sequence and every trap below come from the encoder+OSD
+// spike (bench GS, RK3566, 1200 frames / 0 errors / 73.3 fps concurrent
+// with the live decoder); its working reference is
+// bench/encosd/encosd_main.cpp.
 //
 // Usage:
 //   init(cfg, sink)                        -- fails loudly, never half-inits
@@ -53,8 +53,8 @@ using NalSink =
 //                                             => no OSD region at all)
 //   set_osd(map) / encode(...) per frame   -- both from the SAME thread
 //
-// Threading: set_osd() and encode() must be called from one thread (Task 4's
-// recorder thread). The double buffering exists because the ENCODER thread
+// Threading: set_osd() and encode() must be called from one thread (the burn
+// recorder's thread). The double buffering exists because the ENCODER thread
 // reads the bitmap after encode_put_frame() returns, not because these two
 // may be called concurrently.
 //
@@ -105,8 +105,8 @@ class MppEncoder {
   // resulting packet to the sink before returning.
   //
   // Does NOT take ownership: the caller must hold its reference across the
-  // call and release it afterwards. Task 4 hands the decoder's own buffer
-  // straight in, so there is no copy anywhere in the path.
+  // call and release it afterwards. The burn recorder hands the decoder's
+  // own buffer straight in, so there is no copy anywhere in the path.
   //
   // The FIRST call latches the geometry: this frame's picture size IS the
   // encoder's, whatever it is (it only has to be sane and carry strides >=
@@ -139,7 +139,7 @@ class MppEncoder {
   // and mpp_enc_add_sw_header skips while HDR_ADDED_MASK is set (:2023-2041),
   // and those flags are only cleared by reset_enc_task at the END of the
   // first task -- so frame 0's IDR is header-less and only IDRs from GOP 2
-  // onward carry them. Consequence for Task 4: the fMP4 sample entry
+  // onward carry them. Consequence for the burn recorder: the fMP4 sample entry
   // (hvcC) must be built from header(); a bare Annex-B dump must have it
   // prepended, or nothing can decode the first second.
   const std::vector<uint8_t>& header() const;

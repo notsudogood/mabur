@@ -15,7 +15,7 @@
 namespace maburgs {
 
 // scan.log (scanlog 6) -- the channel-selection record in the debug-log
-// session directory (spec 2026-09-14-inflight-channel-hop). Formats are
+// session directory. Formats are
 // LOCKED by tests/test_scan_log.cpp:
 //
 //   scanlog 6 <header_info>

@@ -45,9 +45,8 @@ struct GsSnapshot {
   // pick rather than the configured home. False when the block is absent
   // (older maburgs) or malformed.
   bool scan_auto = false;
-  // In-flight channel hop (spec 2026-09-14-inflight-channel-hop; keyed on
-  // scan.pick since the 2026-10-03 auto-channel-set feature deleted
-  // link.home): true only while `channel` equals hop.target AND
+  // In-flight channel hop (keyed on scan.pick; there is no link.home):
+  // true only while `channel` equals hop.target AND
   // scan.pick is present (non-null -- the GS has frozen its boot pick, or
   // pin, for the process lifetime) AND that target isn't scan.pick --
   // i.e. the live channel is one the hop feature itself put it on, right
@@ -61,15 +60,15 @@ struct GsSnapshot {
   // link is on the pick / a stale hop target.
   bool hopped = false;
   // link.state == "key_mismatch": our key file differs from the drone's
-  // (spec 2026-10-01 link-pairing). False when the block is absent (older
+  // (link pairing). False when the block is absent (older
   // maburgs) or state is any other value.
   bool key_mismatch = false;
-  // drone.low_power (Telem flags bit7, spec 2026-09-20): the drone is
+  // drone.low_power (Telem flags bit7): the drone is
   // deliberately at its pre-arm low-power operating point (1 Mb/s /
   // 15 fps) because the FC reports DISARMED. False when the drone block is
   // null/absent (no telemetry yet, older maburgs) or the key is not a bool.
   bool low_power = false;
-  // drone.rec (spec 2026-09-26 vtx-recorder): the drone recorder's state
+  // drone.rec (VTX recorder): the drone recorder's state
   // (0 off, 1 recording, 2 error) and error code. Empty when the drone
   // block is null/absent or the keys are missing or mistyped.
   std::optional<int> rec_state;
@@ -86,21 +85,21 @@ struct GsSnapshot {
   // normal, permanent state of a static-pinned link (link.static_mcs >= 0
   // never ticks the controller, so the exporter emits link.ctl: null).
   std::optional<int> mcs;
-  // link.ctl.rung.bw, falling back to link.op.bw (2026-09-24, 40 MHz rungs):
+  // link.ctl.rung.bw, falling back to link.op.bw (40 MHz rungs):
   // with 20/3 and 40/3 both in the ladder the MCS alone does not name the rung.
   std::optional<int> bw;
   std::optional<double> fec_pct;
   std::optional<double> air_pct;        // link.air_pct
-  // link.pre_fec_loss x 100 -- both video layers pooled (2026-09-23) --
+  // link.pre_fec_loss x 100 -- both video layers pooled --
   // falling back to the base-only link.ctl.pre_fec_loss x 100 when the
   // pooled window is null (starved/invalid).
   std::optional<double> pre_loss_pct;
-  // link.residual_loss x 100. Since 2026-09-02 that key is symbol
-  // abandonment (base+enh pooled), not the old packet-seq delivery window --
-  // it now reads 0 on a clean link instead of blipping on reordered FEC
-  // repairs, so this row is quieter than pre-break recordings suggest.
+  // link.residual_loss x 100. That key is symbol abandonment (base+enh
+  // pooled), not the old packet-seq delivery window -- it reads 0 on a clean
+  // link instead of blipping on reordered FEC repairs, so this row is quieter
+  // than pre-break recordings suggest.
   std::optional<double> post_loss_pct;
-  // link.rtt (link-rtt 2026-09-02): control-path RTT EWMA (telem queues
+  // link.rtt (link-rtt): control-path RTT EWMA (telem queues
   // behind video on the drone TX — reads high under saturation, honest
   // congestion signal) and the min-RTT-filtered (pts − GS-mono) offset the
   // player combines with its OWN PtsAnchor for the absolute LAT floor.

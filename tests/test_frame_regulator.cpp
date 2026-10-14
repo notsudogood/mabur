@@ -216,12 +216,12 @@ TEST(servo_inside_lead_window_targets_next_vblank) {
 }
 
 TEST(servo_burst_pair_takes_sequential_vblanks) {
-  // base+enh of one capture pair complete together (FEC generation
-  // close), so their decodes land ~1 ms apart with pts a full frame
-  // apart. Arrival-time targeting alone would aim both at the same
-  // vblank and drop the earlier frame (hw 2026-08-31: ~14 skips/s,
-  // 1-in-4 frames). Sequential-slot assignment must instead push the
-  // later-pts frame to the next grid slot: both display, in order.
+  // base+enh of one capture pair complete together (FEC generation close), so
+  // their decodes land ~1 ms apart with pts a full frame apart. Arrival-time
+  // targeting alone would aim both at the same vblank and drop the earlier
+  // frame (hw: ~14 skips/s, 1-in-4 frames). Sequential-slot assignment must
+  // instead push the later-pts frame to the next grid slot: both display, in
+  // order.
   FrameRegulator reg(12, true, 3);
   warm(reg);
   const uint64_t phase = kT0 + 7 * kVb;
@@ -315,8 +315,8 @@ TEST(mixed_fallback_and_servo_targets_all_hold) {
   CHECK(!reg.servo_locked());
   CHECK(reg.fallback_frames() == 1);
 
-  // 2) Re-warm on a fresh grid (one exact flip actually revalidates --
-  // finding 3 -- 8 mirrors the other re-warm test's cadence).
+  // 2) Re-warm on a fresh grid (one exact flip actually revalidates; 8
+  // mirrors the other re-warm test's cadence).
   const uint64_t phase1 = t_dec1 + 20'000 + 7 * kVb;
   for (int i = 0; i < 8; ++i) reg.on_flip(t_dec1 + 20'000 + i * kVb, true);
 
@@ -685,12 +685,12 @@ TEST(servo_triple_burst_claims_the_second_slot) {
 }
 
 TEST(heal_slip_preserves_release_order_with_a_mixed_queue) {
-  // Review finding 2026-08-31: heal_slip() moves only servo entries, so
-  // a mixed queue [servo, fallback] could invert the sorted-by-release
-  // invariant that release_due()/next_release_us() head-inspect --
-  // releasing the fallback frame late and out of pts order. Construct:
-  // fallback frame held first (cold estimator), then warm the grid so a
-  // servo frame lands with an EARLIER release, then heal.
+  // heal_slip() moves only servo entries, so a mixed queue [servo, fallback]
+  // could invert the sorted-by-release invariant that
+  // release_due()/next_release_us() head-inspect -- releasing the fallback
+  // frame late and out of pts order. Construct: fallback frame held first
+  // (cold estimator), then warm the grid so a servo frame lands with an
+  // EARLIER release, then heal.
   FrameRegulator reg(12, true, 3);
   FrameRegulator::Displaced disp;
   DmaFrame out;

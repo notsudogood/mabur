@@ -76,7 +76,7 @@ inline uint8x16_t mul16(uint8x16_t s, uint8x16_t tlo, uint8x16_t thi,
 //
 // Two inner-loop widths to isolate the unroll effect on the in-order A7
 // (mabur's single-source loop is 64 B wide; the first fused attempt was
-// 32 B wide and LOST to baseline at ss=1312 on target — 2026-07-17 run).
+// 32 B wide and LOST to baseline at ss=1312 on target).
 
 using Lc2 = void (*)(uint8_t* acc, const uint8_t* s1, uint8_t c1,
                      const uint8_t* s2, uint8_t c2, size_t len);

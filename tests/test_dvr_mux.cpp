@@ -323,12 +323,11 @@ TEST(dvr_mux_pts_wrap_tfdt_strictly_increasing) {
   CHECK(durs2[0] == 16704u);  // lone-sample fragment: carried, never 0
 }
 
-// Each fragment's tfdt must equal the previous fragment's tfdt plus its
-// trun durations. The fragment's last duration used to be a GUESS (the
-// previous delta), so after an irregular gap the next tfdt landed before
-// or after where the previous fragment ended: a 2026-09-29 web-GS
-// recording had 465/844 such seams, some 16-133 ms BACKWARDS, and
-// Apple's player would not open it.
+// Each fragment's tfdt must equal the previous fragment's tfdt plus its trun
+// durations. The fragment's last duration used to be a GUESS (the previous
+// delta), so after an irregular gap the next tfdt landed before or after where
+// the previous fragment ended: a web-GS recording had 465/844 such seams, some
+// 16-133 ms BACKWARDS, and Apple's player would not open it.
 TEST(dvr_mux_fragments_tile_the_timeline) {
   std::string path = scratch_path("dvr_mux_tile.mp4");
   std::remove(path.c_str());

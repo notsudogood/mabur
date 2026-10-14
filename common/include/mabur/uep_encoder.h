@@ -31,7 +31,7 @@ struct UepBody {
   uint32_t enqueued_ms = 0;
   // Steady-clock µs sampled immediately before the push (unlike enqueued_ms,
   // which inherits the hot loop's top-of-iteration stamp and therefore spans
-  // the venc-ring wait + FEC CPU too — dq-spike finding 2026-08-31). Feeds
+  // the venc-ring wait + FEC CPU too — dq-spike finding). Feeds
   // the drone-local dq_split gauge only; 0 = never stamped.
   uint64_t pushed_us = 0;
   // True only for the body carrying fragment index 0 of its AU — the one
@@ -47,11 +47,11 @@ struct UepBody {
 // Receives each body the instant its SBI group seals, while later FEC blocks
 // of the same frame are still being packed. The hot loop's sink hands the
 // body straight to the TxQueue so the radio drains in parallel with the
-// remaining GF256/SBI CPU (dq-spike 2026-08-31: the accumulate-then-push
+// remaining GF256/SBI CPU (dq-spike: the accumulate-then-push
 // shape serialized ~3.4 ms of that CPU in front of an idle radio).
 using UepBodySink = std::function<void(UepBody&&)>;
 
-// SPIKE 2026-10-05 (fec-nack): every SOURCE envelope a layer seals, as it
+// fec-nack: every SOURCE envelope a layer seals, as it
 // seals (sid, wire seq, envelope bytes). Feeds the drone's retransmit ring.
 // Called on the hot thread; must not block.
 using UepSourceTap = std::function<void(uint8_t sid, uint32_t seq, const uint8_t* env, size_t len)>;
@@ -87,7 +87,7 @@ class UepEncoder {
   // (usable = fec.max_packet_size() - Fragmenter::kHdrLen), feeds each
   // fragment through that layer's sliding-window encoder and SBI packer, and
   // seals the window at frame end (SwEncoder::flush) so tail symbols + their
-  // repair ship now instead of at next-frame arrival (spec 2026-07-22).
+  // repair ship now instead of at next-frame arrival.
   std::vector<UepBody> add_frame(int stream_id, const uint8_t* data, size_t len,
                                  uint64_t now_ms);
 
@@ -107,7 +107,7 @@ class UepEncoder {
   // to the SBI packer, then SBI flush. Shutdown/replay only.
   std::vector<UepBody> flush_all();
 
-  // Between-frames harvest (fec-join-delete 2026-09-22): for each layer,
+  // Between-frames harvest (fec-join-delete): for each layer,
   // packs the repairs the worker has finished since the last drain and,
   // once that layer has nothing outstanding, flushes the packer's partial
   // group as a short body so the frame's last repairs ship now instead of
@@ -137,13 +137,13 @@ class UepEncoder {
   // True — and the drop is booked in dropped(stream_id) — when that layer is
   // shed. Lets callers skip per-frame work for shed frames BEFORE committing
   // resources (FramePipeline checks this before allocating a frame_id, so
-  // sustained shed never punches id gaps into the GS FrameStream; spec
-  // 2026-07-26 svct-enable). Same sid clamping as add_frame.
+  // sustained shed never punches id gaps into the GS FrameStream). Same
+  // sid clamping as add_frame.
   bool drop_if_shed(int stream_id);
 
   uint64_t dropped(int stream_id) const;
 
-  // Per-layer async-FEC gauge passthrough (fec-compute handover 2026-09-01);
+  // Per-layer async-FEC gauge passthrough (fec-compute handover);
   // see SwEncoder::SwFecGauge for field semantics + the window-max reset.
   // Same sid clamping as add_frame; hot-thread-only like the rest.
   SwEncoder::SwFecGauge take_fec_gauge(int stream_id);
@@ -174,7 +174,7 @@ class UepEncoder {
   };
 
   // The hot-path envelope sink: one envelope in, at most one body out to
-  // sink (copy/alloc diet 2026-09-22 — no envelope vectors in between).
+  // sink (copy/alloc diet — no envelope vectors in between).
   static SwEnvSink env_sink(Layer& layer, const UepBodySink& sink);
   UepSourceTap tap_;  // SPIKE (fec-nack)
   static void emit_flush(Layer& layer, const UepBodySink& sink);

@@ -13,8 +13,8 @@ FIX=${2:-tests/fixtures/frame_stream.bin}
 # frames.bin generation: the same fixture -> maburd --dry-run path as
 # run_gs_au_e2e.sh, including its RCF (read the rationale there).
 # RCF delivered after frame 1 (same trick as run_host_e2e.sh / run_gs_e2e.sh):
-# the fixture alternates TRAIL_R/TRAIL_N on its 12 P frames (2-stream space,
-# spec 2026-08-29-airtime-balance-uep), so without an RCF the boot MAX_RANGE
+# the fixture alternates TRAIL_R/TRAIL_N on its 12 P frames (2-stream
+# space), so without an RCF the boot MAX_RANGE
 # op point (drone/src/rc_agent.cpp:apply_max_range) would shed the 6 genuine
 # sid-1 (enh) frames for good -- feeding one here is what makes the ring
 # carry both streams, not just an incidental side effect of the RCF check.

@@ -18,7 +18,7 @@ std::vector<uint8_t> scan_half_set(const std::vector<uint8_t>& set);
 // % reaches blocked_pct; the blocked tier takes precedence over score AND
 // margin -- an unblocked pair always beats a blocked one regardless of
 // score, and a blocked current channel loses to any unblocked candidate
-// outright (spec 2026-09-25-nhm-airtime §7). There is no fixed home: `set`
+// outright. There is no fixed home: `set`
 // includes `current`, and current's pair keeps `margin` the way
 // ChannelRanker::proposal does for a single channel, applied within a tier;
 // ties stay on current; among candidates the lowest score wins, config

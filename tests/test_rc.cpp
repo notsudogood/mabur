@@ -173,9 +173,9 @@ TEST(rcf_matches_golden_wire) {
   //   std::fprintf(stderr, "%s\n", mtest::hex(wire).c_str());
   // Reverting any pack_rcf() layout change without updating these fails
   // here, which is the point -- the format cannot drift silently.
-  // Re-pinned 2026-10-06 for the RC_VERSION 14 -> 15 bump (version byte 2
-  // moved, re-deriving the tag + CRC over the changed body) -- pack_rcf's
-  // own layout is untouched.
+  // Re-pinned for the RC_VERSION 14 -> 15 bump (version byte 2 moved,
+  // re-deriving the tag + CRC over the changed body) -- pack_rcf's own
+  // layout is untouched.
   const std::vector<std::string> GOLDEN = {
       "43520f01000700243232ff000000003081cd06e6f96e92f6c5",
       "43520f0100ffff006464ff00000300a9ecb70f6005b64e6502",
@@ -211,7 +211,7 @@ TEST(disc_matches_golden_wire) {
   //   std::fprintf(stderr, "%s\n", mtest::hex(wire).c_str());
   // Reverting any pack_disc() layout change without updating this fails
   // here, which is the point -- the format cannot drift silently.
-  // Re-pinned 2026-10-06 for the RC_VERSION 14 -> 15 bump.
+  // Re-pinned for the RC_VERSION 14 -> 15 bump.
   const std::vector<std::string> GOLDEN = {
       "43520f02040100feca9514010000000200ad461c95fb3f72f6d124",
   };
@@ -244,7 +244,7 @@ TEST(disc_ack_matches_golden_wire) {
   //   std::fprintf(stderr, "%s\n", mtest::hex(wire).c_str());
   // Reverting any pack_disc_ack() layout change without updating this
   // fails here, which is the point -- the format cannot drift silently.
-  // Re-pinned 2026-10-06 for the RC_VERSION 14 -> 15 bump.
+  // Re-pinned for the RC_VERSION 14 -> 15 bump.
   const std::vector<std::string> GOLDEN = {
       "43520f03040100feca0200efbe03009514000100be09",
   };
@@ -375,11 +375,11 @@ TEST(telem_round_trip_and_golden) {
   t.txq_drops = 7; t.txq_wait_max_ms = 1234; t.usb_fail = 2;
   t.up_rssi[0] = 51; t.up_rssi[1] = 52; t.up_snr[0] = 21; t.up_snr[1] = 22;
   t.soc_temp_c = 61; t.cpu_busy_x100 = 72;
-  // RX-side channel view per telemetry period (cca-on 2026-09-23): the
-  // drone's own frame split -- ours (RC from the GS), foreign CRC-clean,
-  // and CRC-failed (preamble heard, payload not decodable).
+  // RX-side channel view per telemetry period (cca-on): the drone's own frame
+  // split -- ours (RC from the GS), foreign CRC-clean, and CRC-failed
+  // (preamble heard, payload not decodable).
   t.rx_own = 13; t.rx_foreign = 14; t.rx_crcfail = 15;
-  // VTX recorder status (spec 2026-09-26): state 2 (Error) | err 5 (LowSpace) << 2.
+  // VTX recorder status: state 2 (Error) | err 5 (LowSpace) << 2.
   t.rec_status = 0x16;
   auto wire = mabur::rc::pack_telem(t);
   CHECK(wire.size() == 54 + 2);
@@ -407,10 +407,9 @@ TEST(telem_round_trip_and_golden) {
   CHECK(back->rec_status == 0x16);
   CHECK(back->nack_rx == 0 && back->retx_syms == 0 && back->retx_refused == 0);
   // Golden pin: byte-exact wire so the format can never drift silently.
-  // Computed independently of pack_telem (2026-09-30: python struct.pack of
-  // the documented layout + CRC16-CCITT init 0xFFFF), not printed from it.
-  // Re-pinned 2026-10-06 for RC_VERSION 14 -> 15 (Telem +6 bytes: nack_rx,
-  // retx_syms, retx_refused).
+  // Computed independently of pack_telem (python struct.pack of the documented
+  // layout + CRC16-CCITT init 0xFFFF), not printed from it. Re-pinned for
+  // RC_VERSION 14 -> 15 (Telem +6 bytes: nack_rx, retx_syms, retx_refused).
   const std::string GOLDEN =
       "43520f04090201022d0034127766554433221100a0860100282307000000d2040200"
       "333415163d48000d000e000f0016000000000000e6ad";
@@ -423,11 +422,11 @@ TEST(telem_round_trip_and_golden) {
 }
 
 TEST(telem_rtt_sync_fields_round_trip) {
-  // link-rtt (2026-09-02): the drone echoes WHICH RCF rcf_age_ms is aging
-  // against (seq identity for the GS send-time match) and its pts-domain
-  // clock at telem build (the t3 of the NTP-style offset estimate). Both
-  // must survive the wire at full width — pts_at_build is a 64-bit µs
-  // value in the MI timebase and must not truncate.
+  // link-rtt: the drone echoes WHICH RCF rcf_age_ms is aging against (seq
+  // identity for the GS send-time match) and its pts-domain clock at telem
+  // build (the t3 of the NTP-style offset estimate). Both must survive the
+  // wire at full width — pts_at_build is a 64-bit µs value in the MI timebase
+  // and must not truncate.
   mabur::rc::Telem t;
   t.rcf_age_ms = 12;
   t.rcf_seq_echo = 0xBEEF;
@@ -482,7 +481,7 @@ TEST(version_mismatch_rejected_both_directions) {
   CHECK(mabur::rc::parse_rcf(body.data(), body.size()).has_value());
 
   // Byte 2 is the version. Any other version must be refused outright —
-  // including 14, the version before the 2026-10-06 bump to 15.
+  // including 14, the version before the bump to 15.
   auto v_old = body;
   v_old[2] = 14;
   CHECK(!mabur::rc::parse_rcf(v_old.data(), v_old.size()).has_value());
@@ -653,8 +652,9 @@ TEST(cal_result_sentinel_is_minus_128_and_minus_1_is_a_real_wall) {
 }
 
 TEST(telem_ack_is_the_cal_active_bit_alone) {
-  // The anchor never leaves the drone (spec 2026-09-13): the calibration
-  // ack is flags bit6 and nothing else. TELEM_LEN shrank 88 -> 87 (95 since 2026-09-23, +rx_*), now 96 since 2026-09-26 (+rec_status), 98 since 2026-09-28 (+idr_gs), 48 since 2026-09-30 (fields no GS consumer needs dropped), 54 since 2026-10-06 (+nack_rx/retx_syms/retx_refused).
+  // The anchor never leaves the drone: the calibration ack is flags bit6 and
+  // nothing else (dropping the anchor shrank TELEM_LEN by one byte).
+  // TELEM_LEN is 54 at RC_VERSION 15.
   mabur::rc::Telem t;
   t.flags = 0x40;
   auto b = mabur::rc::pack_telem(t);

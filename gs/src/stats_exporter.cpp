@@ -209,9 +209,9 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
   link["state"] = in.key_mismatch ? "key_mismatch" : in.in_session ? "session" : "beaconing";
   link["key_fp"] = in.key_fp;
   link["tx_card"] = in.tx_card;
-  // OpPoint.overhead is a base/enh pair (Task 4, same-rate-fixed-pairs):
-  // export both GS-commanded values under their own keys -- the single
-  // "overhead" key (Task 4's overhead_base-only placeholder) is gone.
+  // OpPoint.overhead is a base/enh pair (same-rate fixed pairs): export
+  // both GS-commanded values under their own keys -- the single
+  // "overhead" key (an overhead_base-only placeholder) is gone.
   link["op"] = {{"mcs", in.op.mcs},
                 {"bw", in.op.bw},
                 {"sgi", in.op.sgi},
@@ -232,7 +232,7 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
   else at["close_ms"] = nullptr;
   link["layer_delivery_pct"] = in.layer_delivery_pct;
 
-  // Control-path RTT (link-rtt, 2026-09-02): null until the estimator's
+  // Control-path RTT (link-rtt): null until the estimator's
   // first matched sample. Offset/floor stay null until the drone ships a
   // non-zero pts_at_build (MI clock unavailable, or a pre-echo build).
   if (in.rtt) {
@@ -255,7 +255,7 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     rs["probe"] = in.rcf_slot.probe;
     rs["tail_ub_ms"] = in.rcf_slot.tail_ub_ms;
   }
-  // Software NACK (spec 2026-10-05 fec-nack §8). Counters are cumulative;
+  // Software NACK (docs/fec-nack.md). Counters are cumulative;
   // fill_pps / fill_ms / late_ms_max cover the window since the last export.
   // fill_ms percentiles are nearest-rank (index ceil(p*n)-1).
   if (in.nack.enabled) {
@@ -348,7 +348,7 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     ctl["down_util"] = c.down_util;
     ctl["up_util"] = c.up_util;
     ctl["util3"] = clamp_util(c.util3);
-    // Fade regime snapshot (spec 2026-08-14): raw regime state, deliberately
+    // Fade regime snapshot: raw regime state, deliberately
     // not gated on the cascade kill switch, so this stays visible even with
     // the cascade disabled. Deltas are NaN until the corresponding signal
     // has ever been sampled -- serialize as JSON null, never bare NaN.
@@ -377,7 +377,7 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
                          {"u", clamp_util(c.last_event_u)},
                          {"snr", snr_or_null(c.last_event_snr_db)},
                          {"evm", snr_or_null(c.last_event_evm_db)}};
-    // Per-rung EWMA store (spec 2026-08-13): additive, self-describing.
+    // Per-rung EWMA store: additive, self-describing.
     json rungs = json::array();
     for (std::size_t i = 0; i < c.rungs.size(); ++i) {
       const StatsRungIn& rg = c.rungs[i];
@@ -406,7 +406,7 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     link["ctl"] = nullptr;
   }
 
-  // Continuous probe gate (probe-stream, 2026-09-04): unconditional, unlike
+  // Continuous probe gate (probe-stream): unconditional, unlike
   // ctl above -- a pinned link still has no controller but can still export
   // the probe gate's (off) state, so this sits outside the `if (in.ctl)`.
   {
@@ -449,9 +449,9 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     const double phy = mabur::rc::phy_rate_mbps(rung);
     json fj;
     fj["stream"] = s;
-    // The commanded op pair's overhead (base for sid0, enh for sid1). The
-    // drone's applied-overhead echo left Telem 2026-09-30; the two only
-    // ever differed under the bench :8301 override.
+    // The commanded op pair's overhead (base for sid0, enh for sid1). Telem
+    // carries no applied-overhead echo; the two only ever differed under
+    // the bench :8301 override.
     fj["ov"] = s == 0 ? in.op.overhead_base : in.op.overhead_enh;
     fj["rung_mcs"] = rung.mcs;
     fj["rung_bw"] = rung.bw;
@@ -486,7 +486,7 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     fj["recovered_arrived"] = st.syms_recovered_arrived;
     fj["abandoned"] = st.syms_abandoned;
     fj["abandoned_stale"] = st.syms_abandoned_stale;
-    // ArrivalTracker (2026-09-05): arrival-time pre-FEC accounting, the
+    // ArrivalTracker: arrival-time pre-FEC accounting, the
     // ladder's util input. Cumulative; diff across records. Current-only
     // loss = 1 - (arrived-arrived_stale)/(expected-expected_stale).
     fj["arr_expected"] = st.arr_expected;
@@ -497,12 +497,12 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     fj["stale"] = st.symbols_stale;
     fj["bad_cfg"] = st.symbols_bad_cfg;
     fj["sub_fail"] = st.subblocks_failed;
-    // rx.keep_corrupted (2026-09-08): FCS-corrupt bodies the radio delivered
+    // rx.keep_corrupted: FCS-corrupt bodies the radio delivered
     // and the CRC16-clean sub-blocks salvaged out of them. Cumulative; diff
     // across records. flightreport.py's SALVAGE section is the consumer.
     fj["corrupt"] = st.bodies_corrupt;
     fj["salvaged"] = st.subblocks_salvaged;
-    // salvage_only (2026-09-09): seqs whose only arrival was a salvaged
+    // salvage_only: seqs whose only arrival was a salvaged
     // sub-block -- salvaged is the bound, this is the value.
     fj["salvage_only"] = st.arr_salvage_only;
     fj["in_flight"] = st.rows_in_flight;
@@ -549,9 +549,9 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
 
   v["q_drop"] = in.q_drop;
 
-  // Head-segment latency aggregates (Task 10, spec 2026-08-30-latency-
-  // accounting): the whole key is OMITTED -- not null -- while the anchor
-  // isn't usable() or the window is empty, so consumers can treat presence
+  // Head-segment latency aggregates: the whole key is OMITTED -- not null
+  // -- while the anchor isn't usable() or the window is empty, so
+  // consumers can treat presence
   // of "lat" itself as "this build/session has real numbers here".
   if (in.video_lat && in.video_lat->n > 0) {
     const LatWindow::Out& lat = *in.video_lat;
@@ -562,7 +562,7 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
                 {"fec", {lat.p50[3], lat.p99[3]}}};
   }
 
-  // Boot-time channel scan snapshot (spec 2026-09-13-auto-channel-select),
+  // Boot-time channel scan snapshot,
   // top-level rather than under link: it outlives the session and describes
   // the receiver's own scan/freeze state, not the link it eventually picks.
   json& scan = j["scan"];
@@ -570,7 +570,7 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
   scan["rounds"] = in.scan_rounds;
   if (in.scan_pick) scan["pick"] = *in.scan_pick; else scan["pick"] = nullptr;
 
-  // In-flight channel hop snapshot (spec 2026-09-14-inflight-channel-hop),
+  // In-flight channel hop snapshot,
   // top-level like `scan`: it describes the hop feature's own state
   // machine, not a per-window link measurement.
   json& hop = j["hop"];
@@ -639,7 +639,7 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
 
     json& d = j["drone"];
     d["tlm_age_ms"] = now_ms > in.telem_rx_ms ? now_ms - in.telem_rx_ms : 0;
-    // Task 4/5 latency accounting: per-telemetry-window max TxQueue wait,
+    // Latency accounting: per-telemetry-window max TxQueue wait,
     // saturating on the wire (see rc::Telem::txq_wait_max_ms).
     d["txq_wait_ms"] = t.txq_wait_max_ms;
     d["tlm_seq"] = t.tlm_seq;
@@ -649,19 +649,19 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     // shed enh layer is silence to the ladder, so this bit is the only way
     // to tell a congestion-caused enh gap from an RF one.
     d["congestion_shed"] = (t.flags & 0x10) != 0;
-    // Low-power (pre-arm) operating point, flags bit7 (spec 2026-09-20):
+    // Low-power (pre-arm) operating point, flags bit7:
     // the drone is deliberately at low_power.bitrate_kbps / fps because
     // the FC reports DISARMED. maburtop shows LP; the compact OSD tints fps.
     d["low_power"] = (t.flags & 0x80) != 0;
-    // Control-frame auth rejections this telemetry period, flags bit1 (spec
-    // 2026-10-01 link-pairing). One period around a drone restart is the
+    // Control-frame auth rejections this telemetry period, flags bit1
+    // (link pairing). One period around a drone restart is the
     // expected transient; sustained = a bug or two controllers at once.
     d["auth_reject"] = (t.flags & 0x02) != 0;
-    // VTX onboard recorder (spec 2026-09-26): Telem::rec_status split into
+    // VTX onboard recorder: Telem::rec_status split into
     // state (0 off, 1 recording, 2 error) and error code (0..6, RecErr in
     // drone/src/vtx_recorder.h). maburtop and the player OSD read it.
     d["rec"] = {{"state", t.rec_status & 0x03}, {"err", t.rec_status >> 2}};
-    // Software NACK, drone side (spec 2026-10-05 fec-nack §8): NACKs
+    // Software NACK, drone side: NACKs
     // verified, source symbols re-sent and symbols refused by the air
     // bucket -- per Telem period (not cumulative), straight from Telem.
     d["nack"] = {{"rx", t.nack_rx}, {"retx_syms", t.retx_syms}, {"retx_refused", t.retx_refused}};
@@ -675,7 +675,7 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     txq["drops"] = t.txq_drops;
     json& radio = d["radio"];
     // The drone's own RX-side view of the channel for the last telemetry
-    // period (cca-on 2026-09-23): frames that were ours (RC from this GS),
+    // period (cca-on): frames that were ours (RC from this GS),
     // CRC-clean frames that were not (foreign 802.11 on our channel) and
     // CRC-failed frames (preamble heard, payload undecodable). With carrier
     // sense on, foreign + crcfail is what the drone deferred to -- the

@@ -1,6 +1,6 @@
-// Local (browser, OPFS) recording: pure view logic + OPFS helpers (spec
-// 2026-09-28-web-local-recording §1.3-§2.4). The core records; this file
-// names files, reads its lrec_* stats and manages what OPFS holds.
+// Local (browser, OPFS) recording: pure view logic + OPFS helpers. The
+// core records; this file names files, reads its lrec_* stats and manages
+// what OPFS holds.
 
 export const DVR_TARGETS = ['web', 'vtx', 'both'];
 

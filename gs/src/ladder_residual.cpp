@@ -8,7 +8,7 @@ namespace maburgs {
 // pre-transition debris the attribution watermark already accounted for.
 //
 // NOT the packet-level delivery window (window_counts_cur), which this
-// replaced on 2026-09-02. That measure inferred loss from FRAG-seq gaps, and
+// replaced. That measure inferred loss from FRAG-seq gaps, and
 // a gap is indistinguishable from a unit that merely has not completed yet:
 // a sliding-window repair landing late completes an older unit after a newer
 // one, and the next forward gap re-books the already-delivered unit as a
@@ -30,7 +30,7 @@ namespace maburgs {
 //
 // abandoned also folds in syms_retx: a symbol a NACK retransmit filled
 // (or cascade-solved off a repair row) is video-whole but its direct copy
-// never arrived -- option A, spec 2026-10-05: the ladder sees the loss,
+// never arrived -- deliberately: the ladder sees the loss,
 // only the video does not. syms_retx has no stale split: a retx filling a
 // pre-transition seq counts as current residual loss even under `cur`
 // (negligible -- the drone only answers seqs within ring_ms, and a

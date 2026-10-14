@@ -10,7 +10,7 @@ Two views per cell:
     airtime spacing (~216 us at MCS5/1396 B), singles pay preamble + DIFS +
     backoff on top (~309 us mgmt / ~429 us BE).
 
-First run + interpretation: docs/dq-spike-findings-2026-08-31.md §11.
+First run + interpretation: docs/findings/2026-08-31-dq-spike.md §11.
 """
 import glob
 import json

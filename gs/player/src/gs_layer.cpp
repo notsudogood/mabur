@@ -5,14 +5,12 @@
 
 #include "gs_compact.h"
 #include "gs_draw.h"  // premul
-#include "gs_overlay.h"
 
 namespace maburplay {
 
 // --- formatting ---------------------------------------------------------
-// Shared by both styles. The compact bar uses fmt_int and fmt_one_dp only:
-// it renders a plain ASCII '-' for negatives (fmt_signed_int's U+2212 is a
-// typographic refinement the "no styling" bar deliberately does without).
+// The bar renders a plain ASCII '-' for negatives: a typographic U+2212 is
+// a refinement the "no styling" bar deliberately does without.
 
 std::string fmt_int(double v) {
   char b[32];
@@ -33,16 +31,6 @@ std::string fmt_one_dp(double v) {
   const double scaled = std::round(v * 10.0) / 10.0;
   std::snprintf(b, sizeof(b), "%.1f", scaled);
   return b;
-}
-
-std::string fmt_signed_int(double v) {
-  const double r = std::round(v);
-  if (r < 0.0) {
-    char b[32];
-    std::snprintf(b, sizeof(b), "%.0f", -r);
-    return std::string(kMinus) + b;
-  }
-  return fmt_int(r);
 }
 
 std::string fmt_clock(int seconds) {
@@ -125,21 +113,10 @@ RecText rec_text(const RecState& r) {
   return out;
 }
 
-// --- style selection ----------------------------------------------------
+// --- layer construction -------------------------------------------------
 
-bool parse_gs_style(const std::string& s, GsStyle* out) {
-  if (s == "essential") { if (out) *out = GsStyle::kEssential; return true; }
-  if (s == "compact")   { if (out) *out = GsStyle::kCompact;   return true; }
-  return false;
-}
-
-std::unique_ptr<GsLayer> make_gs_layer(GsStyle style, GsFont& font,
-                                       RecTarget rec_target) {
-  switch (style) {
-    case GsStyle::kCompact:   return std::make_unique<GsCompactBar>(font, rec_target);
-    case GsStyle::kEssential: break;
-  }
-  return std::make_unique<GsOverlay>(font, rec_target);
+std::unique_ptr<GsLayer> make_gs_layer(GsFont& font, RecTarget rec_target) {
+  return std::make_unique<GsCompactBar>(font, rec_target);
 }
 
 const uint32_t* gs_palette_seeds(size_t* n) {

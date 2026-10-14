@@ -14,8 +14,8 @@
 namespace maburgs {
 
 struct VrxCfg {
-  // Link key: tags every DISC/RCF this controller builds (spec 2026-10-01
-  // link-pairing §5). config.link.key on the GS.
+  // Link key: tags every DISC/RCF this controller builds (link pairing).
+  // config.link.key on the GS.
   mabur::LinkKey key = mabur::kDefaultLinkKey;
   uint8_t op_channel = 149;
   int feedback_ms = 100;
@@ -39,8 +39,7 @@ struct VrxCfg {
   uint32_t rz_nonce = 0;
 };
 
-// A DISC proposes the channel it is sent on (final review C1 addendum A,
-// 2026-10-04): the GS builds one DISC per tick proposing op and fans it to
+// A DISC proposes the channel it is sent on: the GS builds one DISC per tick proposing op and fans it to
 // every target card, but a search-burst copy leaves on the scout card's
 // member X -- proposing op there made the drone ack "agreed op" and retune
 // itself to op on promotion while the GS linked on X. This rewrites
@@ -70,7 +69,7 @@ class VrxController {
   // here — see ladder_controller.cpp update().
   std::optional<Out> step(double now_ms, const LinkHealth& health);
   const OpPoint& cur_op() const;
-  // The ladder controller itself, for Task 6's sideport link.ctl block and
+  // The ladder controller itself, for the sideport link.ctl block and
   // the "ctl: rung a->b" transition line in main.cpp. Exists even in pin
   // mode (constructed unconditionally) but is never ticked/updated there.
   const LadderController& ctl() const { return ctrl_; }
@@ -79,7 +78,7 @@ class VrxController {
   uint16_t rcf_seq() const;
   // The RCF tag counter: tag ctx = {vrx_nonce, vtx_nonce, seq32}. Restarts at
   // 0 on each NEW vtx_nonce adoption so the drone's fresh per-session seq
-  // tracker and our ctx agree from the first RCF (spec 2026-10-01 §5/§6).
+  // tracker and our ctx agree from the first RCF.
   uint32_t rcf_seq32() const { return seq32_; }
   // The probe byte the last built RCF carried (kNoProbeProfile when none).
   uint8_t probe_profile() const { return last_cmd_probe_profile_; }
@@ -92,7 +91,7 @@ class VrxController {
   // be true or they complain about a peer they have not heard from yet. A
   // key_mismatch-flagged ack does not count.
   bool peer_acked() const { return peer_acked_; }
-  // In-flight channel hop (spec 2026-09-14 §4). set_hop() is carried in
+  // In-flight channel hop. set_hop() is carried in
   // every RCF built from now on (build_rcf() stamps r.hop_ch/r.hop_epoch);
   // restore_rung()/blank_store() forward straight to the ladder controller
   // -- restore_rung() additionally refreshes cur_op_ immediately (the same
@@ -113,20 +112,20 @@ class VrxController {
   // Hold the SESSION keep-alive DISC (a hop order is in flight): its proposal
   // is the old op by construction, and a drone that has already followed the
   // order's RCF would otherwise process the DISC it received on the old
-  // channel and retune straight back (bench 2026-09-26). RCFs are unaffected;
+  // channel and retune straight back (seen on the bench). RCFs are unaffected;
   // the keep-alive is due at once when the hold lifts. Ignored until the
   // peer has acked (the stale-caps fast cadence always runs).
   void set_keepalive_hold(bool hold) { keepalive_hold_ = hold; }
-  // VTX recorder wish for every RCF (RecControl::wire(); spec 2026-09-26).
+  // VTX recorder wish for every RCF (RecControl::wire()).
   void set_rec_wish(uint8_t w) { rec_wish_ = w; }
-  // GS-requested IDR epoch for every RCF (spec 2026-09-28). Only the web GS
+  // GS-requested IDR epoch for every RCF. Only the web GS
   // calls this; maburgs leaves it at 0.
   void set_idr_epoch(uint8_t e) { idr_epoch_ = e; }
   uint8_t proposal() const { return rz_.proposal(); }
   // Last accepted ack's agreed_channel (0 before any accept). Set BEFORE
   // peer_caps_ so a caller reading both on one tick sees a consistent pair.
   uint8_t agreed_channel() const { return agreed_channel_; }
-  // Channel-move edge (spec 2026-10-01 link-pairing §6 step 5): the drone
+  // Channel-move edge (link pairing): the drone
   // retunes only after our first RCF verifies, so the GS follows it to the
   // agreed channel when a Telem says LINKED (the drone emits one on the old
   // channel as it promotes the session) or, if that frame is lost, after

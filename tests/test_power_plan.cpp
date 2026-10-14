@@ -2,13 +2,13 @@
 #include "power_plan.h"
 #include <array>
 
-// Relative walls (spec 2026-09-13): diff[r] = rel[r] - m, where rel is the
-// measured wall as an index RELATIVE to the chip's own per-channel anchor,
-// and m converts margin_db into 0.25 dB index steps. The chip adds the
-// anchor for whichever channel it is on, so one table is valid everywhere.
+// Relative walls: diff[r] = rel[r] - m, where rel is the measured wall as an
+// index RELATIVE to the chip's own per-channel anchor, and m converts
+// margin_db into 0.25 dB index steps. The chip adds the anchor for whichever
+// channel it is on, so one table is valid everywhere.
 
 TEST(measured_unit_plan) {
-  // 2026-09-13 ch136 means, margin 1 dB -> m = 4.
+  // Measured ch136 means, margin 1 dB -> m = 4.
   std::array<int, 8> rel = {63, 63, 62, 45, 22, 6, 9, 5};
   auto p = mabur::make_power_plan(rel, /*legacy_rel=*/63, /*margin_db=*/1.0,
                                   /*anchor=*/39);

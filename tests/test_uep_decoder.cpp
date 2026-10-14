@@ -162,8 +162,8 @@ TEST(garbage_body_is_misrouted_not_fatal) {
   CHECK(dec.bodies_misrouted() == 1);
 }
 
-// The packet-level delivery window was deleted 2026-09-02; post-FEC delivery
-// is now symbol-based and lives in gs/src/ladder_residual.cpp, covered by
+// There is no packet-level delivery window; post-FEC delivery is
+// symbol-based and lives in gs/src/ladder_residual.cpp, covered by
 // tests/test_ladder_residual.cpp (delivery_pct_is_100_when_nothing_expected,
 // pooled_residual_counts_sum_both_layers).
 
@@ -199,7 +199,7 @@ TEST(layer_stats_expose_recovered_arrived) {
   CHECK(dec.stats(1).syms_recovered_arrived >= 1);
 }
 
-// Task 7: DecodedFrag carries the completing body's RX stamp + SBI
+// DecodedFrag carries the completing body's RX stamp + SBI
 // durations. Patch a real encoder body's q_ms/enc_us post-hoc (as the drone
 // TX thread does) and feed it with an explicit body_mono_us; every fragment
 // that body's arrival emits must carry those exact values.
@@ -289,7 +289,7 @@ TEST(fcs_corrupt_body_counts_corrupt_and_salvaged_subblocks) {
   // FCS-corrupt increments bodies_corrupt, and every sub-block of it whose
   // own CRC16 still passes counts as salvaged. Flip one payload byte inside
   // the first sub-block: exactly one sub-block fails, the rest survive and
-  // are what the RCR ACRC32|AICV change (2026-09-08) actually buys.
+  // are what the RCR ACRC32|AICV change actually buys.
   auto bodies = encode_fixture_bodies();
   REQUIRE(!bodies.empty());
   auto& b = bodies.front();
@@ -452,14 +452,14 @@ TEST(uep_attrib_expiry_disarms) {
   CHECK(st.syms_abandoned_stale == 0);
 }
 
-// Fix-round addition (code review, 2026-08-14), retargeted 2026-09-02 when
-// the packet-level delivery window (and with it win_hwm) was deleted: pins
-// the stale-split safety property under a repair-cascade reorder entirely ON
-// THE NEW RUNG, well after the boundary has closed (transition_at=10, drop
-// starts at frame 47 — 37 frames and >180ms into the still-armed window, all
-// bodies at mcs_new). This window/drop-size combination is known (from the
-// pre-transition test above) to make the sliding-window FEC recover one of
-// the three dropped units OUT OF ORDER, completing after a later unit —
+// Pins the stale-split safety property (symbol counters only -- the
+// packet-level delivery window and its win_hwm are gone) under a
+// repair-cascade reorder entirely ON THE NEW RUNG, well after the boundary
+// has closed (transition_at=10, drop starts at frame 47 — 37 frames and
+// >180ms into the still-armed window, all bodies at mcs_new). This
+// window/drop-size combination is known (from the pre-transition test
+// above) to make the sliding-window FEC recover one of the three dropped
+// units OUT OF ORDER, completing after a later unit —
 // the reorder shape that used to fabricate phantom loss on the packet side.
 // The symbol counters are order-independent, so both properties are now
 // statements about attribution alone:
@@ -477,10 +477,10 @@ TEST(uep_attrib_current_loss_first_booking_never_suppressed) {
   CHECK(attrib.abandoned == legacy.abandoned);       // (b) total unperturbed
 }
 
-// Final-review fix (2026-08-14): the boundary-expiry check in add_body must
-// not underflow when now_ms lands BEFORE bnd_arm_ms (a body stamped
-// microseconds before the marking iteration's clock capture can drain in
-// the next iteration with an earlier-rounding ms stamp). Without the
+// The boundary-expiry check in add_body must not underflow when now_ms
+// lands BEFORE bnd_arm_ms (a body stamped microseconds before the marking
+// iteration's clock capture can drain in the next iteration with an
+// earlier-rounding ms stamp). Without the
 // `now_ms > bnd_arm_ms` guard, `now_ms - bnd_arm_ms` wraps to a huge value,
 // exceeds kBoundaryExpiryMs, and force-disarms a fresh boundary at exactly
 // the wrong moment.
@@ -619,7 +619,7 @@ TEST(layer_stats_arr_stale_split_follows_transition) {
 MTEST_MAIN
 
 TEST(salvage_only_books_seqs_no_clean_copy_ever_delivered) {
-  // arr_salvage_only (2026-09-09): of the sub-blocks salvaged out of
+  // arr_salvage_only: of the sub-blocks salvaged out of
   // FCS-corrupt bodies, how many carried a seq that NO clean copy (other
   // card, retry) ever delivered inside the arrival guard. This is what
   // salvage actually bought; subblocks_salvaged is only its upper bound.
@@ -681,7 +681,7 @@ TEST(salvage_only_books_seqs_no_clean_copy_ever_delivered) {
 }
 
 TEST(arrival_guard_is_plumbed_from_the_constructor) {
-  // spec 2026-09-23 tx-windows §5.2: link.arrival_guard_syms sizes the
+  // tx-windows: link.arrival_guard_syms sizes the
   // ArrivalTracker guard; 0 keeps the code default.
   std::array<UepLayerCfg, 2> layers{};
   for (auto& l : layers) { l.fec = SwConfig{64, 8, 0.0}; l.blocks_per_body = 1; }

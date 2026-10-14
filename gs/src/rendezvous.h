@@ -14,7 +14,7 @@ namespace maburgs {
 // in SESSION (1 s keep-alives) on one or two lost acks of our own drone.
 // BEACONING (20 ms DISCs) still trips in ~1 s; SESSION takes ~3 s. Any
 // unflagged ack resets both and leaves KEY_MISMATCH.
-// Spec 2026-10-01 link-pairing §6/§8.
+// See docs/link-pairing.md.
 enum class VrxState { SESSION, BEACONING, KEY_MISMATCH };
 enum class VrxAction { TxFeedback, Beacon, Idle };
 

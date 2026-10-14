@@ -47,27 +47,20 @@ void decode_profile(uint8_t p, PhyMode& mode, uint8_t& mcs, uint8_t& bw) {
   mcs = std::min(raw_mcs, top);
 }
 
-// hw 2026-07-26: the inherited devourer default (T1 = m+1, T2 = m+2) put
-// SVC-T enhance traffic past this link's wall — 20-42% RF loss concentrated
-// on the enhance frames, FEC (0.25x overhead) hopeless against it, lost
-// frame_ids stalling the GS FrameStream. Ruling: mcs is scored for the base
-// operating point, not for a faster per-rung rate; all four rungs (CRIT,
-// T0, T1, T2) ride that same base mcs. Same-day follow-up: T1/T2 also carry
-// T0's ldpc/stbc — flags-off T1/T2 measured 2-3 dB weaker on air at the
-// same MCS (single-chain TX, no coding gain), with the weaker GS card
-// losing 3-5x more of stream 3's frames. Per-layer differentiation is
-// exclusively the FEC overhead ladder (1.00/0.50/0.50/0.50 x scale,
-// flattened 2026-08-29 -- was 1.00/0.75/0.50/0.25).
+// mcs is scored for the base operating point, not for a faster per-layer
+// rate: the inherited devourer default (T1 = m+1, T2 = m+2) put SVC-T
+// enhance traffic past this link's wall on hardware — 20-42% RF loss
+// concentrated on the enhance frames, FEC (0.25x overhead) hopeless
+// against it, lost frame_ids stalling the GS FrameStream. Nothing flies
+// ABOVE the scored mcs. Every layer also carries the base's ldpc/stbc —
+// flags-off measured 2-3 dB weaker on air at the same MCS (single-chain
+// TX, no coding gain), with the weaker GS card losing 3-5x more of stream
+// 3's frames.
 //
-// 2026-08-29: base rides mcs−1, enh rides the scored mcs — UEP via rate,
-// always on (fixed rule mirrored by the GS, RC_VERSION 4). The 2026-07-26
-// rule "nothing flies ABOVE the scored mcs" still holds; base below extends
-// margin downward. Spec 2026-08-29-airtime-balance-uep.
-//
-// 2026-08-30 RULING (spec 2026-08-30-same-rate-fixed-pairs): both streams
-// ride the scored mcs. UEP is per-rung FEC overhead pairs carried in the
-// v5 RCF — no rate split, no runtime redistribution. Measurement basis:
-// docs/same-rate-uep-findings-2026-08-30.md (static/motion/loss sweeps).
+// Both streams ride the scored mcs (no base-below rate split). UEP is
+// per-rung FEC overhead pairs carried in the RCF — no rate split, no
+// runtime redistribution. Measurement basis:
+// docs/findings/2026-08-30-same-rate-uep.md (static/motion/loss sweeps).
 std::array<LayerTxSpec, 2> ladder_from(PhyMode mode, uint8_t mcs, uint8_t bw, bool ldpc) {
   int top = (mode == PhyMode::VHT) ? 8 : 7;
   int m = std::clamp(static_cast<int>(mcs), 0, top);

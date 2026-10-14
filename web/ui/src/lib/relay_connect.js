@@ -4,7 +4,7 @@
 //
 // On https it also carries Chrome's Local Network Access (LNA) gate: a
 // public page reaching a private IP needs the 'local-network' permission
-// (verified Chrome 147, 2026-09-29; 'local-network-access' does NOT unblock
+// (verified Chrome 147; 'local-network-access' does NOT unblock
 // WebSocket). While the permission is at 'prompt', Chrome holds the socket
 // on a one-time prompt — the probe is what raises it, so it gets the long
 // timeout. See docs/web-gs.md "CPE relay radio".

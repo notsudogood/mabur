@@ -8,9 +8,9 @@
 
 namespace mabur::hevc {
 
-// A fill slice (spec 2026-10-10-h265-slices §5.2): an independent slice
-// covering CTUs [first_ctb, end_ctb) in which every coding unit is a skip
-// CU with merge_idx 0 -- "copy from the reference with predicted motion".
+// A fill slice: an independent slice covering CTUs [first_ctb, end_ctb)
+// in which every coding unit is a skip CU with merge_idx 0 -- "copy from
+// the reference with predicted motion".
 // The decoder then sees a complete, legal picture (no gap, no error).
 
 enum class FillBin : uint8_t { kSplit, kSkip, kMergeIdx, kEndOfSlice };

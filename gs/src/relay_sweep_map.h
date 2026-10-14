@@ -1,6 +1,6 @@
 #pragma once
 // A relay sweep entry (mabur-relay v4 SCAN_RESULT) as a ranker visit and a
-// scan.log D record (spec 2026-10-05-cpe-relay-hop §4). Pure.
+// scan.log D record. Pure.
 #include <algorithm>
 #include <cstdint>
 

@@ -36,7 +36,6 @@ stale_ms = 5000            # hide the OSD after this long without updates; 0 = n
 enable   = true
 port     = 8302            # must match a [[stats.out]] port in maburgs.toml
 font     = "/usr/local/share/mabur/gs_osd.gfont"      # stats font file
-style    = "compact"       # "compact" = two rows along the bottom; "essential" = four corners with colours and bars
 stale_ms = 3000            # dim the stats after this long without updates
 
 # GPIO record button: toggles the DVR. Delete this whole block if no button
@@ -64,3 +63,7 @@ genlock_miss_pct = 10      # share of frames allowed to just miss their refresh 
 # drone's venc.sensor_bin) on the screen, the OSD and the recording.
 [colortrans]
 enable = true
+
+# Video decoder.
+[decoder]
+stream = true              # start decoding a picture slice by slice as it arrives (needs the stream-mode GS image); false = decode whole pictures

@@ -78,9 +78,8 @@ TEST(first_emission_immediate_with_null_rates) {
   CHECK(j["cards"][0]["frames"] == 1000);
 }
 
-// Task 5 (same-rate-fixed-pairs): link.op exports the base/enh overhead PAIR
-// -- the single "overhead" key (Task 4's placeholder, overhead_base only) is
-// gone.
+// same-rate-fixed-pairs: link.op exports the base/enh overhead PAIR -- the
+// single "overhead" key (overhead_base only) is gone.
 TEST(op_exports_overhead_pair_not_scalar) {
   Capture cap;
   StatsExporter ex(1, 500, cap.fn());
@@ -94,9 +93,9 @@ TEST(op_exports_overhead_pair_not_scalar) {
   CHECK(op["overhead_enh"].get<double>() > 0.499 && op["overhead_enh"].get<double>() < 0.501);
 }
 
-// link pairing (2026-10-01): link.key_fp, link.state == key_mismatch, and
-// drone.auth_reject (Telem flags bit1) surface Task 5/6's session-pairs
-// state on the sideport.
+// link pairing: link.key_fp, link.state == key_mismatch, and
+// drone.auth_reject (Telem flags bit1) surface the session-pairs state on
+// the sideport.
 TEST(link_carries_key_fp_and_mismatch_state_and_drone_auth_reject) {
   Capture cap;
   StatsExporter ex(1, 500, cap.fn());
@@ -119,7 +118,7 @@ TEST(link_carries_key_fp_and_mismatch_state_and_drone_auth_reject) {
   CHECK(j["drone"]["auth_reject"] == false);
 }
 
-// link-rtt (2026-09-02): link.rtt is null until the estimator has a sample,
+// link-rtt: link.rtt is null until the estimator has a sample,
 // then carries the control-path RTT (EWMA + session min + n), the filtered
 // pts offset, and floor_ms when the anchor was usable — all from StatsInput,
 // the exporter never computes them.
@@ -222,7 +221,7 @@ TEST(recovered_arrived_exported_with_rate) {
 }
 
 TEST(corrupt_bodies_and_salvaged_subblocks_exported) {
-  // rx.keep_corrupted (2026-09-08): FCS-corrupt bodies reach the decoder and
+  // rx.keep_corrupted: FCS-corrupt bodies reach the decoder and
   // their CRC16-clean sub-blocks are salvaged. Both cumulative counters ride
   // every datagram so a flight recording can say what salvage bought.
   Capture cap;
@@ -239,7 +238,7 @@ TEST(corrupt_bodies_and_salvaged_subblocks_exported) {
 }
 
 TEST(salvage_only_exported_next_to_salvaged) {
-  // arr_salvage_only (2026-09-09): seqs whose only arrival was a salvaged
+  // arr_salvage_only: seqs whose only arrival was a salvaged
   // sub-block -- the measured value of salvage, vs `salvaged` its bound.
   Capture cap;
   StatsExporter ex(1, 500, cap.fn());
@@ -493,7 +492,7 @@ TEST(class_entries_sticky_and_rates) {
 TEST(stream_rows_fall_back_to_op_overhead_without_telem) {
   // No telem snapshot yet: sid0's "ov" falls back to the commanded op's
   // overhead_base and sid1's to overhead_enh -- that sid's op pair value,
-  // not a shared scalar (Task 5: base/enh are scored independently, so a
+  // not a shared scalar (base/enh are scored independently, so a
   // fallback that used overhead_base for both would silently hide a
   // divergent enh rung).
   Capture cap;
@@ -509,8 +508,8 @@ TEST(stream_rows_fall_back_to_op_overhead_without_telem) {
 }
 
 TEST(stream_rows_ignore_telem_use_commanded_overhead) {
-  // The drone's applied-overhead echo left Telem 2026-09-30: with a telem
-  // snapshot present the stream rows still carry the commanded op pair.
+  // The drone's applied-overhead echo is not in Telem (telem diet): with a
+  // telem snapshot present the stream rows still carry the commanded op pair.
   Capture cap;
   StatsExporter ex(1, 500, cap.fn());
   StatsInput in = base_input();
@@ -552,7 +551,7 @@ TEST(drone_section_null_then_rates) {
   CHECK(j["drone"]["rec"]["state"] == 2);
   CHECK(j["drone"]["rec"]["err"] == 3);
   // drone.radio.rx: the drone's own RX-side frame split for the last
-  // telemetry period (cca-on 2026-09-23).
+  // telemetry period (cca-on).
   CHECK(j["drone"]["radio"]["rx"]["own"] == 13);
   CHECK(j["drone"]["radio"]["rx"]["foreign"] == 14);
   CHECK(j["drone"]["radio"]["rx"]["crcfail"] == 15);
@@ -570,7 +569,7 @@ TEST(drone_section_null_then_rates) {
   CHECK(cap.last()["drone"]["tlm_age_ms"] == 600);
 }
 
-// Keys dropped with the 2026-09-30 telem diet (RC_VERSION 13) must not come
+// Keys dropped with the telem diet (RC_VERSION 13) must not come
 // back as zeros: every one of them is gone from the drone block, and the
 // removed flag bits (radio_rx_ok / probing / air_shed) with them.
 TEST(telem_diet_keys_absent) {
@@ -775,7 +774,7 @@ TEST(ctl_default_event_is_none_with_zeros) {
   CHECK(ctl["counters"]["probe_holds"] == 0);
 }
 
-// link.probe (probe-stream, 2026-09-04): the continuous probe gate snapshot,
+// link.probe (probe-stream): the continuous probe gate snapshot,
 // unconditional -- present even when in.ctl is nullopt (static-pin mode).
 TEST(probe_block_shape_and_values) {
   Capture cap;
@@ -915,7 +914,7 @@ TEST(uplink_snr_is_exported_in_dB_not_half_dB) {
   CHECK(u["rssi_a"].get<double>() > -58.01 && u["rssi_a"].get<double>() < -57.99);
   CHECK(u["rssi_b"].get<double>() > -63.01 && u["rssi_b"].get<double>() < -62.99);
 }
-// Runtime TX power control was deleted on 2026-08-12, and with it three
+// Runtime TX power control was deleted, and with it three
 // sideport keys. Nothing else pins their absence: every other assertion here
 // checks a key that IS emitted, so re-adding `offset_qdb` to link.op or
 // drone.applied would sail through the suite while silently un-doing a
@@ -923,7 +922,8 @@ TEST(uplink_snr_is_exported_in_dB_not_half_dB) {
 // the additive-only v:1 rule). Checked against the exporter's real output,
 // with a telem snapshot present so the drone block actually exists —
 // against a null drone section these `contains` checks would pass vacuously.
-// (sys.thermal_delta, once asserted present here, left the wire 2026-09-30.)
+// (sys.thermal_delta, once asserted present here, left the wire in the
+// telem diet.)
 TEST(removed_power_keys_absent) {
   Capture cap;
   StatsExporter ex(1, 500, cap.fn());
@@ -937,7 +937,7 @@ TEST(removed_power_keys_absent) {
   CHECK(!j["link"]["op"].contains("offset_qdb"));
   CHECK(j["link"]["op"]["mcs"] == 5);          // the object is still populated
   REQUIRE(j["drone"].is_object());
-  // drone.applied itself left the sideport 2026-09-30 (telem diet).
+  // drone.applied itself left the sideport in the telem diet.
   CHECK(!j["drone"].contains("applied"));
 }
 
@@ -1002,7 +1002,7 @@ TEST(exporter_attrib_block_and_stream_stale) {
   ex.poll(1000, in);
   REQUIRE(!sent.empty());
   auto j = nlohmann::json::parse(sent);
-  CHECK(!j["link"]["attrib"].contains("suppressed"));  // deleted 2026-09-02
+  CHECK(!j["link"]["attrib"].contains("suppressed"));  // deleted key
   CHECK(j["link"]["attrib"]["residual_cur"] == 0.0);
   CHECK(j["link"]["attrib"]["close_ms"] == 12.0);
   bool found = false;
@@ -1038,10 +1038,10 @@ TEST(exporter_ctl_fade_block_and_counter) {
   CHECK(j["link"]["ctl"]["fade"]["dsnr"].is_null());
 }
 
-// Head-segment latency aggregates (Task 10, spec 2026-08-30-latency-
-// accounting): the "lat" key is OMITTED, not null, while video_lat is
-// nullopt (anchor not usable / window empty upstream). contains() pins
-// that -- same auto-vivification trap noted above for fade.dsnr.
+// Head-segment latency aggregates (latency accounting): the "lat" key is
+// OMITTED, not null, while video_lat is nullopt (anchor not usable / window
+// empty upstream). contains() pins that -- same auto-vivification trap
+// noted above for fade.dsnr.
 TEST(video_lat_omitted_when_absent) {
   Capture cap;
   StatsExporter ex(1, 0, cap.fn());
@@ -1153,7 +1153,7 @@ TEST(exports_hop_block_and_card_dwell) {
   StatsExporter ex(1, 500, cap.fn());
   CHECK(ex.poll(1000, in));
   json j = cap.last();
-  CHECK(!j["hop"].contains("enable"));   // deleted 2026-10-04 with hop.enable
+  CHECK(!j["hop"].contains("enable"));   // deleted with hop.enable
   CHECK(j["hop"]["verdict"] == "interfered");
   CHECK(j["hop"]["evidence"] == 6);
   CHECK(j["hop"]["ref_rung"] == 3);
@@ -1254,7 +1254,7 @@ TEST(relay_card_exports_kind_relay_block_and_null_snr) {
   CHECK(!j["cards"][0]["classes"]["s0"]["snr"].is_null());   // when its has_ema is true
 }
 
-// fec-nack (spec 2026-10-05 section 8): link.nack exports the tracker's
+// fec-nack: link.nack exports the tracker's
 // cumulative counters + this window's fill latency (nearest-rank p50/p90),
 // only while [link.nack] is enabled; drone.nack carries Telem's counters.
 TEST(link_nack_block_and_drone_nack_counters) {

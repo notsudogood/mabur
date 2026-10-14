@@ -5,55 +5,95 @@ Recordings that span one of these are not the same experiment and must
 not be pooled. Nothing in the sideport reports most of them, so the only
 reliable method is to date the recording against this page.
 
-Quick index: carrier sense off 2026-08-05 · carrier sense ON again + RC_VERSION 10 + `link.pre_fec_loss` guard 32 → 192 2026-09-23 · TX power constant 2026-08-12 ·
-40 MHz rungs — `ctllog 12` (bw: prefix), `scanlog 3` (per-half dwells, pair
-pick), `air_clock.efficiency`/`ampdu.min_mcs` → `_20`/`_40`, new required
-`link.ladder[].bw` — 2026-09-24 (`docs/bw40.md`) ·
-`feclog 2` adds a `bw` column after `mcs` 2026-09-24 (`feclog 1` rows are 20 MHz) ·
-`feclog 3` (2026-10): rtx column after rec; feclog 1/2 rows read as rtx 0 ·
-`probelog 3` adds a `bw` column after `mcs` 2026-09-24 (`probelog 1`/`2` rows are 20 MHz) ·
-NHM airtime evidence — `scanlog 4` (V card block gains `nhm_busy`/`own_air`,
-D gains `busy`, K entries reshape to `ch:worst_busy:floor:busy`), `[hop.verdict]`
-`busy_dbm`/`blocked_pct`, sideport `cards[i].energy.busy_pct`/`.own_air_pct`
-— 2026-09-25 (`docs/inflight-channel-hop.md`, `docs/nhm-airtime-spike-findings-2026-09-25.md`) ·
-sideport key removals 2026-08-12, 2026-08-15, 2026-08-29, 2026-08-30 and
-2026-09-04 ·
-SNR half-dB scale break 2026-08-04 · EVM op-point dependence 2026-08-10 ·
-RF labels pooled and fade deltas unsuppressed 2026-08-15 (see
-`docs/link-adaptation.md`) · DVR filenames un-dated 2026-08-26 ·
-walls measured by `maburcal` not txagcbench 2026-09-10 · UEP
-overhead flatten 2026-08-29 · overhead literal + 4→2 stream collapse
-2026-08-29 (airtime-balance-uep) · overhead splits into base/enh pairs +
-ctllog 8 2026-08-30 (same-rate-fixed-pairs) · SlotHdr v2 (`# aulog 2`) +
-aucadence completion clock switched to ring `t_complete_us` 2026-08-31
-(latency-accounting) · `reg`/`dsp` split redistributed by the vsync
-servo 2026-08-31 (sum still comparable, split is not) · **post-FEC
-residual re-based from packet-seq to symbol abandonment + ctllog 9
-2026-09-02 (residual-phantom-demotes)** · **discrete s3 probe replaced by
-the always-on probe stream + ctllog 10, `probe_u`/`probe_n` become a
-continuous EWMA 2026-09-04 (probe-stream)** · `probelog 2` adds the
-per-body `first_ms` arrival stamp 2026-09-05 (probe-blanking fix; a
-`probelog 1` file's `t_ms` is the finalize tick and cannot be joined to
-`au-NNNN.log` for timing) · debug logs consolidate into one per-session
-directory and `au.log`'s clock switches WALL→MONOTONIC (`# aulog 4`,
-`# latlog 2`, both drop the `# sync` bridge) 2026-09-06 ·
-link pairing: RC_VERSION 14, `vtx_id` gone, `link.key_fp` /
-`link.state = key_mismatch` / `drone.auth_reject` 2026-10-01 ·
-channel set replaces home + candidates — `scanlog 5` (M loses
-`split_home`/`reunite`, H gains `boot_order`), sideport `link.home`
-removed — 2026-10-03 (`docs/channel-select.md`) · same marker: H
-`boot_order` renamed `relocate`, M gains `link_found`, `scan.pick`
-latched — 2026-10-04 · CPE relay interference sweep/hop (protocol v4) —
-`scanlog 6` (D gains trailing `rx`), sideport `cards[i].relay.tx_scan_drop`/
-`.sweeps`, `hop.sweep_timeouts` — 2026-10-05 (`docs/cpe510-relay.md`) ·
-2026-10-10: `au.log` marker `# aulog 5` (+4 salvage columns); sideport
-`link.video.slice_*` keys added; FrameHdr byte 3 is `slice_rows` (was
-codec id 0x01 — recordings before this date read as slice_rows 1 in no
-tool, the byte was never logged) (`docs/slices.md`) · 2026-10-10:
-maburplay submits slice-salvaged AUs, so LAT / e2e latency tails during
-loss include frames that were skipped before (section below).
+Every format marker (`ctllog N`, `scanlog N`, `aulog N`, `probelog N`,
+`feclog N`, `latlog N`, `callog N`) and every removed sideport key is
+recorded here with its date, so a recording on the DVR can be read with
+the meaning it was written under.
 
-**`link.pre_fec_loss` scale break 2026-09-23, twice.** The ArrivalTracker
+## Quick index
+
+Chronological; each line names the section below that carries the detail.
+
+- 2026-08-04 — `classes.*.snr` / `drone.uplink.snr_*` half-dB → dB scale break.
+- 2026-08-05 → 2026-09-23 — carrier sense OFF on both daemons.
+- 2026-08-10 — `classes.*.evm*` added; EVM is op-point-dependent.
+- 2026-08-12 — TX power constant; sideport key removals start (see
+  "Removed sideport keys").
+- 2026-08-15 — RF labels pooled, fade deltas unsuppressed
+  (`docs/link-adaptation.md`); `link.attrib.on` removed.
+- 2026-08-26 — DVR filenames carry no date.
+- 2026-08-29 — UEP overhead flatten; later the same day overhead goes
+  literal and streams collapse 4 → 2 (RC_VERSION 4).
+- 2026-08-30 — overhead splits into base/enh pairs, `ctllog 8` (RC_VERSION 5).
+- 2026-08-31 — SlotHdr v2 / `# aulog 2`; aucadence completion clock →
+  ring `t_complete_us`; `air` segment basis fix; vsync servo moves the
+  `reg`/`dsp` split (sum still comparable); `dq` → true TxQueue wait.
+- 2026-09-02 — post-FEC residual re-based to symbol abandonment, `ctllog 9`;
+  OSD LAT headlines become absolute.
+- 2026-09-03 — per-card `loss_pct` phantom fixed; `drone.enc.qp` re-pointed
+  then deleted, `roi_qp`/`congestion_shed` added.
+- 2026-09-04 — `link.pre_fec_loss` added; `venc.resilience` deleted; probe
+  stream replaces the discrete s3 probe, `ctllog 10`, `probe_u`/`probe_n`
+  become a continuous EWMA (RC_VERSION 6).
+- 2026-09-05 — `probelog 2` adds the per-body `first_ms` arrival stamp (a
+  `probelog 1` file's `t_ms` is the finalize tick and cannot be joined to
+  the AU log for timing; `docs/findings/2026-09-05-probe-blanking-fix.md`); `u`/`u3`/util become arrival-booked, `ctllog 11`.
+- 2026-09-06 — air clock: `# aulog 3`, SBI ver 2, SlotHdr v3; debug logs
+  consolidate into one session directory, `au.log` clock WALL → MONOTONIC
+  (`# aulog 4`, `# latlog 2`, both drop the `# sync` bridge); the
+  (`essential`) OSD's LAT rows lose their segments, and with them the
+  floor folded into `air+`.
+- 2026-09-08 — per-card `crc_fail` live (structurally 0 before);
+  `streams[].corrupt`/`salvaged`/`sub_fail` added.
+- 2026-09-09 — `streams[].salvage_only` added.
+- 2026-09-10 — walls measured by `maburcal`, not txagcbench (`callog 1`).
+- 2026-09-13 — relative walls (`callog 3`, `radio.*_wall_rel`).
+- 2026-09-16 — probe per AU (~60/s, was enh-only ~30/s): probe.log density
+  and probe air share double; `link.probe.streak_ms` → `streak_bodies`.
+- 2026-09-20 — every recording opens with a low-power segment.
+- 2026-09-21 — `drone.sys.load` → `drone.sys.cpu_pct`.
+- 2026-09-23 — carrier sense ON again (RC_VERSION 10); `link.pre_fec_loss`
+  guard 32 → 192 and pooled base + enh.
+- 2026-09-24 — 40 MHz rungs: `ctllog 12` (`bw:` prefix), `scanlog 3`,
+  `feclog 2` and `probelog 3` add a `bw` column after `mcs` (older rows are
+  20 MHz), `air_clock.efficiency`/`ampdu.min_mcs` → `_20`/`_40`, required
+  `link.ladder[].bw` (`docs/bw40.md`).
+- 2026-09-25 — NHM airtime evidence: `scanlog 4`, sideport
+  `cards[i].energy.busy_pct`/`.own_air_pct`
+  (`docs/inflight-channel-hop.md`, `docs/findings/2026-09-25-nhm-airtime-spike.md`).
+- 2026-09-28 → 2026-09-29 — raw DVR sync point: BASE AUs before, any
+  VPS+SPS+PPS AU for a day, IRAP-only after.
+- 2026-09-30 — telem diet: RC_VERSION 13, Telem 98 → 48 bytes, many
+  `drone.*` keys removed.
+- 2026-10-01 — link pairing: RC_VERSION 14, `vtx_id` gone, `link.key_fp`,
+  `link.state = key_mismatch`, `drone.auth_reject`.
+- 2026-10-02 — relay cards: `cards[i].kind`, null SNR on relays, TX selector
+  on RSSI.
+- 2026-10-03 — channel set replaces home + candidates: `scanlog 5`,
+  `link.home` removed (`docs/channel-select.md`); 2026-10-04, same marker:
+  H `boot_order` → `relocate`, M gains `link_found`, `scan.pick` latched.
+- 2026-10-04 — pin is static: `hop.enable` deleted, no more `would_` rows.
+- 2026-10-05 — CPE relay interference sweep/hop: `scanlog 6`, sideport
+  `cards[i].relay.tx_scan_drop`/`.sweeps`, `hop.sweep_timeouts`
+  (`docs/cpe510-relay.md`).
+- 2026-10-06 — software NACK: RC_VERSION 15, `T_NACK`, `feclog 3` (`rtx`
+  column after `rec`; feclog 1/2 rows read as rtx 0), sideport `link.nack`
+  and `drone.nack` (`docs/fec-nack.md`).
+- 2026-10-10 — slices: `# aulog 5` (+4 salvage columns), sideport
+  `link.video.slice_*`, FrameHdr byte 3 is `slice_rows` (was codec id
+  0x01, never logged) (`docs/slices.md`); maburplay submits slice-salvaged
+  AUs, so LAT / e2e tails during loss include frames skipped before; AU
+  ring v4.
+- 2026-10-11 — the `essential` (four-corner) GS OSD style is removed along
+  with `osd.gs.style`: a burned DVR from before may show either layout
+  (whichever the config picked), one from after shows only the compact bar.
+  The same day the bar's text labels (`ch:`, `rssi:`, …) become icons and
+  `res:1280x720` becomes `720p` — a display change only, at the same type
+  size; the figures themselves are unchanged.
+
+## 2026-09-23 — `link.pre_fec_loss` scale break, twice
+
+The ArrivalTracker
 guard behind `link.pre_fec_loss` (and the OSD LOSS row, `ctl.pre_fec_loss`,
 `streams[*].arr_late`) moved from a compile-time 32 to the new
 `link.arrival_guard_syms` key, default 192; and the link-level key now
@@ -65,52 +105,55 @@ not lost"); after it the same channel reads ~0.02 %. Compare
 `streams[*].recovered` per second across the break, never
 `pre_fec_loss`.
 
-**Carrier sense is back ON on both daemons since 2026-09-23** (`RC_VERSION`
-10, `docs/cca-on-findings-2026-09-23.md`): both bring-up lines read
+## 2026-09-23 — carrier sense back ON
+
+Carrier sense is ON on both daemons from 2026-09-23 (`RC_VERSION`
+10, `docs/findings/2026-09-23-cca-on.md`): both bring-up lines read
 `requested ON`, and `Telem`/the sideport carry the drone's own RX-side
 channel view (`drone.radio.rx`, per telemetry period) so a recording
-says what the drone deferred to. Recordings between the two dates below
+says what the drone deferred to. Recordings from the OFF era below
 are the blind-injection era; the GS-send self-collision they carry
 (~1.5 lost drone PPDUs/s on both cards, visible as `streams[*].recovered`
 and fec.log episodes) does not exist after it.
 
-**Carrier sense was OFF on both daemons from 2026-08-05 to 2026-09-23.** `maburd` and
-`maburgs` both set `dev_cfg.tuning.disable_cca = true` at bring-up, so the
-radios inject without the MAC CCA/EDCCA gate — no deferral to co-channel
-802.11, and no politeness toward it either. Rationale is in
-`docs/superpowers/specs/2026-08-05-cca-disable-design.md` (gitignored,
-hence this note) — that spec is a protocol with an expectations table, not
-results: the 41-45% injection-deferral figure it cites is devourer's own
-measurement, taken with its `txdemo` injector on an 8822EU (same chip
-family), not with maburd, and the mabur-side bench A/B has not run yet.
-Expected practical consequence for anyone reading old data: in a congested
-environment a pre-2026-08-05 recording and a post- one would not be the
-same experiment, since the drone's injection rate under interference is
-expected to change. On a clean channel the gate never trips and the two
-stay comparable. Bench harnesses (`linkbench`, `txagcbench`) are
-deliberately left building a plain `DeviceConfig` — carrier sense stays ON
-there, so don't assume they share the daemons' MAC config. Nothing in the
-sideport reports the CCA state — date the recording against this line. To
-confirm it on a running device, grep the daemon log for `carrier sense`:
-both daemons print a one-line bring-up record (`maburd radio:` / `maburgs
-radio card N:`, once per card bring-up — a recovered front-end reprints
-it, so more than one line per card on a multi-card GS is expected).
-devourer's own carrier-sense line is info-level and so is compiled out of
-the cross-builds' `DEVOURER_LOG_MAX_LEVEL=WARN` — its absence means
-nothing. Both lines record the state mabur *requested*, not a register
-readback.
+## 2026-08-05 → 2026-09-23 — carrier sense OFF
 
-**TX power is constant since 2026-08-12.** There is no runtime power
+`maburd` and
+`maburgs` both set `dev_cfg.tuning.disable_cca = true` at bring-up, so the
+radios injected without the MAC CCA/EDCCA gate — no deferral to co-channel
+802.11. In a congested environment a recording from this window and one
+from either side of it are not the same experiment (the drone's injection
+rate under interference differs); on a clean channel the gate never trips
+and they stay comparable. Rationale and measurements:
+`docs/findings/2026-09-23-cca-on.md` and the gitignored spec
+`docs/superpowers/specs/2026-08-05-cca-disable-design.md`. Nothing in the
+sideport of that era reports the CCA state — date the recording.
+
+To confirm the state on a running device, grep the daemon log for
+`carrier sense`: both daemons print a one-line bring-up record
+(`maburd radio: MAC carrier sense (CCA+EDCCA) requested …` /
+`maburgs radio card N: …`, once per card bring-up — a recovered front-end
+reprints it, so more than one line per card on a multi-card GS is
+expected). devourer's own carrier-sense line is info-level and so is
+compiled out of the cross-builds' `DEVOURER_LOG_MAX_LEVEL=WARN` — its
+absence means nothing. Both lines record the state mabur *requested*, not
+a register readback.
+
+## 2026-08-12 — TX power constant
+
+There is no runtime power
 control anywhere in mabur: no GS-commanded offset, no thermal derate, no
-per-profile offset. `maburd` programs the wall-equalized per-rate diff
-table and zeroes the global offset once at bring-up — both steps live
-inside the `radio.power_mode: "offset"` branch — and never calls a power
-API again: for the life of the process each rate `r` sits at effective
-TXAGC index `anchor(channel) + rate_walls_rel[r] − round(wall_margin_db *
-4)`. Note the
+per-profile offset. Under `radio.power_mode = "offset"` `maburd` programs
+the wall-equalized per-rate diff table and zeroes the global offset at
+bring-up; each rate `r` sits at effective TXAGC index `anchor(channel) +
+rate_walls_rel[r] − round(wall_margin_db * 4)`. Note the
 `* 4`: the chip's index step is 0.25 dB, so `wall_margin_db` is a dB
 figure converted to index steps, and a 1 dB margin is 4 steps
-(`make_power_plan()` in `drone/src/power_plan.h`). The config keys
+(`make_power_plan()` in `drone/src/power_plan.h`). The only later power
+calls re-apply that same plan or belong to calibration: `ReApplyTxPower()`
+after every retune (2026-09-14, so the diffs sit on the new channel's
+anchor) and `maburcal`'s sweep, index override and live apply
+(`docs/calibration.md`). The config keys
 `radio.thermal_max_delta`,
 `radio.min_offset_qdb`, `radio.power_offset_qdb` and
 `link.static_offset_qdb` were REMOVED and now FAIL BOOT, as does
@@ -119,32 +162,36 @@ Also REMOVED: `radio.rate_walls_idx`, `radio.legacy_wall_idx`,
 `radio.base_ref_idx` (2026-09-13, replaced by `rate_walls_rel`/
 `legacy_wall_rel`).
 Sideport keys `link.op.offset_qdb`, `drone.applied.offset_qdb` and
-`drone.applied.derate_qdb` are gone; `thermal_delta` REMAINS and is the
-only surviving signal that a PA is running hot — nothing acts on it, so
-acting on it is a human decision (most likely an airframe cooling fix,
-not a power one). `bench/txagcbench` still drives `SetTxPowerOffsetQdb`
-directly and is still how the walls are measured; it was deliberately
-left alone. Date any recording against this line, the same way the
-2026-08-04 SNR scale break is dated.
+`drone.applied.derate_qdb` are gone. The PA thermal reading left the
+sideport with the 2026-09-30 telem diet (`drone.sys.thermal_delta`); it
+survives only as `thermal_delta=` on maburd's own stderr `stats:` line.
+Nothing acts on it — acting on it is a human decision (most likely an
+airframe cooling fix, not a power one). Until 2026-09-10 the walls were
+measured by `bench/txagcbench` (driving `SetTxPowerOffsetQdb` directly);
+see the next section. Date any recording against this line, the same way
+the 2026-08-04 SNR scale break is dated.
 
-**Walls are measured by `maburcal`, not `txagcbench`, since 2026-09-10.**
-`bench/txagcbench/` was deleted that day and the sentence above is
-historical from then on — it describes how the walls in a recording made
-before it were produced. The kit that replaced it (`docs/calibration.md`)
+## 2026-09-10 — walls measured by `maburcal`, not txagcbench
+
+`bench/txagcbench/` was deleted that day. The kit that replaced it
+(`docs/calibration.md`)
 sweeps from inside the running daemons rather than from a bench harness:
 the drone's own `CalSweep` parks each TXAGC index through the same
 `SetTxPowerIndexOverride` path production uses, and the GS tallies
 delivery. Two consequences for comparing runs. A wall measured before
 this date came from a standalone TX/RX pair with no daemon MAC config
-(carrier sense ON, see the 2026-08-05 line above); one measured after
-comes from the flying pair with the GS radio-silent for the whole sweep.
-And a post-2026-09-10 run leaves its own raw record — `cal.log` in the
-debug-log session directory: `callog 1`/`2` (absolute walls, anchor on
+(carrier sense ON); one measured after
+comes from the flying pair with the GS silent while each sweep phase airs.
+And a post-2026-09-10 run leaves its own raw record, `cal.log` (in the
+debug-log session directory, or `<debug_log.dir>/cal/` when debug logging
+is off): `callog 1`/`2` (absolute walls, anchor on
 the R line) through 2026-09-13, `callog 3` (relative walls, `-128` =
 undetermined) after; `maburcal report` reads all three — where a
 txagcbench run left a CSV the deleted Python analyzer read.
 
-**DVR filenames carry no date since 2026-08-26.** `maburplay` writes
+## 2026-08-26 — DVR filenames carry no date
+
+`maburplay` writes
 `record-NNNN.mp4` (index one past the highest already on the card), where it
 used to write `record_%Y-%m-%d_%H-%M-%S.mp4` with a `-1`/`-2` suffix for
 collisions inside the same second. The date came from the GS RTC, which is
@@ -158,60 +205,71 @@ index-first all along — both names retired by the 2026-09-06 consolidation,
 whose own `NNNN` session-directory index is index-first for the same
 reason.
 
+## Removed sideport keys
+
 Schema/design references (local, gitignored):
 `docs/superpowers/specs/2026-07-25-gs-stats-sideport-design.md` and
 `docs/superpowers/specs/2026-07-26-drone-telemetry-design.md`. The schema
 is NOT additive-only — per the compatibility policy in CLAUDE.md, keys get
 removed and re-typed under `v: 1` without bumping `v`, and the rule is to
 update `tools/maburtop.py` and `tools/flightreport.py` in the same commit.
-Removals so far: 2026-08-12 `link.op.offset_qdb`,
-`drone.applied.offset_qdb`, `drone.applied.derate_qdb` (constant-TX-power
-note above); 2026-08-15 `link.attrib.on` (pooled-RF note in
-`docs/link-adaptation.md`); 2026-08-29 `drone.applied.overhead` (singular)
-→ `drone.applied.overhead_base`/`drone.applied.overhead_enh`, and
-`link.streams` shrank from 4 entries to 2 (overhead scale break note
-below); 2026-08-30 `link.op.overhead` → `link.op.overhead_base`/
-`link.op.overhead_enh`, `link.ctl.rung.ov` → `link.ctl.rung.ov_base`/
-`link.ctl.rung.ov_enh`, `link.ctl.ladder[].ov` →
-`link.ctl.ladder[].ov_base`/`link.ctl.ladder[].ov_enh`, `link.rungs[].ov`
-→ `link.rungs[].ov_base`/`link.rungs[].ov_enh` (same-rate-fixed-pairs
-scale-break note below); 2026-08-30 `link.deadline_ms` (the
-`fec.decode_deadline_ms` row-expiry knob it mirrored was deleted after
-the wall-2 bench measurement,
-`docs/wall2-deadline-findings-2026-08-30.md` addendum — the video
-decoders now rely on the seq horizon alone; MSP's SwDecoder keeps its
-own 2 s expiry); 2026-09-02 `link.attrib.suppressed` (deleted with the
-packet-level delivery window it was defined against — it counted windows
-where the total and attributed packet views disagreed, a question the
-symbol-based measure cannot ask; residual-phantom-demotes note below);
-2026-09-04 `link.ctl.last_probe` (the discrete probe-attempt snapshot —
-there is no discrete attempt any more, its live state is `link.probe`
-instead), `counters.probes_started`/`probes_ok`/`probe_fails`/
-`probe_aborts` (replaced by `counters.promotes_probed`/`probe_holds`),
-`classes.s2`/`classes.s3` (removed, were always empty since the
-2026-08-29 UEP flatten; `classes.probe` added) — probe-stream note below;
-2026-09-21 `drone.sys.load` (was `/proc/loadavg[0]`, which on the
-SigmaStar image counts the SDK's parked D-state workers and read a flat
-~13 whether idle or pegged — never a CPU signal in any recording;
-replaced by `drone.sys.cpu_pct`, the busy percent of the telemetry tick
-from a `/proc/stat` delta, `null` on the first tick after a maburd
-start); 2026-09-30 the telem diet (RC_VERSION 13, section below):
-`drone.gen`, `drone.radio_rx_ok`, `drone.probing`, `drone.air_shed`,
-`drone.air_backlog_max_ms`, `drone.air_shed_drops`, `drone.channel`,
-`drone.hop_epoch`, `drone.applied` (the whole block),
-`drone.enc.fps`/`mbps`/`roi_qp`/`ring_drops`/
-`idr_disagree`/`enhance_disagree`/`vanished_base`/`vanished_enh`/
-`self_idr_refused`/`venc_full_drops`/`venc_ring_fill_pct`/`idr_gs`,
-`drone.txq.depth`/`cap`, `drone.radio.sent_pps`/`drops`,
-`drone.sys.thermal_delta`; 2026-10-03 the channel set (section below):
-`link.home`.
-Removed keys are absent, not null. Keep appending to that list — not to protect
-consumers, but because a recording made before a removal still carries the
-key and `flightreport.py` still reads old recordings. The
-sideport config lives in `/etc/maburgs.toml` under `stats`
-(default-off in the shipped bundle; enabled on the bench GS).
+Removed keys are absent, not null. Keep appending to this list — not to
+protect consumers, but because a recording made before a removal still
+carries the key and `flightreport.py` still reads old recordings. The
+sideport config lives in `/etc/maburgs.toml` under `[stats]` (enabled in
+the shipped bundle).
 
-**Scale break, 2026-08-04 — `classes.*.snr` is now dB, was half-dB.** The
+- **2026-08-12** — `link.op.offset_qdb`, `drone.applied.offset_qdb`,
+  `drone.applied.derate_qdb` (TX power constant, above).
+- **2026-08-15** — `link.attrib.on` (pooled-RF note in
+  `docs/findings/2026-08-14-ladder-attribution-fade-wave.md`).
+- **2026-08-29** — `drone.applied.overhead` (singular) →
+  `drone.applied.overhead_base`/`drone.applied.overhead_enh`, and
+  `link.streams` shrank from 4 entries to 2 (overhead scale break below).
+- **2026-08-30** — `link.op.overhead` → `link.op.overhead_base`/
+  `link.op.overhead_enh`, `link.ctl.rung.ov` → `link.ctl.rung.ov_base`/
+  `link.ctl.rung.ov_enh`, `link.ctl.ladder[].ov` →
+  `link.ctl.ladder[].ov_base`/`link.ctl.ladder[].ov_enh`, `link.rungs[].ov`
+  → `link.rungs[].ov_base`/`link.rungs[].ov_enh` (base/enh pairs scale
+  break below).
+- **2026-08-30** — `link.deadline_ms` (the
+  `fec.decode_deadline_ms` row-expiry knob it mirrored was deleted after
+  the wall-2 bench measurement,
+  `docs/findings/2026-08-30-wall2-deadline.md` addendum — the video
+  decoders rely on the seq horizon alone; MSP's SwDecoder keeps its
+  own 2 s expiry).
+- **2026-09-02** — `link.attrib.suppressed` (deleted with the
+  packet-level delivery window it was defined against — it counted windows
+  where the total and attributed packet views disagreed, a question the
+  symbol-based measure cannot ask; residual scale break below).
+- **2026-09-04** — `link.ctl.last_probe` (the discrete probe-attempt
+  snapshot — there is no discrete attempt any more, its live state is
+  `link.probe`), `counters.probes_started`/`probes_ok`/`probe_fails`/
+  `probe_aborts` (replaced by `counters.promotes_probed`/`probe_holds`),
+  `classes.s2`/`classes.s3` (always empty since the 2026-08-29 UEP
+  flatten; `classes.probe` added) — probe stream section below.
+- **2026-09-21** — `drone.sys.load` (was `/proc/loadavg[0]`, which on the
+  SigmaStar image counts the SDK's parked D-state workers and read a flat
+  ~13 whether idle or pegged — never a CPU signal in any recording;
+  replaced by `drone.sys.cpu_pct`, the busy percent of the telemetry tick
+  from a `/proc/stat` delta, `null` on the first tick after a maburd
+  start).
+- **2026-09-30** — the telem diet (RC_VERSION 13, section below):
+  `drone.gen`, `drone.radio_rx_ok`, `drone.probing`, `drone.air_shed`,
+  `drone.air_backlog_max_ms`, `drone.air_shed_drops`, `drone.channel`,
+  `drone.hop_epoch`, `drone.applied` (the whole block),
+  `drone.enc.fps`/`mbps`/`roi_qp`/`ring_drops`/
+  `idr_disagree`/`enhance_disagree`/`vanished_base`/`vanished_enh`/
+  `self_idr_refused`/`venc_full_drops`/`venc_ring_fill_pct`/`idr_gs`,
+  `drone.txq.depth`/`cap`, `drone.radio.sent_pps`/`drops`,
+  `drone.sys.thermal_delta`.
+- **2026-10-01** — `link.vtx_id` (link pairing, section below).
+- **2026-10-03** — `link.home` (the channel set, section below).
+- **2026-10-04** — `hop.enable` (pin is static, section below).
+
+## 2026-08-04 — SNR scale break: `classes.*.snr` is dB, was half-dB
+
+The
 sideport had been exporting devourer's raw half-dB SNR under a key
 documented as dB, so every `classes.*.snr` (and the `snr_min`/`snr_max`
 derived from it) in any recording made BEFORE that date reads exactly
@@ -245,9 +303,11 @@ PA between compression and linear regimes. Never compare EVM across rungs
 or threshold it globally; use deviation from the same rung's baseline. The
 sweep that established this (and the interpretation: walls stay
 delivery-defined; EVM's job is per-rung baselines + live PA-compression
-watchdog) is `docs/evm-sweep-findings-2026-08-10.md`.
+watchdog) is `docs/findings/2026-08-10-evm-sweep.md`.
 
-**Scale break, 2026-08-29 — UEP overhead flatten.** `kUepRefOverhead`
+## 2026-08-29 — UEP overhead flatten
+
+`kUepRefOverhead`
 changed {1.00, 0.75, 0.50, 0.25} → {1.00, 0.50, 0.50, 0.50}. Sideport
 `streams[].ov` values and the ladder's utilization/`u` readings are on a
 new scale from this date; per-stream ov in recordings before/after the
@@ -258,8 +318,10 @@ not a regression). Later the same day, s0 joined the flat ladder too
 ({0.50, 0.50, 0.50, 0.50}) — sideport s0 `ov` values change scale again.
 See `docs/superpowers/specs/2026-08-29-uep-flatten-rally-design.md`.
 
-**Scale break, 2026-08-29 — overhead goes literal, streams collapse 4→2
-(airtime-balance-uep, RC_VERSION 4).** LATER THE SAME DAY as the flatten
+## 2026-08-29 — overhead goes literal, streams collapse 4→2 (RC_VERSION 4)
+
+Bench record: `docs/findings/2026-08-29-airtime-balance-spike.md`.
+LATER THE SAME DAY as the flatten
 above, the wire's `fec_overhead` field changed meaning from a per-layer
 `uep_layer_overhead`-scaled fraction to the LITERAL FEC command overhead
 (`repair/data`) — old cmd × 2 = new actual. Every overhead-shaped value
@@ -291,8 +353,9 @@ post-break number for mcs6/mcs7 specifically — the halved figure lands
 on the wrong side of the quantization collision. Every other rung is a
 clean ×0.5.
 
-**Scale break, 2026-08-30 — overhead splits into base/enh pairs
-(same-rate-fixed-pairs); ctllog 8.** Every overhead-shaped sideport key
+## 2026-08-30 — overhead splits into base/enh pairs; ctllog 8
+
+Bench record: `docs/findings/2026-08-30-same-rate-uep.md`. Every overhead-shaped sideport key
 that used to carry ONE value per rung/op now carries a base/enh PAIR,
 mirroring the RCF wire and per-rung config split landed the same day
 (RC_VERSION 5, `gs/src/op_point.h`, `Rung::overhead_base/overhead_enh`):
@@ -321,9 +384,11 @@ reads ctllog v1–v8: a pre-v8 log's single per-rung value is read as both
 base and enh (that rung had no split to lose), and the tool prints a
 NOTE on any log older than v8 saying so.
 
-**2026-08-31: aucadence completion clock changed read-time → ring
-`t_complete_us`; offsets recorded before this date fold in reader poll
-latency (~0–0.5 ms one-sided).** `tools/bench/aucadence.py`'s per-AU
+## 2026-08-31 — aucadence completion clock: read-time → ring `t_complete_us`
+
+Offsets recorded before this date fold in reader poll
+latency (~0–0.5 ms one-sided). Context:
+`docs/findings/2026-08-31-latency-budget.md`. `tools/bench/aucadence.py`'s per-AU
 completion delay used to be `arrival_mono_us − pts`, where `arrival_mono_us`
 was stamped by the ~0.5 ms poll loop that reads the ring's write index —
 not the writer's own completion time, which SlotHdr v2 (2026-08-30) now
@@ -335,14 +400,16 @@ caller that never passed `AuLatMeta` — still falls back to the old poll-time
 basis, counted in `fallback_rows`). `tools/flightjitter.py`'s jitter-EMA
 reproduction made the same switch: it now uses a row's `t_complete` (when
 nonzero) as the inter-AU arrival basis instead of `au-NNNN.log`'s `t_us`
-column, which is flightrec's own read-time stamp, same imprecision as the
+column, which was the (since retired) external `flightrec.py` reader's
+own read-time stamp, same imprecision as the
 old aucadence poll. Pre-2026-08-31 `--gate-ms` baselines and `flightjitter`
 `jitter_ema_ms`/`residual_jitter_ms` numbers are not directly comparable to
 post-switch ones for this reason — expect the poll-time noise floor (~0.5
 ms) to shrink, not the underlying transport behavior to have changed.
 
-**2026-08-31 (same day, later): the `air` segment's basis changed —
-enc-excess fix.** The first deployed build computed `air` by clamping
+## 2026-08-31 — the `air` segment's basis changed (enc-excess fix)
+
+The first deployed build computed `air` by clamping
 `enc`/`dq` against the span above a capture-anchored floor, which
 double-counted encode time (the floor already contained the floor frame's
 encode) and pinned `air` at 0 in every clean capture from that build. The
@@ -355,15 +422,19 @@ under-report `enc`/`dq`/`air` accordingly and show `air` ≈ 0 by
 construction. Corrupt-body protection also landed with the fix: wire
 `enc`/`dq` from FCS-failed bodies read as 0 = unknown from this point on.
 
+## 2026-08-31 — `# aulog 2`: latency columns
+
 au-NNNN.log rows grew 4 columns (`t_first t_complete enc dq`, SlotHdr v2's
 latency fields) behind a `# aulog 2` marker line, written once at session
-start by `flightrec.py`. A log without the marker is the old 7-column v1
+start by `flightrec.py` (retired 2026-09-06). A log without the marker is the old 7-column v1
 format; `flightjitter.load_au_log` keys its row parsing on the marker's
 presence, and a v1 row is padded with `t_first=t_complete=enc_us=dq_ms=0`
 so the fec-wait class and the t_complete arrival-basis fallback both treat
 "absent" the same as "present but zero".
 
-**2026-09-06 (air clock): `# aulog 3`, SBI ver 2, SlotHdr v3.** AU rows
+## 2026-09-06 — air clock: `# aulog 3`, SBI ver 2, SlotHdr v3
+
+AU rows
 gain a 12th column, `air_ms` — the drone's modelled air backlog at the
 AU's arrival (`AirClock`, `docs/link-adaptation.md`), carried in the SBI
 body header (ver 2, 13-byte header; ver-1 bodies are rejected) and the AU
@@ -373,7 +444,7 @@ predates the model; `airdrain.py --model` says so instead of comparing.
 column. Recordings from the observe-only period (`air_clock.shed_ms` 0)
 carry a live `air_ms` and zero `drone.air_shed_drops`; a non-zero drop
 count means the gate was armed for that flight. Two caveats from the
-first armed flight (`docs/air-clock-flight-findings-2026-09-06.md`
+first armed flight (`docs/findings/2026-09-06-air-clock-flight.md`
 §5): the counter runs from link-up, so ground-time drops before takeoff
 are in it (flight 0032 started at 12); and a missing enh AU in the AU
 log is not a shed unless a neighbouring `air_ms` is near `shed_ms` —
@@ -384,8 +455,9 @@ to `ctl-0351` / `au-0030` flew 0.6 (commanded `nominal/3`), from
 `ctl-0352` / `au-0031` on 0.5 — `enc.cmd_kbps` in the flight jsonl says
 which, and latency/air numbers across that break are not comparable.
 
-**2026-08-31 (vsync servo): `reg`/`dsp` semantics change when
-`display.vsync_lock` is on.** `reg` becomes hold-to-vblank (grows to
+## 2026-08-31 — vsync servo: `reg`/`dsp` semantics change
+
+When `display.vsync_lock` is on, `reg` becomes hold-to-vblank (grows to
 ~½ panel period mean, up from the old D=12 dejitter hold); `dsp`
 collapses to ≈ lead (`display.vsync_lead_ms`, default 6 ms) + flip
 completion, down from the old 10–25 ms beat sweep. Their SUM is
@@ -394,19 +466,21 @@ the vsync-locked-regulator spec predicts — but the SPLIT between the two
 segments is not: a `reg`/`dsp` pair from before this date and one from
 after cannot be compared segment-by-segment, only as a sum, and only when
 both recordings agree on `vsync_lock`. `lat-NNNN.log` (`# latlog 1`,
-under `display.lat_log_dir`, default `/media/dvr/log`) starts existing at
-this date — see `docs/observability.md` for its format. `lat:` lines from
+under the then `display.lat_log_dir`, default `/media/dvr/log`; the key
+was retired when lat.log moved into the session directory on 2026-09-06)
+starts existing at this date — see `docs/observability.md` for its format. `lat:` lines from
 before this date lived only in tmpfs (`/tmp/maburplay.log`) and are gone;
 there is no way to recover the player tail segments for any flight
 recorded before 2026-08-31.
 
-**2026-08-31 (later, streaming push): `dq` changed meaning and scale —
-~6 ms → ~0.** Before this date the drone stamped every body's
+## 2026-08-31 — streaming push: `dq` changed meaning and scale, ~6 ms → ~0
+
+Before this date the drone stamped every body's
 `enqueued_ms` at the TOP of the hot-loop iteration, so the wire `q_ms`
-(→ player/flightrec `dq`, sideport `drone.txq_wait_ms`) spanned venc-ring
+(→ player/au-log `dq`, sideport `drone.txq_wait_ms`) spanned venc-ring
 wait (~2.6 ms, fictitious — the frame did not exist yet) + FEC/SBI-pack
 CPU (~3.4 ms) + true queue wait (~40 µs) — see
-`docs/dq-spike-findings-2026-08-31.md`. After it, bodies stream to the
+`docs/findings/2026-08-31-dq-spike.md`. After it, bodies stream to the
 TxQueue as each seals, stamped at the actual push: `dq` is the true
 TxQueue wait and reads ~0 in a healthy link; the pre-push CPU overlaps
 the radio drain instead of preceding it, which also moved real latency —
@@ -417,8 +491,9 @@ recording shows `dq`≈6–7 where a healthy post-change one shows 0.
 `dq` > a few ms now genuinely means TxQueue backlog.
 
 
-**Scale break, 2026-09-02 — post-FEC residual is symbol abandonment, was
-packet-seq gaps.** Everything that reports "residual"/"post-FEC loss"
+## 2026-09-02 — post-FEC residual is symbol abandonment, was packet-seq gaps; ctllog 9
+
+Everything that reports "residual"/"post-FEC loss"
 changed what it counts: `link.residual_loss` and `link.attrib.residual_cur`
 on the sideport, `resid`/`resid_cur` on the ctl log's S lines, `resid` on
 its R lines, `link.layer_delivery_pct`, and the player OSD's post-loss row.
@@ -465,8 +540,9 @@ data:
 The ctl log self-identifies: `ctllog 9` and later are symbol-based, v1–v8
 are packet-based, and `flightreport.py` prints a pre-v9 warning.
 
-**Scale break, 2026-09-02 (link-rtt) — the OSD LAT headlines became
-ABSOLUTE.** Before this date the burned-in `P50`/`P99` e2e (and `air+`)
+## 2026-09-02 — OSD LAT headlines became ABSOLUTE (link-rtt)
+
+Before this date the burned-in `P50`/`P99` e2e (and `air+`)
 were relative to the luckiest observed frame's transit — the anchor ate
 the absolute network floor. After it, when `link.rtt.pts_off_us` is live
 the player folds the floor (own anchor + telem-derived pts offset) into
@@ -483,8 +559,9 @@ Even absolute, the headlines still exclude sensor pre-pts (~10–16 ms
 est.) and post-scanout display latency — only an LED/camera measurement
 sees those.
 
-**Burned-DVR shape change, 2026-09-06 — the LAT segment breakdown left
-the screen.** Recordings burned before this date show each LAT row as
+## 2026-09-06 — burned-DVR shape change: LAT segments left the screen
+
+Recordings burned before this date show each LAT row as
 `P50 <e2e> | enc… dq… air+… fec… dec… reg… dsp…`; after it the rows read
 `LAT P50 <e2e> ms` / `LAT P99 <e2e> ms`, right-flushed under `RTT`, with
 no segments. This is a DISPLAY change only — no scale break, the same
@@ -493,10 +570,18 @@ the date will look like data went missing. It did not: the segments are
 in the flight jsonl `lat:` line for both eras, and the sideport
 `link.video.lat` block is unchanged.
 
+This was the `essential` OSD style (the four-corner layout, removed
+2026-10-11; `compact` came later and never carried segments). Each pre-break
+row rendered its own frame's seven segments, never independently-ranked
+percentiles, so a row's segments summed to its headline. Between
+2026-09-02 (link-rtt) and this date the absolute floor was folded into
+the on-screen `air+` segment as well as the headline, so a burned `air+`
+from that window reads a few ms higher than the jsonl `air` for the same
+frame; after it only the headline takes the floor.
+
 ## 2026-09-03: per-card `loss_pct` phantom before the MSP seq fix
 
-Recordings made before the MSP seq-walk fix (branch `msp-seq-fix`)
-carry an inflated `cards[].loss_pct`: the GS excluded MSP bodies and
+Recordings made before the MSP seq-walk fix carry an inflated `cards[].loss_pct`: the GS excluded MSP bodies and
 the drone's RC frames (DISC_ACK, T_TELEM) from the per-card 802.11 seq
 walk on the (wrong) assumption that they carried their own counters. The
 chip stamps ONE hardware seq on every frame it injects (EN_HWSEQ), so
@@ -516,7 +601,7 @@ RcAgent's **ROI QP override** (`actuator.last_roi_qp`, 0 = normal,
 `encoder.roi_qp_low` when the bitrate sat under `roi_threshold_kbps`).
 It read 0 for whole flights and says nothing about the encoder's rate
 control — flight-0011's analysis fell for exactly that
-(`docs/handover-venc-overshoot-2026-09-03.md`). From this date
+(`docs/findings/2026-09-03-handover-venc-overshoot.md`). From this date
 `drone.enc.qp` is the **encoder's QP** for the last frame it published
 (venc `startQual`, 0 = unavailable — host build or no frame yet) and the
 override lives in the new `drone.enc.roi_qp` (signed). Do not compare a
@@ -603,23 +688,22 @@ older material:
   preset path `gop_sec` was `preset.gop_overridden ? preset.gop_s :
   cfg->gop_s`, and every named preset set `gop_overridden` — so whatever
   `venc.gop_s` a config carried alongside `resilience: "rally"` was ignored
-  and 2.0 s was used. It takes effect from this date. The bundle already
-  says 2.0, but a deployed drone config is known to diverge from the bundle
-  (see `handover-venc-overshoot-2026-09-03.md`: `max_ipprop` 2 deployed vs 0
-  in the bundle), so **read `venc.gop_s` out of the drone's live
-  `/etc/mabur.toml` before swapping** — anything but 2.0 changes the IDR
-  interval on this deploy, with nothing in the boot log calling it out.
+  and 2.0 s was used. It takes effect from this date, so a recording's
+  IDR interval from here on is whatever `venc.gop_s` the drone's live
+  config carried (deployed configs have diverged from the bundle before —
+  `docs/findings/2026-09-03-handover-venc-overshoot.md`).
 - The `rescue` preset's 0.25 s GOP is no longer expressible. It wrote
   `gop_sec` directly and so bypassed the `venc.gop_s` range check, whose
   floor is 0.5 s. The IDR-spam escape hatch is gone; nothing flew on it.
 
 Mentions of `venc.resilience ltr:1 → rally` and of the "rally preset" in
-the notes above and in `venc-ring-vanish-findings-2026-08-12.md` describe
+the notes above and in `docs/findings/2026-08-12-venc-ring-vanish.md` describe
 configs that produced data on the DVR. They stay accurate about that data;
 they just name a key that is no longer settable.
 
 ## 2026-09-04: probe stream replaces the discrete s3 probe — RC_VERSION 6, ctllog 10
 
+Bench record: `docs/findings/2026-09-04-probe-stream.md`.
 The s3 probe-before-promote design (2026-08-05) is gone: the drone no
 longer moves the whole ENH stream to a candidate MCS for 2 s per promote
 attempt. Instead it always sends a dedicated probe-stream canary body
@@ -711,6 +795,51 @@ daemon restart within a session appends and re-states its header, including
 a `header_info` that may have changed. Parsers must treat a repeated marker
 as a re-statement, not as the start of a new file.
 
+## 2026-09-08 — per-card `crc_fail` goes live; corrupt-body salvage
+
+The GS asks devourer to keep FCS-failed frames (`rx.keep_corrupted`, set
+unconditionally in `gs/src/radio_frontend.cpp`), so a corrupt frame now
+reaches the aggregator, bumps that card's `cards[i].crc_fail`, and hands
+its body to the UEP decoder, which keeps the SBI sub-blocks whose own
+CRC16 still passes. **Before this date the chip dropped those frames and
+`crc_fail` was structurally 0** — damage unseen, not absent; do not read
+a pre-date 0 as a clean channel. Foreign traffic that fails FCS is
+counted too (the SA filter cannot trust a corrupt address), so per-card
+`crc_fail` creeps on a busy channel even with the drone off. Same date:
+per-stream `link.streams[].corrupt`, `.salvaged` and `.sub_fail` are new
+(absent before). Bench record:
+`docs/findings/2026-09-09-sbi-salvage-flights.md`.
+
+## 2026-09-09 — `streams[].salvage_only` added
+
+`link.streams[].salvage_only` counts seqs whose only arrival inside the
+arrival guard was a salvaged sub-block — the value of salvage, where
+`salvaged` is only the upper bound (the other card's clean copy shadows
+most salvaged sub-blocks). Recordings from 2026-09-08 carry the other
+salvage keys without it; `flightreport.py`'s SALVAGE section prints the
+column only when the recording has the key.
+
+## 2026-09-16 — probe per AU: probe density doubles, streak in bodies
+
+The probe canary trails every video AU (base and enh), not only enh AUs:
+~60 probe bodies/s at 60 fps instead of ~30/s. Consequences when comparing
+across the date:
+
+- **`probe.log` rows and probe air share roughly double**; per-second
+  probe counts, `link.probe.n`/`exp`, and the probe class's pps are not
+  comparable across it. One lost probe body is now a smaller loss quantum,
+  so `link.probe.u` reads on a finer grid.
+- **Sideport `link.probe.streak_ms` → `link.probe.streak_bodies`** (the
+  clean streak as a body count; recordings before the date carry
+  `streak_ms`). Config: `link.probe.clean_ms` → `link.probe.clean_bodies`
+  (90), probe `max_util` 0.15 → 0.05, `link.clean_ms` 3000 → 1500 in the
+  bundle — promotes land faster after this date at the same confidence.
+- The gate also stays alive when the enh layer is absent (enh shed, SVC-T
+  off), where it used to read `noinfo` and hold every promote.
+
+Detail: `docs/link-adaptation.md` "Probe stream — the promote gate"; bench record
+`docs/findings/2026-09-16-probe-per-au-bench.md`.
+
 ## 2026-09-20 — every recording now opens with a low-power segment
 
 Low-power (disarmed) mode (`docs/link-adaptation.md`) runs the encoder at
@@ -779,7 +908,7 @@ Full detail: `docs/bw40.md`.
 
 Full detail: `docs/inflight-channel-hop.md` §2/§3/§8,
 `docs/channel-select.md` ("`scan.log`"), `docs/bw40.md`,
-`docs/nhm-airtime-spike-findings-2026-09-25.md` (the measured defaults).
+`docs/findings/2026-09-25-nhm-airtime-spike.md` (the measured defaults).
 
 - **`scanlog 4`.** Bumped from `scanlog 3`:
   - `V`'s per-card block grows from 7 fields to 9: `foreign fa cca crc rssi
@@ -815,6 +944,27 @@ Full detail: `docs/inflight-channel-hop.md` §2/§3/§8,
   `tools/maburtop.py` gains a per-card `fbusy` column (renamed from `air%`
   in the final-review fix wave: it was always foreign busy, never own
   airtime) (`max(0, busy_pct − own_air_pct)`). See `docs/observability.md`.
+
+## 2026-09-28 / 2026-09-29 — raw DVR sync points
+
+Raw-mode `maburplay` DVR files (and the web GS's local recordings) differ
+in what they flag as a sync point, by date:
+
+- **Before 2026-09-28** the player's raw DVR synced on `sid == 0` (BASE).
+  Since the 2026-08-29 4→2 stream collapse that is every other AU, not the
+  refresh, so a raw file from then marks every base frame as a sync point
+  and its fragments run ~33 ms (one base+enh pair) instead of the refresh
+  period.
+- **2026-09-28 → 2026-09-29** (shared `mabur::RawDvr`, `common/`) it synced
+  on any AU carrying VPS+SPS+PPS — the GDR encoder's TRAIL_R refresh
+  start, a P slice. Those files open on a P slice, flag every refresh
+  sync, and Apple's decoder refuses them. Repair recipe:
+  `docs/findings/2026-09-29-web-gs-raw-dvr-irap-sync.md`.
+- **From 2026-09-29** only a complete IRAP (`au_is_irap()`) once
+  VPS+SPS+PPS are known is a sync point.
+
+Files from before 2026-08-26 are also named `record_<date>.mp4` rather
+than `record-NNNN.mp4` (see "DVR filenames carry no date").
 
 ## 2026-09-30 — telem diet: RC_VERSION 13, Telem 98 → 48 bytes
 
@@ -962,7 +1112,7 @@ where it came from — never to a privileged fallback channel. Full detail:
 
 - `scan.log` `H` rows prefixed `would_` (shadow hops, `hop.enable = false`)
   appear only in sessions recorded before this date. `flightreport.py`'s
-  SHADOW HOP REPORT path stays for them; no later build emits one.
+  HOP report still reads them and tags those rows `[SHADOW]`; no later build emits one.
 - **Removed sideport key:** `hop.enable`. Pinned reads `scan.state == "off"`
   (so does a relay-only roster, which in auto is still reactive on its
   one-card path); the authoritative mode is the `scanlog 5` header's
@@ -1005,6 +1155,31 @@ relay", `docs/inflight-channel-hop.md` §2/§3/§8.
   `docs/observability.md`. A recording before 2026-10-05 has none of the
   three; absent means "not recorded", not 0.
 
+## 2026-10-06 — software NACK: RC_VERSION 15, T_NACK, feclog 3
+
+Full detail: `docs/fec-nack.md`; bench records
+`docs/findings/2026-10-05-fec-nack-spike.md`,
+`docs/findings/2026-10-06-fec-nack-bench.md`. A **flag day**: `T_NACK`
+(GS → drone) and the Telem growth (48 → 54 bytes) bump `RC_VERSION` 14 → 15.
+
+- **`feclog 3`.** Episode rows gain an `rtx` column after `rec` (symbols the
+  episode received via retransmit). `feclog 1`/`2` rows read as `rtx` 0
+  (`tools/flightreport.py` pads them).
+- **New sideport keys:** `link.nack` (cumulative `requests`, `repeats`,
+  `syms_requested`, `tail_requests`, `filled`, `late_fill`, `wasted`,
+  `dropped_deadline`, `suppressed`, `lead_skipped`, plus per-window
+  `fill_pps`, `fill_ms` p50/p90/max, `settle_ms`, `late_ms_max`) — present
+  only while `[link.nack] enable = true`; and `drone.nack`
+  (`rx`, `retx_syms`, `retx_refused`, per Telem period). Absent means
+  "older build or NACK off", not 0.
+- **Comparing flights across it.** The NACK is repair-only: a symbol a
+  retransmit filled still counts as loss for every ladder input (residual
+  inputs use `abandoned + syms_retx`), so ladder behaviour is comparable.
+  What moves is video-level damage — base truncations and fid gaps in
+  `au.log`, abandoned base episodes in `fec.log` — which drop on a flight
+  with the NACK on. Check `link.nack` presence before attributing a
+  truncation-count change to RF.
+
 ## 2026-10-10 — slice salvage: salvaged AUs reach the glass
 
 From 2026-10-10 maburplay (and the web GS) decode slice-salvaged AUs
@@ -1015,3 +1190,17 @@ e2e latency distribution during loss includes frames that before
 that waited out `gap_ms`. A latency tail that grew across this date is
 not by itself a regression: compare flights across it knowingly, and
 split by `au.log`'s salvage columns (`# aulog 5`) where it matters.
+
+## 2026-10-10 — AU ring v4: slots published while they fill
+
+`kAuRingVersion` 3 → 4 (`gs/src/au_ring.h`, spec 2026-10-10-h265-slices
+§6.2). SlotHdr byte 30 (`codec`, a constant 0x01 since 2026-10-10) is gone;
+bytes 54/55/56 carry `state` (0 closed, 1 open, 2 aborted), `nslices` (0/1 =
+whole AU) and `valid_len`; RingHdr offset 40 is `open_rec`. maburgs claims a
+slot at the AU's first byte and readers may follow it while it fills. An AU
+that outgrows its slot leaves an `aborted` slot and still counts
+`dropped_oversize`. `ausniff.py`/`aucadence.py` read v4 only and count
+closed records only. No recording format changes: `au.log` stays `aulog 5`
+(it is written from the writer's own record meta, not the ring bytes), and
+the ring itself is never recorded — an old ausniff against a new ring
+refuses on the version.

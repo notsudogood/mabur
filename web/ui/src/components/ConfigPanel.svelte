@@ -3,7 +3,7 @@
   import { chipChannels, MAX_RUNGS, applyEdit, applyRungEdit, rungWarnings, checkChannelSet, toggleChannel, describeEdit, describeRungEdit } from '../lib/config.js';
   let { cfg, onChange, locked = false, spotter = false, onDisconnect = null, variant = 'rule', applied = '', recordings = null,
     keyFp = 'default', onLoadKey = null, onClearKey = null } = $props();
-  const uid = $props.id();   // unique per mounted instance -- two panels (sidebar + Task 11 side panel) never share a radio group.
+  const uid = $props.id();   // unique per mounted instance -- two panels (sidebar + immersive side panel) never share a radio group.
 
   const groupClass = $derived(variant === 'card' ? 'card cardg' : 'group');
   const set = (key, val) => onChange(applyEdit(cfg, key, val), describeEdit(key, val));

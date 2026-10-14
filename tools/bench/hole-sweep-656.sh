@@ -4,7 +4,7 @@
 # (seq re-anchor patch); cells are separated by >=4s idle so the RX json
 # segments by activity bursts in launch order.
 set -u
-DRONE=root@192.168.10.152
+DRONE=${DRONE:?set DRONE=root@<drone-ip>}
 OUT="$(dirname "$0")/hole_sweep"
 mkdir -p "$OUT"
 MANIFEST="$OUT/manifest.csv"

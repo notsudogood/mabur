@@ -1,5 +1,5 @@
 <script>
-  // OPFS recordings (spec §2.3): list, download, delete; never auto-deleted.
+  // OPFS recordings: list, download, delete; never auto-deleted.
   import Icon from './Icon.svelte';
   import { formatBytes } from '../lib/localrec.js';
   let { items = [], active = null, storage = '', warn = null, available = true, onDownload, onDelete } = $props();

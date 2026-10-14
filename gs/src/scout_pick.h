@@ -1,5 +1,5 @@
 #pragma once
-// Which card scouts (spec 2026-10-02-maburgs-remote-card §3). Pure, like
+// Which card scouts. Pure, like
 // width_resync.h. The relay (RemoteCard) has no FA/CCA/NHM reads and so is
 // never a scout; USB cards come first in the roster, so "last capable" is
 // the spare USB card -- the same choice as the old n_cards - 1 rule on an
@@ -23,7 +23,7 @@ inline int pick_inflight_scout(const std::vector<bool>& can_scout, int tx) {
   return -1;
 }
 
-// The card for the hop freshness burst (spec 2026-10-05 §4), first match:
+// The card for the hop freshness burst, first match:
 // a scout-capable (USB) card that is not transmitting; a sweep-capable
 // (relay) card that is not transmitting -- the USB TX card keeps the link
 // while the relay sweeps; the scout-capable TX card (the one-card GS's
@@ -46,7 +46,7 @@ inline int pick_burst_card(const std::vector<bool>& can_scout, const std::vector
   return last(can_sweep, false);
 }
 
-// DISC targets while the scout owns a card (spec 2026-10-03 §4.2).
+// DISC targets while the scout owns a card.
 // Two USB: the link card (always) + the scout card while it bursts DISC on a member.
 // One USB: the scout card while beaconing (op window or search burst).
 // Plus every relay that is ready() — but a relay is never the ONLY path to rendezvous,
@@ -64,8 +64,8 @@ inline std::vector<int> scan_disc_targets(int n_usb, int n_cards, int scout_card
   } else if (n_usb == 1 && scout_beaconing) {
     out.push_back(scout_card);
   }
-  // Every ready relay. With no USB card the scout IS a relay (search-only,
-  // spec 2026-10-04 §3.7): it joins only while beaconing, like a USB scout.
+  // Every ready relay. With no USB card the scout IS a relay
+  // (search-only): it joins only while beaconing, like a USB scout.
   for (int i = n_usb; i < n_cards && i < static_cast<int>(ready.size()); ++i) {
     if (!ready[static_cast<size_t>(i)]) continue;
     if (n_usb == 0 && i == scout_card) { if (scout_beaconing) out.push_back(i); continue; }

@@ -1,6 +1,6 @@
 #pragma once
 // ProbeTrack — score the probe stream (SBI stream 5) against the enh AU
-// cadence, per spec §3.2.
+// cadence.
 //
 // Why expected comes from the AU count, not the probe seq: the probe
 // stream shares the enh AU's send opportunity, so a probe body can be
@@ -46,8 +46,8 @@
 // blocks -- not ~5-30 ms earlier, on the AU's own t_au + finalize_ms.
 // Without this tie, a delivered body's AU finalizes strictly before the
 // body does, opening a one-body `expected` deficit that a downstream
-// sliding loss window can sample and misread as loss (2026-09-04 bench
-// finding: read as a phantom u_probe 0.2 quantum). An AU that never
+// sliding loss window can sample and misread as loss (bench finding: read
+// as a phantom u_probe 0.2 quantum). An AU that never
 // finds a match -- the probe was lost, or its body arrives only after
 // the AU already finalized alone -- still finalizes independently, as
 // before.
@@ -57,7 +57,7 @@
 // arrival on the second card (or a duplicate) can still fold into the
 // same entry instead of double-booking. commanded() gates whether a body
 // is "on profile": the ladder only ever cares about loss at the profile
-// it currently has commanded, and the per-body log (Task 9) already
+// it currently has commanded, and the per-body log (ProbeLog) already
 // carries every body's own profile/mcs, so ProbeTrack keeps counters for
 // the commanded profile only plus a single `off_profile` count instead of
 // a full per-profile map.
@@ -88,7 +88,7 @@ struct ProbeCounts {
   uint64_t bodies_rx = 0;        // finalized bodies at the commanded profile
 };
 
-// One row per finalized received body, drained by ProbeLog (Task 9) --
+// One row per finalized received body, drained by ProbeLog --
 // emitted for EVERY body, on- or off-profile (an RCF-lag body still logs
 // its own `profile`); only the ProbeCounts booking above is gated to the
 // commanded profile.
@@ -98,7 +98,8 @@ struct ProbeFinalized {
   // fraction -- the same CLOCK_MONOTONIC the AU ring's t_complete_us is
   // on). This is the "burst is off air" instant the probe exists to mark;
   // t_ms is two orders of magnitude too coarse for the completion->probe
-  // offset (handover-probe-blanking 2026-09-04, "Instrumentation gap").
+  // offset (docs/findings/2026-09-04-handover-probe-blanking.md,
+  // "Instrumentation gap").
   double first_ms = 0;
   uint32_t seq = 0;
   uint8_t profile = 0;
@@ -123,7 +124,7 @@ class ProbeTrack {
   uint8_t commanded() const;
 
   // The core loop saw one video AU begin -- base (sid 0) or enh (sid 1),
-  // the drone trails BOTH with a probe since 2026-09-16 -- identified by
+  // the drone trails BOTH with a probe -- identified by
   // its frame id (the same id probe bodies for it carry as
   // ProbeRx::hdr.enh_fid; base and enh share one frame-id counter). Books
   // an expectation of `bpb` blocks, finalized `finalize_ms` later unless

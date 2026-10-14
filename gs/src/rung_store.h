@@ -11,7 +11,7 @@ namespace maburgs {
 // direction ladder_controller.h -> rung_store.h acyclic.
 enum class CtlReason;
 
-// Per-rung EWMA store config (spec 2026-08-13-rung-store-design.md):
+// Per-rung EWMA store config:
 // alpha = 1 - 0.5^(1/half_life_samples). Default ~30 s of parked time at
 // the 50 ms RCF cadence.
 struct RungStoreCfg {
@@ -20,7 +20,7 @@ struct RungStoreCfg {
 
 // One exponentially weighted mean, seeded by its first sample (no
 // decay-from-zero warm-up bias). n counts samples ever fed. Values are
-// sample-driven and NEVER decay with wall time (spec decision): consumers
+// sample-driven and NEVER decay with wall time (by design): consumers
 // discount staleness via the exported ages/counts instead.
 struct Ewma {
   double v = 0.0;

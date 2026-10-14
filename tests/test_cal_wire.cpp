@@ -60,7 +60,7 @@ TEST(rejects_out_of_range_fields) {
 }
 
 TEST(accepts_negative_relative_idx) {
-  // idx is a SIGNED index relative to the chip's anchor (spec 2026-09-13):
+  // idx is a SIGNED index relative to the chip's anchor:
   // the coarse sweep starts at -40.
   auto p = build_cal_payload(0, -40, kPhaseCoarse, 9);
   CalFrameInfo f;

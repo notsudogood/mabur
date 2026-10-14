@@ -162,7 +162,7 @@ class ChannelCore {
   bool dwell_busy() const { return dwell_busy_.load(); }
   uint64_t scout_gated_sends() const { return scout_gated_sends_; }
   bool pick_open() const { return boot_pick_.open(); }
-  // Relay sweep seams (spec 2026-10-05): a SCAN is in flight / timed out.
+  // Relay sweep seams: a SCAN is in flight / timed out.
   bool sweep_pending() const { return sweep_.on; }
   uint64_t sweep_timeouts() const { return sweep_timeouts_; }
   bool scout_working() const { return scout_ && scout_->working(); }       // card reopen gate
@@ -190,7 +190,7 @@ class ChannelCore {
   std::vector<bool> snr_ok_;
   int scout_card_ = -1;        // pick_boot_scout(can_scout_)
   bool one_card_ = false;      // n_usb == 1 (scout mode); the hop's one-card path is lead<0
-  bool relay_search_only_ = false;   // no card can measure: the last relay searches (Task 6)
+  bool relay_search_only_ = false;   // no card can measure: the last relay searches
   uint8_t saved_op_ = 0;       // last value handed to store_
   uint64_t gs_start_ms_ = 0;
 
@@ -242,7 +242,7 @@ class ChannelCore {
   VerdictOut last_verdict_out_;
   std::optional<uint64_t> last_hop_event_ms_;
   double last_burst_ms_ = -1e18;
-  // ---- relay sweep (spec 2026-10-05-cpe-relay-hop) ----
+  // ---- relay sweep ----
   // One SCAN in flight at most; it ends on its SCAN_RESULT, on the timeout,
   // or on the card dying. A reopened relay drops a pending scan without a
   // result, so !sweeping() never means "result ready".
@@ -281,7 +281,7 @@ class ChannelCore {
   double now_ms_cur_ = 0;
   uint64_t now_ms_u_cur_ = 0;
 
-  // ---- steps (Task 3/4/5) ----
+  // ---- steps ----
   void freeze_pick_(double t, const char* why);
   void dispatch_hop_action_(const HopAction& act, bool relocate_tick, double now_ms);
   void apply_hop_action_(const HopAction& act, double now_ms);

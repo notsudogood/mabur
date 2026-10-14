@@ -269,7 +269,7 @@ TEST(null_surface_is_a_no_op) {
   CHECK(raster.draw(screen, none, nullptr) == 0);
 }
 
-// --- Task 1: region-scoped clears -------------------------------------
+// --- region-scoped clears -------------------------------------------
 // A sentinel pixel OUTSIDE the MSP grid stands in for a second layer.
 // Nothing OsdRaster does may touch it.
 

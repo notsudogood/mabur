@@ -2,8 +2,8 @@
 // LinkHealthAssembler — the ladder's per-tick input (LinkHealth), assembled
 // from the Aggregator's decoder counters, its per-card RF pools and the
 // probe stream. Extracted verbatim from maburgs main.cpp's control loop
-// 2026-09-27 (spec 2026-09-27-web-gs) so the web GS feeds the SAME windows
-// the same way and its ladder behaves exactly like maburgs's.
+// so the web GS feeds the SAME windows the same way and its ladder behaves
+// exactly like maburgs's.
 //
 // Call order per core-loop iteration, as main.cpp does it:
 //   tick(now_ms, agg, inputs)  -- after the drain + fstream.poll
@@ -95,7 +95,7 @@ class LinkHealthAssembler {
   }
 
   LinkHealthCfg cfg_;
-  // Probe stream (spec 2026-09-04 section 3): scored by ProbeTrack against
+  // Probe stream: scored by ProbeTrack against
   // the enh AU count; the ENH layer's geometry gives bpb/block_payload, so
   // the same array the Aggregator was built from decides how a probe body
   // is parsed. Core-thread-owned like every other window in this loop.
@@ -112,11 +112,11 @@ class LinkHealthAssembler {
   // (syms_recovered_arrived) — a repair that merely wins an arrival race is
   // not channel loss. Without that term, rung 0's 2x parity read a clean
   // bench as 19-26% pre-FEC loss and pinned u above up_util forever (stuck
-  // at mcs0, 2026-07-27). This is the PRE-FEC window; the post-FEC residual
+  // at mcs0). This is the PRE-FEC window; the post-FEC residual
   // below is a different question over the same symbol counters (what FEC
   // could not repair at all) -- see gs/src/ladder_residual.cpp.
   //   s1_loss_
-  // Sideport/OSD gauge (2026-09-23): BOTH video layers' current-only
+  // Sideport/OSD gauge: BOTH video layers' current-only
   // arrival-tracker counts pooled in one window, so the LOSS row reads the
   // whole downlink; the ladder keeps deciding on s1_loss_cur (base only).
   //   pre_loss_all_
@@ -127,7 +127,7 @@ class LinkHealthAssembler {
   // sibling left to keep here.
   //   s3_loss_
   S1LossWindow s1_loss_, pre_loss_all_, s3_loss_;
-  // Current-rung-only siblings (transition attribution, spec 2026-08-14):
+  // Current-rung-only siblings (transition attribution):
   // same machinery, fed from the attributed counters. s1_loss/s3_loss stay
   // as the observability totals (residual_loss, the artifact-rate meter).
   S1LossWindow s1_loss_cur_, s1_resid_cur_, s3_loss_cur_, s3_resid_cur_;
@@ -136,7 +136,7 @@ class LinkHealthAssembler {
   // Budget: one 50 ms edge-detect tick + the ~80 ms abandonment-horizon
   // booking lag + margin. Deliberately half of s3_settle_ms: a genuine
   // continuing fade then steps ~200 ms/rung, inside the ~410-440 ms/rung
-  // cadence flight-validated 2026-08-14, and nowhere near the broken
+  // cadence flight-validated, and nowhere near the broken
   // 50 ms/rung debris cascade this exists to stop.
   // (settle constant now lives in TransitionEdge::kResidSettleMs)
   // Observability siblings of s1_resid_cur, pooled over both layers: the
@@ -150,8 +150,8 @@ class LinkHealthAssembler {
   // Per-layer delivery percent (sideport link.layer_delivery_pct), windowed
   // for the same reason.
   std::array<S1LossWindow, 2> layer_resid_;
-  // Fade-trigger staleness gate (spec 2026-08-14 §3, source repointed to
-  // the s1+s3 pool 2026-08-15): per-card pooled frame counts snapshotted
+  // Fade-trigger staleness gate (source: the s1+s3 pool): per-card pooled
+  // frame counts snapshotted
   // once per feedback window (same cadence as the prev_pkts_out snapshot
   // below), so "zero
   // s1+s3 frames this window" can NaN the RF labels before they reach the

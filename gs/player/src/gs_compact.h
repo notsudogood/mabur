@@ -13,29 +13,67 @@ namespace maburplay {
 class GsFont;
 struct MaskAtlas;
 
-// osd.gs.style = "compact": two plain-text rows along the bottom edge.
+// Item icons: Material Design icons as the JetBrains Mono Nerd Font carries
+// them (supplementary private use area), UTF-8 encoded. The "Mono" variant
+// gen_gsfont.py bakes makes each exactly one cell wide, so an icon advances
+// the pen like any character. Every one must also be in gen_gsfont.py's
+// BAR_ICONS, or it draws as a blank cell.
+namespace gs_icon {
+constexpr const char* kCh = "\U000F05A9";       // wifi
+constexpr const char* kMcs = "\U000F066A";      // tune-vertical
+constexpr const char* kAir = "\U000F07AF";      // chart-donut
+constexpr const char* kRssi = "\U000F04A2";     // signal
+constexpr const char* kSnr = "\U000F147D";      // waveform
+constexpr const char* kTemp = "\U000F050F";     // thermometer
+constexpr const char* kBitrate = "\U000F04C5";  // speedometer
+constexpr const char* kRes = "\U000F0A24";      // aspect-ratio
+constexpr const char* kFps = "\U000F0230";      // filmstrip
+constexpr const char* kJit = "\U000F0430";      // pulse
+constexpr const char* kLat = "\U000F051B";      // timer-outline
+constexpr const char* kLoss = "\U000F033A";     // link-variant-off
+}  // namespace gs_icon
+
+// The GS link-status OSD: two rows along the bottom edge, each item an icon,
+// a space and its figures ([name] stands for the icon).
 //
 //                                                   ● REC 12:47   <- top right
 //   ...
-//   ch:149 mcs:5 air:62% rssi:-70/-72 snr:22/20 temp:41
-//   bitrate:8.1 res:1280x720 fps:60 jit:5.2 lat:45/78 loss:0.3/0.0
+//   [wifi] 149 [tune-vertical] 5/20 [chart-donut] 62% [signal] -70/-72
+//     [waveform] 22/20 [thermometer] 41
+//   [speedometer] 8.1 [aspect-ratio] 720p [filmstrip] 60 [pulse] 5.2
+//     [timer-outline] 45/78 [link-variant-off] 0.3/0.0
 //
-// `temp` is the drone SoC temperature (sideport drone.sys.soc_temp_c),
-// caution-coloured from 70 C; it sits on the radio row because it is
-// drone-sourced, not player-measured.
+// Row 0 is channel, mcs/width, airtime, per-card RSSI, per-card SNR and the
+// drone SoC temperature (sideport drone.sys.soc_temp_c, caution-coloured
+// from 70 C -- on the radio row because it is drone-sourced, not
+// player-measured). Row 1 is bitrate, the decoded resolution as its height
+// plus "p", fps, jitter, latency p50/p99 and pre/post-FEC loss.
 //
 // With the GS's channel scan enabled (sideport scan.state != "off") the
-// channel reads "ch:149(a)": the number may be an auto-selected pick rather
+// channel reads "149(a)": the number may be an auto-selected pick rather
 // than the configured home (docs/channel-select.md).
 //
-// TWO rows, not one, purely for type size: the eleven items on a single
-// line cap out at 22 px on a 1080p panel (132 worst-case characters into
-// 1856 px), which is too small to read on the GS screen. Split across two
-// rows the widest one is ~74 character advances, and the same "largest
-// baked size that fits" rule lands on ~38 px -- 1.7x. The rows are split by
-// SOURCE (link above, video below) rather than by width, so the pilot reads
-// the radio on one line and the picture on the other; `loss` sits with the
-// video row it explains rather than with the radio figures that cause it.
+// The rows are split by SOURCE (link above, video below) rather than by
+// width, so the pilot reads the radio on one line and the picture on the
+// other; `loss` sits with the video row it explains rather than with the
+// radio figures that cause it. Two rows rather than one for type size: all
+// twelve items on one line would cap the type too small to read on the GS
+// screen.
+//
+// The two rows share COLUMNS: an item starts at the same x as the item
+// above or below it (ch/bitrate, mcs/res, air/fps, rssi/jit, snr/lat,
+// temp/loss), each column as wide as the wider of its two worst cases, and
+// the grid -- not each row -- is centred. Rows centred on their own widths
+// put every item at an arbitrary offset from its neighbour on the other row.
+//
+// The TYPE SIZE is pinned, not "whatever fits": layout() takes the largest
+// baked size at which a reference row of kSizingChars characters in
+// kSizingItems items fits between the insets -- 25/37/48/75 px at
+// 720p/1080p/1440p/2160p with the shipped asset. That reference is the
+// widest row from when the items carried text labels, and the operator
+// chose that size; the icons made the real rows narrower, and the width
+// they freed stays slack rather than growing the bar into the picture. The
+// real worst-case grid must fit too, so a wider item can never overflow.
 //
 // No status colours, no meters, no bars -- every glyph takes
 // tok::kTextPrimary, with three deliberate exceptions.
@@ -46,29 +84,20 @@ struct MaskAtlas;
 // exists to prevent. The player-measured items never dim -- they are
 // current by construction.
 //
-// The second is the RECORDING indicator, which is deliberately IDENTICAL
-// to the essential overlay's: a tok::kStatusRec dot, "REC" and an mm:ss
-// clock, or "REC FAULT" in tok::kStatusCaution. Same reasoning as
-// gs_overlay.h gives for the dot -- recording is a mode, not a status, and
-// a white dot does not read as recording -- plus the stronger one that a
-// pilot must not have to learn two recording indicators for one aircraft.
-// Armed draws nothing at all, exactly as it does there -- and, unlike
-// there, is not even reserved: a blank box inside a CENTRED row drags the
-// whole row 166 px off centre at 1080p for the entire flight, since armed
-// is the normal state. So the REC box appears and disappears with the
-// recorder, and row 0 re-centres when it does. That is a second thing
-// (besides the card count) that reflows the line, but it is a deliberate
-// button press rather than a cadence, and it takes the same erase-then-
-// re-place path.
+// The second is the RECORDING indicator: a tok::kStatusRec dot, "REC" and
+// an mm:ss clock, or "REC FAULT" in tok::kStatusCaution. The dot gets its
+// own hue because recording is a mode, not a status, and a white dot does
+// not read as recording. Armed draws nothing at all.
 //
-// It sits at the end of ROW 0 rather than with the other player-measured
-// items on row 1 for a purely mechanical reason: row 1 is the wider row
-// and therefore the one that sets the type size (see kRow in the .cpp), so
-// putting REC there would cost a size step -- 38 px to 34 at 1080p. On row
-// 0 it is free. That also happens to match where the essential layout puts
-// it, in the link block rather than the video one.
+// It sits alone in the top-right corner, at half the bar's type size,
+// rather than in either row for a purely mechanical reason: a row's width
+// sets the type size the whole bar renders at (see kRow in the .cpp), so
+// an item in a row costs every other figure a size step, and a box blank
+// for the whole flight (armed is the normal state) inside a CENTRED row
+// would drag that row off centre. Anchored in the corner it costs the bar
+// nothing and never moves when the recorder starts or stops.
 //
-// The third is low-power (pre-arm) mode (spec 2026-09-20): while
+// The third is low-power (pre-arm) mode: while
 // snap.low_power is set, the fps cell -- the one player-measured item
 // this exception touches -- takes tok::kStatusCaution instead of
 // tok::kTextPrimary, so the pilot can tell a deliberately throttled rate
@@ -83,16 +112,19 @@ struct MaskAtlas;
 // The glyph mask's baked drop shadow stays. It is part of the glyph, not
 // styling: without it the line is unreadable over bright video.
 //
-// Same per-field dirty discipline as GsOverlay, and for the same reason --
-// see the budget paragraph in gs_overlay.h. Measured against the real asset
-// with four cards and a live REC, a FULL repaint is 199,715 px at 1080p and
-// 727,466 at 2160p: within ~12% of the four-corner layout's own 179,392 /
-// 649,429, i.e. the same ~3.7 ms and ~9.9 ms projected on the A55, both
-// past the 2 ms pump period. The two rows did not make this cheaper by
-// being simpler -- bigger type over two rows covers about the same ink --
-// so the rule is unchanged: a full repaint is a startup/re-layout event and
-// must never land on a cadence. A typical second redraws the one or two
-// items whose text moved, ~17 k px each at 1080p.
+// Dirty tracking is per FIELD: each item has a box sized at layout() from
+// its worst-case string, so a value change never reflows a row and a
+// typical second redraws only the one or two items whose text moved,
+// ~9 k px each at 1080p. That margin is load-bearing, not tidy: update()
+// runs on maburplay's 2 ms pump loop. Measured against the real asset with
+// four cards and a live REC (tools/bench/gs_osd_bench.cpp), a FULL repaint
+// is 151,590 px at 1080p and 564,328 at 2160p -- ~3.6 ms and ~10.4 ms of
+// draw + quantize projected on the A55, both past the pump period. So a full repaint is a
+// startup/re-layout event and must never land on a cadence; do not add a
+// caller that restates every field on a timer. (What that costs when it
+// happens is flip-reap latency, not a dropped AU: ring.pump(2) is a poll()
+// ceiling and the shm ring is slotted. And the quantize half is
+// burned-DVR-only.)
 // The order here is the draw order and the index into the shadow array.
 // Which ROW each item lands on is kRow in the .cpp, not this enum.
 enum class GsBarField {
@@ -119,10 +151,11 @@ class GsCompactBar final : public GsLayer {
   explicit GsCompactBar(GsFont& font, RecTarget rec_target = RecTarget::kGs)
       : font_(font), rec_target_(rec_target) {}
 
-  // Picks the LARGEST baked atlas whose worst-case rows (kMaxCards cards,
-  // every value at the magnitude its clamp allows) both fit between the
-  // insets and stack inside the surface, then centres each row for however
-  // many cards are actually reported. Type size is fixed at the worst case
+  // Picks the LARGEST baked atlas at which the sizing reference row and the
+  // worst-case grid (kMaxCards cards, every value at the magnitude its
+  // clamp allows) fit between the insets and the rows stack inside the
+  // surface, then centres the grid for however many cards are actually
+  // reported. Type size is fixed at the worst case
   // on purpose: sizing it to the live card count would change the font
   // under the pilot the first time a card dropped out. Fails (with *err
   // set) when even the smallest baked size cannot fit.
@@ -137,7 +170,7 @@ class GsCompactBar final : public GsLayer {
 
   int field_count() const { return (int)GsBarField::kCount; }
 
-  // Test hooks, mirroring GsOverlay's. `debug_field_text` formats without
+  // Test hooks. `debug_field_text` formats without
   // drawing; `debug_field_box` is what the no-overflow tests measure text
   // against; `debug_atlas_px` is the size layout() resolved, 0 before it
   // has run.
@@ -150,15 +183,24 @@ class GsCompactBar final : public GsLayer {
   DirtyRect debug_field_box(GsBarField id) const;
   int debug_atlas_px() const;
   int debug_rec_atlas_px() const;  // the REC indicator's size, 0 before layout()
-  // Width of worst-case row `row` in `a`, boxes included -- exactly what
-  // layout() compares against the space between the insets. Exposed so the
-  // size-choice test can assert "no larger baked size fits" by the same
-  // measurement layout() makes, rather than by reimplementing it.
-  static int worst_row_width(const MaskAtlas& a, int row, int n_cards);
+  // Width of the worst-case column grid in `a` with `n_cards` cards, boxes
+  // included -- exactly what layout() compares against the space between
+  // the insets. Exposed so the size-choice test can assert "no larger baked
+  // size fits" by the same measurement layout() makes, rather than by
+  // reimplementing it.
+  static int worst_grid_width(const MaskAtlas& a, int n_cards);
+  // Width of the sizing reference row in `a` (see the type-size paragraph
+  // above), measured the same way as worst_grid_width.
+  static int sizing_row_width(const MaskAtlas& a);
+  static constexpr int kSizingChars = 76;
+  static constexpr int kSizingItems = 6;
   // Which row an item draws on: 0 (link figures), 1 (video figures), or
   // kCorner for the recording indicator, which is right-flushed at the top
   // inset and belongs to no row.
   static int row_of(GsBarField id);
+  // Which grid column an item draws in, 0..kCols-1; -1 for the corner item.
+  static int col_of(GsBarField id);
+  static constexpr int kCols = 6;
   static constexpr int kRows = 2;
   static constexpr int kCorner = -1;
   // The widest string field `id` can render with `n_cards` cards -- what
@@ -168,7 +210,7 @@ class GsCompactBar final : public GsLayer {
   // clamp in state_of_ exists to keep the live string inside this one.
   // Public (not just an implementation detail of layout()) so a worst-case
   // format change -- like the 40 MHz rung's width suffix -- can be pinned
-  // by its own test rather than only indirectly through worst_row_width.
+  // by its own test rather than only indirectly through worst_grid_width.
   // kRec's worst case depends on dvr.target (gs_layer.h rec_worst); every
   // other field ignores rec_target.
   static std::string worst_case(GsBarField id, int n_cards,
@@ -186,8 +228,7 @@ class GsCompactBar final : public GsLayer {
     std::string text;
     uint32_t rgb = 0;
     // 1 = paint the leading glyph in tok::kStatusRec (the recording dot),
-    // -1 = unused. One field, two colours, same as GsOverlay's kRec: they
-    // change together, so splitting them would double the dirty rects for
+    // -1 = unused. One field, two colours: they change together, so splitting them would double the dirty rects for
     // nothing.
     int aux = -1;
     bool operator==(const FieldState&) const = default;
@@ -218,8 +259,8 @@ class GsCompactBar final : public GsLayer {
   RecTarget rec_target_;
   Field fields_[(size_t)GsBarField::kCount];
   const MaskAtlas* atlas_ = nullptr;
-  // The REC corner item's atlas: the nearest baked size to half of atlas_
-  // (2026-09-26). Every other field shares atlas_.
+  // The REC corner item's atlas: the nearest baked size to half of atlas_.
+  // Every other field shares atlas_.
   const MaskAtlas* rec_atlas_ = nullptr;
   const MaskAtlas* atlas_for_(GsBarField id) const {
     return id == GsBarField::kRec && rec_atlas_ ? rec_atlas_ : atlas_;

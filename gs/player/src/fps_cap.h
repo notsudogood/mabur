@@ -14,7 +14,7 @@ namespace maburplay {
 // and the early half of every pair fails the test. Widening the slack to
 // cover that would un-cap the 47..59 band against a 59.94 source, which is
 // the trap the old proportional slack existed to avoid (a cap of 50 must not
-// run the encoder at 60). Bench 2026-09-17: cap 60 admitted 41-45 fps of a
+// run the encoder at 60). Bench: cap 60 admitted 41-45 fps of a
 // 60 fps stream, three runs.
 //
 // Here a frame is admitted when it is due -- at or after the next slot minus

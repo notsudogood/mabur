@@ -107,7 +107,7 @@ TEST(spotter_never_sends_over_lossy_replay) {
   CHECK(aus > 500);
 }
 
-// The spotter's LOSS row with the width-only op (2026-09-30): the op no
+// The spotter's LOSS row with the width-only op: the op no
 // longer tracks the flying rung, so TransitionEdge fires once at start and
 // never again. Pre-FEC must still read real erasures, post-FEC must stay a
 // valid number, and a clean link must read ~0 -- bodies tagged at a real
@@ -172,7 +172,7 @@ TEST(gs_beacons_then_rcf_after_ack) {
   CHECK(stats_json(g.stats()).find("\"rcf_sent\":" + std::to_string(rcf)) != std::string::npos);
 }
 
-// trunc_base (bench 2026-10-07): the sid-0 share of the truncated AUs, the
+// trunc_base: the sid-0 share of the truncated AUs, the
 // layer the NACK protects. Counted from the same AU-end the page sees.
 TEST(trunc_base_counts_sid0_truncations) {
   uint64_t base_trunc = 0, enh_trunc = 0;
@@ -440,8 +440,8 @@ TEST(idr_requests_are_noop_in_spotter) {
   CHECK(g.sends() == 0);
 }
 
-// A spotter's link setting is just the configured width (2026-09-30: the
-// drone's applied-op echo left Telem). Its mcs readout comes off the air
+// A spotter's link setting is just the configured width (the drone's
+// applied-op echo is not in Telem). Its mcs readout comes off the air
 // (spotter_mcs_is_base_stream_rx_mcs), never from a Telem.
 TEST(spotter_op_is_configured_width_no_mcs) {
   Io io;
@@ -821,12 +821,12 @@ TEST(gs_roster_builds_core_and_one_card_prelude_commits_and_stores) {
   CHECK(r.stored.back() != 40);
   CHECK(r.stored.back() == r.g->channel_core()->op());
   // "channel" is the card's LIVE channel: with one card that can be a scout
-  // dwell channel rather than op -- spec'd, and what the page shows.
+  // dwell channel rather than op -- intended, and what the page shows.
   CHECK(r.g->stats().channel == r.card.ch);
   CHECK(stats_json(r.g->stats()).find("\"channel\":" + std::to_string(r.card.ch)) != std::string::npos);
 }
 
-// Pin is static (2026-10-04) reaches the browser GS through the shared core:
+// Pin is static: it reaches the browser GS through the shared core:
 // the page's Link channel select becomes `channel = N` in the [radio]
 // overlay, the loader sets radio.pin, WebGs hands cfg.radio to ChannelCore.
 // Same interference on the one card, two rigs: auto (pick frozen at
@@ -870,7 +870,7 @@ TEST(gs_one_card_auto_hops_on_interference_but_pinned_never) {
   CHECK(std::string(p.g->stats().chan->hop.verdict) == "interfered");   // still measured for the page
 }
 
-// The web GS on a CPE relay (auto, spec 2026-10-05 §5): no boot measure
+// The web GS on a CPE relay (auto): no boot measure
 // (search-only), but in flight interference makes the core ask the relay to
 // sweep; the result ranks every candidate in one burst and the page hops.
 TEST(gs_relay_page_sweeps_and_hops_on_interference) {
@@ -921,7 +921,7 @@ TEST(send_gate_drops_rcf_and_skips_rtt_stamp) {
   CHECK(r.g->vrx()->rcf_seq() != seq_before);  // RCFs were built...
   CHECK(r.g->channel_core()->scout_gated_sends() > gated_before);   // ...and gated
   CHECK(r.card.sent.empty());
-  CHECK(r.ticks_with_sent == 0);   // plan 2 review: a gated frame is not reported as `sent`
+  CHECK(r.ticks_with_sent == 0);   // a gated frame is not reported as `sent`
   CHECK(r.g->stats().rcf_sent == 0);
   CHECK(r.g->stats().sends == r.card.sent.size());   // sends counts frames handed to the card only
 }
@@ -1047,7 +1047,7 @@ struct SpotRig {
     g->on_rx(b);
   }
   // The real GS's RCF heard on rx_ch, ordering hop_ch/epoch (tagged with the
-  // default key: the spotter never checks it, spec §6.2).
+  // default key: the spotter never checks it).
   void rcf_on(uint8_t rx_ch, uint8_t hop_ch, uint8_t epoch) {
     mabur::rc::Rcf r;
     r.hop_ch = hop_ch;
@@ -1173,7 +1173,7 @@ TEST(stats_json_carries_follow_fields_for_spotter_only) {
   CHECK(!s.stats().follow_state.has_value());
 }
 
-// ---- software NACK (fec-nack, web port 2026-10-06) ----
+// ---- software NACK (fec-nack, web port) ----
 // Same tracker and send rule as maburgs (gs/src/main.cpp): base-layer seqs
 // the FEC cannot repair are asked back over a direct, tagged T_NACK.
 namespace {

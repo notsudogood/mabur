@@ -71,8 +71,8 @@ TEST(profile_table_matches_vectors_verbatim) {
   for (size_t i = 0; i < table.size(); ++i) {
     CHECK(table[i].mcs == expect_rows[i]["mcs"].get<uint8_t>());
     double expect_ov = expect_rows[i]["ov"].get<double>();
-    // Both slots duplicate the same overhead value (same-rate ruling,
-    // 2026-08-30): no rate split, ov_base == ov_enh for every rung.
+    // Both slots duplicate the same overhead value (same-rate ruling): no
+    // rate split, ov_base == ov_enh for every rung.
     double ov_base = table[i].ov_base;
     double ov_enh = table[i].ov_enh;
     CHECK(ov_base > expect_ov - 1e-9 && ov_base < expect_ov + 1e-9);
@@ -83,7 +83,7 @@ TEST(profile_table_matches_vectors_verbatim) {
 }
 
 TEST(ladder_from_applies_same_rate) {
-  // 2026-08-30 ruling: both slots ride the scored mcs (no rate split).
+  // Same-rate ruling: both slots ride the scored mcs (no rate split).
   auto l5 = rc::ladder_from(rc::PhyMode::HT, 5, 20);
   CHECK(l5[0].mcs == 5);   // base
   CHECK(l5[1].mcs == 5);   // enh
@@ -95,11 +95,11 @@ TEST(ladder_from_applies_same_rate) {
 
 TEST(ladder_from_sets_ldpc_stbc_on_all_rungs) {
   // LDPC+STBC on every rung by default; LDPC can be turned off by the
-  // drone's radio.ldpc (2026-10-02, see ldpc_off below).
+  // drone's radio.ldpc (see ldpc_off below).
   auto ladder = ladder_from(PhyMode::HT, 2, 20);
   // BASE
   CHECK(ladder[0].mode == PhyMode::HT);
-  CHECK(ladder[0].mcs == 2);  // same-rate ruling, 2026-08-30
+  CHECK(ladder[0].mcs == 2);  // same-rate ruling
   CHECK(ladder[0].bw == 20);
   CHECK(ladder[0].ldpc == true);
   CHECK(ladder[0].stbc == true);
@@ -112,7 +112,7 @@ TEST(ladder_from_sets_ldpc_stbc_on_all_rungs) {
 }
 
 TEST(ladder_from_ldpc_off_clears_ldpc_keeps_stbc) {
-  // radio.ldpc = false (2026-10-02): an RTL8821AU GS cannot decode HT-LDPC
+  // radio.ldpc = false: an RTL8821AU GS cannot decode HT-LDPC
   // (bench: 1/1000 LDPC vs 900+/1000 BCC), so the drone can fly BCC.
   auto ladder = ladder_from(PhyMode::HT, 2, 20, /*ldpc=*/false);
   for (const auto& l : ladder) {
@@ -124,7 +124,7 @@ TEST(ladder_from_ldpc_off_clears_ldpc_keeps_stbc) {
 
 TEST(ladder_from_clamps_at_top) {
   // HT top = 7: an out-of-range mcs clamps to 7; both slots ride it
-  // (same-rate ruling, 2026-08-30).
+  // (same-rate ruling).
   auto ladder = ladder_from(PhyMode::HT, 9, 20);
   CHECK(ladder[0].mcs == 7);
   CHECK(ladder[1].mcs == 7);
@@ -159,7 +159,7 @@ TEST(ladder_for_row_matches_table_ladder_from) {
 
 TEST(ladder_for_row_applies_same_rate_rule) {
   // Row 3 carries T0 mcs 4 (see profile_table): both slots ride 4
-  // (same-rate ruling, 2026-08-30).
+  // (same-rate ruling).
   auto ladder = ladder_for_row(3);
   CHECK(ladder[0].mcs == 4);
   CHECK(ladder[1].mcs == 4);

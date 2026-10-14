@@ -41,9 +41,9 @@ class FrameSink {
 // Builds `radiotap(layer.bw) | 26-byte 802.11 QoS-Data header | body` frames for the
 // 2-slot adaptive-link ladder and hands them to a FrameSink. Every frame
 // transmits at the ladder's configured width — there is no per-seq
-// bandwidth-probe schedule (removed 2026-07-27, SDD ladder-controller
-// Task 5: the ladder controller never varies bw independently of the
-// commanded rung, so probing alternate widths had no consumer left).
+// bandwidth-probe schedule (the ladder controller never varies bw
+// independently of the commanded rung, so probing alternate widths has no
+// consumer).
 //
 // Radiotap headers are prebuilt per layer in set_ladder() — called from the
 // agent thread whenever the ladder changes — and cached in a
@@ -71,7 +71,7 @@ class RadioTx {
   explicit RadioTx(FrameSink& sink, devourer::HwQueue retx_queue = devourer::HwQueue::Default);
 
   // Rebuilds the radiotap cache: slot 0/1 = the video ladder, slot 2 = the
-  // probe stream's MCS (spec 2026-09-04) or empty when probe is nullopt,
+  // probe stream's MCS or empty when probe is nullopt,
   // slot 3 = the base layer's mode on retx_queue (retransmits).
   void set_ladder(const std::array<rc::LayerTxSpec, 2>& ladder,
                   const std::optional<rc::LayerTxSpec>& probe);

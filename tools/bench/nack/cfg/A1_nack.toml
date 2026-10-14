@@ -12,7 +12,7 @@ channel  = 144
                                 # member once; a member number = pin the link there.
 width   = 40               # 20 or 40 MHz; 40 is needed for the 40 MHz link speeds in [[link.ladder]] below
 tx_card = -1               # card that transmits to the drone; -1 = pick the one with the best signal
-relays  = []   # CPE disabled for maburcal (2026-10-03); was ["10.83.11.1:8310"]
+relays  = []   # CPE disabled for maburcal; was ["10.83.11.1:8310"]
 
 # Boot-time channel scan. While waiting for the drone, a spare card measures
 # the candidates plus the home channel and the ground station proposes the

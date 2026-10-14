@@ -9,7 +9,7 @@ namespace maburgs {
 
 namespace {
 // Rebuild an OpPoint from the ladder's current rung. Power is constant and
-// is not part of the operating point (spec 2026-08-12-constant-txpower).
+// is not part of the operating point.
 OpPoint op_from_rung(const Rung& r) {
   return OpPoint{false, r.mcs, r.bw, false, r.overhead_base, r.overhead_enh, 0.0};
 }
@@ -83,7 +83,7 @@ std::optional<VrxController::Out> VrxController::step(double now_ms,
   if (act != VrxAction::TxFeedback) return std::nullopt;
 
   // Fix (a): SESSION keep-alive DISC, replacing this tick's RCF slot.
-  // SESSION needs an accepted DiscAck (link pairing, spec 2026-10-01 §6),
+  // SESSION needs an accepted DiscAck (link pairing),
   // so the peer's caps are always known here; a GS that lacks them is still
   // BEACONING at beacon_period_ms, which is the stale-caps re-teach.
   if (!keepalive_hold_ && now_ms - last_keepalive_ms_ >= cfg_.beacon_keepalive_ms) {
@@ -97,13 +97,12 @@ std::optional<VrxController::Out> VrxController::step(double now_ms,
     if (ctrl_.update(health, now_ms)) sync_op_();
   }
   mabur::rc::Rcf r = build_rcf();
-  // No repeat copies of an op-changing RCF: the 2026-08-14 repeat burst
-  // (3 copies 10 ms apart) was removed 2026-09-05 -- with the RCF slotter
-  // the drone hears ~90 % of single sends, and the slotter released the
-  // three copies as one batch at an AU completion, which overran the
+  // No repeat copies of an op-changing RCF (a repeat burst of 3 copies
+  // 10 ms apart): with the RCF slotter the drone hears ~90 % of single
+  // sends, and the slotter released the three copies as one batch at an AU completion, which overran the
   // inter-AU idle and killed the next aggregate on both cards on a quarter
   // to a third of all rung changes (bench A/B, ctl-0296/0298/0300,
-  // docs/switch-loss-findings-2026-09-05.md).
+  // docs/findings/2026-09-05-switch-loss.md).
   note_cmd(r);
   if (move_armed_ && ++rcfs_since_adopt_ >= kMoveAfterRcfs) {
     move_edge_ = true;
@@ -130,7 +129,7 @@ mabur::rc::Rcf VrxController::build_rcf() {
   r.hop_epoch = hop_epoch_;
   r.rec = rec_wish_;
   r.idr_epoch = idr_epoch_;
-  // Probe stream MCS (spec 2026-09-04): the ladder names a rung to probe on
+  // Probe stream MCS: the ladder names a rung to probe on
   // every RCF, or none. In static-pin mode the ladder is out of the loop, so
   // the probe follows the dedicated pin instead.
   r.probe_profile = mabur::rc::kNoProbeProfile;
@@ -141,7 +140,7 @@ mabur::rc::Rcf VrxController::build_rcf() {
                                                   static_cast<uint8_t>(cur_op_.bw));
   } else if (const int pr = ctrl_.probe_rung(); pr >= 0) {
     // The PROBE rung's own width, not the current op's: sitting on 20/4
-    // with 40/3 above, the probe must fly 40 MHz (2026-09-24).
+    // with 40/3 above, the probe must fly 40 MHz.
     const Rung& prung = cfg_.ladder.ladder[static_cast<std::size_t>(pr)];
     r.probe_profile = mabur::rc::encode_profile(
         mode, static_cast<uint8_t>(prung.mcs), static_cast<uint8_t>(prung.bw));

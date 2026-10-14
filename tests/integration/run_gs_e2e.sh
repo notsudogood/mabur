@@ -10,7 +10,7 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 # RCF delivered after frame 1 (same trick as run_host_e2e.sh). 2-stream
-# space (spec 2026-08-29-airtime-balance-uep): the fixture alternates
+# space: the fixture alternates
 # TRAIL_R/TRAIL_N on its 12 P frames, so classify_frame routes 6 of them to
 # sid 1 (enh) -- and the RCF IS needed for reachability here (MAX_RANGE
 # sheds sid 1 until it lands), on top of exercising the RCF path and

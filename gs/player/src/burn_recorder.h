@@ -115,7 +115,7 @@ struct BurnCfg {
 //     times overlap, so the DVR runs at max(GPU stage, encode) rather than
 //     the sum -- ~35 ms serial at 1080p meant 26-32 fps and a third of the
 //     frames dropped; overlapped it holds the admitted rate with <1 % drops
-//     (bench 2026-09-17). Drops at either mailbox count in frames_dropped().
+//     (bench). Drops at either mailbox count in frames_dropped().
 class BurnRecorder {
  public:
   BurnRecorder();

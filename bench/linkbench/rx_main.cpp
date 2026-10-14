@@ -2,7 +2,7 @@
 // chosen channel via maburgs::RadioFrontend (which already handles 8822E
 // duplex bring-up, RSSI/SNR extraction and the USB advisory lock), decodes
 // the bench FEC stream, and prints one iperf-style line per second plus a
-// summary. Spec: docs/superpowers/specs/2026-07-13-linkbench-design.md.
+// summary.
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -46,7 +46,7 @@ struct Args {
   // (GetRxEnergy(with_nhm) + decoded-frame deltas) to stdout.
   int energy_ms = 0;
   // --nhm-busy-ms N: every N ms print an "N" line for a busy-airtime NHM
-  // window armed at the previous one (spec 2026-09-25-nhm-airtime spike).
+  // window armed at the previous one (NHM airtime spike).
   // --nhm-reset: also run a FA/CCA counter reset mid-window (spike q. b).
   int nhm_busy_ms = 0;
   bool nhm_reset = false;

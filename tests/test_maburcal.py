@@ -134,8 +134,8 @@ class TestReport(unittest.TestCase):
     def test_no_verify_reports_not_written(self):
         # Walls measured (a W record exists) but the run never produced a
         # verify pass -- e.g. phase 2's command was lost and the session's
-        # deadline expired (Task 10's await_next_timeout path). cal.log has
-        # no record of an apply outcome, so this must not claim one.
+        # deadline expired (the await_next_timeout path). cal.log has no record
+        # of an apply outcome, so this must not claim one.
         text = "callog 1\nR 44 53 1.00\nW 0 91 28 0 1\n"
         out = render(text)
         self.assertNotIn("written: /etc/mabur.toml", out)
@@ -250,13 +250,13 @@ class TestRenderWhenReady(unittest.TestCase):
         self.assertIn("mcs0", text)
 
     def test_a_structural_problem_is_reported_not_waited_out(self):
-        # Regression (hardware, 2026-09-11): a cal.log missing its `callog 1`
-        # marker is unreadable FOREVER -- no amount of polling makes a
-        # format marker appear -- yet the reader swallowed UnsupportedLog
-        # inside the retry loop and the operator got "holds no calibration
-        # run" after a RENDER_RETRY_S wait, which points at the wrong thing
-        # entirely (the file was full of perfectly good measurements). A
-        # permanent problem must come back immediately, with its reason.
+        # Regression (hardware): a cal.log missing its `callog 1` marker is
+        # unreadable FOREVER -- no amount of polling makes a format marker
+        # appear -- yet the reader swallowed UnsupportedLog inside the retry
+        # loop and the operator got "holds no calibration run" after a
+        # RENDER_RETRY_S wait, which points at the wrong thing entirely (the
+        # file was full of perfectly good measurements). A permanent problem
+        # must come back immediately, with its reason.
         path = self._tmp(GOOD.replace("callog 1\n", "", 1))
         start = time.monotonic()
         text, problem = maburcal._render_when_ready(path)

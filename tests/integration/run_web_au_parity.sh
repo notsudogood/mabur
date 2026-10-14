@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # WebGs AU output == maburgs --dry-run --out-aus on the same frame file,
-# clean and lossy (spec 2026-09-27-web-gs section 6.3). webgs runs Spotter
+# clean and lossy. webgs runs Spotter
 # mode (always decodes, like the dry-run, which negotiates no session) with
 # --fixed-gap: the dry-run has no GapTimeoutPolicy.
 set -euo pipefail

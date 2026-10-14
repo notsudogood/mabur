@@ -9,11 +9,10 @@
 namespace maburplay {
 namespace {
 
-// Design geometry at 1080p. Deliberately tighter than the essential
-// overlay's 96/54 safe inset: that inset reserves the corners a broadcast
-// safe area would clip, and this line is a single strip along the bottom
-// whose whole point is to fit the most figures at the largest readable
-// size. 32/24 still clears the panel bezel on the GS's own display.
+// Design geometry at 1080p. Deliberately tighter than a broadcast safe
+// area: this line is a single strip along the bottom whose whole point is
+// to fit the most figures at the largest readable size. 32/24 still clears
+// the panel bezel on the GS's own display.
 constexpr int kInsetX = 32, kInsetY = 24;
 
 // The eleven items, in draw order, and the row each one lands on. This IS
@@ -22,11 +21,13 @@ constexpr int kInsetX = 32, kInsetY = 24;
 // than by width -- an even split would put `snr` next to `bitrate`, which
 // reads as one continuous line of unrelated figures.
 //
-// Row 0 is the WIDER of the two since the temp cell joined it (71
-// worst-case characters plus 5 gaps, against row 1's 69 plus 5), so it is
-// what decides the type size. Moving an item between rows changes the size
-// the whole bar renders at -- which is one of the reasons REC is in the
-// corner instead (see gs_compact.h).
+// The two rows share columns: an item's column is its position within its
+// row, so kOrder pairs ch/bitrate, mcs/res, air/fps, rssi/jit, snr/lat and
+// temp/loss. The worst-case grid is 72 cells plus 5 gaps, inside the
+// sizing reference row's 76 + 5, so the reference -- not the grid --
+// decides the type size (gs_compact.h). REC sits in the corner because in
+// the grid it would eat that slack and shift a column whenever the
+// recorder was merely armed.
 constexpr GsBarField kOrder[] = {
     GsBarField::kCh,   GsBarField::kMcs, GsBarField::kAir,     GsBarField::kRssi,
     GsBarField::kSnr,  GsBarField::kTemp, GsBarField::kRec,    GsBarField::kBitrate,
@@ -38,6 +39,13 @@ static_assert(sizeof(kOrder) / sizeof(kOrder[0]) == (size_t)GsBarField::kCount,
               "every field must appear exactly once in the draw order");
 static_assert(sizeof(kRow) / sizeof(kRow[0]) == (size_t)GsBarField::kCount,
               "every field needs a row");
+constexpr int items_in_row(int row) {
+  int n = 0;
+  for (int r : kRow) n += (r == row);
+  return n;
+}
+static_assert(items_in_row(0) == GsCompactBar::kCols && items_in_row(1) == GsCompactBar::kCols,
+              "both rows fill every column of the shared grid");
 
 // Gap between the two rows, on top of the cell height. The boxes span the
 // padded CELL, so stacking by glyph_h alone already separates them; this is
@@ -45,8 +53,9 @@ static_assert(sizeof(kRow) / sizeof(kRow[0]) == (size_t)GsBarField::kCount,
 constexpr int kRowGap = 4;
 
 // Drone SoC caution threshold. The disarmed fan-off spike climbed to 84 C
-// in 15 min flattening at ~1 C/min (docs/low-power-spike-findings-
-// 2026-09-19.md); 70 leaves the pilot a margin to act before that.
+// in 15 min flattening at ~1 C/min
+// (docs/findings/2026-09-19-low-power-spike.md); 70 leaves the pilot a
+// margin to act before that.
 constexpr int kTempCautionC = 70;
 
 // Top inset for the corner-anchored recording indicator. Deeper than the
@@ -82,16 +91,18 @@ int item_gap(const MaskAtlas* a) {
   return std::max(a->advance_x, (a->glyph_w - a->advance_x) + 2);
 }
 
-// Plain ASCII integer, hyphen-minus for negatives. NOT fmt_signed_int: its
-// U+2212 is a typographic refinement this line does without, and the ASCII
+// Plain ASCII integer, hyphen-minus for negatives. Not U+2212: a true
+// minus is a typographic refinement this line does without, and the ASCII
 // form is a character narrower.
 std::string ascii_int(double v) { return fmt_int(v); }
 
-std::string join_cards(const std::string& label, const GsSnapshot& snap,
-                       bool snr) {
+// An item's lead: its icon and one space.
+std::string tag(const char* icon) { return std::string(icon) + " "; }
+
+std::string join_cards(const char* icon, const GsSnapshot& snap, bool snr) {
   const int n = std::min((int)snap.cards.size(), kMaxCards);
-  if (n <= 0) return label + ":--";
-  std::string out = label + ":";
+  if (n <= 0) return tag(icon) + "--";
+  std::string out = tag(icon);
   for (int i = 0; i < n; ++i) {
     if (i) out += "/";
     const GsCard& c = snap.cards[(size_t)i];
@@ -108,9 +119,9 @@ std::string join_cards(const std::string& label, const GsSnapshot& snap,
   return out;
 }
 
-std::string repeat_joined(const std::string& label, const char* per, int n) {
-  if (n <= 0) return label + ":--";
-  std::string out = label + ":";
+std::string repeat_joined(const char* icon, const char* per, int n) {
+  if (n <= 0) return tag(icon) + "--";
+  std::string out = tag(icon);
   for (int i = 0; i < n; ++i) {
     if (i) out += "/";
     out += per;
@@ -124,34 +135,34 @@ std::string GsCompactBar::worst_case(GsBarField id, int n_cards,
                                      RecTarget rec_target) {
   const int n = std::clamp(n_cards, 0, kMaxCards);
   switch (id) {
-    // "ch:--" is narrower than the numeric form, so the number sizes the
-    // box; "(a)" is the auto-channel-select marker (GsSnapshot::scan_auto).
-    // The in-flight hop marker (GsSnapshot::hopped, "(h)") shares this same
+    // "--" is narrower than the numeric form, so the number sizes the box;
+    // "(a)" is the auto-channel-select marker (GsSnapshot::scan_auto). The
+    // in-flight hop marker (GsSnapshot::hopped, "(h)") shares this same
     // slot -- the two are mutually exclusive (see the render switch) and
-    // exactly as wide, so no separate worst case is needed for it.
-    case GsBarField::kCh:      return "ch:999(a)";
-    // 40 MHz rungs (2026-09-24): the width suffix makes the live form the
-    // WIDER one now ("mcs:9/40" beats the dash form "mcs:--"), the reverse
-    // of the pre-bw worst case -- still an explicit worst case rather than
-    // whatever the live value happens to be, just on the other side.
-    case GsBarField::kMcs:     return "mcs:9/40";
-    case GsBarField::kAir:     return "air:100%";
-    case GsBarField::kRssi:    return repeat_joined("rssi", "-999", n);
-    case GsBarField::kSnr:     return repeat_joined("snr", "-99", n);
-    // int8 on the wire, rendered clamped to [0, 127]: "temp:127" beats
-    // "temp:--" by one glyph.
-    case GsBarField::kTemp:    return "temp:127";
-    case GsBarField::kBitrate: return "bitrate:999.9";
-    case GsBarField::kRes:     return "res:9999x9999";
-    case GsBarField::kFps:     return "fps:999";
-    case GsBarField::kJit:     return "jit:999.9";
-    case GsBarField::kLat:     return "lat:999/999";
-    case GsBarField::kLoss:    return "loss:100.0/100.0";
+    // exactly as wide, so no separate worst case is needed for it. "KEY?"
+    // (link key mismatch) replaces the whole item and is narrower still.
+    case GsBarField::kCh:      return tag(gs_icon::kCh) + "999(a)";
+    // 40 MHz rungs: the width suffix makes the live form the WIDER one
+    // ("9/40" beats the dash form "--") -- an explicit worst case rather
+    // than whatever the live value happens to be.
+    case GsBarField::kMcs:     return tag(gs_icon::kMcs) + "9/40";
+    case GsBarField::kAir:     return tag(gs_icon::kAir) + "100%";
+    case GsBarField::kRssi:    return repeat_joined(gs_icon::kRssi, "-999", n);
+    case GsBarField::kSnr:     return repeat_joined(gs_icon::kSnr, "-99", n);
+    // int8 on the wire, rendered clamped to [0, 127]: "127" beats "--" by
+    // one glyph.
+    case GsBarField::kTemp:    return tag(gs_icon::kTemp) + "127";
+    case GsBarField::kBitrate: return tag(gs_icon::kBitrate) + "999.9";
+    // The decoded height plus "p", clamped to four digits.
+    case GsBarField::kRes:     return tag(gs_icon::kRes) + "9999p";
+    case GsBarField::kFps:     return tag(gs_icon::kFps) + "999";
+    case GsBarField::kJit:     return tag(gs_icon::kJit) + "999.9";
+    case GsBarField::kLat:     return tag(gs_icon::kLat) + "999/999";
+    case GsBarField::kLoss:    return tag(gs_icon::kLoss) + "100.0/100.0";
     // Sized on rec_worst(target) (gs_layer.h): the widest REC text this
     // dvr.target can produce -- "● REC FAULT" for "gs", as it always was.
     // Armed renders nothing and leaves the box blank -- the same
-    // fixed-width reservation every other item makes, and the same thing
-    // the essential overlay does.
+    // fixed-width reservation every other item makes.
     case GsBarField::kRec:     return rec_worst(rec_target);
     case GsBarField::kCount:   break;
   }
@@ -164,16 +175,41 @@ int GsCompactBar::row_of(GsBarField id) {
   return 0;
 }
 
-int GsCompactBar::worst_row_width(const MaskAtlas& a, int row, int n_cards) {
-  const int gap = item_gap(&a);
-  int w = 0, n = 0;
+int GsCompactBar::col_of(GsBarField id) {
+  int col[kRows] = {};
   for (int i = 0; i < (int)GsBarField::kCount; ++i) {
-    if (kRow[i] != row) continue;  // kCorner belongs to no row
-    if (n++) w += gap;
-    w += text_width(a, worst_case(kOrder[i], n_cards).c_str());
+    if (kRow[i] == kCorner) {
+      if (kOrder[i] == id) return -1;
+      continue;
+    }
+    if (kOrder[i] == id) return col[kRow[i]];
+    ++col[kRow[i]];
   }
-  // The first box's left pad and the last one's right.
-  return n ? w + 2 * pad_h(&a) : 0;
+  return -1;
+}
+
+// Each column's width in `a`: the wider of its items' worst cases.
+static void column_widths(const MaskAtlas& a, int n_cards, int* cw) {
+  for (int k = 0; k < GsCompactBar::kCols; ++k) cw[k] = 0;
+  for (int i = 0; i < (int)GsBarField::kCount; ++i) {
+    const int k = GsCompactBar::col_of(kOrder[i]);
+    if (k < 0) continue;
+    cw[k] = std::max(cw[k], text_width(a, GsCompactBar::worst_case(kOrder[i], n_cards).c_str()));
+  }
+}
+
+int GsCompactBar::worst_grid_width(const MaskAtlas& a, int n_cards) {
+  int cw[kCols];
+  column_widths(a, n_cards, cw);
+  int w = 0;
+  for (int k = 0; k < kCols; ++k) w += cw[k];
+  // Gaps between columns, then the first box's left pad and the last one's
+  // right.
+  return w + (kCols - 1) * item_gap(&a) + 2 * pad_h(&a);
+}
+
+int GsCompactBar::sizing_row_width(const MaskAtlas& a) {
+  return kSizingChars * a.advance_x + (kSizingItems - 1) * item_gap(&a) + 2 * pad_h(&a);
 }
 
 bool GsCompactBar::layout(int screen_w, int screen_h, std::string* err) {
@@ -181,9 +217,9 @@ bool GsCompactBar::layout(int screen_w, int screen_h, std::string* err) {
   atlas_ = nullptr;
   for (Field& f : fields_) f = Field{};
   bounds_ = DirtyRect{0, 0, 0, 0};
-  // Same reason as GsOverlay's: a re-layout must force the next update()
-  // to reconcile the card count again, even if it reports what it did
-  // before this layout() threw the boxes away.
+  // A re-layout must force the next update() to reconcile the card count
+  // again, even if it reports what it did before this layout() threw the
+  // boxes away: a stale n_cards_ would make that reconciliation a no-op.
   n_cards_ = -1;
 
   if (screen_w <= 0 || screen_h <= 0) {
@@ -195,20 +231,17 @@ bool GsCompactBar::layout(int screen_w, int screen_h, std::string* err) {
   const int inset_y = (int)(kInsetY * scale + 0.5);
   const int avail_w = screen_w - 2 * inset_x;
 
-  // Largest baked size whose WORST-CASE rows both fit. Unlike the essential
-  // overlay this asks for no particular design size: the bar has one type
-  // size and its only constraints are the width of its widest row and the
-  // height of the stack, so "the biggest that fits" is the whole rule --
-  // and it is what makes the bar render at a readable size on a 720p panel
-  // and a bigger one on a 4K panel without a per-resolution table.
+  // Largest baked size at which the sizing reference row AND both
+  // worst-case rows fit, and the stack fits the height (gs_compact.h). One
+  // type size, no per-resolution table: the same rule renders a readable
+  // bar on a 720p panel and a bigger one on a 4K panel.
   const MaskAtlas* best = nullptr;
   int best_px = 0;
   for (int px = 1; px <= 512; ++px) {
     const MaskAtlas* a = font_.atlas(px);
     if (!a || a->advance_x <= 0) continue;
-    bool fits = true;
-    for (int row = 0; row < kRows; ++row)
-      if (worst_row_width(*a, row, kMaxCards) > avail_w) fits = false;
+    bool fits = sizing_row_width(*a) <= avail_w &&
+                worst_grid_width(*a, kMaxCards) <= avail_w;
     if (!fits) continue;
     // The stack also has to sit ABOVE the bottom inset without running off
     // the top of a short surface.
@@ -230,8 +263,7 @@ bool GsCompactBar::layout(int screen_w, int screen_h, std::string* err) {
   // rise by that much for the BOX -- shadow pad included -- to clear the
   // bottom inset. Rows stack by a full glyph_h plus a margin: a shorter
   // pitch would have row 0's padded box overlap row 1's, and an overlap is
-  // one row's clear erasing the other's ink (the mistake gs_overlay.cpp
-  // documents at kRung's placement).
+  // one row's clear erasing the other's ink.
   const int row_pitch = best->glyph_h + (int)(kRowGap * scale + 0.5);
   baseline_y_[kRows - 1] = screen_h - inset_y - (best->glyph_h - best->baseline);
   for (int row = kRows - 2; row >= 0; --row)
@@ -272,30 +304,27 @@ void GsCompactBar::place_(int n_cards) {
     bounds_ = union_of(bounds_, f.box);
   }
 
-  // Each row is centred on its OWN width, not on the block's: the two rows
-  // hold different amounts of text, and left-aligning the shorter one to
-  // the longer one's edge reads as a layout that slipped.
-  for (int row = 0; row < kRows; ++row) {
-    int total = 0, n = 0;
-    for (int i = 0; i < (int)GsBarField::kCount; ++i) {
-      if (kRow[i] != row) continue;
-      total += w[i] + (n++ ? gap_ : 0);
-    }
-    if (n == 0) continue;
-    // Centred, but never past the inset: with kMaxCards a row can be wide
-    // enough that centring and the inset disagree, and the inset wins.
-    int pen = (screen_w_ - total) / 2;
-    if (pen < inset_x_ + pad) pen = inset_x_ + pad;
-    for (int i = 0; i < (int)GsBarField::kCount; ++i) {
-      if (kRow[i] != row) continue;
-      Field& f = f_(kOrder[i]);
-      f.pen_x = pen;
-      f.baseline_y = baseline_y_[row];
-      f.box = DirtyRect{pen - pad, baseline_y_[row] - atlas_->baseline,
-                        w[i] + 2 * pad, atlas_->glyph_h};
-      bounds_ = union_of(bounds_, f.box);
-      pen += w[i] + gap_;
-    }
+  // The rows share a column grid (gs_compact.h), and the GRID is centred.
+  // Each item starts at its column's left edge; its box spans only its own
+  // worst case, not the column, so a narrow item's redraw stays narrow.
+  int cw[kCols];
+  column_widths(*atlas_, n_cards, cw);
+  int total = (kCols - 1) * gap_;
+  for (int k = 0; k < kCols; ++k) total += cw[k];
+  // Centred, but never past the inset: with kMaxCards the grid can be wide
+  // enough that centring and the inset disagree, and the inset wins.
+  int col_x[kCols];
+  col_x[0] = std::max((screen_w_ - total) / 2, inset_x_ + pad);
+  for (int k = 1; k < kCols; ++k) col_x[k] = col_x[k - 1] + cw[k - 1] + gap_;
+  for (int i = 0; i < (int)GsBarField::kCount; ++i) {
+    const int row = kRow[i];
+    if (row == kCorner) continue;
+    Field& f = f_(kOrder[i]);
+    f.pen_x = col_x[col_of(kOrder[i])];
+    f.baseline_y = baseline_y_[row];
+    f.box = DirtyRect{f.pen_x - pad, baseline_y_[row] - atlas_->baseline,
+                      w[i] + 2 * pad, atlas_->glyph_h};
+    bounds_ = union_of(bounds_, f.box);
   }
 }
 
@@ -319,8 +348,8 @@ GsCompactBar::FieldState GsCompactBar::state_of_(const GsSnapshot& snap,
   switch (id) {
     case GsBarField::kCh:
       st.rgb = link;
-      // Our key file differs from the drone's (spec 2026-10-01
-      // link-pairing): no RCFs go out in this state, so this takes
+      // Our key file differs from the drone's (link pairing): no RCFs go
+      // out in this state, so this takes
       // priority over the hop/scan suffixes below -- the channel number
       // itself is irrelevant while the link can't be controlled. Gated on
       // !stale: a frozen last-known key_mismatch from a dead sideport
@@ -330,13 +359,12 @@ GsCompactBar::FieldState GsCompactBar::state_of_(const GsSnapshot& snap,
         st.rgb = tok::kStatusCaution;
         break;
       }
-      st.text = snap.channel
-                    ? "ch:" + ascii_int(std::clamp(*snap.channel, 0, 999))
-                    : "ch:--";
-      // In-flight channel hop (spec 2026-09-14-inflight-channel-hop) takes
-      // priority over the boot-scan mark below -- both share one suffix
-      // slot (worst_case() reserves exactly "(a)"'s width), and a hop mid-
-      // flight is the more actionable of the two for the pilot.
+      st.text = tag(gs_icon::kCh) +
+                (snap.channel ? ascii_int(std::clamp(*snap.channel, 0, 999)) : "--");
+      // In-flight channel hop takes priority over the boot-scan mark below --
+      // both share one suffix slot (worst_case() reserves exactly "(a)"'s
+      // width), and a hop mid-flight is the more actionable of the two for
+      // the pilot.
       if (snap.hopped) {
         st.text += "(h)";
       } else if (snap.scan_auto) {
@@ -348,25 +376,24 @@ GsCompactBar::FieldState GsCompactBar::state_of_(const GsSnapshot& snap,
     case GsBarField::kMcs:
       st.rgb = link;
       if (snap.mcs) {
-        st.text = "mcs:" + ascii_int(std::clamp(*snap.mcs, 0, 9)) + "/" +
+        st.text = tag(gs_icon::kMcs) + ascii_int(std::clamp(*snap.mcs, 0, 9)) + "/" +
                   (snap.bw ? ascii_int(std::clamp(*snap.bw, 20, 40)) : std::string("--"));
       } else {
-        st.text = "mcs:--";
+        st.text = tag(gs_icon::kMcs) + "--";
       }
       break;
     case GsBarField::kAir:
       st.rgb = link;
-      st.text = snap.air_pct
-                    ? "air:" + fmt_int(std::clamp(*snap.air_pct, 0.0, 100.0)) + "%"
-                    : "air:--";
+      st.text = tag(gs_icon::kAir) +
+                (snap.air_pct ? fmt_int(std::clamp(*snap.air_pct, 0.0, 100.0)) + "%" : "--");
       break;
     case GsBarField::kRssi:
       st.rgb = link;
-      st.text = join_cards("rssi", snap, /*snr=*/false);
+      st.text = join_cards(gs_icon::kRssi, snap, /*snr=*/false);
       break;
     case GsBarField::kSnr:
       st.rgb = link;
-      st.text = join_cards("snr", snap, /*snr=*/true);
+      st.text = join_cards(gs_icon::kSnr, snap, /*snr=*/true);
       break;
     case GsBarField::kTemp:
       // Drone SoC temperature off the 1 Hz Telem. Link-sourced, so it dims
@@ -377,24 +404,26 @@ GsCompactBar::FieldState GsCompactBar::state_of_(const GsSnapshot& snap,
       st.rgb = link;
       if (snap.soc_temp_c) {
         const int c = std::clamp(*snap.soc_temp_c, 0, 127);
-        st.text = "temp:" + ascii_int(c);
+        st.text = tag(gs_icon::kTemp) + ascii_int(c);
         if (c >= kTempCautionC && !stale) st.rgb = tok::kStatusCaution;
       } else {
-        st.text = "temp:--";
+        st.text = tag(gs_icon::kTemp) + "--";
       }
       break;
     case GsBarField::kBitrate:
       // Player-measured: AU bytes off the ring, not an encoder setpoint.
-      st.text = "bitrate:" + fmt_one_dp(std::clamp(ps.mbps, 0.0, 999.9));
+      st.text = tag(gs_icon::kBitrate) + fmt_one_dp(std::clamp(ps.mbps, 0.0, 999.9));
       break;
     case GsBarField::kRes:
-      st.text = (ps.vid_w > 0 && ps.vid_h > 0)
-                    ? "res:" + ascii_int(std::clamp(ps.vid_w, 0, 9999)) + "x" +
-                          ascii_int(std::clamp(ps.vid_h, 0, 9999))
-                    : "res:--";
+      // The short form: decoded height plus "p" (1280x720 -> 720p). A 4:3
+      // mode reads the same as its 16:9 sibling (1440x1080 -> 1080p).
+      st.text = tag(gs_icon::kRes) +
+                ((ps.vid_w > 0 && ps.vid_h > 0)
+                     ? ascii_int(std::clamp(ps.vid_h, 0, 9999)) + "p"
+                     : "--");
       break;
     case GsBarField::kFps:
-      st.text = "fps:" + fmt_int(std::clamp(ps.fps, 0.0, 999.0));
+      st.text = tag(gs_icon::kFps) + fmt_int(std::clamp(ps.fps, 0.0, 999.0));
       // Low-power (pre-arm) mode: the rate is low on purpose. Caution
       // tint, same text. The CELL is player-measured and so never dims --
       // but the FLAG is link-sourced, so it is gated on !stale: once the
@@ -405,23 +434,21 @@ GsCompactBar::FieldState GsCompactBar::state_of_(const GsSnapshot& snap,
       if (snap.low_power && !stale) st.rgb = tok::kStatusCaution;
       break;
     case GsBarField::kJit:
-      st.text = "jit:" + fmt_one_dp(std::clamp(ps.jitter_ms, 0.0, 999.9));
+      st.text = tag(gs_icon::kJit) + fmt_one_dp(std::clamp(ps.jitter_ms, 0.0, 999.9));
       break;
     case GsBarField::kLat:
-      // p50 then p99, the same order the essential overlay stacks them in.
-      // No ~ marker for the relative case: this line has no room for a
+      // p50 then p99. No ~ marker for the relative case: this line has no room for a
       // qualifier, and lat_valid already gates the only state where the
       // number would be a fabrication.
-      st.text = ps.lat_valid
-                    ? "lat:" +
-                          fmt_int(std::clamp((double)ps.lat_p50_e2e_ms, 0.0, 999.0)) +
-                          "/" +
-                          fmt_int(std::clamp((double)ps.lat_e2e_ms, 0.0, 999.0))
-                    : "lat:--/--";
+      st.text = tag(gs_icon::kLat) +
+                (ps.lat_valid
+                     ? fmt_int(std::clamp((double)ps.lat_p50_e2e_ms, 0.0, 999.0)) + "/" +
+                           fmt_int(std::clamp((double)ps.lat_e2e_ms, 0.0, 999.0))
+                     : "--/--");
       break;
     case GsBarField::kLoss:
       st.rgb = link;
-      st.text = "loss:";
+      st.text = tag(gs_icon::kLoss);
       st.text += snap.pre_loss_pct
                      ? fmt_one_dp(std::clamp(*snap.pre_loss_pct, 0.0, 100.0))
                      : "--";
@@ -431,9 +458,8 @@ GsCompactBar::FieldState GsCompactBar::state_of_(const GsSnapshot& snap,
                      : "--";
       break;
     case GsBarField::kRec: {
-      // Byte-for-byte the essential overlay's kRec, deliberately: one
-      // aircraft, one recording indicator. Never dimmed -- the recorder is
-      // the player's own business and says nothing about the link.
+      // Never dimmed -- the recorder is the player's own business and says
+      // nothing about the link.
       const RecText t = rec_text(ps.rec);
       st.text = t.text;
       st.rgb = t.rgb;
@@ -470,9 +496,11 @@ void GsCompactBar::draw_field_(GsBarField id, const FieldState& st,
   int pen_x = f.pen_x;
   if (id == GsBarField::kRec) {
     // kRec's box is sized to rec_worst(target) (gs_layer.h), wider than most
-    // of what rec_text() actually returns -- see the essential overlay's
-    // draw_field_ for the full reasoning. Right-align within the box so a
-    // GS-only "REC mm:ss"/"REC FAULT" lands exactly where it always did.
+    // of what rec_text() actually returns -- a GS-only "REC mm:ss"/"REC
+    // FAULT" must land exactly where it always did, not wherever the widest
+    // VTX+GS fault combo would start. Right-align within the box: the pad on
+    // both sides is symmetric, so box_right - pad - text_width mirrors
+    // layout()'s box_left + pad.
     const int pad = (a->glyph_w - a->advance_x) / 2;
     pen_x = f.box.x + f.box.w - pad - text_width(*a, st.text.c_str());
   }
@@ -495,12 +523,10 @@ int GsCompactBar::update(const GsSnapshot& snap, bool stale,
   if (!laid_out_) return 0;
   int drawn = 0;
 
-  // A changed card count changes the width of two items and therefore the
-  // x of every item after them -- and, because each row is centred, of
-  // every item before them on that row too. Both items live on row 0, but
-  // erase EVERYTHING anyway: it costs one extra clear of a row that did not
-  // move and removes the standing question of whether the split still keeps
-  // the widths apart. A field's own next draw only ever clears its NEW box.
+  // A changed card count changes the width of two items, so of their
+  // columns, and therefore -- the grid being centred -- the x of every
+  // column, on both rows. Erase everything: a column move takes the row-1
+  // item under it along. A field's own next draw only ever clears its NEW box.
   const int n = std::min((int)snap.cards.size(), kMaxCards);
   if (n != n_cards_) {
     if (n_cards_ >= 0) {

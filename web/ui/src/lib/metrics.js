@@ -1,4 +1,4 @@
-// Page-side video metrics sampled every 200 ms (spec §4.2): the core's stats
+// Page-side video metrics sampled every 200 ms: the core's stats
 // are 1 Hz, the handoff's refresh is 200 ms. Trailing 1 s windows.
 const WINDOW_MS = 1000;
 

@@ -22,7 +22,7 @@
 
 /* ── Compiled constants ───────────────────────────────────────────────────
  * These were waybeam JSON keys with exactly one value mabur ever uses, so
- * they are pinned here rather than carried through VencCfg (spec §3).
+ * they are pinned here rather than carried through VencCfg.
  * Values are waybeam's venc_config_defaults() (f956a52:src/venc_config.c). */
 #define STAR6E_OVERCLOCK_LEVEL      1      /* system.overclockLevel */
 #define STAR6E_KEEP_ASPECT          true   /* isp.keepAspect */
@@ -41,7 +41,7 @@
  * can never pick it: fps excess sits in the HIGH 32 bits of the cost, so
  * that mode's 90-60=30 excess outranks its perfect resolution match.
  * Pinning is the only lever, since forced_mode has no config key.
- * Measured on the bench 2026-09-16 (matched scene content, mode 2's central
+ * Measured on the bench (matched scene content, mode 2's central
  * 66.7% upscaled to compare like for like): binning costs ~33% of fine
  * detail (mean |grad| 1.336 -> 0.895) with strong edges untouched, and buys
  * back the entire field of view.  On an FPV lens that is the trade we want.
@@ -841,7 +841,7 @@ static int star6e_pipeline_pre_start_apply_ref_pred(MI_VENC_CHN chn,
 	return 0;
 }
 
-/* H.265 row slices (spec 2026-10-10-h265-slices §5.1). SDK rule, like
+/* H.265 row slices (docs/slices.md). SDK rule, like
  * refPred: between CreateChn and StartRecvPic. u32SliceRowCount counts
  * 32-px rows; the SDK rounds to whole 64-px CTU rows, so 2k asks for k CTU
  * rows per slice. A failed set or a readback that differs fails channel
@@ -987,7 +987,7 @@ static int prepare_pipeline_config(const VencCfg *cfg,
 	pconf->image_width     = pconf->sensor_width;
 	pconf->image_height    = pconf->sensor_height;
 	pconf->sensor_framerate = cfg->fps;
-	/* No venc.bitrate key (spec §3) — the channel is created at the floor
+	/* No venc.bitrate key — the channel is created at the floor
 	 * and RcAgent programs the real rate on its first tick. */
 	pconf->venc_max_rate   = VENC_BOOT_BITRATE_KBPS;
 
@@ -1197,7 +1197,7 @@ static int bind_and_finalize_pipeline(Star6ePipelineState *state,
 
 	/* VTX onboard recorder: bound BEFORE the link channel, so the link is
 	 * the newest VPE peer and its encode runs first on the single-task
-	 * H.265 engine (docs/sd-record-findings-2026-09-26.md, R1 vs R2-R4).
+	 * H.265 engine (docs/findings/2026-09-26-sd-record.md, R1 vs R2-R4).
 	 * Nothing may bind a new ACTIVE peer to this port after the link.
 	 * Non-fatal: a failure leaves the recorder reporting Disabled. */
 	(void)venc_record_attach(&state->vpe_port, state->image_width,
@@ -1205,7 +1205,7 @@ static int bind_and_finalize_pipeline(Star6ePipelineState *state,
 		bind_src_fps);
 
 	/* FRAMEBASE is the only link mode this hop accepts.
-	 * I6_SYS_LINK_LOWLATENCY was tried on hardware 2026-08-31 (it would
+	 * I6_SYS_LINK_LOWLATENCY was tried on hardware (it would
 	 * overlap encode with sensor readout, worth ~4-6 ms of the `enc`
 	 * segment): MI_SYS_BindChnPort2 rejects it outright with
 	 * -1610014712 (0xa00a8008) and venc init fails — encode start

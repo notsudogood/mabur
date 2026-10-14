@@ -5,7 +5,7 @@
 
 namespace maburgs {
 
-// Rate-aware FrameStream gap timeout (docs/dejitter-findings-2026-08-30.md
+// Rate-aware FrameStream gap timeout (docs/findings/2026-08-30-dejitter.md
 // §follow-up). A lost symbol can only be repaired while the TX sliding
 // window still references it — a lifetime of w/send_rate SECONDS, which at
 // low rungs exceeds the fixed 50 ms gap timeout (w=32 spans ~85 ms at

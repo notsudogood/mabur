@@ -1,5 +1,5 @@
 // RcAgent <-> VrxController loopback: the only place both ends of the
-// rendezvous run against each other on the host. Spec 2026-10-01 §11.
+// rendezvous run against each other on the host.
 #include <cstdio>
 #include <vector>
 #include "mtest.h"
@@ -173,12 +173,11 @@ TEST(drone_restart_relinks_through_the_keepalive_disc) {
   std::fprintf(stderr, "drone restart: relinked %.0f ms after the swap\n", relinked_at);
 }
 
-// Spec 2026-10-01 §7: failsafe clears both sessions. The GS keeps getting
-// video (so it stays in SESSION and keeps sending RCFs + 1 s keep-alive
-// DISCs) while every GS->drone frame is lost for longer than failsafe_ms.
-// An RCF the GS sent during the fade, replayed after failsafe, must be
-// rejected; once the uplink returns the keep-alive DISC re-pairs and the
-// next RCF re-links.
+// Failsafe clears both sessions. The GS keeps getting video (so it stays in
+// SESSION and keeps sending RCFs + 1 s keep-alive DISCs) while every GS->drone
+// frame is lost for longer than failsafe_ms. An RCF the GS sent during the
+// fade, replayed after failsafe, must be rejected; once the uplink returns the
+// keep-alive DISC re-pairs and the next RCF re-links.
 TEST(uplink_fade_past_failsafe_relinks_through_the_keepalive_disc) {
   Loop l(kDefaultLinkKey, kDefaultLinkKey);
   double t = 0;

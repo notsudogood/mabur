@@ -35,7 +35,7 @@ struct ScoutDwell {
   devourer::chanmig::SurveyDwell survey;
   bool floor_valid = false;
   int8_t floor_dbm = 0;
-  // In-session (Task 10) provenance: whether this dwell ran mid-flight, and
+  // In-session provenance: whether this dwell ran mid-flight, and
   // the step timings in microseconds. Boot-time dwells leave these at their
   // defaults (0/0/0/0) so scan.log's D record stays valid without a hop.
   bool in_session = false;
@@ -54,13 +54,13 @@ struct ScoutDwell {
 //    it is. Bursts happen only when search && the dwell channel is a member.
 //  - measure (auto mode, pick open): observe every dwell channel (both 20
 //    MHz halves of each member's pair at width 40) and rank it. An observe
-//    while unlinked is quiet(): the TX card holds its DISC (bench
-//    2026-09-13: a beaconing card's TX leaks into the adjacent scout).
+//    while unlinked is quiet(): the TX card holds its DISC (bench: a
+//    beaconing card's TX leaks into the adjacent scout).
 //    Linked, the TX card carries video and is never held; its leak is
 //    subtracted instead: RankSample::leak = round(leak_per_frame x frames
 //    the TX card sent during the observe), fed in via set_tx_frames().
 //    With the search off (linked), op's own halves are skipped: they carry
-//    the drone's video (final review I1).
+//    the drone's video.
 //  - no work (linked and pinned, or frozen): park on op at link_width_mhz
 //    (once), working() false. freeze() closes the pick for good.
 //
@@ -104,8 +104,8 @@ class ChannelScout {
   // mature(): every member except op ranked (op too while searching: then
   // it is visited like any other). op_ranked(): op's pair (width 40) / op
   // itself (width 20) has the effective min_rounds. While the search is off
-  // and the pick open, op's halves are never dwelt on (final review I1:
-  // they carry the drone's own video), so op keeps only its pre-link visits
+  // and the pick open, op's halves are never dwelt on (they carry
+  // the drone's own video), so op keeps only its pre-link visits
   // and may well be unranked at maturity -- the core freezes in place then.
   bool mature() const;
   bool op_ranked() const;

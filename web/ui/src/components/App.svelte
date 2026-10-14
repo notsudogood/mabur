@@ -74,7 +74,7 @@
   const video = new VideoPipeline({ getCanvas: () => canvas, getGlCanvas: () => glCanvas, getMode: () => sess.mode,
     getColortrans: () => ui.cfg.colortrans, onWantIdr: () => session.requestIdr() });
   const tele = new Telemetry(video);
-  // MSP OSD (spec 2026-09-27-web-msp-osd): latest DisplayPort grid, painted on
+  // MSP OSD: latest DisplayPort grid, painted on
   // a second canvas over the video. The atlas URL resolves against the page
   // (works under the Pages /mabur/ base as well as at a local root).
   const osdLayer = new OsdLayer();
@@ -240,8 +240,7 @@
   const localReady = $derived(live && opfsOk && core?.lrec_avail !== 0);
   // Local needs only a live module with OPFS; VTX-only keeps today's rule.
   // Both falls back to the VTX-only rule when there's no browser storage --
-  // spec §2.4 still wants Record to work, just VTX-only (spec 2026-09-28
-  // final review finding 4).
+  // Record still works then, just VTX-only.
   const bothVtxFallback = $derived(recTarget === 'both' && !localReady);
   const recDisabled = $derived(recTarget === 'vtx' || bothVtxFallback ? !vtxReady : !localReady);
   const recLabel = $derived(recOn ? formatClock(recMs) : recWaiting ? 'waiting for sync…'

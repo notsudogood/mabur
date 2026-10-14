@@ -4,7 +4,7 @@ add_library(mabur_common STATIC src/crc16.cpp src/gf256.cpp src/sbi.cpp src/nal.
 # Buildroot's toolchain file pins CMAKE_CXX_FLAGS to -Os and empties the
 # Release flags, so the image-builder maburd was -Os while tools/build-arm.sh
 # was -O3 -- an 8.5 % difference on the drone's producer thread, measured
-# 2026-09-22 (docs/bitrate-ceiling-findings-2026-09-21.md). A per-target
+# 2026-09-22 (docs/findings/2026-09-21-bitrate-ceiling.md). A per-target
 # option comes after CMAKE_CXX_FLAGS on the command line, so it wins under
 # either builder. Debug builds keep their -O0.
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")

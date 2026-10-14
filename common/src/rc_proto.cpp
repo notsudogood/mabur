@@ -65,10 +65,10 @@ void put_tag(std::vector<uint8_t>& body, const LinkKey& key, const TagCtx& ctx) 
   put64(body, siphash24(key, m.data(), m.size()));
 }
 
-constexpr size_t RCF_HEAD_LEN = 15;  // 2026-10-01: vtx_id deleted (19)
+constexpr size_t RCF_HEAD_LEN = 15;  // RC_VERSION 14: vtx_id deleted (19)
 constexpr size_t DISC_LEN = 17;
-constexpr size_t DISC_ACK_LEN = 20;  // 2026-10-01: vtx_nonce(4) + flags(1) added (15)
-constexpr size_t TELEM_LEN = 54;  // 2026-10-06: +nack_rx/retx_syms/retx_refused (48)
+constexpr size_t DISC_ACK_LEN = 20;  // RC_VERSION 14: vtx_nonce(4) + flags(1) added (15)
+constexpr size_t TELEM_LEN = 54;  // RC_VERSION 15: +nack_rx/retx_syms/retx_refused (48)
 
 // magic(2) | ver | type | flags | nonce(4) | phase | fpc(2) |
 // settle(2) | gap(2) | n_windows(1) | n * 4 bytes

@@ -1,8 +1,8 @@
 // Host-side burst-loss simulator for the sliding-window UEP pipeline.
 // Real UepEncoder -> body-loss channel -> real UepDecoder, fake clock.
 // Quantifies residual per-layer frame loss vs burst length across
-// symbol_size/bpb/window configs (spec: 2026-07-15-per-layer-symbol-size).
-// 2-stream space since Task 3 (airtime-balance-uep): sid 0 = critical/base,
+// symbol_size/bpb/window configs.
+// 2-stream space since airtime-balance-uep: sid 0 = critical/base,
 // sid 1 = bulk/enhance (the old sid 1..3 bulk streams collapsed to one).
 //
 // Modes:
@@ -33,9 +33,9 @@ struct LayerSpec {
   const char* name;
 };
 
-// Literal overhead (Task 3): 0.5 on both layers is the flattened value the
-// old kUepRefOverhead ladder carried at every index (2026-08-29 UEP
-// flatten), so this reproduces the exact SwConfig geometry pre-Task-3
+// Literal overhead: 0.5 on both layers is the flattened value the old
+// kUepRefOverhead ladder carried at every index (UEP flatten), so this
+// reproduces the exact SwConfig geometry the pre-airtime-balance-uep
 // layers_for() built via kUepRefOverhead[s] — no ×2 rule needed here, this
 // constant was already the literal applied overhead, never a scaled cmd
 // value.
@@ -280,8 +280,8 @@ int self_check() {
       expect(residual_pct(o.layer[(size_t)s]) == 0.0, "B=1 zero loss");
   }
   // Gate 2: guarantee-region budget edge, single-layer stream 1 (the bulk
-  // layer — old sid 3 pre-Task-3, ov 0.50 since the 2026-08-29 UEP flatten,
-  // was 0.25), sym1312/bpb1/w64.
+  // layer — old sid 3 before the 2-stream renumbering, ov 0.50 since the
+  // UEP flatten, was 0.25), sym1312/bpb1/w64.
   // L <= W*ov/(1+ov) = 64*0.50/1.50 = 21.33 lost SOURCES is a one-sided
   // sufficiency bound, same as before. The body mix changed with ov: the
   // emitted-body stream interleaves one repair per 1/ov sources, i.e. the
@@ -297,8 +297,8 @@ int self_check() {
   // so the first lossy B may land past it — assert it exists in [31, 51]
   // (measured edge: B=48 under whole-frame traffic with the flattened
   // ladder, lossless confirmed through B=47; was B=21 under the pre-flatten
-  // ov=0.25 ladder — see the 2026-08-29 UEP-flatten commit for that history;
-  // geometry unchanged by the Task 3 sid 3->1 renumbering, sym1312/bpb1/w64
+  // ov=0.25 ladder — see the UEP-flatten commit for that history;
+  // geometry unchanged by the sid 3->1 renumbering, sym1312/bpb1/w64
   // is exactly the same layer as before).
   int first_lossy = -1;
   for (int B = 2; B <= 51; B += 1) {

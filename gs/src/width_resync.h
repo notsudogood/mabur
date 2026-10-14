@@ -14,7 +14,7 @@ namespace maburgs {
 
 // The fix-up may touch cards only once no boot scout thread owns one:
 // joined (after run(), or never started) AND the scan is over (frozen).
-// No scout at all (radio.scan.enable off) is open from the start.
+// No scout at all (pinned, or no scout-capable card) is open from the start.
 inline bool width_resync_open(bool scout_joined, bool has_scout, bool scout_frozen) {
   return scout_joined && (!has_scout || scout_frozen);
 }

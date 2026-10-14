@@ -12,14 +12,23 @@ using mabur::framewire::FrameHdr;
 
 namespace {
 struct Capture {
-  struct Ev { char kind; FrameHdr hdr; std::vector<uint8_t> bytes; bool complete; uint8_t sid = 0; AuLatMeta lat; };
+  struct Ev { char kind; FrameHdr hdr; std::vector<uint8_t> bytes; bool complete; uint8_t sid = 0; AuLatMeta lat; uint8_t nslices = 0; };
   std::vector<Ev> evs;
   std::vector<uint8_t> cur;
+  std::vector<uint8_t> tail;   // bytes that came through frame_tail (cbs_with_tail only)
   FrameStream::Callbacks cbs() {
     return {
-        [this](const FrameHdr& h, uint8_t sid) { evs.push_back({'B', h, {}, false, sid, {}}); cur.clear(); },
+        [this](const FrameHdr& h, uint8_t sid, uint8_t ns) { evs.push_back({'B', h, {}, false, sid, {}, ns}); cur.clear(); },
         [this](const uint8_t* d, size_t n) { cur.insert(cur.end(), d, d + n); },
         [this](bool c, const AuLatMeta& lat) { evs.push_back({'E', {}, cur, c, 0, lat}); cur.clear(); }};
+  }
+  FrameStream::Callbacks cbs_with_tail() {
+    FrameStream::Callbacks c = cbs();
+    c.frame_tail = [this](const uint8_t* d, size_t n) {
+      tail.insert(tail.end(), d, d + n);
+      cur.insert(cur.end(), d, d + n);   // still part of the AU's bytes
+    };
+    return c;
   }
 };
 
@@ -238,7 +247,7 @@ TEST(waybeam_restart_discont_no_phantom_drops) {
 }
 
 TEST(lost_discont_restart_recovers_via_stall_watchdog) {
-  // The 2026-07-25 rig outage: maburd restarts, every frame of its discont
+  // The rig outage: maburd restarts, every frame of its discont
   // window is lost at radio bring-up, and the new epoch's ids unwrap BELOW
   // the surviving emit cursor via the signed-16 delta. Every arriving frame
   // is then evicted as "late" — no emission for up to 18 min. The watchdog
@@ -297,7 +306,7 @@ TEST(whole_frame_gap_waits_for_the_max_sid_timeout) {
   CHECK(fs.frames_clean() == 2);
 }
 
-// --- Task 8: per-AU latency latch (t_first/drone_q_ms/enc_us on end_frame) ---
+// --- per-AU latency latch (t_first/drone_q_ms/enc_us on end_frame) ---
 
 TEST(lat_t_first_is_min_body_time_q_enc_latched_from_idx0) {
   Capture cap;
@@ -401,7 +410,7 @@ TEST(tail_view_reports_count_and_seq_of_highest_fragment) {
 
 TEST(tail_view_hdr_retx_latches_through_end_frame) {
   // Fragment 0 arriving retx-marked latches AuLatMeta::hdr_retx, surfaced to
-  // the ring writer via end_frame -- Task 7's latency-anchor guard consumes
+  // the ring writer via end_frame -- the latency-anchor guard consumes
   // this to refuse an anchor sample built from a NACK-filled header.
   Capture cap;
   FrameStream fs({50, 8}, cap.cbs());
@@ -420,7 +429,7 @@ TEST(tail_view_hdr_retx_latches_through_end_frame) {
   CHECK(cap.evs.back().lat.hdr_retx == true);
 }
 
-// --- Task 9: FrameStream slice-salvage integration ---
+// --- FrameStream slice-salvage integration ---
 
 namespace {
 // FrameHdr + AU, split into fragments of 324-byte payload like production.
@@ -502,7 +511,7 @@ TEST(split_au_without_params_passes_through_counted) {
   CHECK(cap.evs[1].bytes == std::vector<uint8_t>(aus[5].begin(), aus[5].begin() + 20 * 324 - 8));
 }
 
-TEST(split_au_fallback_with_assembler_is_the_raw_prefix) {   // spec 5.7
+TEST(split_au_fallback_with_assembler_is_the_raw_prefix) {
   // Params usable and slice_rows 5: the assembler is engaged and drains
   // fragment by fragment. The picture is the IDR (I slices) with a hole in
   // slice 1 -> kSliceFbISlice. Passthrough must be byte-identical to the
@@ -621,7 +630,80 @@ TEST(no_early_give_up_without_the_fragment_symbol_map) {
   CHECK(fs.early_finished(0) == 0);
 }
 
-MTEST_MAIN
+// --- Part 2: begin_frame tells the ring how many slices the picture has ---
+
+TEST(begin_frame_carries_the_slice_count) {
+  const auto aus = mtest::load_slice_fixture();
+  Capture cap;
+  FrameStream fs({50, 8}, cap.cbs());
+  for (auto& p : frag_au(0, aus[3], 0, 0)) fs.push_fragment(0, p.data(), p.size(), 1);  // refresh start: params, one slice
+  for (auto& p : frag_au(1, aus[5], 5, 1)) fs.push_fragment(0, p.data(), p.size(), 2);  // 4 slices of 5 CTU rows
+  REQUIRE(cap.evs.size() == 4);
+  CHECK(cap.evs[0].kind == 'B');
+  CHECK(cap.evs[0].nslices == 1);   // unsplit AU: whole
+  CHECK(cap.evs[2].kind == 'B');
+  CHECK(cap.evs[2].nslices == 4);   // 17 CTU rows / 5 per slice
+}
+
+TEST(split_au_before_params_begins_whole) {
+  const auto aus = mtest::load_slice_fixture();
+  Capture cap;
+  FrameStream fs({50, 8}, cap.cbs());
+  for (auto& p : frag_au(0, aus[5], 5, 0)) fs.push_fragment(0, p.data(), p.size(), 1);  // no SPS/PPS yet
+  REQUIRE(!cap.evs.empty());
+  CHECK(cap.evs[0].kind == 'B');
+  CHECK(cap.evs[0].nslices == 1);   // no assembler: the ring gets a whole AU
+}
+
+// --- Part 2: the ring v4 writer contract (a split AU's valid_len ends on a NAL boundary) ---
+
+TEST(passthrough_remainder_goes_to_frame_tail) {
+  // The picture of split_au_fallback_with_assembler_is_the_raw_prefix: the
+  // IDR with a hole in slice 1 passes through (kSliceFbISlice). What drain()
+  // streamed is NAL-aligned frame_data; the remainder emitted at finish (it
+  // ends at the hole, mid-NAL) arrives through frame_tail.
+  const auto aus = mtest::load_slice_fixture();
+  const auto sl = mtest::slice_nals(aus[0]);
+  const size_t off1 = static_cast<size_t>(
+      std::search(aus[0].begin(), aus[0].end(), sl[1].begin(), sl[1].end()) - aus[0].begin());
+  const size_t hole = (off1 + 8) / 324 + 1;   // inside slice 1: slice 0 drained whole
+  Capture cap;
+  FrameStream fs({50, 8}, cap.cbs_with_tail());
+  for (auto& p : frag_au(0, aus[3], 0, 0)) fs.push_fragment(0, p.data(), p.size(), 1);
+  auto frags = frag_au(1, aus[0], 5, 1);
+  REQUIRE(hole + 1 < frags.size());
+  frags.erase(frags.begin() + static_cast<long>(hole));
+  for (auto& p : frags) fs.push_fragment(0, p.data(), p.size(), 2);
+  CHECK(cap.tail.empty());             // nothing unaligned before finish
+  fs.poll(100);
+  REQUIRE(cap.evs.size() == 4);
+  CHECK(cap.evs[3].lat.slice.fallback == kSliceFbISlice);
+  const auto& b = cap.evs[3].bytes;
+  CHECK(b == std::vector<uint8_t>(aus[0].begin(), aus[0].begin() + static_cast<long>(hole * 324 - 8)));
+  REQUIRE(!cap.tail.empty());
+  REQUIRE(cap.tail.size() < b.size());
+  const size_t cut = b.size() - cap.tail.size();   // where frame_data stopped
+  CHECK(b[cut] == 0 && b[cut + 1] == 0 &&
+        (b[cut + 2] == 1 || (b[cut + 2] == 0 && b[cut + 3] == 1)));   // a start code: NAL boundary
+  CHECK(std::equal(cap.tail.begin(), cap.tail.end(), b.begin() + static_cast<long>(cut)));
+}
+
+TEST(whole_slices_never_use_frame_tail) {
+  const auto aus = mtest::load_slice_fixture();
+  Capture cap;
+  FrameStream fs({50, 8}, cap.cbs_with_tail());
+  for (auto& p : frag_au(0, aus[3], 0, 0)) fs.push_fragment(0, p.data(), p.size(), 1);  // params
+  for (auto& p : frag_au(1, aus[5], 5, 1)) fs.push_fragment(0, p.data(), p.size(), 2);  // complete split AU
+  auto frags = frag_au(2, aus[5], 5, 2);   // the same picture again, now with a hole
+  frags.erase(frags.begin() + 20);     // in slice 1 (as salvage_rebuilds_a_holed_split_au): salvaged
+  for (auto& p : frags) fs.push_fragment(0, p.data(), p.size(), 3);
+  fs.poll(100);
+  REQUIRE(cap.evs.size() == 6);
+  CHECK(cap.evs[3].complete);
+  CHECK(cap.evs[5].lat.slice.salvaged);
+  CHECK(cap.tail.empty());
+}
+
 
 TEST(moved_fragments_emit_the_same_as_copied) {
   // The core path hands FrameStream the decoder's buffer (move overload);
@@ -666,3 +748,5 @@ TEST(moved_fragments_emit_the_same_as_copied) {
   b.push_fragment(1, std::move(runt), t);  // shorter than a FRAG header
   CHECK(b.bad_fragments() == 1);
 }
+
+MTEST_MAIN

@@ -38,7 +38,7 @@ void clear_region(const Surface& s, const DirtyRect& r);
 
 // Total pen advance for a UTF-8 string. Codepoints the atlas lacks still
 // advance, so a missing glyph leaves a gap instead of shifting the line.
-// This is what sizes every field box -- see GsOverlay::layout().
+// This is what sizes every field box -- see GsCompactBar::layout().
 int text_width(const MaskAtlas& a, const char* utf8);
 
 // Draws `utf8` with the pen starting at (pen_x, baseline_y) and returns the

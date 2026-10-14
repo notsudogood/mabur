@@ -45,7 +45,7 @@ class SwEncoder {
   // survive process restarts (UepEncoder, linkbench tx_main) should pass a
   // random draw (residual collision odds ~2^-11 against kResetSpan=2^20
   // over a ~2^32 seq space).
-  // worker: optional shared FEC worker (spec 2026-07-17). nullptr (default)
+  // worker: optional shared FEC worker. nullptr (default)
   // = repairs are built synchronously inside add_packet/flush exactly as
   // before — same bytes, same order (this mode is what every pre-async test
   // pins, and the inline fallback when the worker queue is full). Non-null
@@ -71,7 +71,7 @@ class SwEncoder {
   // larger than max_packet_size() returns empty and counts oversize_drops().
   std::vector<std::vector<uint8_t>> add_packet(const uint8_t* data, size_t len);
 
-  // Sink forms (copy/alloc diet 2026-09-22): the same envelopes in the
+  // Sink forms (copy/alloc diet): the same envelopes in the
   // same order, delivered through sink instead of returned as vectors.
   // Sources are sealed in place in a reusable buffer — no per-envelope
   // allocation on the hot path. The two-span overload appends a followed
@@ -88,7 +88,7 @@ class SwEncoder {
   // burst tail is recoverable without waiting for the next source. The tail
   // repair fires at most once per sealed source (idle re-flushes are no-ops,
   // so UepEncoder's repeated poll cannot spam repairs). Async mode: does
-  // NOT wait for the worker (fec-join-delete 2026-09-22) — returns whatever
+  // NOT wait for the worker (fec-join-delete) — returns whatever
   // repairs are already built; the rest surface at a later
   // add_packet/flush/collect drain, or at finish().
   std::vector<std::vector<uint8_t>> flush();
@@ -112,7 +112,7 @@ class SwEncoder {
   // this many jobs — ~1.8 frame periods of worker time at 60 fps and the
   // measured ~116 µs per repair, i.e. a repair that would ship later than
   // that is worth less than the frame it delays. Sized above the frame-end
-  // depth peak of the biggest legitimate frame: bench 2026-09-22 read
+  // depth peak of the biggest legitimate frame: the bench read
   // qdepth_max 99 at 18 Mb/s on the 0.5/0.25 pair and >192 (capped) at
   // 19.2 Mb/s on the 1.0/0.5 pair — the worker is preempted on cpu0 by the
   // tx/usb wakeups the feed itself triggers, so the peak is deeper than
@@ -131,7 +131,7 @@ class SwEncoder {
   uint64_t sources_out() const { return sources_out_; }
   uint64_t repairs_out() const { return repairs_out_; }
 
-  // Async-path gauge (fec-compute handover 2026-09-01): splits the hot
+  // Async-path gauge (fec-compute handover): splits the hot
   // thread's per-AU wall into wait-on-worker vs its own work, and exposes
   // the worker's per-repair build cost + queue depth. Sums/counts are
   // cumulative — the reader diffs across report windows; the *_max fields
@@ -155,7 +155,7 @@ class SwEncoder {
   // Sealed symbols live in one contiguous 16 B-aligned fixed-stride ring of
   // window + kSlackRows rows (not a deque of vectors). The slack keeps a
   // row readable for kSlackRows further seals after it leaves the window —
-  // the async repair path (spec 2026-07-17) queues jobs that reference ring
+  // the async repair path queues jobs that reference ring
   // rows by slot instead of copying the window. 512 (was 64): with no
   // frame-end join the worker may legitimately trail the producer by up to
   // kMaxBacklogJobs repairs, i.e. several frames of seals at 332 B symbols,

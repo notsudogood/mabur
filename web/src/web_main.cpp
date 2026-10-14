@@ -1,6 +1,6 @@
 // webgs: the web GS entry point. Native: CLI (replay for parity gates, live
 // for bench A/B vs the browser). Emscripten: the same live loop, with AUs
-// and 1 Hz stats posted to the page (spec 2026-09-27-web-gs §2.3).
+// and 1 Hz stats posted to the page.
 #include <atomic>
 #include <chrono>
 #include <climits>
@@ -46,7 +46,7 @@
 
 #ifndef WEBGS_CONFIG_PATH
 #ifdef __EMSCRIPTEN__
-#define WEBGS_CONFIG_PATH "/maburgs.toml"   // embedded in the WASM FS (Task 6)
+#define WEBGS_CONFIG_PATH "/maburgs.toml"   // embedded in the WASM FS
 #else
 #define WEBGS_CONFIG_PATH MABUR_SOURCE_DIR "/gs/bundle/maburgs.default.toml"
 #endif
@@ -54,7 +54,7 @@
 
 namespace {
 
-// Page -> core requests (spec 2026-09-27-web-ui §3.1/§3.3). Written from the
+// Page -> core requests. Written from the
 // browser main thread (Module._webgs_stop/_webgs_set_rec) or a native signal
 // handler; read by the live loop. Shared memory under pthreads: no proxying.
 std::atomic<bool> g_stop{false};
@@ -64,8 +64,8 @@ std::atomic<int> g_rec{-1};   // -1 never pressed, 0 off, 1 on
 // count; the loop forwards it, and its low byte rides every RCF.
 std::atomic<uint32_t> g_idr_req{0};
 
-// Browser storage for local recordings (spec 2026-09-28-web-local-recording
-// §1.3): true once the startup OPFS probe passed. Always false natively.
+// Browser storage for local recordings: true once the startup OPFS probe
+// passed. Always false natively.
 std::atomic<bool> g_opfs_ok{false};
 
 // Page -> core local-recording request (webgs_set_local_rec). seq bumps on
@@ -104,7 +104,7 @@ void report_stats(const std::string& json) {
 #endif
 }
 
-// One per armed recording, when it is sealed (spec §1.4): the page downloads
+// One per armed recording, when it is sealed: the page downloads
 // `name` from OPFS when bytes > 0. err: 0 ok, 1 open, 2 write, 3 no OPFS.
 void report_rec_closed(const std::string& name, uint64_t bytes, int err) {
 #ifdef WEBGS_PAGE
@@ -168,7 +168,7 @@ void emit_au(webgs::Au&& a) {
       p, static_cast<int>(a.data.size()), static_cast<double>(a.pts_us), a.sid,
       static_cast<int>(a.flags | (a.salvaged ? 0x40 : 0)),
       a.complete ? 1 : 0, static_cast<double>(a.t_complete_us), hv, hv_len, cap_us, t_emit_ms,
-      // FEC/assembly segment (fix round 1, Ruling R7): first body -> AU
+      // FEC/assembly segment: first body -> AU
       // complete, core clock; 0 when FrameStream never saw a nonzero
       // body_mono_us for this AU (gs/src/frame_stream.cpp). Page-only
       // (WEBGS_PAGE); replay's AuFileWriter path is untouched.
@@ -178,7 +178,7 @@ void emit_au(webgs::Au&& a) {
 #endif
 }
 
-// Hands one MSP OSD screen to the page (spec 2026-09-27-web-msp-osd).
+// Hands one MSP OSD screen to the page.
 // Native live: nothing (the STATS line counts osd_screens).
 void emit_osd(int rows, int cols, const uint16_t* cells) {
 #ifdef WEBGS_PAGE
@@ -203,7 +203,7 @@ void emit_osd(int rows, int cols, const uint16_t* cells) {
 }
 
 #ifdef WEBGS_PAGE
-// DvrSink over an OPFS file (spec §1.3). Destruction only closes -- never
+// DvrSink over an OPFS file. Destruction only closes -- never
 // removes: it can run inside the AU callback (RawDvr seals on a write
 // error there), where an async remove() must not unwind. seal_local_rec()
 // removes an empty file from the loop instead.
@@ -365,8 +365,8 @@ bool parse_int(const char* v, int& out) {
 int live_loop(const LiveOpts& o, const maburgs::Config& cfg, uint8_t ch, int width,
               std::vector<std::unique_ptr<maburgs::LinkCard>>& cards, int n_usb,
               maburgs::BodyQueue& q) {
-  // Local recording (spec 2026-09-28-web-local-recording §1.2), fed on this
-  // thread from the AU callback, before the page hand-off.
+  // Local recording, fed on this thread from the AU callback, before the
+  // page hand-off.
   mabur::RawDvr dvr;
   std::string lrec_name;       // the armed/last recording's file name
   bool lrec_armed = false;     // a recording is armed or open and not yet reported
@@ -502,7 +502,7 @@ int live_loop(const LiveOpts& o, const maburgs::Config& cfg, uint8_t ch, int wid
     j.pop_back();   // '}'
     const int lst = lrec_armed ? (dvr.state() == mabur::RawDvr::State::Recording ? 2 : 1)
                                : (lrec_err ? 3 : 0);
-    // lrec_name is page-built from [A-Za-z0-9.-] only (Task 7's recFileName),
+    // lrec_name is page-built from [A-Za-z0-9.-] only (localrec.js recFileName),
     // so it needs no JSON escaping.
     char extra[384];
     std::snprintf(extra, sizeof extra, ",\"qdrop\":%llu,\"lrec_avail\":%d,\"lrec_state\":%d,\"lrec_bytes\":%llu,"
@@ -524,17 +524,20 @@ int live_loop(const LiveOpts& o, const maburgs::Config& cfg, uint8_t ch, int wid
     report_stats(j + extra + extra2 + "}");
   }
   // Every exit (Disconnect, card lost) seals the local recording before the
-  // module goes away, so the page can download it (spec §1.4).
+  // module goes away, so the page can download it.
   seal_local_rec();
   return rc;
 }
 
 // Cards the web core opens; devourer's chip-id read picks the driver.
 // 0bda:a81a/881a = RTL8812EU (Jaguar3), 0bda:8812 = RTL8812AU or EU,
-// 2357:011e/0120/0122 = TP-Link RTL8821AU (Jaguar1, 1T1R). The page's
-// WebUSB chooser filters by vendor only (logic.mjs USB_FILTERS).
+// 0bda:c812 = RTL8812CU (Jaguar3 8822C, e.g. Comfast CF-924AC V3; the OS
+// must eject its 0bda:1a2b driver-CD mode first, docs/web-gs.md),
+// 2357:011e/0120/0122 = TP-Link RTL8821AU
+// (Jaguar1, 1T1R). The page's WebUSB chooser filters by vendor only
+// (logic.mjs USB_FILTERS).
 const std::vector<maburgs::RadioFrontend::UsbId> kCards = {
-    {0x0bda, 0xa81a}, {0x0bda, 0x881a}, {0x0bda, 0x8812},
+    {0x0bda, 0xa81a}, {0x0bda, 0x881a}, {0x0bda, 0x8812}, {0x0bda, 0xc812},
     {0x2357, 0x011e}, {0x2357, 0x0120}, {0x2357, 0x0122},
 };
 

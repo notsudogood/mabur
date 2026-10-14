@@ -162,15 +162,11 @@ void handle_stats(int fd) {
 // (RcAgent::kReassertMs, 5000 ms — rc_agent.h), on top of the ordinary
 // pushes at every rung transition, failsafe/LINKED entry and ROI threshold
 // crossing. So an override lasts at most ~5 s on a parked link, and less if
-// the ladder moves in the meantime.
-//
-// It used to be unbounded: run_bitrate_policy() pushed on CHANGE only, and
-// hardware 2026-08-29 (B9 gate 5) measured a bitrate set here holding for
-// 20 s+ with the ladder parked. Bench procedures written against that
-// behaviour need re-POSTing inside the re-assert window now, or the ladder
-// parked at a rung whose computed target IS the value you want.
-// Controller carry: report {"ok":false} on a failed verb rather than a
-// blind {"ok":true} -- B6 made the three verbs return real status.
+// the ladder moves in the meantime. Bench procedures need re-POSTing
+// inside the re-assert window, or the ladder parked at a rung whose
+// computed target IS the value you want.
+// Report {"ok":false} on a failed verb rather than a blind {"ok":true} --
+// the three verbs return real status.
 void handle_set(int fd, const DebugReq& req, mabur::OvOverride* feed) {
   // Per-layer overhead override: feed-backed, works without MABUR_HAVE_VENC.
   // Accepts -1 (clear) or 0..300 (percent).

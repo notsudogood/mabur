@@ -5,20 +5,19 @@
 #include <cstdint>
 #include <vector>
 
-#include "au_ring.h"     // maburgs::AuRecordMeta (Task 6)
-#include "pts_anchor.h"  // maburgs::PtsAnchor (Task 9) -- the ONE anchor impl
+#include "au_ring.h"     // maburgs::AuRecordMeta
+#include "pts_anchor.h"  // maburgs::PtsAnchor -- the ONE anchor impl
 
 namespace maburplay {
 
-// Per-frame tail latency stamps + the additive 8-segment chain (spec
-// 2026-08-30-latency-accounting Task 11): enc,dq,air,fec,dec,reg,dsp,e2e
-// (indices 0..7), same order as maburgs' head-segment sideport export and
-// the OSD LAT row (Task 12). enc/dq/air/fec are computed at on_submit()
-// from AuRecordMeta the same way gs/src/main.cpp computes its own head
-// segments (own PtsAnchor instance -- daemon and player are separate
-// processes and do not share warm-up state, even though they run on the
-// same box and the same CLOCK_MONOTONIC domain). dec/reg/dsp are filled in
-// as the frame moves through decode -> regulator release -> vsync flip;
+// Per-frame tail latency stamps + the additive 8-segment chain:
+// enc,dq,air,fec,dec,reg,dsp,e2e (indices 0..7), same order as maburgs'
+// head-segment sideport export and the OSD LAT row. enc/dq/air/fec are
+// computed at on_submit() from AuRecordMeta the same way gs/src/main.cpp
+// computes its own head segments (own PtsAnchor instance -- daemon and player
+// are separate processes and do not share warm-up state, even though they run
+// on the same box and the same CLOCK_MONOTONIC domain). dec/reg/dsp are filled
+// in as the frame moves through decode -> regulator release -> vsync flip;
 // e2e is the running sum. A frame that never completes the whole chain
 // (dropped, flushed, or a wedged decoder that ages it out of the bounded
 // map) is excluded from percentiles and simply forgotten -- there is
@@ -64,7 +63,7 @@ class LatTracker {
 
   static constexpr std::size_t kMaxInflight = 64;
 
-  // link-rtt (2026-09-02): the tracker's own anchor, read-only, for the
+  // link-rtt: the tracker's own anchor, read-only, for the
   // absolute-floor combination with the sideport pts offset
   // (maburgs::floor_us_from). Each process combines the offset with its
   // OWN anchor — the daemon's floor_ms export used ITS anchor and the two

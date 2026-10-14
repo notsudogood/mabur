@@ -1,15 +1,15 @@
 // The rung-transition edge-detect wiring (gs/src/transition_edge.h): which
-// instant-demote windows get settle-blanked at an op change. Before
-// 2026-09-05 only the base (s1) residual window was blanked; the enh (s3)
+// instant-demote windows get settle-blanked at an op change. Both residual
+// windows are blanked: with only the base (s1) one blanked, the enh (s3)
 // window kept the abandonment-horizon's late booking of old-rung loss and
 // re-fired the demote the tick the controller's s3_settle_ms gate opened
 // (flights 20/21: 13 of 14 s3_residual cascades double-stepped at exactly
 // 300 ms and were promoted straight back). The dry-run e2e never runs the
 // ladder, so this is the host-side pin for that wiring.
-// The util windows left the edge on 2026-09-05 (arrival tracker) and came
-// back on 2026-10-06 (flight 0026): attribution kept debris out of them,
-// but nothing emptied the 500 ms of legitimately booked old-rung loss the
-// cascade then re-decided on. They are cleared, not settle-blanked.
+// The util windows are on the edge too (flight 0026): attribution keeps
+// debris out of them, but nothing else empties the 500 ms of legitimately
+// booked old-rung loss the cascade would re-decide on. They are cleared,
+// not settle-blanked.
 #include <type_traits>
 
 #include "mtest.h"
@@ -74,7 +74,7 @@ TEST(mcs_edge_blanks_both_residual_windows) {
 }
 
 TEST(mcs_edge_clears_both_util_windows_without_a_swallow) {
-  // Flight 0026 (2026-10-06): the 500 ms util windows were never cleared at
+  // Flight 0026: the 500 ms util windows were never cleared at
   // a transition, only the residual ones, so in the fade regime (100 ms
   // confirm, 150 ms spacing) one real demote kept stepping every 150 ms on
   // the same old-rung bookings -- u collapsed to 0 in one tick exactly
@@ -111,7 +111,7 @@ TEST(overhead_only_step_blanks_base_not_enh) {
 }
 
 TEST(width_only_step_blanks_both_residual_windows) {
-  // 20/3 -> 40/3 (2026-09-24 40 MHz rungs): same MCS, different PHY rate
+  // 20/3 -> 40/3 (40 MHz rungs): same MCS, different PHY rate
   // and airtime -- a real rung transition, so both edges fire.
   auto dec = make_dec();
   S1LossWindow s1(500), s3(500), u1(500), u3(500);

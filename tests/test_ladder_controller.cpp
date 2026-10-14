@@ -8,13 +8,13 @@ using namespace maburgs;
 
 namespace {
 
-// Ladder from the task brief: {mcs, overhead} per rung, [0] = failsafe.
-// Overhead values are 2x the pre-2026-08-29-airtime-balance-uep fixture:
+// Test ladder: {mcs, overhead} per rung, [0] = failsafe.
+// Overhead values are 2x the pre-airtime-balance-uep fixture:
 // budget() used to scale via uep_layer_overhead(1, ov) = 2*ov (post-flatten
 // kUepRefOverhead=0.5, cmd_overhead/0.25 baseline), and now reads the
 // literal overhead directly -- doubling every value here keeps every
 // numeric expectation in this file unchanged.
-// same-rate-fixed-pairs (Task 4): overhead_enh is set explicitly here (equal
+// same-rate-fixed-pairs: overhead_enh is set explicitly here (equal
 // to overhead_base) rather than left at the struct default, since
 // budget_enh_for()/s3-probe scoring now reads it directly.
 const std::vector<Rung> kLadder = {{0, 2.0, 2.0}, {2, 1.0, 1.0}, {4, 0.5, 0.5},
@@ -68,11 +68,11 @@ void feed_for(LadderController& ctl, double& t, double dt_total,
   }
 }
 
-// Healthy base sample carrying a usable probe window measured at `rung`
-// with union block loss `loss` (and usable s3 for the steady-state paths).
-// The probe streak is counted in BODIES (probe per AU, 2026-09-16), so
-// every okp() sample advances the cumulative expected-body counter by
-// kBodiesPerSample: 3 per 50 ms = 60 probes/s, one per AU at 60 fps.
+// Healthy base sample carrying a usable probe window measured at `rung` with
+// union block loss `loss` (and usable s3 for the steady-state paths). The
+// probe streak is counted in BODIES (probe per AU), so every okp() sample
+// advances the cumulative expected-body counter by kBodiesPerSample: 3 per
+// 50 ms = 60 probes/s, one per AU at 60 fps.
 constexpr uint64_t kBodiesPerSample = 3;
 uint64_t g_probe_bodies = 0;
 LinkHealth okp(double pre, int probe_rung, double loss) {
@@ -136,15 +136,15 @@ int penalty_ms_for(const LadderController& ctl, double now_ms, int rung) {
 TEST(budget_is_literal_overhead_fraction) {
   // rung overhead_base 0.3 -> budget 0.3/1.3: budget_base_for() is the
   // rung's literal FEC command overhead directly since
-  // task-10-airtime-balance-uep deleted the uep_layer_overhead scaling call
-  // (a no-op since the 2026-08-29 flatten).
+  // airtime-balance-uep deleted the uep_layer_overhead scaling call (a
+  // no-op since the UEP flatten).
   LadderCfg cfg;
   cfg.ladder = {{7, 0.3, 0.3}};
   LadderController c(cfg);
   CHECK(std::abs(c.budget_base_for(0) - 0.3 / 1.3) < 1e-9);
 }
 
-// same-rate-fixed-pairs (Task 4): budget_base()/budget_enh_for() score each
+// same-rate-fixed-pairs: budget_base()/budget_enh_for() score each
 // sid off its OWN overhead now, not a shared value.
 TEST(per_sid_budgets) {
   LadderCfg cfg;
@@ -394,7 +394,7 @@ TEST(starved_forces_bottom) {
 }
 
 TEST(transient_starved_is_ignored) {
-  // hw 2026-07-27: a rung transition re-keys the drone FEC stream and yields
+  // hw: a rung transition re-keys the drone FEC stream and yields
   // 1-2 zero-completion decode windows on a healthy link. Those must not
   // demote — only a starved run persisting past starved_confirm_ms may.
   LadderController ctl(make_cfg_noprobe());
@@ -441,14 +441,13 @@ TEST(timeout_forces_bottom) {
   CHECK(ctl.counters().timeout_drops == 1);
 }
 
-// Regression (reviewer finding 2026-07-27): update() used to stamp
-// last_feedback_ms_ unconditionally, even on an invalid (sample_valid=false)
-// sample. VrxController calls update() on every RCF slot while in SESSION,
-// so a run where the S1 window never produces a valid sample (but video is
-// still nominally arriving) stamped the feedback clock forever and
-// permanently suppressed on_tick()'s blind-side timeout, holding an
-// aggressive rung on zero real measurements. Confirm the timeout still
-// fires off the last REAL sample despite a continuous stream of invalid
+// Regression: update() used to stamp last_feedback_ms_ unconditionally, even
+// on an invalid (sample_valid=false) sample. VrxController calls update() on
+// every RCF slot while in SESSION, so a run where the S1 window never produces
+// a valid sample (but video is still nominally arriving) stamped the feedback
+// clock forever and permanently suppressed on_tick()'s blind-side timeout,
+// holding an aggressive rung on zero real measurements. Confirm the timeout
+// still fires off the last REAL sample despite a continuous stream of invalid
 // updates in between.
 TEST(invalid_samples_do_not_suppress_feedback_timeout) {
   auto cfg = make_cfg_noprobe();
@@ -514,7 +513,7 @@ TEST(hold_after_downgrade) {
   CHECK(ctl.last_event().t_ms >= down_t + cfg.hold_after_down_ms - 1e-9);
 }
 
-// --- continuous probe gate (spec 2026-09-04) -----------------------------
+// --- continuous probe gate ---------------------------------------------
 
 TEST(probe_rung_is_offset_clamped_to_top) {
   LadderCfg cfg = make_cfg();
@@ -557,7 +556,7 @@ TEST(clean_probe_streak_gates_the_promote) {
   CHECK(c.probation_ms_left(t) > 0);
 }
 
-// The streak is a BODY count, not a duration (probe per AU, 2026-09-16):
+// The streak is a BODY count, not a duration (probe per AU):
 // the same clean_bodies takes half the wall time at 60 probes/s (one per
 // AU at 60 fps) as at 30/s (30 fps, or the old enh-only cadence), so the
 // gate's confidence -- (1-p)^n over n bodies -- never depends on the frame
@@ -623,8 +622,8 @@ TEST(noinfo_holds_while_a_probe_is_commanded) {
   CHECK(c.counters().probe_holds == 1);
 }
 
-// Low-power mode (docs/link-adaptation.md "Low-power (disarmed) mode") runs
-// the drone at 15 fps, so the per-AU probe books 15 AU/s x bpb 4 = 30
+// Low-power mode (docs/link-adaptation.md "Low-power (disarmed) mode") at
+// the code-default low_power.fps 15 (the bundle ships 30), so the per-AU probe books 15 AU/s x bpb 4 = 30
 // expected symbols in the gate's 500 ms window (bench session 0147 read
 // probe_n 28-32). The original min_syms = 40 floor was sized against 60 fps
 // (120 per window) and made every low-power sample unusable: the gate sat in
@@ -747,11 +746,10 @@ TEST(event_carries_snr) {
 
 // --- s3 steady-state demotes ---------------------------------------------
 
-// s3 residual demotes on the FIRST window now (spec 2026-08-15), matching
-// the s1 residual path. What makes a 0 ms confirm safe is that attribution
-// is EXACT, not fast: the watermark lives in symbol-sequence space
-// (sw_decoder.h), so pre-transition debris is absent from the input rather
-// than outrun by a shorter window.
+// s3 residual demotes on the FIRST window, matching the s1 residual path. What
+// makes a 0 ms confirm safe is that attribution is EXACT, not fast: the
+// watermark lives in symbol-sequence space (sw_decoder.h), so pre-transition
+// debris is absent from the input rather than outrun by a shorter window.
 TEST(s3_residual_demotes_on_the_first_window) {
   LadderCfg cfg = make_cfg_noprobe();
   LadderController ctl(cfg);
@@ -770,7 +768,7 @@ TEST(s3_residual_demotes_on_the_first_window) {
 // rung must be the one the loss was MEASURED on. rung() is the live value and
 // has already stepped down by the time a demote returns, so a row built from
 // it files the loss against the rung the link demoted TO. Measured on real
-// flights 2026-08-15: 15/16 and 13/13 smear samples landed within 200 ms of a
+// flights: 15/16 and 13/13 smear samples landed within 200 ms of a
 // demote, which made the true culprit rung invisible in every per-rung table.
 // measured_rung() is stamped before any decision block and is what the log
 // must record.
@@ -820,7 +818,7 @@ TEST(s3_residual_demote_is_exempt_from_min_between_changes) {
   CHECK(ctl.rung() == before - 2);
 }
 
-// THE safety test (spec §8). With the confirm window gone, s3_settle_ms
+// THE safety test. With the confirm window gone, s3_settle_ms
 // blanking is the only guard the CONTROLLER still owns between a rung
 // transition and a cascade on that transition's own FEC re-key debris.
 // Attribution removes the debris upstream in main.cpp and the controller
@@ -857,8 +855,8 @@ TEST(s3_util_confirmed_demotes) {
   CHECK(ctl.last_event().reason == CtlReason::S3Util);
 }
 
-// Coverage regression (whole-branch review, I-3): the s3 residual path went
-// instant on 2026-08-15 and took its two confirm-window gap tests with it
+// Coverage regression: the s3 residual path went instant and took its two
+// confirm-window gap tests with it
 // (`s3_residual_confirm_window_resets_across_an_s3_gap` /
 // `..._an_invalid_sample_gap`), but the continuity gate they drove
 // (ladder_controller.cpp, just above the s3_live/!s3_live split) also guards
@@ -1101,10 +1099,10 @@ TEST(fade_regime_expires_back_to_full_confirm) {
 }
 
 TEST(fade_regime_s3_blanking_invariant_holds) {
-  // Spec §6 test 7 (updated 2026-08-15): in-regime s3-residual steps still
-  // respect s3_settle_ms — the re-key blank is NOT shortened by the regime.
-  // There is no separate confirm to shorten any more: the demote fires on
-  // the first live sample after the blank, in or out of the regime.
+  // In-regime s3-residual steps still respect s3_settle_ms — the re-key blank
+  // is NOT shortened by the regime. There is no separate confirm to shorten
+  // any more: the demote fires on the first live sample after the blank, in or
+  // out of the regime.
   LadderCfg cfg = make_cfg_noprobe();
   LadderController ctl(cfg);
   double t = 0;
@@ -1157,7 +1155,7 @@ TEST(fade_cascade_kill_switch_is_legacy) {
   CHECK(!ctl.fade_active(d2 + cfg.fade.hold_ms));
 }
 
-// --- Part B: predictive fade trigger (spec 2026-08-14 section 3) ---
+// --- Part B: predictive fade trigger ---
 
 TEST(fade_predict_fires_on_joint_ramp) {
   LadderCfg cfg = make_cfg_noprobe();
@@ -1333,7 +1331,7 @@ TEST(fade_predict_latch_survives_nan_blip) {
   const int after_first = ctl.rung();
   // A NaN telemetry blip mid-fade is absence of evidence, not evidence of
   // recovery — the RF condition is still genuinely over threshold either side
-  // of it (Task 4's staleness gate NaNs these labels deliberately). Breaking
+  // of it (the staleness gate NaNs these labels deliberately). Breaking
   // the sustain run on it is conservative; releasing the latch would not be.
   CHECK(!ctl.update(ok(0.3 * ctl.budget_base()), t));  // ok() leaves the RF labels NaN
   t += 50;
@@ -1348,9 +1346,9 @@ TEST(fade_predict_latch_survives_nan_blip) {
   CHECK(ctl.rung() == after_first);
 }
 
-// --- final whole-branch review, 2026-08-14 ---
+// --- fade EWMA feed ---
 
-// Finding 5. The EWMA feed used to sit below block 4's residual-demote
+// The EWMA feed used to sit below block 4's residual-demote
 // return, so it was skipped during exactly the loss phase of a fade and
 // fade_drssi/fade_dsnr (sideport link.ctl.fade, ctl-log S line) froze at
 // stale values through the episodes the feature will be tuned from.
@@ -1371,7 +1369,7 @@ TEST(fade_ewmas_feed_on_a_residual_demote_tick) {
   CHECK(ctl.fade_dsnr() > 0.0);
 }
 
-// Until 2026-08-15 the fade regime's shortened s3-util confirm was gated on
+// The fade regime's shortened s3-util confirm used to be gated on
 // link.attrib: with attribution off, the ~200 ms of debris that outlives
 // s3_settle_ms lands between the in-regime 100 ms confirm and the legacy
 // window, and u3 is scored against s3's much smaller budget so debris
@@ -1407,7 +1405,7 @@ TEST(fade_regime_shortens_the_s3_util_confirm) {
   CHECK(follow_on_demotes() > 0);
 }
 
-// --- Task 8: hop restore + store blanking (spec 2026-09-14 in-flight hop) ---
+// --- hop restore + store blanking (in-flight hop) ---
 
 // restore() re-enters a rung directly: no probe gate (probe is ENABLED in
 // make_cfg() here, so a normal promote from 0 would need one), probation
@@ -1450,14 +1448,13 @@ TEST(blank_store_gates_every_store_write) {
   CHECK(ctl.rungs().stat(2).u.n > before);
 }
 
-// Fix round 1: blank_store() must gate ONLY the RungStore write, never the
-// s3 demote decision itself -- the spec (2026-09-14 §4) has the ladder
-// running UNFROZEN through the whole detect+hop+settle window (a demote or
-// two, each an IDR, is expected and wanted), while the store simply must
-// not learn from a window it knows is unrepresentative of the rung on a
-// clean channel. This pins the split: with a blank active, an s3 residual
-// condition that would normally demote still demotes, but the per-rung
-// s3_resid EWMA it was measured on does not advance.
+// blank_store() must gate ONLY the RungStore write, never the s3 demote
+// decision itself -- the ladder runs UNFROZEN through the whole
+// detect+hop+settle window (a demote or two, each an IDR, is expected and
+// wanted), while the store simply must not learn from a window it knows is
+// unrepresentative of the rung on a clean channel. This pins the split: with a
+// blank active, an s3 residual condition that would normally demote still
+// demotes, but the per-rung s3_resid EWMA it was measured on does not advance.
 TEST(blank_store_does_not_suspend_s3_decisions_only_the_ewma) {
   LadderCfg cfg = make_cfg_noprobe();
   LadderController ctl(cfg);

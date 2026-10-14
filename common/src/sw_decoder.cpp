@@ -83,7 +83,7 @@ void SwDecoder::mark_transition() {
 // a join burst, or merely a lower seq that arrived after a higher one at
 // bpb=1 where each symbol is its own air frame) tested `< base_` and was
 // dropped stale — never delivered, recovered, nor abandoned. Whole RTP
-// packets vanished with every loss counter frozen (hardware 2026-07-15,
+// packets vanished with every loss counter frozen (seen on hardware as
 // bpb=1 big-symbol video corruption). Using the horizon floor admits them
 // during the join window and is identical to base_ in steady state.
 uint64_t SwDecoder::live_floor() const { return newest_v_ - horizon_; }
@@ -514,7 +514,7 @@ uint64_t SwDecoder::deficit() const {
 
 int SwDecoder::expire_rows_older_than(uint64_t deadline_ms, uint64_t now_ms) {
   // now_ms > guard against underflow — bodies routinely carry stamps newer
-  // than the poll clock (bench 2026-07-13).
+  // than the poll clock (seen on the bench).
   int dropped = 0;
   for (auto it = rows_.begin(); it != rows_.end();) {
     if (now_ms > it->second.first_seen_ms &&

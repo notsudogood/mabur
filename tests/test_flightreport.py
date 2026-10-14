@@ -187,8 +187,8 @@ def synthesize_flight_jsonl():
 
 def _mk_salvage_row(t, rung_idx, crc_fail, corrupt, salvaged, sub_fail, abandoned,
                     salvage_only=0):
-    """Sideport-shaped row carrying the rx.keep_corrupted counters
-    (2026-09-08): per-card crc_fail, per-stream corrupt/salvaged/sub_fail."""
+    """Sideport-shaped row carrying the rx.keep_corrupted counters: per-card
+    crc_fail, per-stream corrupt/salvaged/sub_fail."""
     return {
         "v": 1, "t_ms": t,
         "cards": [{"id": 0, "crc_fail": crc_fail, "frames": 1000 + t},
@@ -238,9 +238,9 @@ def test_salvage_section_totals_and_per_rung():
 
 
 def test_salvage_section_reports_salvage_only_per_stream_and_rung():
-    """salvage_only (2026-09-09): seqs whose only arrival was a salvaged
-    sub-block. Differenced and attributed like the other counters: rung 0
-    moves 2, rung 2 moves 1, stream total 3."""
+    """salvage_only: seqs whose only arrival was a salvaged sub-block.
+    Differenced and attributed like the other counters: rung 0 moves 2, rung 2
+    moves 1, stream total 3."""
     rows = [
         _mk_salvage_row(0,    0, crc_fail=0, corrupt=0, salvaged=0, sub_fail=0, abandoned=0),
         _mk_salvage_row(500,  0, crc_fail=2, corrupt=2, salvaged=5, sub_fail=3, abandoned=4,
@@ -262,12 +262,12 @@ def test_salvage_section_reports_salvage_only_per_stream_and_rung():
 
 def test_salvage_section_survives_counter_reset_on_restart():
     """A maburgs restart rejoins the session directory (debug-log
-    consolidation 2026-09-06), so one flight.jsonl can carry a counter
-    reset: the sideport `session` id changes and every cumulative counter
-    restarts from 0. The section must sum per-interval deltas and treat a
-    reset interval's delta as the post-reset value, never last-minus-first
-    (which would go negative). Before: corrupt 2 / salvaged 5 / crc_fail 3.
-    After the restart: corrupt 1 / salvaged 2 / crc_fail 4. Totals 3/7/7."""
+    consolidation), so one flight.jsonl can carry a counter reset: the sideport
+    `session` id changes and every cumulative counter restarts from 0. The
+    section must sum per-interval deltas and treat a reset interval's delta as
+    the post-reset value, never last-minus-first (which would go negative).
+    Before: corrupt 2 / salvaged 5 / crc_fail 3. After the restart: corrupt 1 /
+    salvaged 2 / crc_fail 4. Totals 3/7/7."""
     a = _mk_salvage_row(0,   0, crc_fail=0, corrupt=0, salvaged=0, sub_fail=0, abandoned=0)
     b = _mk_salvage_row(500, 0, crc_fail=3, corrupt=2, salvaged=5, sub_fail=3, abandoned=4)
     c = _mk_salvage_row(1000, 1, crc_fail=0, corrupt=0, salvaged=0, sub_fail=0, abandoned=0)
@@ -319,9 +319,9 @@ def _mk_drone_rx_row(t_ms, tlm_seq, own, foreign, crcfail):
 
 
 def test_drone_rx_section_once_per_telemetry_period():
-    """DRONE RX section (cca-on 2026-09-23): drone.radio.rx is a
-    PER-TELEMETRY-PERIOD count repeated on every sideport record until the
-    next Telem, so it is sampled once per tlm_seq, never per record."""
+    """DRONE RX section (cca-on): drone.radio.rx is a PER-TELEMETRY-PERIOD
+    count repeated on every sideport record until the next Telem, so it is
+    sampled once per tlm_seq, never per record."""
     rows = [
         _mk_drone_rx_row(0,    1, own=18, foreign=2, crcfail=1),
         _mk_drone_rx_row(200,  1, own=18, foreign=2, crcfail=1),   # same period, not a sample
@@ -366,13 +366,12 @@ def _mk_drone_tx_row(t_ms, tlm_seq, wait, drops, usb, cpu, cong, fs=False, auth=
 
 
 def test_drone_tx_path_section():
-    """DRONE TX PATH (telem diet 2026-09-30): the fields kept on the wire
-    for post-flight attribution -- txq wait, txq drops, usb fail, cpu,
-    congestion/failsafe shed -- sampled once per tlm_seq. Cumulative
-    counters are summed as per-period deltas, and a maburd restart (counter
-    going backwards) contributes its post-restart value, never a negative.
-    auth_reject (link pairing, 2026-10-01): a control-frame verification
-    failure, also counted per period."""
+    """DRONE TX PATH (telem diet): the fields kept on the wire for post-flight
+    attribution -- txq wait, txq drops, usb fail, cpu, congestion/failsafe shed
+    -- sampled once per tlm_seq. Cumulative counters are summed as per-period
+    deltas, and a maburd restart (counter going backwards) contributes its
+    post-restart value, never a negative. auth_reject (link pairing): a
+    control-frame verification failure, also counted per period."""
     rows = [
         _mk_drone_tx_row(0,    1, wait=3,  drops=10, usb=0, cpu=20.0, cong=False),
         _mk_drone_tx_row(200,  1, wait=3,  drops=10, usb=0, cpu=20.0, cong=False),  # repeat
@@ -500,8 +499,8 @@ def test_flightreport_structure():
 
 
 def test_old_scale_snr_warns_on_stderr():
-    """A recording with SNR > 60 predates the 2026-08-04 half-dB fix and
-    must be flagged, not silently misread as if it were already dB."""
+    """A recording with SNR > 60 predates the half-dB SNR fix and must be
+    flagged, not silently misread as if it were already dB."""
     fixture_dir = Path("tests/fixtures")
     fixture_dir.mkdir(exist_ok=True)
     flight_jsonl = fixture_dir / "flight-old-snr-scale-fixture.jsonl"
@@ -605,9 +604,9 @@ def test_old_scale_snr_warns_on_stderr():
 
 
 def _mk_stream_row(t, n_streams, overhead=0.25):
-    """One sideport-shaped jsonl row with an n_streams-entry link.streams
-    array -- 4 is the pre-2026-08-29 shape (kept as the one old-shape
-    fixture the data-provenance policy requires), 2 is current."""
+    """One sideport-shaped jsonl row with an n_streams-entry link.streams array
+    -- 4 is the pre-scale-break shape (kept as the one old-shape fixture the
+    data-provenance policy requires), 2 is current."""
     return {
         "v": 1, "t_ms": t,
         "link": {
@@ -619,12 +618,12 @@ def _mk_stream_row(t, n_streams, overhead=0.25):
 
 
 def test_overhead_scale_break_warns_on_stderr():
-    """A recording whose link.streams array has 4 entries predates the
-    2026-08-29 overhead scale break (4-layer UEP, RC_VERSION <4): every
-    overhead-shaped field in it is cmd-scale (half the actual air overhead
-    on the post-break scale). The report must DETECT and LABEL this, never
-    convert the values (data-provenance policy, CLAUDE.md) -- this is the
-    one old-shape (4-stream) fixture kept to prove the label path."""
+    """A recording whose link.streams array has 4 entries predates the overhead
+    scale break (4-layer UEP, RC_VERSION <4): every overhead-shaped field in it
+    is cmd-scale (half the actual air overhead on the post-break scale). The
+    report must DETECT and LABEL this, never convert the values
+    (data-provenance policy, CLAUDE.md) -- this is the one old-shape (4-stream)
+    fixture kept to prove the label path."""
     fixture_dir = Path("tests/fixtures")
     fixture_dir.mkdir(exist_ok=True)
     flight_jsonl = fixture_dir / "flight-old-overhead-scale-fixture.jsonl"
@@ -688,8 +687,8 @@ def test_ctllog_evm_optional_trailing_token():
 
 
 def test_s_line_resid_cur_parsed_and_absent_is_nan():
-    """resid_cur (ctllog 2, 2026-08-14 attribution) parses on a v2-shaped S
-    line and defaults to nan on a v1-shaped one (backward compatibility)."""
+    """resid_cur (ctllog 2, attribution) parses on a v2-shaped S line and
+    defaults to nan on a v1-shaped one (backward compatibility)."""
     text = (
         "ctllog 2 ladder=5/25 down_util=0.60 up_util=0.15\n"
         "S 1000 3 0.0123 31.5 0.0456 0.0000 0.0000 -21.0 0.0011\n"
@@ -704,9 +703,8 @@ def test_s_line_resid_cur_parsed_and_absent_is_nan():
 
 
 def test_s_line_fade_deltas_parsed_and_absent_nan():
-    """drssi/dsnr (ctllog 3, 2026-08-14 fade-trigger deltas) parse on a
-    v3-shaped S line and default to nan on a v2-shaped one (backward
-    compatibility)."""
+    """drssi/dsnr (ctllog 3, fade-trigger deltas) parse on a v3-shaped S line
+    and default to nan on a v2-shaped one (backward compatibility)."""
     text = (
         "ctllog 3 ladder=5/25 down_util=0.60 up_util=0.15\n"
         "S 1000 3 0.0123 31.5 0.0456 0.0000 0.0000 -21.0 0.0011 9.5 4.2\n"
@@ -1148,9 +1146,9 @@ class CtlLog10Test(unittest.TestCase):
         self.assertIn("lead", buf.getvalue())
 
     def test_probe_lead_bounded_to_the_hold(self):
-        # flight-0020 2026-09-05: a lossy edge BEFORE the promote into the
-        # rung is not a warning about that hold, and a demote of the NEXT
-        # hold does not vindicate an edge the gate then overrode.
+        # flight-0020: a lossy edge BEFORE the promote into the rung is not a
+        # warning about that hold, and a demote of the NEXT hold does not
+        # vindicate an edge the gate then overrode.
         log = flightreport.load_ctllog(self._write(CTL10_HOLDS))
         leads = flightreport.probe_lead(log["E"], log["P"])
         eps = leads["episodes"]
@@ -1215,7 +1213,7 @@ class CtlLog10Test(unittest.TestCase):
         # ProbeSource seeds a RANDOM initial seq per daemon start (SwEncoder
         # restart contract), and across a starve the GS is deaf for > failsafe
         # while the drone keeps counting. Neither gap is a per-mcs loss sample:
-        # probe-0352 (2026-09-06) read mcs1 lost=2600797061 from one restart.
+        # probe-0352 read mcs1 lost=2600797061 from one restart.
         pl = {"bpb": 4, "version": 2, "rows": [
             {"t_ms": 1000.0, "seq": 10, "mcs": 3, "enh_fid": 1, "blocks_ok": 4, "card_mask": 3, "snr": [30, 30], "evm": [-20, -20], "first_ms": 1000.0},
             {"t_ms": 1066.0, "seq": 12, "mcs": 3, "enh_fid": 3, "blocks_ok": 4, "card_mask": 3, "snr": [30, 30], "evm": [-20, -20], "first_ms": 1066.0},  # seq 11 lost: real
@@ -1234,9 +1232,9 @@ class CtlLog10Test(unittest.TestCase):
 
     def test_find_aulog_for_prefers_the_log_that_joins(self):
         # Every boot's mono clock starts near 0, so on a DVR holding many
-        # flights a dozen au logs overlap the probe span within seconds of
-        # each other (probe-0353 vs au-0020..0032, 2026-09-06). Overlap alone
-        # picked au-0001; the au log that JOINS on enh_fid is the right one.
+        # flights a dozen au logs overlap the probe span within seconds of each
+        # other (probe-0353 vs au-0020..0032). Overlap alone picked au-0001;
+        # the au log that JOINS on enh_fid is the right one.
         d = tempfile.mkdtemp()
         p = os.path.join(d, "probe-0009_20260906.log")
         with open(p, "w") as f:
@@ -1292,11 +1290,11 @@ class CtlLog10Test(unittest.TestCase):
 
 
 class SessionModeProbeJoinTest(unittest.TestCase):
-    """Task 8 review finding 1: session mode must not silently drop the
-    probe join. session.resolve() finds ctl.log and probe.log as siblings
-    structurally; the legacy ctl-NNNN_ filename-glob heuristic in main()
-    can never match those session-mode filenames, so main() must be told
-    the probe path explicitly instead of relying on that heuristic."""
+    """Session mode must not silently drop the probe join. session.resolve()
+    finds ctl.log and probe.log as siblings structurally; the legacy ctl-NNNN_
+    filename-glob heuristic in main() can never match those session-mode
+    filenames, so main() must be told the probe path explicitly instead of
+    relying on that heuristic."""
 
     PROBE_LOG = ("probelog 1 bpb=4\n"
                  "1000 10 6 5 4 3 30.5 28.0 -24.0 -22.0\n"
@@ -1343,8 +1341,8 @@ E 1380 3 5 hop_restore 0.0500 25.0 -20.0
 
 
 class HopReportTest(unittest.TestCase):
-    """Task 13: flightreport's HOP section, built from scan.log (gs/src/
-    scan_log.cpp) V/H/D records plus ctl.log's E hop_restore lines."""
+    """flightreport's HOP section, built from scan.log (gs/src/scan_log.cpp)
+    V/H/D records plus ctl.log's E hop_restore lines."""
 
     FIXTURE = Path("tests/fixtures/scan-hop.log")
 
@@ -1356,12 +1354,12 @@ class HopReportTest(unittest.TestCase):
         return flightreport.load_ctllog(p)
 
     def test_rejoined_session_takes_the_last_scanlog_marker(self):
-        """Bench 2026-09-15: a GS restart REJOINS the session directory, so
-        the first scan.log after a deploy starts with the old binary's
-        'scanlog 1' header and carries the new binary's 'scanlog 2' marker
-        (and every V/H/D record) further down. Reading only the first line
-        skipped the whole HOP section on exactly the session that held the
-        first real hop. The highest marker seen wins."""
+        """Bench: a GS restart REJOINS the session directory, so the first
+        scan.log after a deploy starts with the old binary's 'scanlog 1' header
+        and carries the new binary's 'scanlog 2' marker (and every V/H/D
+        record) further down. Reading only the first line skipped the whole HOP
+        section on exactly the session that held the first real hop. The
+        highest marker seen wins."""
         d = tempfile.mkdtemp()
         p = os.path.join(d, "scan.log")
         with open(p, "w") as f:
@@ -1375,8 +1373,8 @@ class HopReportTest(unittest.TestCase):
         self.assertEqual(len(scanlog["V"]), len(ref["V"]))
 
     def test_v6_scanlog_d_carries_rx(self):
-        """scanlog 6 (spec 2026-10-05-cpe-relay-hop): D gains a trailing rx %
-        (relay sweeps; '-' for USB dwells). Older D lines have no rx field."""
+        """scanlog 6 (relay hop): D gains a trailing rx % (relay sweeps; '-'
+        for USB dwells). Older D lines have no rx field."""
         d = tempfile.mkdtemp()
         p = os.path.join(d, "scan.log")
         with open(p, "w") as f:
@@ -1391,12 +1389,12 @@ class HopReportTest(unittest.TestCase):
         self.assertEqual(s["D"][1]["busy"], 70.0)
 
     def test_v4_scanlog_carries_busy_and_own_air(self):
-        """scanlog 4 (spec 2026-09-25-nhm-airtime §6): the V card block
-        grows two fields, nhm_busy (%, '-' when the window wasn't ours) and
-        own_air (%). A rejoined session can carry a v3 section ahead of the
-        v4 one (see test_rejoined_session_takes_the_last_scanlog_marker) --
-        each V line must parse with the stride its own section's marker
-        set, not the file's final version."""
+        """scanlog 4 (NHM airtime): the V card block grows two fields, nhm_busy
+        (%, '-' when the window wasn't ours) and own_air (%). A rejoined
+        session can carry a v3 section ahead of the v4 one (see
+        test_rejoined_session_takes_the_last_scanlog_marker) -- each V line
+        must parse with the stride its own section's marker set, not the file's
+        final version."""
         d = tempfile.mkdtemp()
         p = os.path.join(d, "scan.log")
         with open(p, "w") as f:
@@ -1420,9 +1418,9 @@ class HopReportTest(unittest.TestCase):
         self.assertEqual(v4["cards"][1]["own_air"], 2.0)
 
     def test_d_line_carries_busy(self):
-        """scanlog 4 (spec 2026-09-25-nhm-airtime §6): the D record gains a
-        trailing NHM busy % field, '-' when the in-flight dwell had no
-        reading (no NHM support, or the arm/read period mismatched)."""
+        """scanlog 4 (NHM airtime): the D record gains a trailing NHM busy %
+        field, '-' when the in-flight dwell had no reading (no NHM support, or
+        the arm/read period mismatched)."""
         d = tempfile.mkdtemp()
         p = os.path.join(d, "scan.log")
         with open(p, "w") as f:
@@ -1501,12 +1499,12 @@ class HopReportTest(unittest.TestCase):
         self.assertEqual(rows[0]["outcome_ts"], 4000.0)
 
     def test_session_lost_closes_the_attempt_row(self):
-        """HopController::on_session_lost (bench 2026-09-24, GS session
-        0207): the link's session dropped while an order was still waiting
-        for its confirm, and the order is withdrawn at that falling edge.
-        That ENDS the attempt -- it must read as its own outcome, not fall
-        through to "unterminated" (the log ending mid-attempt), and the
-        shadow (hop.enable = false) spelling must close it too."""
+        """HopController::on_session_lost (bench, GS session 0207): the link's
+        session dropped while an order was still waiting for its confirm, and
+        the order is withdrawn at that falling edge. That ENDS the attempt --
+        it must read as its own outcome, not fall through to "unterminated"
+        (the log ending mid-attempt), and the shadow (hop.enable = false)
+        spelling must close it too."""
         def E(t, kind, epoch, target):
             return {"t_ms": float(t), "kind": kind, "epoch": epoch,
                     "target": target, "score": 0, "elapsed_ms": 0.0}
@@ -1523,7 +1521,7 @@ class HopReportTest(unittest.TestCase):
     def test_zero_hops_prints_verdict_histogram(self):
         """No H events at all (a perfectly healthy flight, or hop_controller
         compiled in but never triggering): the verdict histogram, not an
-        empty hop table, per the brief's zero-hop path.
+        empty hop table.
 
         Every non-healthy V line here must be a state
         HopVerdict::window() (gs/src/hop_verdict.cpp) can actually produce:
@@ -1649,11 +1647,11 @@ class HopReportTest(unittest.TestCase):
         self.assertIn("outcome withdraw", out)
 
     def test_escape_events_and_starved_windows_are_counted(self):
-        """Task 11 (d)/(c): an `escape` H event places an order (a fresh
-        row, and -- after a verify fail -- the outcome of the attempt it
-        replaced, like a verify_fail retry), and V windows with evidence
-        0x40 (kEvStarved) are counted. Revert (drop "escape" from
-        _HOP_ORDER_KINDS / the two counters): one row, no counts."""
+        """An `escape` H event places an order (a fresh row, and -- after a
+        verify fail -- the outcome of the attempt it replaced, like a
+        verify_fail retry), and V windows with evidence 0x40 (kEvStarved) are
+        counted. Revert (drop "escape" from _HOP_ORDER_KINDS / the two
+        counters): one row, no counts."""
         def E(t, kind, epoch, target):
             return {"t_ms": float(t), "kind": kind, "epoch": epoch,
                     "target": target, "score": 0, "elapsed_ms": 0.0}
@@ -1678,11 +1676,11 @@ class HopReportTest(unittest.TestCase):
         self.assertIn("starved windows: 2", out)
 
     def test_confirm_extend_and_withdraw_undelivered_are_counted(self):
-        """Task 12 (f): `confirm_extend` is informational (the attempt stays
-        open), `withdraw_undelivered` closes it like a withdraw, and the HOP
-        report counts both. Revert (drop "withdraw_undelivered" from
-        _HOP_TERMINAL_ONLY_KINDS / the counters): the row reads
-        "unterminated" and no count line."""
+        """`confirm_extend` is informational (the attempt stays open),
+        `withdraw_undelivered` closes it like a withdraw, and the HOP report
+        counts both. Revert (drop "withdraw_undelivered" from
+        _HOP_TERMINAL_ONLY_KINDS / the counters): the row reads "unterminated"
+        and no count line."""
         def E(t, kind, epoch, target, el=0.0):
             return {"t_ms": float(t), "kind": kind, "epoch": epoch,
                     "target": target, "score": 0, "elapsed_ms": el}
@@ -1799,13 +1797,13 @@ FEC_LOG_ROWS = """feclog 1
 
 
 def test_fec_section_counterfactual_overhead_per_sid_and_rung():
-    """FEC (fec.log, 2026-09-15): per (sid, mcs, ov) group, the overhead
-    each episode would have needed, ov_req = (sqrt(1+4c)-1)/2 with
-    c = m*ov*(1+ov)/r (a lower overhead packs more sources into the same
-    lost aggregate, so m scales by (1+ov)/(1+ov') while the covering repairs
-    scale by ov'/ov). Rows: A m=12 r=32 -> 0.50; B m=4 -> 0.21; C m=40
-    aband=8 -> 1.16 (a real failure); D stale=3 (transition debris, counted
-    but excluded from the counterfactual); E sid 1 at ov 0.5 -> 0.40."""
+    """FEC (fec.log): per (sid, mcs, ov) group, the overhead each episode would
+    have needed, ov_req = (sqrt(1+4c)-1)/2 with c = m*ov*(1+ov)/r (a lower
+    overhead packs more sources into the same lost aggregate, so m scales by
+    (1+ov)/(1+ov') while the covering repairs scale by ov'/ov). Rows: A m=12
+    r=32 -> 0.50; B m=4 -> 0.21; C m=40 aband=8 -> 1.16 (a real failure); D
+    stale=3 (transition debris, counted but excluded from the counterfactual);
+    E sid 1 at ov 0.5 -> 0.40."""
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / "fec.log"
         p.write_text(FEC_LOG_ROWS)

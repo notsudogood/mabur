@@ -88,7 +88,7 @@ int star6e_output_stream_packet_info_complete(
 }
 
 /* An already-encoded access unit was discarded.  Report the chain break
- * upward instead of requesting an IDR here — pure mechanism, spec §4: the
+ * upward instead of requesting an IDR here — pure mechanism: the
  * facade owns the recovery policy (the 1 s chain-break holdoff layered on
  * the shared 100 ms IDR spacing). */
 static void star6e_output_recover_dropped_access_unit(Star6eOutput *output,

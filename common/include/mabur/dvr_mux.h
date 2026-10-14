@@ -9,7 +9,7 @@
 namespace mabur {
 
 // Where DvrMux's bytes go. open(path) uses a FILE* sink; the web GS hands
-// open(sink) an OPFS file (spec 2026-09-28-web-local-recording §1.3).
+// open(sink) an OPFS file.
 class DvrSink {
  public:
   virtual ~DvrSink() = default;                        // closes

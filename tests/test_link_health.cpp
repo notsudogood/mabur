@@ -1,5 +1,5 @@
 // LinkHealthAssembler (gs/src/link_health.h): the ladder's per-tick input,
-// extracted from maburgs main.cpp 2026-09-27 so the web GS feeds the SAME
+// extracted from maburgs main.cpp so the web GS feeds the SAME
 // windows. These pin the wiring the main loop is otherwise unreachable for.
 #include <cmath>
 

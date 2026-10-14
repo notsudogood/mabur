@@ -19,8 +19,8 @@ struct TxSelectorCfg {
 
 // Picks the uplink (RCF) TX card. Hysteresis + a dead-card override, same as
 // before; it now compares RSSI, not SNR: the CPE510 relay's SNR is not a
-// second measurement (spec 2026-10-02-maburgs-remote-card §4), and RSSI is
-// honest on every card type.
+// second measurement (its noise floor is a constant, so SNR is just
+// RSSI + 95; docs/cpe510-relay.md), and RSSI is honest on every card type.
 class TxSelector {
  public:
   TxSelector(TxSelectorCfg cfg, int n_cards);

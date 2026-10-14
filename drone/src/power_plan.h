@@ -8,11 +8,11 @@
 
 namespace mabur {
 
-// Relative-wall power plan (spec 2026-09-13-relative-walls-design.md):
-// every wall is a signed index RELATIVE to the chip's own per-channel TXAGC
-// anchor (the efuse reference devourer programs into 0x18e8 on each channel
-// set). diff[r] = rel[r] - m parks rate r at wall-minus-margin on whatever
-// channel the chip is on, because the chip adds the right anchor itself.
+// Relative-wall power plan: every wall is a signed index RELATIVE to the
+// chip's own per-channel TXAGC anchor (the efuse reference devourer programs
+// into 0x18e8 on each channel set). diff[r] = rel[r] - m parks rate r at
+// wall-minus-margin on whatever channel the chip is on, because the chip
+// adds the right anchor itself.
 // m = round(margin_db * 4) converts dB to the chip's 0.25 dB index steps.
 //
 // anchor_idx: the reference index read back at bring-up ON THE BOOT

@@ -11,78 +11,23 @@ FIX=tests/fixtures/frame_stream.bin
 # change to the OSD sizing/blitting rules makes the old pixels wrong -- run
 # the --osd-render command below by hand and paste the printed hash.
 OSD_SHA_EXPECTED=e202e5d127467752984bda2c135d166661f8c0eb2c8481a77d54b39ed8f76a83
-# Golden for PART D below. Same rule as OSD_SHA_EXPECTED: to re-bless after
-# an intentional visual change, run the --gs-render command below by hand
-# and paste the hash. Pinned against the SYNTHETIC font on purpose -- hashing
-# the 13 MB shipped .gfont would make a font bump look like a rendering
-# regression. A re-bless needs a PIXEL DIFF against the old dump, not just a
-# hash swap: the geometry floor below cannot see a single-field blanking, a
-# pre/post value transposition, or a pure recolour.
-#
-# Re-blessed 2026-08-04 (was c311690a...): the FPS baseline was derived from
-# the WRONG atlas's cell height, which left the hero FPS box overlapping the
-# JIT/MBPS box -- by exactly 0 px with the synthetic font, and by 1..3 px
-# with the real one (tests/test_gs_asset.cpp). Diff verified: the FPS value
-# and label translate up exactly 8 px and NOTHING else on the 1920x1080
-# surface changes (0 differing px outside the FPS cell band, 0 lit px left in
-# the vacated rows, lit-pixel total identical at 74690).
-#
-# Re-blessed 2026-08-04 (was 6479dbb1...): the per-card RSSI box was sized for
-# the 11-glyph unheard string instead of the widest numeric, leaving ~160 px of
-# dead space between the value and "dBm" on every heard row (visible on the
-# bench screen). Pixel diff old->new: 14,344 px differ, bbox x 362..640
-# y 924..1022, ZERO differing px outside the card rows, lit total unchanged at
-# 74,690 -- i.e. a pure 116 px leftward translation of dBm/SNR in both rows,
-# with no glyph added, removed or recoloured.
-#
-# Re-blessed 2026-08-31 (was 908affc9...): Task 12 (spec
-# 2026-08-30-latency-accounting) added the OSD LAT row, a new field this
-# harness's --gs-render invocation has no CLI flag to populate, so it always
-# renders "LAT --" here. Pixel diff old->new: 3,224 px differ, ALL of them
-# NEW ink (lit total 74,690 -> 77,914, delta == diff count exactly, so
-# nothing existing moved, changed colour, or was erased), bbox x 1007..1096
-# y 858..893 -- a small isolated region above the FPS block (LAT stacks
-# above FPS in the video-figures column, see gs_overlay.cpp), matching
-# nothing but the new field's own box. No other block's pixels differ.
-#
-# Re-blessed 2026-09-06 (was 3d926998...): commit 6709053 collapsed the LAT
-# block to three right-flush rows (RTT / P50 / P99) sharing one right edge and
-# dropped the per-segment breakdown column, so the two LAT rows this harness
-# renders as placeholders changed from "P50 --"/"P99 --" left-anchored in the
-# old head column to "LAT P50 --"/"LAT P99 --" flushed right. Pixel diff
-# old->new: 16,928 px differ, ALL of them inside the two LAT row bands
-# (y 812..847 and y 858..893); the surface is byte-identical everywhere else,
-# so the RTT row above and the FPS/JIT/MBPS block below did not move. Per row:
-# 3,224 px erased at x 993..1082, 5,240 px added at x 1607..1752, ZERO px
-# recoloured and ZERO change in vertical extent -- a rightward translation plus
-# the "LAT " prefix each row absorbed from the deleted label column. Lit total
-# 84,362 -> 88,394 (delta 4,032 == added - erased exactly).
-#
-# The preceding commit fc44c70 (per-card EVM) is NOT in this delta: rebuilt and
-# rendered, it still hashes 3d926998..., because the fixture's cards carry no
-# EVM and that field blanks.
-# Re-blessed 2026-09-26 (was 77352a37...): the REC indicator draws at half
-# the secondary size (nearest baked; 19 px in this synthetic font, 24 before).
-# Pixel diff old vs new: 5103 px changed, all inside x 1663..1822 y 178..213
-# (the REC field), 0 outside; REC ink still ends flush at x 1822.
-GS_SHA_EXPECTED=a8f4637f98c88e78cad41f3c67107df355e1bf04059565c22ad87cf82fbb2099
-# Golden for PART E, the compact bar (osd.gs.style = "compact"). Same rule
-# as the two above: re-bless only from a pixel diff, never from a hash swap
-# alone -- the geometry floor below sees a bar that moved or lost a row, but
+# Golden for PART D, the GS link-status OSD (the compact bar). Same rule as
+# OSD_SHA_EXPECTED, and stricter: re-bless only from a pixel diff, never
+# from a hash swap alone -- the geometry floor below sees a bar that moved or lost a row, but
 # not a transposed value pair or a blanked field.
 #
-# Re-blessed 2026-09-08 (was 27566469...): the recording indicator moved out
+# Re-blessed (was 27566469...): the recording indicator moved out
 # of row 0 and up to the TOP-RIGHT corner, on its own. Row 0 goes back to
 # exactly the pixels it had before the indicator existed (d4cc28b3's row 0),
 # row 1 is untouched, and the only new ink is the indicator's own band at
 # the top inset -- which is what the third band the gate now asserts is.
 #
-# Re-blessed 2026-09-08 (was d4cc28b3...): the bar gained the recording
+# Re-blessed (was d4cc28b3...): the bar gained the recording
 # indicator, rendered identically to the essential overlay's (dot, REC,
 # mm:ss clock), and this invocation now passes --rec recording so the pixel
 # path covers it.
 #
-# Re-blessed 2026-09-08 (was f5c5b69c...): the bar went from one row to two.
+# Re-blessed (was f5c5b69c...): the bar went from one row to two.
 # A single line capped the type at 22 px on a 1080p panel -- too small to
 # read on the GS screen -- and splitting the eleven items across two rows
 # (radio above, picture below) lets the same "largest baked size that fits"
@@ -91,8 +36,8 @@ GS_SHA_EXPECTED=a8f4637f98c88e78cad41f3c67107df355e1bf04059565c22ad87cf82fbb2099
 # bands, both centred, block hugging the bottom) plus the per-row strings
 # pinned in tests/test_gs_compact.cpp.
 #
-# Re-blessed 2026-09-24 (was 658c9593...): compact bar mcs cell shows width
-# (Task 11, 2026-09-24-bw40-rungs spec -- 40 MHz rungs). GsSnapshot::bw and
+# Re-blessed (was 658c9593...): compact bar mcs cell shows width
+# (40 MHz rungs). GsSnapshot::bw and
 # the "mcs:<mcs>/<bw>" cell format were added in commit 66e52ba; the fixture
 # (tests/fixtures/gs_snapshot_nominal.json) carries no ctl.rung.bw or op.bw,
 # so the cell now reads "mcs:5/--" instead of "mcs:5", widening row 0 and
@@ -102,22 +47,33 @@ GS_SHA_EXPECTED=a8f4637f98c88e78cad41f3c67107df355e1bf04059565c22ad87cf82fbb2099
 # pixel diff old->new shows every differing pixel confined to the row-0
 # scanline band (y 944..996) -- 31,963 px differ (lit 135,694 -> 139,190,
 # delta 3,496), ZERO of them in the REC corner band (y 42..94) or row 1 (y
-# 1003..1055), which stay byte-identical. Nothing else pinned in this script
-# depends on the compact bar: OSD_SHA_EXPECTED is the drone-side MSP OSD,
-# and GS_SHA_EXPECTED renders --style essential, whose kRung field ("MCS 7 /
-# FEC 25%") never reads bw.
-# Re-blessed 2026-09-26 (was c7194602...): the REC corner item draws at half
+# 1003..1055), which stay byte-identical.
+# Re-blessed (was c7194602...): the REC corner item draws at half
 # the bar's size (nearest baked; 19 px here). Pixel diff old vs new: 11768 px
 # changed, all inside x 1639..1886 y 42..94 (the REC field), 0 outside; REC
 # ink still ends flush at x 1886 and its top stays on the 40 px inset.
-BAR_SHA_EXPECTED=6e8c67a6a3c8b0a498736d2a04ed56dc8acf5cabe41e3773528b08a328650d7c
+# Re-blessed (was 6e8c67a6...): item labels became icons ("ch:" -> the
+# wifi icon and a space, ...) and "res:1280x720" became "720p", at an
+# unchanged type size. Pixel diff old vs new (the old dump rebuilt from the
+# previous sources reproduces 6e8c67a6... exactly): the same three ink
+# bands at the same rows (y 42..70, 944..996, 1003..1055); ZERO differing px
+# in the REC band; both bar rows narrower and still centred (row 0 x
+# 264..1633 -> 407..1490, row 1 143..1688 -> 374..1457); lit 129,731 ->
+# 90,091 as the label text left.
+# Re-blessed (was a8df1c23...): the two rows share a centred column grid
+# instead of each centring on its own width. Pixel diff old vs new (old
+# dump rebuilt from the previous sources reproduces a8df1c23... exactly):
+# same three ink bands at the same rows, ZERO differing px in the REC band,
+# lit total identical at 90,091 (a pure horizontal translation of items),
+# and both rows now start at x 308 (row 0 308..1413, row 1 308..1523; were
+# 407..1490 and 374..1457).
+BAR_SHA_EXPECTED=46d4286e152e61ca499602cf59122e83c4820b5945008a5415d6160c15be7937
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 # RCF delivered after frame 1 (same trick as run_gs_au_e2e.sh): the fixture
-# alternates TRAIL_R/TRAIL_N on its 12 P frames (2-stream space, spec
-# 2026-08-29-airtime-balance-uep), so without an RCF the boot MAX_RANGE op
-# point (drone/src/rc_agent.cpp:apply_max_range) would shed the 6 genuine
+# alternates TRAIL_R/TRAIL_N on its 12 P frames (2-stream space), so
+# without an RCF the boot MAX_RANGE op point (drone/src/rc_agent.cpp:apply_max_range) would shed the 6 genuine
 # sid-1 (enh) frames for good and this chain would never exercise ENH
 # through the player/DVR path.
 python3 - "$TMP/rc.bin" <<'EOF'
@@ -177,6 +133,9 @@ assert s["dropped_enhance_incomplete"] == 0, s
 assert s["resyncs"] == 0, s
 assert s["dvr_samples"] == 13, s
 assert s["dvr_fragments"] >= 1, s
+assert s["stream"] == "off:no_decoder", s   # null backend: no stream mode, whole AUs
+assert s["streamed"] == 0, s
+assert s["stream_aborted"] == 0, s
 print(f"OK stats: {s}")
 EOF
 
@@ -313,115 +272,21 @@ if [ "$OSD_SHA" != "$OSD_SHA_EXPECTED" ]; then
   exit 1
 fi
 
-# --- PART D: GS link-status overlay render gate -----------------------
-# The DRM half of the GS overlay cannot run off-hardware, so this is the
+# --- PART D: GS link-status OSD render gate ---------------------------
+# The DRM half of the GS OSD cannot run off-hardware, so this is the
 # host-side gate for everything below it: .gfont load, layout arithmetic,
-# thresholds, formatting and the mask blitter. Same dump format as the MSP
-# --osd-render gate above; the eight sizes are the 1080p design sizes, which
-# resolve exactly at this screen height.
+# formatting and the mask blitter. Same dump format as the MSP --osd-render
+# gate above. The bar is two rows of icon-tagged items along the bottom
+# edge, plus the recording indicator alone in the TOP-RIGHT corner, so the
+# invariants are three bands of ink and nothing else: the indicator up top,
+# then the two rows hugging the bottom inset. The synthetic font carries
+# eight sizes (and a box for every icon); the bar takes its size from its
+# sizing reference row (gs_compact.h).
 echo "== GS render gate =="
 python3 tools/msp/gen_gsfont.py --synthetic "$TMP/syn.gfont" \
   --sizes 19,21,22,24,26,34,38,56
-
-# --style essential explicitly: the shipped default is the compact bar (PART
-# E below), and this whole part -- corner anchors, the centre-of-frame band,
-# the golden hash -- is about the four-block layout.
-"$MABURPLAY" --gs-render tests/fixtures/gs_snapshot_nominal.json \
-  --out-gs "$TMP/gs.bin" --gsfont "$TMP/syn.gfont" --screen 1920x1080 \
-  --style essential \
-  --rec recording --rec-elapsed 767 --fps 60 --jit 3 --mbps 24.6
-
-# Sanity floor before the hash: an all-transparent dump would match a stale
-# golden just as happily as a correct render. Beyond "pixels landed", each
-# block is checked to HUG the inset edge it is anchored to -- a mere ">0
-# pixels somewhere in this corner" test passes just as happily for a block
-# that has drifted a hundred px off its anchor, which is precisely the class
-# of bug the layout has already had once.
-python3 - "$TMP/gs.bin" <<'EOF'
-import struct, sys
-d = open(sys.argv[1], "rb").read()
-magic, w, h, stride = struct.unpack("<4I", d[:16])
-assert magic == 0x5244534F, hex(magic)
-assert (w, h, stride) == (1920, 1080, 1920), (w, h, stride)
-assert len(d) == 16 + h * stride * 4, len(d)
-px = struct.unpack("<%dI" % (h * stride), d[16:])
-
-def lit(x0, y0, x1, y1):
-    return sum(1 for y in range(y0, y1) for x in range(x0, x1)
-               if px[y * stride + x])
-
-def bbox(x0, y0, x1, y1):
-    on = [(x, y) for y in range(y0, y1) for x in range(x0, x1)
-          if px[y * stride + x]]
-    assert on, "region %s is empty" % ((x0, y0, x1, y1),)
-    return (min(p[0] for p in on), min(p[1] for p in on),
-            max(p[0] for p in on), max(p[1] for p in on))
-
-assert lit(0, 0, w, h) > 0, "nothing drawn at all"
-# Row 2: the central ~60% x 55% of frame is empty by design.
-assert lit(400, 300, 1520, 780) == 0, "OSD drew in the centre of frame"
-# Nothing outside the 5% title-safe inset (96 x 54 at 1080p).
-assert lit(0, 0, 96, h) == 0, "drew left of the safe inset"
-assert lit(w - 96, 0, w, h) == 0, "drew right of the safe inset"
-assert lit(0, 0, w, 54) == 0, "drew above the safe inset"
-assert lit(0, h - 54, w, h) == 0, "drew below the safe inset"
-# The design puts no block in the top-left corner; anything there is a
-# block that has escaped one of the other three.
-assert lit(0, 0, 960, 540) == 0, "drew in the unused top-left quadrant"
-
-# Per-block anchoring. The search windows are separated by the real gaps
-# between blocks, so a bbox reaching a window edge means two blocks have run
-# together (or one has moved into another's corner) -- checked before the
-# anchor itself, since a merged bbox would make the anchor test meaningless.
-TOL = 8
-RIGHT, BOTTOM = w - 96 - 1, h - 54 - 1
-for name, win, anchors in [
-    ("top-right",     (960, 0, w, 540),    ("right", "top")),
-    ("bottom-left",   (0, 540, 720, h),    ("left", "bottom")),
-    ("bottom-centre", (720, 540, 1300, h), ("hcentre", "bottom")),
-    ("bottom-right",  (1300, 540, w, h),   ("right", "bottom")),
-]:
-    x0, y0, x1, y1 = bbox(*win)
-    print("  %-14s bbox x %d..%d y %d..%d" % (name, x0, x1, y0, y1))
-    assert win[0] + 32 < x0 and x1 < win[2] - 32, "%s crowds its window" % name
-    assert win[1] + 32 < y0 and y1 < win[3] - 32, "%s crowds its window" % name
-    for a in anchors:
-        if a == "left":
-            assert abs(x0 - 96) <= TOL, "%s not flush left (x0=%d)" % (name, x0)
-        elif a == "right":
-            assert abs(x1 - RIGHT) <= TOL, "%s not flush right (x1=%d)" % (name, x1)
-        elif a == "top":
-            assert abs(y0 - 54) <= TOL, "%s not flush top (y0=%d)" % (name, y0)
-        elif a == "bottom":
-            assert abs(y1 - BOTTOM) <= TOL, "%s not flush bottom (y1=%d)" % (name, y1)
-        elif a == "hcentre":
-            # Loose deliberately: the loss row is centred on its WORST-CASE
-            # field widths, so short values ("2.1%" in a "100.0%" box) sit
-            # tens of px off centre legitimately. Still ~600 px from any
-            # edge anchor, which is what this has to discriminate against.
-            assert abs((x0 + x1) // 2 - w // 2) <= 48, "%s not centred" % name
-print("OK gs render: %dx%d lit=%d" % (w, h, lit(0, 0, w, h)))
-EOF
-
-GS_SHA=$(sha256sum "$TMP/gs.bin" | cut -d' ' -f1)
-echo "gs render sha256: $GS_SHA"
-if [ "$GS_SHA" != "$GS_SHA_EXPECTED" ]; then
-  echo "GS render hash changed (expected $GS_SHA_EXPECTED)" >&2
-  exit 1
-fi
-
-# --- PART E: compact bar render gate ----------------------------------
-# The shipped default layout (osd.gs.style = "compact"): two plain-text rows
-# along the bottom edge, plus the recording indicator alone in the TOP-RIGHT
-# corner. Same dump format and the same reasoning as PART D, but the
-# invariants are the bar's own -- three bands of ink and nothing else: the
-# indicator up top, then the two rows hugging the bottom inset. The
-# four-corner assertions above do not apply and would all fail here, which
-# is the point of gating the two styles separately.
-echo "== GS compact bar render gate =="
 "$MABURPLAY" --gs-render tests/fixtures/gs_snapshot_nominal.json \
   --out-gs "$TMP/gsbar.bin" --gsfont "$TMP/syn.gfont" --screen 1920x1080 \
-  --style compact \
   --rec recording --rec-elapsed 767 \
   --fps 60 --jit 5.2 --mbps 8.1 --res 1280x720 --lat 45/78
 
@@ -467,16 +332,21 @@ assert 1920 - 32 - 24 <= rx1 <= 1920 - 32, "rec not flush right (x1=%d)" % rx1
 assert rx0 > w // 2, "rec is not in the right half (x0=%d)" % rx0
 
 # --- the two bottom rows ---
+row_x = []
 for i, (y0, y1) in enumerate(bands[1:]):
     x0, x1 = extent(y0, y1)
+    row_x.append((x0, x1))
     print("  row %d: x %d..%d y %d..%d" % (i, x0, x1, y0, y1))
-    # Centred on the surface. Loose for the same reason PART D's hcentre is:
-    # every box is sized from its worst case, so short values sit
-    # legitimately off centre -- 160 px still discriminates against an
-    # edge-anchored row.
-    assert abs((x0 + x1) // 2 - w // 2) <= 160, "row %d not centred" % i
     # Inside the bar's own 32 px horizontal inset.
     assert x0 >= 32 and x1 <= w - 32, "row %d crosses its inset" % i
+# The rows share a column grid: both start at column 0's left edge (each
+# first item opens with its icon, so the ink lines up too).
+assert row_x[0][0] == row_x[1][0], "rows do not share a left edge: %r" % (row_x,)
+# The GRID is centred, loosely: every box is sized from its worst case, so
+# short values sit legitimately off centre -- 160 px still discriminates
+# against an edge-anchored grid.
+gx0, gx1 = min(x for x, _ in row_x), max(x for _, x in row_x)
+assert abs((gx0 + gx1) // 2 - w // 2) <= 160, "grid not centred (x %d..%d)" % (gx0, gx1)
 
 # The block hugs the bottom: within the 24 px inset plus the cell's own
 # descender.
@@ -496,5 +366,62 @@ if [ "$BAR_SHA" != "$BAR_SHA_EXPECTED" ]; then
   echo "GS compact bar render hash changed (expected $BAR_SHA_EXPECTED)" >&2
   exit 1
 fi
+
+# --- PART E: live run, SIGTERM -> clean shutdown ----------------------
+# The oneshot drain never reaches the run loop. Run it for real on the ring
+# maburgs left behind (null backend, no doorbell, no DVR, no overlays), then
+# stop it the way S97maburplay does: exit 0, promptly, through the shutdown
+# drain (null backend: nothing streams -> "stream idle").
+echo "== PART E: live run, SIGTERM =="
+cat > "$TMP/live.toml" <<EOF
+ring_path = "$TMP/au-ring"
+socket = "$TMP/none.sock"
+backend = "null"
+
+[dvr]
+autostart = false
+dir = "$TMP"
+
+[osd]
+enable = false
+
+[osd.gs]
+enable = false
+EOF
+"$MABURPLAY" -c "$TMP/live.toml" > "$TMP/live.out" 2> "$TMP/live.err" &
+LIVE=$!
+# SIGTERM only once the handler is in: main installs it (std::signal) well
+# before it starts the feed thread and prints "feed thread on", so that line
+# proves both. A fixed sleep could land before it under load, and SIGTERM's
+# default action would kill the player (exit 143) instead of draining.
+READY=0
+for _ in $(seq 1 100); do   # up to 5 s
+  if grep -q '^maburplay: feed thread on' "$TMP/live.err" 2>/dev/null; then READY=1; break; fi
+  kill -0 "$LIVE" 2>/dev/null || break
+  sleep 0.05
+done
+if [ "$READY" != 1 ]; then
+  echo "FAIL: no 'maburplay: feed thread on' line within 5 s" >&2
+  kill -9 "$LIVE" 2>/dev/null; cat "$TMP/live.err" >&2; exit 1
+fi
+# The delivered=13 check below needs the feed's first pump (the 13 retained
+# AUs, read in well under a millisecond) to run before the drain request:
+# there is no line for that, so give it a moment. The handler race above does
+# not depend on this.
+sleep 0.2
+kill -TERM "$LIVE"
+for _ in $(seq 1 50); do kill -0 "$LIVE" 2>/dev/null || break; sleep 0.1; done
+if kill -0 "$LIVE" 2>/dev/null; then
+  echo "FAIL: maburplay still running 5 s after SIGTERM" >&2
+  kill -9 "$LIVE"; cat "$TMP/live.err" >&2; exit 1
+fi
+set +e; wait "$LIVE"; RC_LIVE=$?; set -e
+cat "$TMP/live.err"
+[ "$RC_LIVE" = 0 ] || { echo "FAIL: exit $RC_LIVE after SIGTERM (want 0)" >&2; exit 1; }
+grep -q '^maburplay: shutdown: stream idle' "$TMP/live.err" || {
+  echo "FAIL: no 'maburplay: shutdown: stream idle' line" >&2; exit 1; }
+grep -q '^maburplay: feed thread on' "$TMP/live.err" || { echo "FAIL: no feed thread" >&2; exit 1; }
+grep -q '^maburplay: feed: delivered=13 ' "$TMP/live.err" || {
+  echo "FAIL: the feed thread did not read the 13 retained AUs" >&2; exit 1; }
 
 echo "== player_e2e passed =="

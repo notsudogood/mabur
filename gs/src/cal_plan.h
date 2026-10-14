@@ -1,6 +1,5 @@
 #pragma once
 // Builds the three calibration sweep plans. Pure: no state, no I/O.
-// Spec: docs/superpowers/specs/2026-09-10-tx-power-calibration-design.md.
 #include <array>
 #include <cstdint>
 
@@ -35,8 +34,8 @@ constexpr uint16_t kGapUs = 2000;
 mabur::rc::CalCmd make_coarse_plan(uint32_t nonce);
 
 // Only rows whose coarse pass found a real dip get refined. A kCalNoDip row's
-// wall came from the RSSI knee on a flat ceiling, where +/-2 indices costs no
-// measurable power; a kCalUndetermined row has nothing to refine.
+// wall parks at the rail (kRailRel) on a flat ceiling, where +/-2 indices
+// costs no measurable power; a kCalUndetermined row has nothing to refine.
 mabur::rc::CalCmd make_fine_plan(uint32_t nonce,
                                  const std::array<RateWall, 8>& coarse);
 

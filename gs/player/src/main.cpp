@@ -1,6 +1,6 @@
 // maburplay -- GS native player: AU ring -> VideoBackend, with fMP4 DVR.
-// Host builds only ever link the null backend (this task); MppBackend /
-// DrmPresenter are cross-only (MABUR_PLAYER_HW, Task 7/8).
+// Host builds only ever link the null backend; MppBackend /
+// DrmPresenter are cross-only (MABUR_PLAYER_HW).
 #include <sys/statvfs.h>  // DVR free-space check behind the GS recording block
 
 #include <atomic>
@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
@@ -17,14 +18,15 @@
 #include <vector>
 
 #include "au_ring.h"
+#include "au_router.h"
 #include "colortrans.h"  // ColorTrans, build_cubic_lut, LutAxis (docs/colortrans.md)
+#include "feed_loop.h"
 #include "mabur/dvr_mux.h"
 #include "mabur/dvr_name.h"
 #include "mabur/raw_dvr.h"
 #include "gs_font.h"
 #include "gs_metrics.h"
 #include "gs_layer.h"
-#include "gs_overlay.h"
 #include "osd_compose.h"
 #include "gs_source.h"
 #include "mabur/hevc_params.h"
@@ -34,14 +36,15 @@
 #include "osd_source.h"
 #include "player_config.h"
 #include "rec_button.h"
-#include "rec_control.h"  // maburgs::kRecControlPort (Task 7)
+#include "rec_control.h"  // maburgs::kRecControlPort
 #include "ring_client.h"
+#include "stream_feeder.h"
 #include "video_backend.h"
 #include "genlock_client.h"   // camera-rate setpoint to maburgs (genlock.h)
 #include "async_raw_dvr.h"    // raw recording on a writer thread (SD writes off this loop)
 #include "osd_recorder.h"     // dvr.osd_file: .osd/.srt next to a raw recording
 #include "genlock_control.h"  // maburgs::kGenlockControlPort
-#include "vtx_rec_client.h"  // sends the button's VTX wish to maburgs (Task 8)
+#include "vtx_rec_client.h"  // sends the button's VTX wish to maburgs
 #include "splash_image.h"  // startup splash asset + cover-fit painter
 
 #ifdef MABUR_PLAYER_HW
@@ -49,8 +52,8 @@
 #include "drm_presenter.h"  // KMS atomic NV12 presenter, the default display path
 #include "frame_regulator.h"  // phase-aware pts+D display release
 #include "gs_draw.h"         // set_colour_inverse() for the GS overlay pre-invert
-#include "lat_tracker.h"    // tail latency segments + 1 Hz lat line (Task 11)
-#include "lat_log.h"        // persist 1 Hz lat line to <dvr>/log/lat-NNNN.log (Task 7)
+#include "lat_tracker.h"    // tail latency segments + 1 Hz lat line
+#include "lat_log.h"        // persist 1 Hz lat line to <dvr>/log/lat-NNNN.log
 #include "mpp_backend.h"    // MppBackend::info_changes()/errors() for --decode-only
 #include "osd_palette.h"    // build_palette() for the encoder-side OSD
 #endif
@@ -106,7 +109,6 @@ void usage() {
                "            is the host e2e's OSD pixel-path gate.)\n"
                "       maburplay --gs-render <snap.json> --out-gs <out.bin>\n"
                "                 [--gsfont F] [--screen WxH] [--stale]\n"
-               "                 [--style compact|essential]\n"
                "                 [--rec recording|armed|fault] "
                "[--rec-elapsed N]\n"
                "                 [--fps N] [--jit N] [--mbps N] [--res WxH]\n"
@@ -124,8 +126,7 @@ void usage() {
                "   \"errors\":N,\"errors_after_sync_3s\":N,\"concealed\":N} and exits. fps is\n"
                "  over the whole window; fps_active is over first-to-last\n"
                "  decoded frame only (excludes the cold-attach/sid0-join\n"
-               "  wait). This is the hardware decode gate (see\n"
-               "  .superpowers/sdd/2026-08-02-pr-b-maburplay/task-8-brief.md).\n"
+               "  wait). This is the hardware decode gate.\n"
                "\n"
                "--fps-log: normal (non-decode-only) run only -- once per\n"
                "  second, prints \"fps-log: fps=X flips/s=X repl=N frames=N "
@@ -272,14 +273,14 @@ int run_osd_render(const std::string& snap_path, const std::string& out_path,
 }
 
 // Test support (see usage()): renders one sideport snapshot through the
-// exact GsFont/GsOverlay/gs_draw path the live overlay uses and dumps the
+// exact GsFont/GsCompactBar/gs_draw path the live overlay uses and dumps the
 // ARGB surface. No ring, no backend, no DRM -- the DRM half of the overlay
 // cannot run off-hardware, so this is the host-side gate for everything
 // below it (layout arithmetic, thresholds, formatting, the mask blitter).
 // Dump format is byte-identical to --osd-render's.
 int run_gs_render(const std::string& snap_path, const std::string& out_path,
                   const std::string& font_path, int width, int height, bool stale,
-                  const maburplay::GsPlayerState& ps, maburplay::GsStyle style) {
+                  const maburplay::GsPlayerState& ps) {
   const std::vector<uint8_t> snap = read_whole_file(snap_path);
   if (snap.empty()) {
     std::fprintf(stderr, "maburplay: --gs-render: cannot read %s\n", snap_path.c_str());
@@ -298,7 +299,7 @@ int run_gs_render(const std::string& snap_path, const std::string& out_path,
                  snap_path.c_str());
     return 2;
   }
-  std::unique_ptr<maburplay::GsLayer> ovp = maburplay::make_gs_layer(style, font);
+  std::unique_ptr<maburplay::GsLayer> ovp = maburplay::make_gs_layer(font);
   maburplay::GsLayer& ov = *ovp;
   if (!ov.layout(width, height, &err)) {
     std::fprintf(stderr, "maburplay: --gs-render: %s\n", err.c_str());
@@ -390,7 +391,6 @@ int main(int argc, char** argv) {
     std::string font = maburplay::Config().osd.gs.font;
     int w = 1920, h = 1080;
     bool stale = false;
-    maburplay::GsStyle style = maburplay::GsStyle::kCompact;
     maburplay::GsPlayerState ps;
     for (int i = 2; i < argc; ++i) {
       const std::string a = argv[i];
@@ -405,11 +405,6 @@ int main(int argc, char** argv) {
         }
       } else if (a == "--stale") {
         stale = true;
-      } else if (a == "--style" && i + 1 < argc) {
-        if (!maburplay::parse_gs_style(argv[++i], &style)) {
-          usage();
-          return 2;
-        }
       } else if (a == "--res" && i + 1 < argc) {
         if (std::sscanf(argv[++i], "%dx%d", &ps.vid_w, &ps.vid_h) != 2) {
           usage();
@@ -456,7 +451,7 @@ int main(int argc, char** argv) {
       usage();
       return 2;
     }
-    return run_gs_render(snap, out, font, w, h, stale, ps, style);
+    return run_gs_render(snap, out, font, w, h, stale, ps);
   }
 
   std::string config_path = "/etc/maburplay.toml";
@@ -520,7 +515,7 @@ int main(int argc, char** argv) {
   // (install_colortrans, the burn-palette forward map) below, so a host
   // build would otherwise warn that they are unused. Silence that rather
   // than restructuring the declarations -- ct itself must stay at this
-  // scope for Task 12, and these two are declared alongside it.
+  // scope, and these two are declared alongside it.
   (void)ct_display_on;
   (void)lut_axis;
 #endif
@@ -598,10 +593,6 @@ int main(int argc, char** argv) {
   // wiring: sources, fonts, and the decision to invoke it.
   maburplay::OsdComposer composer;
   bool want_gs_osd = false;
-  // Validated at config load (player_config.cpp fails an unknown value), so
-  // this cannot pick a layout the operator did not ask for.
-  maburplay::GsStyle gs_style = maburplay::GsStyle::kCompact;
-  maburplay::parse_gs_style(cfg.osd.gs.style, &gs_style);
   if (cfg.osd.gs.enable && !decode_only) {
     std::string err;
     if (!gs_font.load(cfg.osd.gs.font, &err)) {
@@ -624,10 +615,10 @@ int main(int argc, char** argv) {
   // (non-decode-only) run -- release_frame() is no longer called inline
   // here, it happens when the presenter is done with a frame (see
   // drm_presenter.h's ownership contract). --decode-only stays
-  // presenter-free per its own brief ("no presenter"): frames are counted
-  // and released immediately, same as before Task 9.
+  // presenter-free by design: frames are counted
+  // and released immediately.
 #ifdef MABUR_PLAYER_HW
-  // Tail latency segments + 1 Hz lat line (Task 11). Declared ahead of the
+  // Tail latency segments + 1 Hz lat line. Declared ahead of the
   // presenter (whose flip sink feeds it) and the regulator (whose release
   // feeds it too) so both are in scope by the time either is wired below.
   maburplay::LatTracker lat;
@@ -753,7 +744,7 @@ int main(int argc, char** argv) {
   uint64_t last_engage_ms = 0;
   uint64_t last_heal_ms = 0;
   // 1 Hz mark for the lat/regulator observability block in the main loop
-  // (independent of the GS-OSD block since 2026-08-31).
+  // (independent of the GS-OSD block).
   uint64_t lat_mark_ms = 0;
   // Regulator stderr line: printed both at 1 Hz from the main loop's stats
   // block (below) and once more at exit as the final tally -- same format
@@ -846,14 +837,12 @@ int main(int argc, char** argv) {
       // parse_rec_target would.
       maburplay::RecTarget rec_target = maburplay::RecTarget::kGs;
       maburplay::parse_rec_target(cfg.dvr.target, &rec_target);
-      composer.set_gs(maburplay::make_gs_layer(gs_style, gs_font, rec_target),
-                      maburplay::make_gs_layer(gs_style, gs_font, rec_target),
-                      maburplay::make_gs_layer(gs_style, gs_font, rec_target));
+      composer.set_gs(maburplay::make_gs_layer(gs_font, rec_target),
+                      maburplay::make_gs_layer(gs_font, rec_target),
+                      maburplay::make_gs_layer(gs_font, rec_target));
       std::fprintf(stderr,
-                   "maburplay: gs osd on udp 127.0.0.1:%d font=%s style=%s "
-                   "stale_ms=%d\n",
-                   gs_src->port(), cfg.osd.gs.font.c_str(),
-                   cfg.osd.gs.style.c_str(), cfg.osd.gs.stale_ms);
+                   "maburplay: gs osd on udp 127.0.0.1:%d font=%s stale_ms=%d\n",
+                   gs_src->port(), cfg.osd.gs.font.c_str(), cfg.osd.gs.stale_ms);
     }
   }
 
@@ -881,7 +870,7 @@ int main(int argc, char** argv) {
   // the record button flips it. Declared here because start_burn_if_needed
   // below reads it.
   bool rec_on = cfg.dvr.autostart;
-  // dvr.target (spec 2026-09-26): which recorders the button drives.
+  // dvr.target: which recorders the button drives.
   const bool rec_gs = cfg.dvr.target != "vtx";
   const bool rec_vtx = cfg.dvr.target != "gs";
   maburplay::VtxRecClient vtx_rec;
@@ -910,7 +899,7 @@ int main(int argc, char** argv) {
   // build_palette() histograms the whole MSP atlas (~2 M px through a hash
   // map) and runs a 255-step median cut: ~150 ms on the A55, and on the main
   // loop that was most of the ~200 ms display stall every record start used
-  // to cost (bench 2026-09-17). Its inputs -- the atlas, the
+  // to cost (bench). Its inputs -- the atlas, the
   // GS seeds, the forward map -- are fixed for a run, so the first build is
   // done at startup below, before video flows; a later key change (a
   // presenter acquired after startup flipping colour_inverse()) rebuilds
@@ -1031,6 +1020,8 @@ int main(int argc, char** argv) {
   // just carries the extra bookkeeping for free.
   uint64_t frame_count = 0;
   bool have_first_frame = false;
+  bool have_decoded_pts = false;  // shutdown waits for the drained picture's frame
+  uint32_t last_decoded_pts = 0;
   std::chrono::steady_clock::time_point t_first_frame, t_last_frame;
   // Named so the watchdog's backend-recreation path can re-wire the same
   // sink into the fresh decoder instance.
@@ -1054,11 +1045,15 @@ int main(int argc, char** argv) {
     presenter->present(f);
   };
 #endif
+  std::function<void()> drain_notes_fn;  // set once a FeedLoop exists; run before lat.on_decoded
   const maburplay::VideoBackend::FrameSink frame_sink = [&](const maburplay::DmaFrame& f) {
+    if (drain_notes_fn) drain_notes_fn();  // on_submit for this pts is out before its frame
 #ifdef MABUR_PLAYER_HW
     lat.on_decoded(f.pts_us, mono_us());
 #endif
     ++frame_count;
+    have_decoded_pts = true;
+    last_decoded_pts = f.pts_us;
     // The DECODED picture size, which is what the OSD's res: field means --
     // not screen_mode (the panel) and not bcfg (the burn encoder), both of
     // which stay at 1080p while the drone streams 720p. Latched here rather
@@ -1093,11 +1088,24 @@ int main(int argc, char** argv) {
 #endif
     backend->release_frame(f);
   };
+#ifdef MABUR_PLAYER_HW
+  // [decoder] stream: MppBackend sets its parser up for streaming at init.
+  if (auto* mpp = dynamic_cast<maburplay::MppBackend*>(backend.get()))
+    mpp->set_stream(cfg.decoder.stream);
+#endif
   const bool init_ok = backend->init(bcfg, frame_sink);
   if (!init_ok) {
     std::fprintf(stderr, "maburplay: backend \"%s\" init failed\n", cfg.backend.c_str());
     return 2;
   }
+  // Streamed decode: split AUs go to the
+  // decoder slice by slice as ring v4 publishes them. The VideoBackend seam
+  // stays frozen; a backend that can stream also implements StreamDecoder
+  // (MppBackend), reached by dynamic_cast like its other extensions.
+  maburplay::StreamFeeder feeder(cfg.decoder.stream);
+  feeder.set_decoder(dynamic_cast<maburplay::StreamDecoder*>(backend.get()));
+  std::fprintf(stderr, "maburplay: decoder stream: %s\n",
+               maburplay::stream_off_name(feeder.off_reason()));
 
   // Raw-mode recorder (common/raw_dvr.h): sync gate + params + mux, run on
   // a writer thread behind a bounded queue (async_raw_dvr.h) so the SD
@@ -1201,133 +1209,66 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "maburplay: rec: STOP (no recorder was running)\n");
   };
 
-  uint64_t backend_submits = 0;
-
-  // Sync-point gate for the backend feed (and DVR's hvcC collection below):
-  // this live encoder's shipped GDR + SVC-T config emits exactly ONE real IRAP
-  // NAL, at session start, and never again -- au_is_irap()/kFlagIdr both
-  // stay false for the rest of the session (measured on hardware: neither
-  // ever fires past the opening IDR). The ~2 s periodic meta.sid==0 AUs are
-  // NOT IRAPs: they're parameter-set retransmission (fresh VPS/SPS/PPS)
-  // bundled with an ordinary refresh picture on sid 0 (the CRIT stream),
-  // while sid 1 (T0 base) and sid 3 (SVC-T enhance) carry ordinary P
-  // slices in between. A decoder that attaches mid-session (the normal
-  // deployment path -- the player comes up independently of the encoder)
-  // has to treat sid0 as the join/cut point instead of a true IRAP: drop
-  // AUs until the first sid==0 arrives, then feed everything in order.
-  // Because sid0 is a refresh picture, not a clean random-access point,
-  // decoders should expect concealment/errors for up to one refresh cycle
-  // (~2 s) right after joining, then clean decode. Re-armed on
-  // flush_before (discontinuity/reset drops whatever parameter-set state
-  // the decoder had) -- same join rule applies again there. au_is_irap()
-  // itself is untouched/still correct for genuinely IRAP-keyed input (see
-  // --mux-annexb's real x265 stream, used by the host e2e).
-  bool backend_armed = false;
-  // First-ever sync-point timestamp (decode-only diagnostics: buckets
-  // MppBackend's error count into "within the first 3s post-sync" vs.
-  // after, per the amended gate's concealment-window allowance).
-  bool t_sync_seen = false;
-  std::chrono::steady_clock::time_point t_sync;
-  uint64_t truncated_skipped = 0;
-
-  // RingClient sink: (a) DVR write (must not depend on decode health, so it
-  // happens before the backend ever sees the AU), then (b) backend submit.
-  auto sink = [&](maburplay::AuEvent&& ev) {
-    const bool complete = (ev.meta.flags & maburgs::kRecFlagComplete) != 0;
-    // Slice salvage (spec 2026-10-10-h265-slices §5.5): a salvaged AU is a
-    // legal, gap-free picture (kept slices + skip-slice fills) -- decode it.
-    const bool decodable = maburgs::au_decodable(ev.meta.flags);
-
-    // GS overlay video figures, measured HERE -- at AU delivery -- and not
-    // at flip: the presenter is a mailbox on the panel vsync, so flip
-    // deltas are quantized to vsync-period multiples and a 3 ms arrival
-    // wobble is invisible in them. RingClient::pump(2) is a poll() on the doorbell fd
-    // with a 2 ms CEILING, not a 2 ms sample grid, so the doorbell wakes us
-    // promptly and steady_clock resolves sub-millisecond here.
-    gs_jitter.on_au(mono_ms());
-    // Delivered bitrate is what arrived, truncated AUs included: the figure
-    // answers "what is the link carrying", not "what decoded".
-    gs_bytes_total += ev.au.size();
-    if (complete) ++gs_complete_aus;
-
-    // !burned_mode: in burned mode the BurnRecorder owns the recording and
-    // writes the encoder's output to its own DvrMux instead. RawDvr applies
-    // the raw path's rules itself (complete AUs only, file begins at a
-    // parameter-set AU) and ignores AUs while not armed.
-    if (rec_on && !burned_mode && rec_gs) {
-      dvr.feed(ev.au.data(), ev.au.size(), ev.meta.pts_us, decodable);
-      // The OSD clock starts with the video file's first frame.
-      if (osd_rec.armed() && !osd_rec.running() && dvr.opened()) {
-        osd_rec.begin(mono_ms());
-        std::fprintf(stderr, "maburplay: rec: OSD -> %s%s\n", osd_rec.osd_path().c_str(),
-                     osd_rec.error() ? " (could not open)" : "");
-      }
-    }
-
-    if (ev.flush_before) {
-      // Flush-ordering contract carried from Task 8's review:
-      // MppBackend::flush()/mpi->reset() with DmaFrames still held by the
-      // presenter is an unverified interaction, so every held frame MUST
-      // be released back to the backend first -- present nothing until a
-      // new frame arrives -- BEFORE flush() runs.
+  // Decoder input.
+  // AuRouter is the ring sink: the sid-0 join gate (this encoder's GDR+SVC-T
+  // config emits ONE real IRAP per session -- a mid-session join treats the
+  // ~2 s parameter-set sid0 refresh as its cut point), the decodable gate,
+  // whole and streamed submits. What it hands back is processed here.
+  maburplay::AuRouter router(feeder, backend);
+  auto process_note = [&](maburplay::FeedNote&& n) {
+    if (n.kind == maburplay::FeedNote::Kind::kSubmit) {
 #ifdef MABUR_PLAYER_HW
-      if (presenter) presenter->drop_all();
-      {
-        // The regulator is the THIRD holder — force-release its held frames
-        // into the backend before flush(), same contract as drop_all().
-        maburplay::DmaFrame held;
-        while (regulator.release_due(~0ull, &held)) backend->release_frame(held);
-      }
-      if (burn) {
-        // The recorder is the SECOND holder of decoder buffers, so it has
-        // to let go here too -- same reason, same place. Then reseal the
-        // recording: the next encoded frame after a discontinuity is an IDR.
-        burn->drop_pending();
-        burn->request_idr();
-      }
-      lat.flush_all();  // discont: the old session's pts space is dead
+      lat.on_submit(n.meta, n.t_us);
 #endif
-      backend->flush();
-      backend_armed = false;
-    }
-    // Never feed a truncated AU to the decoder. The spec's original policy
-    // (submit truncated base, let MPP conceal) HANGS rkvdec2 on this
-    // hardware: a truncated slice declares more bitstream than exists, the
-    // VPU waits for bytes that never arrive, and the kernel force-resets
-    // the session ("mpp_rkvdec2 ... task timeout ... resetting") leaving
-    // userspace MPP wedged. Counted; corruption washes out via the
-    // encoder's rolling refresh. (The decode watchdog in the main loop is
-    // the second line of defense if the VPU wedges anyway.)
-    // MUST run BEFORE the arming check: a truncated sid0 would otherwise
-    // arm the decoder and then discard the very parameter sets that made
-    // it a sync point (review finding -- everything until the next sid0
-    // would be param-less P slices, spuriously tripping the watchdog).
-    // Salvaged AUs pass: they contain no partial slice.
-    if (!decodable) {
-      ++truncated_skipped;
       return;
     }
-    if (!backend_armed) {
-      // A salvaged AU never arms the decoder: it is not a sync point. Only
-      // a genuinely complete sid0 AU carries the fresh parameter sets that
-      // make it one (see the comment above backend_armed's declaration).
-      if (ev.meta.sid != 0 || !complete) return;
-      backend_armed = true;
-      if (!t_sync_seen) {
-        t_sync_seen = true;
-        t_sync = std::chrono::steady_clock::now();
-      }
-    }
+    // GS overlay video figures, measured at AU delivery (t_us is stamped where
+    // the ring was read) -- not at flip: the presenter is a mailbox on the
+    // panel vsync, so flip deltas are quantized to vsync-period multiples.
+    gs_jitter.on_au(n.t_us / 1000);
+    // Delivered bitrate is what arrived, truncated AUs included.
+    gs_bytes_total += n.bytes;
+    if (n.complete) ++gs_complete_aus;
+    // !burned_mode: in burned mode the BurnRecorder owns the recording. RawDvr
+    // applies the raw path's rules itself (complete AUs only, file begins at a
+    // parameter-set AU) and ignores AUs while not armed.
+    if (rec_on && !burned_mode && rec_gs && !n.au.empty())
+      dvr.feed(n.au.data(), n.au.size(), n.meta.pts_us, n.decodable);
+  };
+  // Flush-ordering contract: MppBackend::flush()
+  // / mpi->reset() with DmaFrames still held is an unverified interaction, so
+  // every holder -- presenter, regulator (the THIRD holder), recorder (the
+  // SECOND; resealed with an IDR) -- lets go BEFORE flush() runs.
+  auto drop_holders = [&]() {
 #ifdef MABUR_PLAYER_HW
-    lat.on_submit(ev.meta, mono_us());
+    if (presenter) presenter->drop_all();
+    {
+      maburplay::DmaFrame held;
+      while (regulator.release_due(~0ull, &held)) backend->release_frame(held);
+    }
+    if (burn) {
+      burn->drop_pending();
+      burn->request_idr();
+    }
+    lat.flush_all();  // the old session's pts space is dead
 #endif
-    backend->submit_au(ev.au.data(), ev.au.size(), ev.meta.pts_us);
-    ++backend_submits;
+  };
+  auto do_flush = [&]() {
+    drop_holders();
+    feeder.on_flush();  // never reset under an open streamed picture
+    backend->flush();
+    router.disarm();    // resync at the next sid0
+  };
+  router.set_hooks({process_note, [&]() { do_flush(); return true; }, [] { return mono_us(); }});
+  maburplay::FeedLoop* feed_ptr = nullptr;
+  auto sink = [&](maburplay::AuEvent&& ev) {
+    if (feed_ptr && !feed_ptr->checkpoint()) return;  // parked for the main thread, or stopping
+    router.on_event(std::move(ev));
   };
 
   maburplay::RingClient ring({cfg.ring_path, cfg.socket}, sink);
-  // Wait indefinitely for maburgs to create the ring (GS boot race,
-  // 2026-09-08): the init scripts start us milliseconds after maburgs, so
+  // Wait indefinitely for maburgs to create the ring (GS boot race):
+  // the init scripts start us milliseconds after maburgs, so
   // losing the race is normal, not a config error -- and exiting made it
   // permanent, because S97maburplay reads our exit 2 as "config error, skip
   // restart". --oneshot is the exception: there the ring is the test fixture,
@@ -1344,7 +1285,8 @@ int main(int argc, char** argv) {
         "{\"delivered\":%llu,\"dropped_enhance_incomplete\":%llu,"
         "\"truncated_base\":%llu,\"salvaged_base\":%llu,\"salvaged_enhance\":%llu,"
         "\"resyncs\":%llu,\"dvr_samples\":%llu,"
-        "\"dvr_fragments\":%llu,\"backend_submits\":%llu}\n",
+        "\"dvr_fragments\":%llu,\"backend_submits\":%llu,"
+        "\"streamed\":%llu,\"stream_aborted\":%llu,\"stream\":\"%s\"}\n",
         static_cast<unsigned long long>(ring.delivered()),
         static_cast<unsigned long long>(ring.dropped_enhance_incomplete()),
         static_cast<unsigned long long>(ring.truncated_base()),
@@ -1352,7 +1294,10 @@ int main(int argc, char** argv) {
         static_cast<unsigned long long>(ring.salvaged_enhance()),
         static_cast<unsigned long long>(ring.resyncs()), static_cast<unsigned long long>(dvr.samples()),
         static_cast<unsigned long long>(dvr.fragments()),
-        static_cast<unsigned long long>(backend_submits));
+        static_cast<unsigned long long>(router.submits()),
+        static_cast<unsigned long long>(feeder.streamed()),
+        static_cast<unsigned long long>(feeder.stream_aborted()),
+        maburplay::stream_off_name(feeder.off_reason()));
     return 0;
   }
 
@@ -1361,8 +1306,8 @@ int main(int argc, char** argv) {
   std::signal(SIGUSR1, on_rec_toggle);
 
   if (decode_only) {
-    // Hardware decode gate (task-8-brief.md, amended per the sid0-join
-    // finding above): drive the backend straight off the live ring for
+    // Hardware decode gate (amended per the sid0-join finding above):
+    // drive the backend straight off the live ring for
     // `decode_only_seconds`, no presenter -- the frame_sink above (wired
     // at backend->init() time, shared with the normal run loop) counts
     // frames and timestamps the first/last decoded frame. info_changes
@@ -1386,8 +1331,8 @@ int main(int argc, char** argv) {
     while (!g_stop.load() && std::chrono::steady_clock::now() < deadline) {
       ring.pump(100);
       backend->poll();
-      if (!sampled_3s && t_sync_seen &&
-          std::chrono::steady_clock::now() >= t_sync + std::chrono::seconds(3)) {
+      if (!sampled_3s && router.synced() &&
+          mono_us() >= router.t_sync_us() + 3'000'000) {
         sampled_3s = true;
 #ifdef MABUR_PLAYER_HW
         if (auto* mpp = dynamic_cast<maburplay::MppBackend*>(backend.get())) {
@@ -1449,6 +1394,59 @@ int main(int argc, char** argv) {
         static_cast<unsigned long long>(concealed_count));
     return ring_died ? 1 : 0;
   }
+
+  // The decoder-input thread (design-reader-thread.md). From here on the
+  // ring, the StreamFeeder and the router are its; this thread keeps the
+  // display, OSD, DVR, stats, the watchdog and the decoder's OUTPUT side.
+  maburplay::FeedLoop feed(ring, router, feeder, {});
+  auto drain_notes = [&]() {
+    std::vector<maburplay::FeedNote> got;
+    feed.take_notes(&got);
+    for (maburplay::FeedNote& n : got) process_note(std::move(n));
+  };
+  // Notes first, then a waiting flush: everything before the flush record
+  // reaches lat/DVR before lat.flush_all() runs -- today's order.
+  auto service_feed = [&]() {
+    drain_notes();
+    if (feed.flush_waiting()) {
+      drain_notes();
+      do_flush();
+      feed.resume();
+    }
+  };
+  drain_notes_fn = drain_notes;
+  router.set_hooks({[&feed](maburplay::FeedNote&& n) { feed.push_note(std::move(n)); },
+                    [&feed]() { return feed.park_for_flush(); }, [] { return mono_us(); }});
+  feed_ptr = &feed;
+#ifdef MABUR_PLAYER_HW
+  if (auto* mpp = dynamic_cast<maburplay::MppBackend*>(backend.get()))
+    mpp->set_input_cancel(&feed.cancel_flag());
+#endif
+  // Streamed-decode counters + ring wake latency, every 5 s, from the feed
+  // thread (it owns every input). wake = closed-record delivery - t_complete.
+  feed.set_periodic([&]() {
+    const auto wk = ring.take_wake();
+    uint64_t stream_refused = 0;
+#ifdef MABUR_PLAYER_HW
+    // backend read on the feed thread: safe only because the watchdog re-creates it while the feed is parked.
+    if (auto* mpp = dynamic_cast<maburplay::MppBackend*>(backend.get()))
+      stream_refused = mpp->stream_errors();
+#endif
+    std::fprintf(stderr,
+                 "stream: %s streamed=%llu salvaged=%llu aborted=%llu whole=%llu "
+                 "opened=%llu open_aborted=%llu wake_us=%u/%u n=%u refused=%llu parks=%llu\n",
+                 maburplay::stream_off_name(feeder.off_reason()),
+                 static_cast<unsigned long long>(feeder.streamed()),
+                 static_cast<unsigned long long>(feeder.streamed_salvaged()),
+                 static_cast<unsigned long long>(feeder.stream_aborted()),
+                 static_cast<unsigned long long>(feeder.whole_submits()),
+                 static_cast<unsigned long long>(ring.opened()),
+                 static_cast<unsigned long long>(ring.open_aborted()), wk.p50, wk.p99, wk.n,
+                 static_cast<unsigned long long>(stream_refused),
+                 static_cast<unsigned long long>(feed.parks()));
+  }, 5000);
+  feed.start();
+  std::fprintf(stderr, "maburplay: feed thread on (ring reader + decoder input off the render loop)\n");
 
   // --fps-log bookkeeping: a once-per-second stderr line, computed off the
   // same frame_count the FrameSink above already maintains.
@@ -1513,7 +1511,7 @@ int main(int argc, char** argv) {
     int pump_ms = 2;
 #ifdef MABUR_PLAYER_HW
     // Wake for the next scheduled release, not just the AU doorbell
-    // (hw 2026-08-31): the fixed ceiling plus the decode work below put
+    // (measured on hw): the fixed ceiling plus the decode work below put
     // the release->submit path ~4 ms behind schedule, forcing
     // vsync_lead_ms up to ~9 -- and the lead sits inside every frame's
     // glass latency. Bound the pump by the release deadline, then
@@ -1531,7 +1529,8 @@ int main(int argc, char** argv) {
       }
     }
 #endif
-    ring.pump(pump_ms);
+    feed.wait_main(pump_ms);
+    service_feed();
 #ifdef MABUR_PLAYER_HW
     if (presenter) {
       const uint64_t nr1 = regulator.next_release_us();
@@ -1547,7 +1546,7 @@ int main(int argc, char** argv) {
 #endif
     backend->poll();
     // One ioctl per iteration (~500/s, microseconds each) -- far under the
-    // ~1.5 ms budget tools/bench/gs_overlay_bench.cpp polices for this loop.
+    // ~1.5 ms budget tools/bench/gs_osd_bench.cpp polices for this loop.
     if ((rec_button.is_open() && rec_button.poll(mono_ms())) || g_rec_toggle.exchange(false)) {
       if (rec_on) {
         rec_stop();
@@ -1590,7 +1589,7 @@ int main(int argc, char** argv) {
       // frames instead of resubmitting them a period late) -- follows the
       // servo state so the fallback path keeps the original behavior.
       presenter->set_paced(regulator.servo_locked());
-      // Chain-break heal, per-tick (hw 2026-08-31): a loop stall past the
+      // Chain-break heal, per-tick (seen on hw): a loop stall past the
       // lead window (the 1 Hz OSD/stats work) makes one release miss its
       // latch, and the miss self-sustains -- each parked resubmit lands
       // exactly on a vblank and misses the next latch, so every frame
@@ -1836,7 +1835,7 @@ int main(int argc, char** argv) {
         }
         gs_ps.rec = gs_rec.update(rin, now_ms);
         {
-          // VTX leg (spec 2026-09-26) from the drone's drone.rec via maburgs.
+          // VTX leg from the drone's drone.rec via maburgs.
           const maburplay::GsSnapshot& snap = gs_src->snapshot();
           maburplay::VtxRecTracker::Inputs vin;
           vin.requested = rec_on && rec_vtx;
@@ -1854,14 +1853,14 @@ int main(int argc, char** argv) {
     }
 #ifdef MABUR_PLAYER_HW
     // Player tail-latency aggregates + regulator line, 1 Hz. Deliberately
-    // OUTSIDE the gs_src gate (2026-08-31: originally nested in the GS-OSD
-    // block, so disabling the OSD silently killed the lat:/regulator:
-    // lines and the DVR lat log) and behind the idle-window gate so this
+    // OUTSIDE the gs_src gate (nested in the GS-OSD block, disabling the
+    // OSD would silently kill the lat:/regulator: lines and the DVR lat
+    // log) and behind the idle-window gate so this
     // block's own cost can never stall a release past its latch deadline.
     if (idle_ok && mono_ms() - lat_mark_ms >= 1000) {
       lat_mark_ms = mono_ms();
       const auto L = lat.flush_line();
-      // OSD LAT rows (Task 12): p99_frame() returns the REAL p99-by-e2e
+      // OSD LAT rows: p99_frame() returns the REAL p99-by-e2e
       // frame, computed as a side effect inside flush_line() above from
       // the window it is about to clear -- it is a member that
       // persists across flush_line() calls, not derived
@@ -1887,12 +1886,10 @@ int main(int argc, char** argv) {
       // reasoning as above: a stale post-reset bd would otherwise still
       // get copied into gs_ps.lat_e2e_ms even though the OSD is about to
       // ignore it, leaving gs_ps holding a phantom number.
-      // link-rtt (2026-09-02): absolute floor = own anchor + the sideport
+      // link-rtt: absolute floor = own anchor + the sideport
       // pts offset (floor_us_from owns the 32-bit-seed wrap rule). Folded
       // into e2e, turning it from "excess above the luckiest transit" into
-      // capture-stamp→scanout-start truth. (It used to be folded into the
-      // air+ segment as well, so the OSD breakdown still summed to the
-      // headline; that breakdown is gone as of 2026-09-06, and the jsonl
+      // capture-stamp→scanout-start truth. (The jsonl
       // lat: line below is deliberately untouched by the floor -- it is
       // the relative record the older recordings are in.) Sanity-bounded:
       // an offset that puts the floor outside (-1ms, 1s) is estimator
@@ -2057,10 +2054,10 @@ int main(int argc, char** argv) {
       const auto now = std::chrono::steady_clock::now();
       if (frame_count != wd_frames) {
         wd_frames = frame_count;
-        wd_submits = backend_submits;
+        wd_submits = router.submits();
         wd_last_progress = now;
         wd_consecutive = 0;
-      } else if (have_first_frame && backend_submits > wd_submits + 60 &&
+      } else if (have_first_frame && router.submits() > wd_submits + 60 &&
                  now - wd_last_progress > std::chrono::seconds(2)) {
         // have_first_frame gate: before the decoder has EVER produced a
         // frame (cold attach waiting for the encoder's session sync), a
@@ -2069,27 +2066,22 @@ int main(int argc, char** argv) {
         std::fprintf(stderr,
                      "maburplay: decode watchdog -- %llu AUs submitted with no decoded frame "
                      "for 2 s; resetting decoder and resyncing (attempt %d)\n",
-                     static_cast<unsigned long long>(backend_submits - wd_submits),
+                     static_cast<unsigned long long>(router.submits() - wd_submits),
                      wd_consecutive);
-#ifdef MABUR_PLAYER_HW
-        if (presenter) presenter->drop_all();
-        {
-          // Regulator flush, same contract as the flush_before site: the
-          // held frames must go back to the OLD backend before reset/teardown.
-          maburplay::DmaFrame held;
-          while (regulator.release_due(~0ull, &held)) backend->release_frame(held);
+        // The decoder's input side is the feed thread's: park it (between two
+        // events, outside every MPP call) before anything below resets or
+        // re-creates the decoder. A feed that cannot park in 2 s is wedged
+        // beyond this process: respawn.
+        if (!feed.park(std::chrono::seconds(2))) {
+          std::fprintf(stderr,
+                       "maburplay: decode watchdog -- the feed thread did not park in 2 s; "
+                       "exiting for respawn\n");
+          std::fflush(stderr);
+          std::_Exit(1);
         }
-        if (burn) {
-          // Same pairing as flush_before: release the buffer the recorder is
-          // holding before the decoder is reset or torn down, and reseal the
-          // recording with an IDR once frames come back. The recorder never
-          // holds a backend pointer, so the recreation path below needs
-          // nothing else from it.
-          burn->drop_pending();
-          burn->request_idr();
-        }
-        lat.flush_all();  // decoder reset: inflight frames will never complete
-#endif
+        drain_notes();
+        drop_holders();
+        feeder.on_flush();  // end a streamed picture before reset/teardown
         if (wd_consecutive < 3) {
           backend->flush();
         } else if (wd_consecutive == 3) {
@@ -2102,11 +2094,20 @@ int main(int argc, char** argv) {
                        "decoder context\n");
           backend.reset();  // destroy the wedged context BEFORE creating anew
           backend = maburplay::make_backend(cfg.backend);
+#ifdef MABUR_PLAYER_HW
+          if (auto* mpp = dynamic_cast<maburplay::MppBackend*>(backend.get()))
+            mpp->set_stream(cfg.decoder.stream);
+#endif
           if (!backend || !backend->init(bcfg, frame_sink)) {
             std::fprintf(stderr,
                          "maburplay: decoder recreation failed -- exiting for respawn\n");
             return 1;
           }
+          feeder.set_decoder(dynamic_cast<maburplay::StreamDecoder*>(backend.get()));
+#ifdef MABUR_PLAYER_HW
+          if (auto* mpp = dynamic_cast<maburplay::MppBackend*>(backend.get()))
+            mpp->set_input_cancel(&feed.cancel_flag());
+#endif
         } else {
           // Even a fresh context won't decode: something below us (VPU,
           // kernel, stream) needs a full process restart. The init wrapper
@@ -2116,8 +2117,9 @@ int main(int argc, char** argv) {
                        "respawn\n");
           return 1;
         }
-        backend_armed = false;  // resync at the next sid0 AU
-        wd_submits = backend_submits;
+        router.disarm();  // resync at the next sid0 AU
+        feed.resume();
+        wd_submits = router.submits();
         wd_last_progress = now;
       }
     }
@@ -2179,8 +2181,7 @@ int main(int argc, char** argv) {
           // delivery chain froze somewhere -- dump where the reader sits
           // relative to the ring so the stuck stage is identifiable.
           if (fps < 0.5 && frame_count > 0)
-            std::fprintf(stderr, "fps-log: STALL %s trunc_skip=%llu\n", ring.debug_line().c_str(),
-                         static_cast<unsigned long long>(truncated_skipped));
+            feed.request_debug_line();  // printed by the feed thread, which owns the ring
         } else
 #endif
         {
@@ -2191,11 +2192,60 @@ int main(int argc, char** argv) {
         frames_at_last_fps_log = frame_count;
       }
     }
-    if (ring.dead()) {
+    if (feed.dead()) {
       std::fprintf(stderr, "maburplay: ring reader dead, exiting\n");
       break;
     }
   }
+
+  // Clean shutdown. A streamed picture still
+  // open in rkvdec when MPP is torn down gets mpp_dec_stop's empty LAST
+  // (mpp_dec.c:877) -- 64 zero bytes in the kernel -- and decodes into an
+  // error IRQ: one rkvdec reset per such kill (3 of 13). Finish it with its
+  // own last slice instead (its close is at most a frame away), then let it
+  // decode. Only on a signal: the watchdog and dead-ring exits are faults.
+  auto report_drain = [&](const maburplay::DrainResult& dr) {
+    bool decoded = false;
+    if (dr.kind == maburplay::DrainResult::kFinished) {
+      const uint64_t t1 = mono_ms();
+      for (;;) {
+        decoded = have_decoded_pts && last_decoded_pts == dr.pts;
+        if (decoded || mono_ms() - t1 >= 50) break;
+        backend->poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+    }
+    std::fprintf(stderr, "maburplay: shutdown: %s pts=%u waited=%u ms%s\n",
+                 maburplay::drain_name(dr.kind), dr.pts, dr.waited_ms,
+                 dr.kind == maburplay::DrainResult::kFinished
+                     ? (decoded ? ", decoded" : ", not decoded in 50 ms")
+                 : dr.kind == maburplay::DrainResult::kAborted
+                     ? " -- its close never came: expect one rkvdec reset"
+                     : "");
+  };
+  if (g_stop.load() && !feed.dead()) {
+    feed.begin_drain();
+    const uint64_t t0 = mono_ms();
+    while (!feed.finished() && mono_ms() - t0 < 500) {  // the feed's own budget is 100 ms
+      feed.wait_main(1);
+      service_feed();   // a flush can still park it
+      backend->poll();  // keep the output side moving (a BUFFER_FULL needs it)
+    }
+  }
+  feed.stop_and_join();
+  drain_notes();
+  if (g_stop.load() && !feed.dead()) {  // a dead ring asked for no drain: nothing to report
+    if (feed.drained()) {
+      report_drain(feed.drain_result());
+    } else {
+      std::fprintf(stderr, "maburplay: shutdown: the feed thread did not finish its drain\n");
+    }
+  }
+  std::fprintf(stderr, "maburplay: feed: delivered=%llu submits=%llu parks=%llu notes_dropped=%llu\n",
+               static_cast<unsigned long long>(ring.delivered()),
+               static_cast<unsigned long long>(router.submits()),
+               static_cast<unsigned long long>(feed.parks()),
+               static_cast<unsigned long long>(feed.notes_dropped()));
 
 #ifdef MABUR_PLAYER_HW
   // Final tally -- same line the 1 Hz stats block above already printed all

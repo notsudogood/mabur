@@ -8,7 +8,7 @@
 
 namespace maburgs {
 
-// Per-episode FEC loss log (2026-09-15): one row per LossEpisode a video
+// Per-episode FEC loss log: one row per LossEpisode a video
 // layer's SwDecoder closes -- the raw inputs for "what FEC overhead would
 // this link have needed", read by tools/flightreport.py's FEC section.
 // Writes `fec.log` inside the session directory (DebugSession::dir()) via
@@ -22,19 +22,19 @@ namespace maburgs {
 // t_ms is the core-loop drain tick (mono ms, ~10 ms coarse; an episode
 // closes at horizon eviction, ~a horizon after the loss itself). sid is the
 // video layer (0 base, 1 enh). mcs, bw and ov are the op MCS, the op's
-// width (20|40 MHz) and THAT sid's commanded overhead at drain time, so a row scores against the rung it
-// flew on without a ctl.log join (a rung change inside the horizon is the
-// case `stale` > 0 flags). first_seq is the wire (u32) seq of the first
-// missing source; span, m (missing), rec, rtx, aband, stale, r (covering
-// repairs) and w (repair window as flown) are LossEpisode verbatim.
+// width (20|40 MHz) and THAT sid's commanded overhead at drain time, so a
+// row scores against the rung it flew on without a ctl.log join (a rung
+// change inside the horizon is the case `stale` > 0 flags). first_seq is the
+// wire (u32) seq of the first missing source; span, m (missing), rec, rtx,
+// aband, stale, r (covering repairs) and w (repair window as flown) are
+// LossEpisode verbatim.
 //
-// feclog 1 (2026-09-15 .. 2026-09-24) had no bw column: every row was
-// 20 MHz, and flightreport.py reads it as such. feclog 2 (2026-09-24 ..
-// 2026-10) added bw so 20/3 and 40/3 episodes do not pool, and had no rtx
-// column (the NACK retransmit didn't exist yet). feclog 3 adds rtx: symbols
-// a NACK retransmit filled -- video-whole but still residual loss to the
-// ladder (option A, spec 2026-10-05 fec-nack; ladder_residual.cpp counts
-// them the same way).
+// feclog 1 had no bw column: every row was 20 MHz, and flightreport.py
+// reads it as such. feclog 2 added bw so 20/3 and 40/3 episodes do not
+// pool, and had no rtx column (the NACK retransmit didn't exist yet).
+// feclog 3 adds rtx: symbols a NACK retransmit filled -- video-whole but
+// still residual loss to the ladder (ladder_residual.cpp counts them the
+// same way).
 //
 // Every failure mode is non-fatal: ok() reads false and row() is a no-op.
 class FecLog {

@@ -5,8 +5,8 @@
 # (paggr fraction + inter-frame tsfl-delta histogram + unique-counter fps —
 # NOT the equal-tsfl burst marker, which does not fire on an 8812EU RX).
 #
-# First run + findings: docs/dq-spike-findings-2026-08-31.md §11
-# (2026-09-01: the E die aggregates; 93% of arrivals at pure MPDU airtime).
+# First run + findings: docs/findings/2026-08-31-dq-spike.md §11
+# (the E die aggregates; 93% of arrivals at pure MPDU airtime).
 #
 # Prereqs:
 #   - txdemo cross-built for the drone:  cmake --build build-arm-glibc
@@ -17,8 +17,8 @@
 #     restart + ausniff gate afterwards.
 # GS busybox has no pkill — killall only.
 set -u
-DRONE=${DRONE:-root@192.168.10.152}
-GS=${GS:-root@10.18.0.1}
+DRONE=${DRONE:?set DRONE=root@<drone-ip>}
+GS=${GS:?set GS=root@<gs-ip>}
 CH=${CH:-161}; RATE=${RATE:-MCS5}; PAYLOAD=${PAYLOAD:-1396}
 SECS=${SECS:-8}; AGG=${AGG:-16}; DENSITY=${DENSITY:-7}
 OUT=/tmp/ampdu_e_spike   # on the GS

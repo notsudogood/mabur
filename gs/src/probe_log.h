@@ -8,12 +8,11 @@
 
 namespace maburgs {
 
-// Per-body probe log (spec docs/superpowers/specs/2026-09-04-probe-stream
-// section 6.2). One row per body ProbeTrack finalizes on the probe stream --
-// far higher rate than CtlLog's dwell-period S lines, so it is its own file
+// Per-body probe log. One row per body ProbeTrack finalizes on the probe
+// stream -- far higher rate than CtlLog's dwell-period S lines, so it is its own file
 // rather than another CtlLog record type. Writes `probe.log` inside the
 // session directory (DebugSession::dir()) via the shared LogWriter -- the
-// 2026-09-06 consolidation collapsed the per-boot indexed
+// debug-log consolidation collapsed the per-boot indexed
 // `probe-NNNN_<date>.log` naming into one session directory per boot, so
 // probe.log and ctl.log from the same boot always pair up by directory
 // rather than by a shared NNNN.
@@ -25,8 +24,8 @@ namespace maburgs {
 //   <t_ms> <seq> <mcs> <bw> <enh_fid> <blocks_ok> <card_mask> <snr0> <snr1>
 //     <evm0> <evm1> <first_ms>                               # one row per finalized body
 //
-// probelog 1 (2026-09-04, one day) had no first_ms column; probelog 2
-// (2026-09-05 .. 2026-09-24) had no bw column (every body was 20 MHz).
+// probelog 1 had no first_ms column; probelog 2 had no bw column (every
+// body was 20 MHz).
 // probelog 3 (40 MHz rungs) adds bw -- the probe body's own width from its
 // profile byte -- right after mcs, so 20/3 and 40/3 do not pool.
 // flightreport.py reads all three.

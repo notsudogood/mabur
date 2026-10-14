@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bench driver for maburgs' injected per-stream loss (--loss-sim).
 
-Mainlined (2026-08-29) behind the CMake option MABUR_LOSS_SIM (default OFF).
+Mainlined behind the CMake option MABUR_LOSS_SIM (default OFF).
 Requires maburgs built with -DMABUR_LOSS_SIM=ON; the loopback control socket
 does not exist otherwise.
 

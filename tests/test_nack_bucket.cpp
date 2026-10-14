@@ -1,6 +1,6 @@
-// TokenBucket: the air cap on NACK re-sends (spec 2026-10-05 fec-nack §4.3),
-// in symbols. A request beyond the tokens is refused, never queued; a
-// repeat-flagged (doubled) send draws two tokens per symbol.
+// TokenBucket: the air cap on NACK re-sends, in symbols. A request beyond the
+// tokens is refused, never queued; a repeat-flagged (doubled) send draws two
+// tokens per symbol.
 #include "nack_bucket.h"
 #include "mtest.h"
 
@@ -35,7 +35,7 @@ TEST(doubled_send_draws_two) {
 }
 
 TEST(depth_follows_the_rung_and_clamps_tokens) {
-  // Depth is burst_ms of air at the CURRENT op (spec: a demote to a slow
+  // Depth is burst_ms of air at the CURRENT op (a demote to a slow
   // rung must not burst a fast rung's worth of symbols), so the handler
   // re-sets it on every refill. Growing it leaves the tokens alone (they
   // refill toward the new ceiling); shrinking it clamps what is held.

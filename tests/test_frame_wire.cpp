@@ -24,7 +24,7 @@ TEST(frame_hdr_wire_layout_little_endian) {
   FrameHdr h;
   h.frame_id = 0x0201;
   h.flags = 0x01;
-  h.slice_rows = 0x05;  // byte 3: was the codec byte until 2026-10-10
+  h.slice_rows = 0x05;  // byte 3
   h.pts_us = 0x04030201;
   uint8_t buf[kFrameHdrLen];
   pack_frame_hdr(h, buf);

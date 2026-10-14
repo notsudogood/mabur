@@ -41,7 +41,7 @@ int classify_frame(const uint8_t* annexb, size_t len);
 // NAL) — harmless, since classify_frame already maps such frames to sid 0
 // regardless, and agreement demotion (this function feeding into it) only
 // ever lowers sid, never raises it. Only genuine TRAIL_N participates in the
-// producer-flag agreement check (spec 2026-07-26 svct-enable).
+// producer-flag agreement check.
 bool frame_is_trail_n(const uint8_t* annexb, size_t len);
 
 // One start-code walk (the same as classify_frame's) over an Annex-B access

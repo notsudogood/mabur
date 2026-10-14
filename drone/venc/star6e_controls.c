@@ -53,7 +53,7 @@ static uint32_t g_last_requested_kbps;
  * (RcAgent's thread, under venc_core's verb lock -- the ONLY thread that
  * talks to MI_VENC_*RcParam) once >= RC_READBACK_AFTER_S have passed since
  * bind, i.e. past the #255 stale window.  It was first hooked into the
- * encoder loop at t+10 s and segfaulted there on the 2026-09-03 deploy the
+ * encoder loop at t+10 s and segfaulted there on deploy the
  * instant the line had printed (SCHED_FIFO/CPU0 thread, concurrent with
  * the agent's Get/Set on the same channel); the same Get from the agent
  * thread had already succeeded three times in that boot.  Keep every RC
@@ -106,7 +106,7 @@ static uint32_t rc_compensate_kbps(uint32_t kbps, uint32_t delivered_fps)
 
 /* Program the encoder rate.
  *
- * The bitrate-change IDR that waybeam fired here is DELETED (spec §4): the
+ * The bitrate-change IDR that waybeam fired here is DELETED: the
  * encoder is a pure mechanism and does not decide to spend the largest
  * frame in the stream on a rate step.  The rate controller absorbs
  * between-IDR changes; RcAgent asks for an IDR explicitly when it wants
@@ -157,8 +157,8 @@ static int apply_bitrate(uint32_t kbps)
 	return 0;
 }
 
-/* Live frame-rate change (spec 2026-09-20; probe 2026-09-20 in
- * docs/low-power-spike-findings-2026-09-19.md).  Ported from waybeam
+/* Live frame-rate change (probe in
+ * docs/findings/2026-09-19-low-power-spike.md).  Ported from waybeam
  * f956a52 src/star6e_controls.c apply_fps().
  *
  * The VPE->VENC bind RATIO is the frame-rate lever on this SDK: the RC
@@ -357,7 +357,7 @@ int star6e_controls_request_idr(void)
 
 /* Everything we have asked the rate controller for, kept because
  * MI_VENC_GetRcParam cannot be trusted to give it back (upstream waybeam
- * bf8c3cb, issue #255, ported 2026-09-03).
+ * bf8c3cb, issue #255).
  *
  * The SDK does not reflect a just-written s32IPQPDelta in the next Get: it
  * keeps returning driver defaults until the driver commits the pending
@@ -389,7 +389,7 @@ static struct {
  * note on g_rc_intent for why the Get cannot be trusted.  No IDR, no log:
  * shared by the qp_delta / max_ipprop verbs and by the SuperFrame guard
  * (waybeam PR #113 saw SetSuperFrameCfg reset qpDelta to 0 / maxQp to 48
- * on its path; the 2026-08-27 fork probe did not, so that call is
+ * on its path; the fork probe did not, so that call is
  * belt-and-braces and must not cost a keyframe per bitrate write). */
 static int rc_commit_intent(void)
 {
@@ -456,13 +456,13 @@ static int apply_qp_delta(int delta)
 
 /* SuperFrame REENCODE with a P-frame threshold = g_superframe_p_pct % of
  * the per-frame budget at `kbps` (the rate the encoder was just given),
- * I and B thresholds unlimited. Measured on this SoC 2026-08-27 (waybeam
+ * I and B thresholds unlimited. Measured on this SoC (waybeam
  * 0.69.2 probe, ../mabur-fork stack): P frames bounded from the NEXT
  * frame, keyframe-free, no drops; an I threshold below the IDR size
  * stalls the channel permanently, hence the unconditional 0xFFFFFFFF.
  * The RC re-plans UNDER the threshold rather than clipping at it (6000 B
  * cap -> 3.2 kB frames), so the percentage is a quality lever as well as
- * a burst bound — the 2026-09-03 bench's motivating case is a scene-cut
+ * a burst bound — the motivating bench case is a scene-cut
  * P frame at 2-6x the budget (195 kB against 34 kB at rung 5). pct 0
  * writes NONE (all thresholds unlimited) if a policy was ever applied. */
 static int apply_superframe_p(uint32_t kbps)
@@ -509,7 +509,7 @@ static int apply_superframe_p(uint32_t kbps)
  * size as a multiple of P-frame size).  Staged through g_rc_intent like
  * every other RC write, so it can neither be reverted by a later
  * qp_delta/SuperFrame write nor revert one (issue #255).  Logs the
- * firmware's own value beside it -- the 2026-08-29 probe found this
+ * firmware's own value beside it -- a hardware probe found this
  * proportion IS enforced under H265 CBR, unlike u32MaxISize/u32MaxPSize,
  * which were proven dead on hardware. */
 static int apply_max_ipprop(uint32_t prop)

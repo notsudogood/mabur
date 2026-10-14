@@ -4,8 +4,7 @@
 //
 //   u32-LE record length | VencFrameMeta | Annex-B frame
 //   VencFrameMeta = pts u32-LE (µs) | codec u8 | flags u8 | enc_us u16-LE
-//   (µs, 0 = unknown; replaced the write-only gdr_pos/gdr_len bytes
-//   2026-08-30, see drone/vendor/venc_frame_ring.h)
+//   (µs, 0 = unknown; see drone/vendor/venc_frame_ring.h)
 //
 // Plus the two steps every consumer test repeats: building the wire unit
 // maburd feeds UepEncoder::add_frame (FrameHdr stamped over the producer meta,

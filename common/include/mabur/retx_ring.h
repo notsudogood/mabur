@@ -1,9 +1,9 @@
 #pragma once
-// Fixed-slot ring of sealed source envelopes keyed by wire seq (spec
-// 2026-10-05 fec-nack §4.1). Single writer (the drone hot thread), any
-// reader (the RX thread answering a T_NACK). No lock: each slot carries a
-// seqlock-style state word; a reader that catches a slot mid-write, or a
-// slot that was overwritten under it, gets `false` and treats it as a miss.
+// Fixed-slot ring of sealed source envelopes keyed by wire seq (fec-nack).
+// Single writer (the drone hot thread), any reader (the RX thread answering a
+// T_NACK). No lock: each slot carries a seqlock-style state word; a reader
+// that catches a slot mid-write, or a slot that was overwritten under it,
+// gets `false` and treats it as a miss.
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
@@ -37,7 +37,7 @@ class RetxRing {
     state_[i].store(1, std::memory_order_relaxed);          // writing
     std::atomic_thread_fence(std::memory_order_release);
     std::memcpy(&data_[i * env_len_], env, env_len_);
-    // Release, not relaxed (controller ruling R16): pairs with the acquire
+    // Release, not relaxed: pairs with the acquire
     // seq_ load in get()'s first gate -- see the comment there.
     seq_[i].store(seq, std::memory_order_release);
     state_[i].store(2, std::memory_order_release);          // valid

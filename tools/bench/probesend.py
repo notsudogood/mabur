@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """probesend.py -- where do the GS's own control sends land relative to the
-probe stream? (probe-blanking fix, 2026-09-05)
+probe stream? (probe-blanking fix)
 
 Inputs, all from one maburgs run on the GS:
   gaplog   stderr of maburgs started with MABUR_GAPLOG=1 ('gstx card=..
@@ -17,7 +17,7 @@ probe relative to its enh AU's completion; sends relative to the probe of
 the same AU; and the decisive test -- of the LOST probes (seq gaps,
 attributed to the enh AUs completing between the neighbouring rows), how
 many had a send within the collision window, against the same rate for
-delivered probes. Bench 2026-09-05 (pinned mcs4, feedback 50): 45/55 lost
+delivered probes. Bench (pinned mcs4, feedback 50): 45/55 lost
 vs 22 % baseline before the fix.
 
 Usage: python3 tools/bench/probesend.py gaplog.txt <session-dir> | probe-NNNN.log au-NNNN.log

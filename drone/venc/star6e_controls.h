@@ -7,7 +7,7 @@
 
 /* waybeam's VencApplyCallbacks table (the HTTP /api/v1/set live-apply glue)
  * is deleted along with httpd; the surviving controls are called directly.
- * Everything here is pure mechanism — no encoder-local policy (spec §4). */
+ * Everything here is pure mechanism — no encoder-local policy. */
 
 /** Bind pipeline and config to runtime control state. */
 void star6e_controls_bind(Star6ePipelineState *pipeline, const VencCfg *cfg);
@@ -18,7 +18,7 @@ void star6e_controls_reset(void);
 /** Program the encoder rate.  The ONLY rate source is RcAgent — there is
  *  no venc.bitrate key and no encoder-local clamp policy beyond the
  *  VENC_BITRATE_{MIN,MAX}_KBPS rails and the >120 fps exact-CBR
- *  compensation.  Does NOT request an IDR (spec §4). */
+ *  compensation.  Does NOT request an IDR. */
 int star6e_controls_apply_bitrate(uint32_t kbps);
 
 /** Live frame-rate change: VPE->VENC rebind at sensor_fps:fps + RC fpsNum
@@ -65,7 +65,7 @@ int star6e_controls_set_iqp_bound(int is_min, uint32_t qp);
  *  agent thread, the first time it runs >= 10 s after bind (past the
  *  #255 stale-Get window) so /tmp/mabur.log proves the boot-time
  *  qp_delta / max_ipprop reached the encoder.  MUST stay on the agent
- *  thread: from the encoder loop it segfaulted (2026-09-03). */
+ *  thread: from the encoder loop it segfaulted. */
 void star6e_controls_log_rc_readback(const char *when);
 
 /** SuperFrame P-frame ceiling as a percentage of the per-frame budget

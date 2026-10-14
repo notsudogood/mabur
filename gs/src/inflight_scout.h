@@ -20,7 +20,7 @@ struct InflightScoutCfg {
   int busy_dbm = -83;      // radio.scan.busy_dbm: NHM bucket edge for the dwell's busy-airtime read
 };
 
-// The ~10 ms mid-flight dwell (spec 2026-09-14-inflight-channel-hop §3): a
+// The ~10 ms mid-flight dwell: a
 // single, timed visit to one candidate channel on the SPARE card, back to
 // `back` (the card's normal channel) before returning, so the live video --
 // which never left the other card -- sees no interruption. Every retune,
@@ -36,11 +36,11 @@ struct InflightScoutCfg {
 // OTHER card, so a stranded scout card means the aircraft is down to one
 // radio with no diversity); dwell() flags the record and returns false
 // rather than booking a visit around an unknown card position. Recovery is
-// NOT this module's job -- Task 11's mechanical retune loop (driven off
+// NOT this module's job -- the caller's mechanical retune loop (driven off
 // `plan.desired(card)` every tick) is the real reconciliation path.
 //
 // Pure apart from the injected radio: no threads, no clock of its own.
-// main.cpp (Task 11) owns the thread that calls dwell()/burst() on a
+// ChannelCore owns the thread that calls dwell()/burst() on a
 // period_ms cadence, and picks the dwell card per cycle via set_radio().
 class InflightScout {
  public:
@@ -58,12 +58,12 @@ class InflightScout {
   // One dwell on `ch`, returning to `back`. Fills d.survey (fa/cca/frames/
   // observe_ms), d.in_session=true, and the three step timings regardless
   // of outcome. Also arms an NHM busy-airtime window for the observe span
-  // and reads it back (spec 2026-09-25-nhm-airtime §6), filling
+  // and reads it back, filling
   // d.busy_valid/d.busy_pct and, on success, visit.busy_valid/busy_pct --
   // left at their false/0 defaults on radios without NHM support.
   //
-  // CONTRACT (relied on by gs/src/main.cpp's sideport dwell attribution,
-  // Task 12 -- HopVisit carries no card field, so main.cpp pairs each
+  // CONTRACT (relied on by ChannelCore's sideport dwell attribution
+  // -- HopVisit carries no card field, so ChannelCore pairs each
   // drained ScoutDwell against dwell_visits purely off this return-value/
   // flag/visit relationship, in order, across the two vectors):
   //   - Returns false, with d.survey.flags carrying kFlagRetuneFailed and
@@ -78,7 +78,7 @@ class InflightScout {
   //     kFlagRetuneFailed.
   // Breaking either half of this pairing (return value disagreeing with
   // the flag, or with whether `visit` was actually filled) silently
-  // corrupts main.cpp's per-card score/visit attribution without failing
+  // corrupts ChannelCore's per-card score/visit attribution without failing
   // any test at this call site -- see tests/test_inflight_scout.cpp's
   // dwell_return_value_flag_and_visit_population_stay_in_lockstep group.
   bool dwell(uint8_t ch, uint8_t back, ScoutDwell& d, HopVisit& visit);

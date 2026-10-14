@@ -16,7 +16,7 @@ TEST(superframe_p_pct_key_whitelisted) {
   CHECK(p.val == 200);
 }
 TEST(min_qp_key_rejected) {
-  // Deleted 2026-09-03 with the venc.min_qp config key (bench refuted the
+  // Deleted with the venc.min_qp config key (bench refuted the
   // QP-floor hypothesis); a stale bench script must get BAD, not a silent ok.
   CHECK(debug_http_parse("POST /venc/set?min_qp=24 HTTP/1.0").kind == DebugReq::BAD);
 }

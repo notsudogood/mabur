@@ -95,7 +95,7 @@ bool get_bool(const Value& o, const char* key, bool dflt,
   return o[key].get<bool>();
 }
 
-// Overlay merge (spec 2026-09-27-web-ui §3.2): tables recurse, anything else
+// Overlay merge: tables recurse, anything else
 // replaces -- so an overlay [[link.ladder]] replaces the file's ladder whole.
 void merge_overlay(Value& base, const Value& ov) {
   for (const auto& [k, v] : ov.items()) {
@@ -372,7 +372,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
     c.fec.seq_horizon = static_cast<int>(get_int(r, "seq_horizon", 512, 16, 65536, "fec"));
   }
 
-  // Raw [link] key overlay (spec 2026-10-01 link-pairing §2); empty when
+  // Raw [link] key overlay; empty when
   // absent or when only key_file was given. Resolved, with key_file, in the
   // unconditional block below (same reasoning as the sentinel resolution
   // further down: a config with no [link] table at all must still resolve
@@ -394,10 +394,10 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
                 "nack",
                 "key_file", "key"});
     c.link.key_file = get_str(r, "key_file", "/etc/mabur.key", "link");
-    // Read by presence: link.key is an optional web-overlay key (spec §2),
+    // Read by presence: link.key is an optional web-overlay key,
     // not a tunable with a meaningful default, so its absence (the normal
     // case -- key_file is the real config surface) must not register as a
-    // defaulted key (fix round 1, Task 4 review) -- that would print
+    // defaulted key -- that would print
     // "link.key=" under every plain boot's "config: N key(s) defaulted"
     // list, right next to the real DEFAULT-key warning, diluting it.
     if (r.contains("key")) link_inline_key = get_str(r, "key", "", "link");
@@ -408,7 +408,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
     c.link.static_mcs = static_cast<int>(get_int(r, "static_mcs", -1, -1, 7, "link"));
     // Actual-air overhead (airtime-balance-uep): literal, not a scaled cmd
     // value -- old cmd default/range 0.25 [0.10, 1.0] x2 everywhere.
-    // Same-rate-fixed-pairs (Task 3): base/enh pair, same default/range.
+    // Same-rate fixed pairs: base/enh pair, same default/range.
     c.link.static_overhead_base =
         get_num(r, "static_overhead_base", 0.5, 0.1, 2.0, "link");
     c.link.static_overhead_enh =
@@ -433,16 +433,16 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
         check_keys(rj, where, {"mcs", "bw", "overhead_base", "overhead_enh"});
         Rung rung;
         rung.mcs = static_cast<int>(get_int(rj, "mcs", 0, 0, 7, where));
-        // Per-rung width (2026-09-24 40 MHz top rungs): required, no
+        // Per-rung width: required, no
         // default -- a rung silently airing at 20 when the author meant 40
         // (or vice versa) is exactly the wrong-width mistake this is meant
         // to catch.
-        if (!rj.contains("bw")) fail(where + ".bw", "required: 20 or 40 (per-rung width, 2026-09-24)");
+        if (!rj.contains("bw")) fail(where + ".bw", "required: 20 or 40 (per-rung width)");
         rung.bw = static_cast<int>(get_int(rj, "bw", 20, 20, 40, where));
         if (rung.bw != 20 && rung.bw != 40) fail(where + ".bw", "must be 20 or 40");
         // Actual-air overhead (airtime-balance-uep): literal, not a scaled
         // cmd value -- old cmd default/range 1.0 [0.05, 1.0] x2 everywhere.
-        // Same-rate-fixed-pairs (Task 3): base/enh pair, same default/range.
+        // Same-rate fixed pairs: base/enh pair, same default/range.
         rung.overhead_base = get_num(rj, "overhead_base", 2.0, 0.1, 2.0, where);
         rung.overhead_enh = get_num(rj, "overhead_enh", 2.0, 0.1, 2.0, where);
         // Operator rule: the base layer every frame depends on never gets
@@ -495,8 +495,8 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
     // down_util below, AFTER down_util has parsed above.
     auto& lc = c.link.ladder_cfg;
     lc.s3_min_syms = static_cast<int>(get_int(r, "s3_min_syms", 50, 1, 100000, "link"));
-    // Probe stream gate (spec 2026-09-04 §5). Optional block with live
-    // defaults; the pre-2026-09-04 flat probe_* keys are gone and fail boot.
+    // Probe stream gate. Optional block with live defaults; the old flat
+    // probe_* keys are gone and fail boot.
     if (r.contains("probe")) {
       const Value& pj = r["probe"];
       check_keys(pj, "link.probe", {"enable", "rung_offset", "clean_bodies", "max_util",
@@ -504,7 +504,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
       auto& pc = lc.probe;
       pc.enable = get_bool(pj, "enable", pc.enable, "link.probe");
       pc.rung_offset = static_cast<int>(get_int(pj, "rung_offset", 1, 1, 7, "link.probe"));
-      // Streak in expected probe BODIES (probe per AU, 2026-09-16), so the
+      // Streak in expected probe BODIES (a probe per AU), so the
       // gate's confidence is fixed by config alone, not by fps or the
       // layer split. clean_ms is gone: it fails boot like any unknown key.
       pc.clean_bodies = static_cast<int>(get_int(pj, "clean_bodies", 90, 10, 100000, "link.probe"));
@@ -530,8 +530,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
       note_default("link", "s3_down_util", "(defaults to link.down_util)");
     lc.s3_settle_ms = static_cast<int>(get_int(r, "s3_settle_ms", 300, 0, 5000, "link"));
 
-    // Fade-aware demotes (spec 2026-08-14 fade-demote). Config surface only:
-    // nothing in this task consumes lc.fade yet.
+    // Fade-aware demotes (LadderController's fade cascade and predictor).
     if (r.contains("fade")) {
       const Value& fj = r["fade"];
       check_keys(fj, "link.fade",
@@ -549,7 +548,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
     } else {
       note_default("link", "fade", "(section absent)");
     }
-    // Software NACK (spec 2026-10-05 fec-nack §7). settle is adaptive (no key).
+    // Software NACK (docs/fec-nack.md). settle is adaptive (no key).
     if (r.contains("nack")) {
       const Value& nj = r["nack"];
       check_keys(nj, "link.nack", {"enable", "lookback", "repeat_ms", "max_tries", "min_lead_ms",
@@ -592,7 +591,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
   if (c.link.ladder_cfg.s3_down_util < 0)
     c.link.ladder_cfg.s3_down_util = c.link.ladder_cfg.down_util;
 
-  // Pairing key resolution (spec 2026-10-01 link-pairing §2): an inline
+  // Pairing key resolution: an inline
   // [link] key overrides key_file; otherwise the key file is read (missing
   // -> compiled-in default). Runs unconditionally so a config with no
   // [link] table at all still resolves to the default.
@@ -613,7 +612,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
     }
   }
 
-  // ---- Width cross-checks (2026-09-24, 40 MHz top rungs) -------------------
+  // ---- Width cross-checks (40 MHz rungs) ----------------------------------
   // A 40 MHz rung or pin needs the GS tuned 40 -- a 20-tuned receiver cannot
   // hear HT40 at all (docs/bw40.md). Runs unconditionally, after both radio
   // and link sections are settled, and after the max_mcs filter above: a

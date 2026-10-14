@@ -22,7 +22,7 @@ CalCell cell(int idx, int pct, int rssi = -70, int expected = 100) {
 
 }  // namespace
 
-// mcs7 as measured 2026-07-29: a sensitivity floor below idx 34, a clean run
+// mcs7 as measured on the bench: a sensitivity floor below idx 34, a clean run
 // to 49, then the comb -- 2% at 56 but 95% at 57. The wall is the END OF THE
 // FIRST CONTIGUOUS RUN (49). The island at 57 is not headroom.
 TEST(mcs7_first_dip_not_last_good) {
@@ -161,7 +161,7 @@ TEST(row_never_reaching_threshold_is_undetermined) {
 
 TEST(negative_relative_indices_are_ordinary_cells) {
   // Relative indices: a wall can sit below the anchor (mcs7 read -4 on
-  // the 2026-09-13 bench at anchor 53). Nothing may treat < 0 as a sentinel.
+  // the bench at anchor 53). Nothing may treat < 0 as a sentinel.
   std::vector<CalCell> cells;
   for (int i = -40; i <= -8; i += 4) cells.push_back(cell(i, 98));
   for (int i = -4; i <= 60; i += 4) cells.push_back(cell(i, 10));

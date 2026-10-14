@@ -125,7 +125,7 @@ class RelayE2E(unittest.TestCase):
         self.assertNotIn(TX, r.types())
 
     def test_spotter_is_refused_when_not_owner(self):
-        # One relay, one client (spec 2026-10-04 §1): the page is the relay's
+        # One relay, one client: the page is the relay's
         # tune owner in BOTH modes; a refusal is an operator error, not a listen-only path.
         r = FakeRelay(own=False)
         t0 = time.time(); p = run_webgs(r.port, 'spotter', 10); r.stop = True

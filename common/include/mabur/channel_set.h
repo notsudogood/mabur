@@ -1,7 +1,7 @@
 #pragma once
-// The channel set (spec 2026-10-03-auto-channel-set §2): the members both
-// ends agree the link may live on. Pure, header-only, shared by the drone
-// and GS config loaders and by RcAgent/ChannelPlan membership checks.
+// The channel set: the members both ends agree the link may live on.
+// Pure, header-only, shared by the drone and GS config loaders and by
+// RcAgent/ChannelPlan membership checks.
 #include <algorithm>
 #include <cstdint>
 #include <optional>

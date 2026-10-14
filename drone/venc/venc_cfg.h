@@ -1,5 +1,5 @@
 /* ported-from/derived-from waybeam_venc f956a52:include/venc_config.h —
- * trimmed to the surface mabur exercises (spec 2026-08-28 §3). */
+ * trimmed to the surface mabur exercises. */
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
@@ -12,8 +12,8 @@ typedef struct {
   int8_t qp_delta;           /* venc.qp_delta */
   uint8_t max_ipprop;        /* venc.max_ipprop: 0 (default) = leave the
                               * firmware default (0 = unbounded); 1..100 =
-                              * program u32MaxIPProp at boot. 2026-08-29
-                              * probe findings: enforced on star6e
+                              * program u32MaxIPProp at boot. Probe
+                              * findings: enforced on star6e
                               * (dose-response measured), achieved-ratio
                               * floor ~1.4 at small values (I-QP rails);
                               * useful range 2..4 at the shipped GDR/SVC-T
@@ -21,7 +21,7 @@ typedef struct {
   uint8_t min_iqp;           /* venc.min_iqp: 0 (default) = leave the
                               * firmware I-QP floor (12); 1..51 = program
                               * u32MinIQp at boot. The one direct IDR SIZE
-                              * bound star6e honours (bench 2026-09-06,
+                              * bound star6e honours (bench:
                               * 14400->10800 attr-change IDR: floor
                               * 12/30/36/42/48 -> 11.6/11.4/5.0/2.6/1.4 kB,
                               * P frames unchanged, no IDR on the write).
@@ -35,12 +35,12 @@ typedef struct {
                               * MI_VENC_SetSuperFrameCfg REENCODE with I
                               * unlimited, re-derived on every bitrate
                               * write. The one live P-frame size bound on
-                              * star6e (fork probe 2026-08-27); the RC
+                              * star6e (fork probe); the RC
                               * re-plans UNDER the cap, so this is a quality
                               * lever too — bench before shipping non-zero. */
   /* ── Error-resilience structure ───────────────────────────────────────
    * These six fields WERE one string, venc.resilience, naming a row in a
-   * preset table that expanded into them (deleted 2026-09-04). They are
+   * preset table that expanded into them (since deleted). They are
    * now config keys in their own right, and each is a field of one of the
    * two MI structs verbatim — there is no derivation between config and
    * hardware left to surprise anyone.
@@ -72,7 +72,7 @@ typedef struct {
                                 * structure this SoC expresses; larger is
                                 * strictly less. Must be >= 1 when ref_base
                                 * is nonzero. Device-measured on Star6E
-                                * 2026-08-06 by raw-ES NAL census.
+                                * by raw-ES NAL census.
                                 *
                                 * Costs the intra sweep: a stripe landing in
                                 * a non-referenced frame never enters the
@@ -88,8 +88,7 @@ typedef struct {
                                 * MI_VENC_SetH265SliceSplit in the CreateChn ->
                                 * StartRecvPic window; only counts the SDK's
                                 * whole-CTU-row geometry reproduces are legal
-                                * (venc_cfg_slice_rows). Spec
-                                * 2026-10-10-h265-slices §5.1. */
+                                * (venc_cfg_slice_rows; docs/slices.md). */
   bool roi_enabled;          /* venc.roi.enabled */
   uint8_t roi_steps;         /* venc.roi.steps */
   double roi_center;         /* venc.roi.center */
@@ -97,7 +96,7 @@ typedef struct {
   uint8_t snapshot_quality;  /* venc.snapshot_quality */
   /* Compiled constants, NOT config: ring name VENC_RING_NAME "/mabur_f"
    * (shared with frame_source), rcMode CBR, codec H265. NO bitrate field —
-   * rate arrives exclusively via venc_set_bitrate_kbps() (spec §3). */
+   * rate arrives exclusively via venc_set_bitrate_kbps(). */
 } VencCfg;
 
 /* ── Compiled constants ─────────────────────────────────────────────────
@@ -123,8 +122,8 @@ typedef struct {
 #define VENC_BITRATE_MIN_KBPS 300
 #define VENC_BITRATE_MAX_KBPS 200000
 
-/* Rate the encoder channel is CREATED at.  There is no venc.bitrate key
- * (spec §3): the real rate arrives from RcAgent via
+/* Rate the encoder channel is CREATED at.  There is no venc.bitrate key:
+ * the real rate arrives from RcAgent via
  * star6e_controls_apply_bitrate() within the first control tick, so the
  * boot value only has to be legal, not correct. */
 #define VENC_BOOT_BITRATE_KBPS 1000   /* unchanged by the 2026-10-11 floor move */
@@ -133,7 +132,7 @@ typedef struct {
 extern "C" {
 #endif
 
-/* Seeds *cfg with the spec §3 defaults — the values an absent config key
+/* Seeds *cfg with the absent-key defaults — the values an absent config key
  * falls back to. Every field EXCEPT sensor_bin gets a sane value; sensor_bin
  * is zeroed and stays REQUIRED, because it names a device-specific ISP
  * calibration blob that no default can guess (the config loader fails boot

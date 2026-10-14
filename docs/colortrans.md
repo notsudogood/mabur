@@ -11,8 +11,8 @@ pinned JS/GLSL copy for its video:
 |---|---|---|
 | Live picture | VOP2 CRTC `CUBIC_LUT`, 9x9x9, 12-bit entries, built by `build_cubic_lut()` and attached on every modeset commit (`drm_presenter.cpp`) | none (scanout hardware) |
 | OSD (both overlays) | pre-inverted at the source: `OsdFont::set_inverse()` on the MSP atlas, `set_colour_inverse()` in `gs_draw` for the GS tokens and shadow | once at startup |
-| Burned DVR | `FrameColorTrans` (`frame_colortrans.cpp`): NV12 dmabuf -> GLES2 shader (colortrans3 verbatim) -> ARGB GBM target -> RGA -> NV12, on the recorder's ct thread, pipelined with `encode()` (see "Latency" below) | ct thread only; `burn_ctfb=` on the fps-log counts frames that fell back to flat, `burn_ct_ms=`/`burn_enc_ms=` are the per-window mean stage times |
-| Web GS video (`web/`) | `web/ui/src/lib/colortrans.js`: each decoded `VideoFrame` -> `texImage2D` -> the same shader on a WebGL canvas stacked over the flat 2D one; the MSP OSD is its own canvas above, so nothing is pre-inverted. Page toggle, see `docs/web-gs.md` ("Colour correction") | one GPU pass per frame; off = the old 2D `drawImage` path untouched |
+| Burned DVR | `FrameColorTrans` (`frame_colortrans.cpp`): NV12 dmabuf -> GLES2 shader (colortrans3 verbatim) -> ARGB GBM target -> RGA -> NV12, on the recorder's ct thread, pipelined with `encode()` (see "Keeping the burned stage off the display path" below) | ct thread only; `burn_ctfb=` on the fps-log counts frames that fell back to flat, `burn_ct_ms=`/`burn_enc_ms=` are the per-window mean stage times |
+| Web GS video (`web/`) | `web/ui/src/lib/colortrans.js`: each decoded `VideoFrame` -> `texImage2D` -> the same shader on a WebGL canvas stacked over the flat 2D one; the MSP OSD is its own canvas above, so nothing is pre-inverted. Page toggle, see `docs/web-gs.md` ("Colour correction") | one GPU pass per frame; off = the plain 2D `drawImage` path |
 
 Config: `[colortrans] enable = true|false` in `maburplay.toml` (default false in
 code, true in the bundle). Retuning = edit `kColorTrans3` in `colortrans.cpp`
@@ -21,15 +21,14 @@ AND the constants in `kFrag` in `frame_colortrans.cpp`, rebuild, redeploy — AN
 `web/tests/colortrans.test.mjs` pins the web copy to the same values and to
 `colortrans.h`'s defaults (a retune that misses the page fails it).
 
-The ct thread also SCALES (2026-09-27): the burned DVR's picture is the OSD
-surface's size, not the decoded size, because the encoder lays the OSD 1:1
-from the top-left while the panel stretches the video under it — a 720p
-drone on a 1080p panel used to record the OSD offset and clipped. With
-colortrans the shader draw scales (target = OSD size, LINEAR sampler);
-without it, one RGA NV12 resize (~5 ms 720p→1080p). So the ct thread runs
+The ct thread also SCALES: the burned DVR's picture is the OSD surface's
+size, not the decoded size, because the encoder lays the OSD 1:1 from the
+top-left while the panel stretches the video under it — recording at the
+decoded size would put the OSD offset and clipped on a 720p drone with a
+1080p panel. With colortrans the shader draw scales (target = OSD size,
+LINEAR sampler); without it, one RGA NV12 resize. So the ct thread runs
 whenever there is an OSD region, colortrans or not, and a 720p drone
-records a 1080p file. Bench 720p→1080p: ct 11.4 ms / enc 13.6 ms mean with
-colortrans, ~1 % dropped at the 60 fps cap.
+records a 1080p file.
 
 ## Kernel facts (GS kernel 6.1.84, `rockchip_drm_vop2.c`)
 
@@ -55,14 +54,14 @@ colortrans, ~1 % dropped at the 60 fps cap.
   marker/"fault" colour; RED is correct, BLUE (or an obvious cast on body
   text) means the axis is inverted. Two field remedies need no rebuild —
   export `MABUR_COLORTRANS_AXIS=bgr` from `S97maburplay` to flip the axis
-  persistently, or set `[colortrans] enable = false` for a clean total
-  retreat to pre-branch behaviour. The permanent fix is to change the
+  persistently, or set `[colortrans] enable = false` to turn the whole
+  feature off. The permanent fix is to change the
   default in `main.cpp` (`lut_axis = LutAxis::kBlueFastest`), update the
   `axis=` string in the same log line, rebuild, and redeploy.
 
 ## Build
 
-maburplay is glibc-dynamic since 2026-09-16 (Mesa EGL/GBM cannot be linked
+maburplay is glibc-dynamic (Mesa EGL/GBM cannot be linked
 statically). `tools/build-arm64.sh` stage 6 builds it with the Buildroot SDK
 in `../sbc-groundstations-gilankpam/output/radxa_zero3_defconfig/host`
 (`MABUR_BR_HOST` overrides). That sysroot must contain mesa3d + librga:
@@ -92,9 +91,9 @@ this leak and fails loudly with an explanatory message rather than let CMake
 surface a confusing "path does not exist" error — but the safe move is to
 just not wrap the script in the first place.
 
-`out/arm64/maburplay-static` is the old musl build (no GPU stage; with
-colortrans on it records flat and `burn_ctfb` climbs) — the rollback build.
-maburgs is unchanged (static).
+`out/arm64/maburplay-static` is the musl build from stage 5 (no GPU stage;
+with colortrans on it records flat and `burn_ctfb` climbs) — the rollback
+build. maburgs stays static.
 
 Confirm the dynamic build's actual link list with:
 
@@ -105,72 +104,53 @@ which on the current build reads: `libEGL.so.1`, `libGLESv2.so.2`,
 usual `libstdc++.so.6`, `libm.so.6`, `libgcc_s.so.1`, `libc.so.6`, and the
 loader `ld-linux-aarch64.so.1`.
 
-## Latency while recording (2026-09-17)
+## Keeping the burned stage off the display path
 
-The first build of this stage made `dsp` p99 sit at 22 ms (baseline 5) for
-every second a recording ran: one vsync slip on ~10 % of flips. Three things
-were found and fixed, all on the bench with the drone streaming:
+A recording must not cost the live picture a vsync. What makes that hold:
 
-1. **Implicit fence on the decoder's frame.** The GPU stage imports the
-   decoder's NV12 dmabuf as a texture; panfrost (6.1) attaches a
-   `DMA_RESV_USAGE_WRITE` fence to every BO in a job, the PRIME import shares
-   one `dma_resv` between that texture and the KMS framebuffer of the same
-   frame, VOP2 has no `prepare_fb` of its own, so `drm_gem_plane_helper_prepare_fb`
-   picked the fence up and the commit worker blocked 7-15 ms on a job that only
-   reads. ftrace showed 66 `dma_fence_wait` calls per 10 s in the DRM commit
-   workers, p90 12.5 ms; zero with recording off. Fix: `DrmPresenter` mints
-   one already-signalled `sync_file` (a `DRM_SYNCOBJ_CREATE_SIGNALED` syncobj
-   on the panfrost render node, exported; rockchip-drm lacks
-   `DRIVER_SYNCOBJ`) and sets it as `IN_FENCE_FD` on every video-plane
-   commit — with an explicit fence the helper only takes KERNEL-usage fences,
-   of which there are none. After: 576 waits per 10 s (one per commit, the
-   signalled fence), max 79 µs, `dsp` 5/5. Log line at startup:
-   `DrmPresenter: video plane commits carry an explicit IN_FENCE_FD (...)`.
-2. **Serial pipeline.** GPU import 2.7 + draw/finish 14.6 + RGA 4.9 + encode
-   13.0 ms = 35 ms per frame on one thread → 26-32 fps recorded, 30 % of
-   admitted frames dropped, and the GPU idle enough that devfreq never left
-   300 MHz. The stage now runs on its own thread (EGL is thread-bound) with
-   three destination buffers and a latest-wins handoff to the encode thread
-   (`burn_recorder.h`, THREADING). Two more shavings were needed once the
-   admission cap (below) let the full 60 fps through: the stage pins the GPU
-   devfreq governor to `performance` for its lifetime (simple_ondemand never
-   clocks up at the ~60 % utilisation a pipelined stage shows; restored at
-   stop, logged both ways), and the per-frame EGLImage import of the
-   decoder's dma-buf is cached per (fd, inode) -- the pool is 24 fixed
-   buffers, so imports happen 24 times per recording instead of 60 times a
-   second. After all three: stage 12.2 ms mean (import 0, draw+finish 7.0,
-   RGA 5.1) against 13.2 ms encode; 1770 admitted / 1760 encoded / 9 dropped
-   over 30 s at a 58-60 fps source, `dsp` 5/5. The stage is memory-bound now
-   (11 MB GPU + 11 MB RGA traffic per 1080p frame), so the next lever would
-   be feeding the encoder BGRA directly and deleting the RGA pass, untested.
-   `BurnRecorder: stopped` reports `ct_ms=mean/max enc_ms=mean/max`; the ct
-   thread logs `colortrans stage mean per frame ...: import, draw+finish,
-   rga` at stop.
-3. **Record-start spike.** Every start blocked the main loop ~240 ms: 147 ms
-   of it was `build_palette()` histogramming the whole MSP atlas, now built
-   once at startup and memoised (`maburplay: burn palette built: N entries`
-   at boot); the remaining ~75 ms is the first full OSD quantize (32-39 ms
-   with a cold cache) plus the GPU bring-up (~165 ms on the ct thread, of
-   which drm+gbm ~50, program ~65, targets ~30) and is accepted as a one-shot
-   cost of pressing record. A similar ~80 ms one-shot happens at stop.
+- **Explicit in-fence on video-plane commits.** The GPU stage imports the
+  decoder's NV12 dmabuf, and panfrost attaches a write fence to every BO in
+  a job; through the shared `dma_resv` the KMS commit worker would wait on a
+  job that only reads. `DrmPresenter` mints one already-signalled
+  `sync_file` (a `DRM_SYNCOBJ_CREATE_SIGNALED` syncobj on the panfrost
+  render node; rockchip-drm lacks `DRIVER_SYNCOBJ`) and sets it as
+  `IN_FENCE_FD` on every video-plane commit, so the plane helper takes no
+  implicit fence. Startup log:
+  `DrmPresenter: video plane commits carry an explicit IN_FENCE_FD (...)`.
+- **Pipelined ct thread.** The stage runs on its own thread (EGL is
+  thread-bound) with three destination buffers and a latest-wins handoff to
+  the encode thread (`burn_recorder.h`, THREADING).
+- **GPU governor pinned to `performance`** for the stage's lifetime
+  (simple_ondemand never clocks up at a pipelined stage's utilisation);
+  restored at stop, logged both ways (`FrameColorTrans: GPU governor …`).
+- **Import cache.** The EGLImage import of the decoder's dma-buf is cached
+  per source buffer (the decoder pool is 24 fixed buffers), so imports
+  happen once per buffer per recording, not per frame.
+- **Palette memoised at boot** (`maburplay: burn palette built: N entries`),
+  so a record start does not histogram the MSP atlas on the main loop. A
+  record start/stop still costs a one-shot GPU bring-up/teardown.
+- **Schedule-based `dvr.burned.fps_cap`** (`gs/player/src/fps_cap.h`,
+  `test_fps_cap`): a frame is admitted when its slot is due and slots
+  advance one interval per admit, so a source at or under the cap passes
+  whole even though decoded frames arrive in pairs.
 
-Bench affordance: `kill -USR1 $(pidof maburplay)` toggles a recording
-exactly like the GPIO button, so a mid-session record start can be measured
-without a hand on the GS.
+`BurnRecorder: stopped` reports `ct_ms=mean/max enc_ms=mean/max`; the ct
+thread logs `colortrans stage mean per frame ...: import, draw+finish, rga`
+at stop. Bench affordance: `kill -USR1 $(pidof maburplay)` toggles a
+recording exactly like the GPIO button, so a mid-session record start can be
+measured without a hand on the GS.
 
-Also fixed the same day, pre-existing: `dvr.burned.fps_cap = 60` admitted
-only ~41-45 fps of a 60 fps stream — the cap rejected any frame arriving less
-than `interval - interval/8` after the last admitted one, and decoded frames
-arrive in pairs. The cap is now schedule-based (`gs/player/src/fps_cap.h`,
-host-tested by `test_fps_cap`): a frame is admitted when its slot is due,
-slots advance one interval per admit, so a source at or under the cap passes
-whole and a faster one is thinned to exactly the cap.
+Bench record of the three fixes and their numbers:
+`docs/findings/2026-09-17-colortrans-recording-latency.md`.
 
 ## Not done / follow-ups
 
 - Live retune (config + restart is the loop).
-- EGL YUV colour-space / range hints on the dmabuf import (PixelPilot passes
-  none; a mismatch is a slight tint between the display and the DVR).
+- EGL YUV colour-space / range hints on the dmabuf import (none are passed;
+  a mismatch is a slight tint between the display and the DVR).
 - Raw DVR mode is the bitstream and stays flat: post-process with
   `ffmpeg -vf "libplacebo=custom_shader_path=colortrans3.glsl"`.
 - The splash is not inverted.
+- The stage is memory-bound (GPU + RGA traffic per 1080p frame); feeding
+  the encoder BGRA directly and deleting the RGA pass is the untested next
+  lever.

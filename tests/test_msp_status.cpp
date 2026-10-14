@@ -14,9 +14,9 @@ static std::vector<uint8_t> msp_reply(uint8_t cmd, std::vector<uint8_t> payload)
   return f;
 }
 
-// The 27-byte MSP_STATUS payload the bench FC answered on 2026-09-19:
-// cycle 123, i2c 0, sensors 0x002b, flightModeFlags, profile 0, then
-// whatever the FC pads to 27. Only bytes 6..9 (the flags word) matter here.
+// The 27-byte MSP_STATUS payload the bench FC answered: cycle 123, i2c 0,
+// sensors 0x002b, flightModeFlags, profile 0, then whatever the FC pads to 27.
+// Only bytes 6..9 (the flags word) matter here.
 static std::vector<uint8_t> status_payload(uint32_t flight_mode_flags) {
   std::vector<uint8_t> p(27, 0);
   p[0] = 123; p[1] = 0;      // cycleTime

@@ -7,10 +7,10 @@
 #include <memory>
 #include <string>
 
-// The extensibility seam (spec: docs/superpowers/specs — PR B maburplay
-// design). This block is FROZEN verbatim: hardware backends (MppBackend,
-// Task 7/8) and NullBackend (this task) both implement VideoBackend as-is;
-// do not change the shape here without updating the design doc first.
+// The extensibility seam. This block is FROZEN verbatim: hardware backends
+// (MppBackend) and NullBackend both implement VideoBackend as-is; extend
+// through a side interface reached by dynamic_cast (StreamDecoder) rather
+// than changing the shape here.
 namespace maburplay {
 
 struct BackendCfg { int width = 1920, height = 1080, fps = 60; };

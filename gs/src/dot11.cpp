@@ -71,9 +71,9 @@ RxVerdict fill_rx_body(const uint8_t* d, size_t len, const RxMeta& meta,
   // here (they cannot collide):
   //  - jaguar1/2/3 (8812/8822B/8822E...): the raw Realtek DESC_RATE index --
   //    HT MCS0..7 = 0x0C..0x13 (DESC_RATEMCS0, ieee80211_radiotap.h). This
-  //    is what the GS's 8822E cards produce; verified 2026-08-14 on the
-  //    bench when the original 0x80-only mapping left every attribution
-  //    boundary unclosed (link.attrib.close_ms null through 5 promotes).
+  //    is what the GS's 8822E cards produce; verified on the bench when
+  //    the original 0x80-only mapping left every attribution boundary
+  //    unclosed (link.attrib.close_ms null through 5 promotes).
   //  - kestrel (8852B/C): the AX 9-bit code, HT = 0x80 + mcs (the encoding
   //    RxPacket.h's comment describes; it does NOT apply to jaguar chips).
   // Everything else (legacy CCK/OFDM, VHT, HE, 2SS) is "unknown" for

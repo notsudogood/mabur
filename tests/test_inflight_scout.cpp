@@ -33,9 +33,9 @@ TEST(dwell_sequence_and_record) {
   // an absolute-count implementation (foreign_delta = f1.foreign, dropping
   // the f0 subtraction) genuinely diverges from the correct delta -- with
   // foreign starting at 0 (the field's default), the two are numerically
-  // identical and this assertion can't tell them apart. Round 1 fix: a
-  // mutation to the absolute form was confirmed to still pass 3/3 before
-  // this seed was added.
+  // identical and this assertion can't tell them apart (a mutation to the
+  // absolute form was confirmed to still pass 3/3 before this seed was
+  // added).
   r.foreign = 100;
   ScoutDwell d; HopVisit v;
   CHECK(s.dwell(149, 136, d, v));
@@ -166,14 +166,14 @@ TEST(failed_retune_returns_false_and_leaves_card_on_back) {
   CHECK(d.survey.flags & devourer::chanmig::kFlagRetuneFailed);
   CHECK(r.ch == 136);   // recovered onto `back`, never left parked on the candidate
 }
-// Round 1 fix #3: the return-to-`back` retune's own result must be checked
-// too -- a stranded scout card (parked on the candidate, mistaken for
-// having returned) is exactly the failure this module exists to prevent,
-// since live video is on the OTHER card. A fake whose SECOND retune call
-// (the return-to-back one; the first, to the candidate, succeeds) fails,
-// and -- matching RadioFrontend::retune's real contract, where a failed
-// call never reaches FastRetune -- leaves `ch` wherever the last
-// successful retune put it, i.e. still on the candidate.
+// The return-to-`back` retune's own result must be checked too -- a stranded
+// scout card (parked on the candidate, mistaken for having returned) is
+// exactly the failure this module exists to prevent, since live video is on
+// the OTHER card. A fake whose SECOND retune call (the return-to-back one; the
+// first, to the candidate, succeeds) fails, and -- matching
+// RadioFrontend::retune's real contract, where a failed call never reaches
+// FastRetune -- leaves `ch` wherever the last successful retune put it, i.e.
+// still on the candidate.
 TEST(failed_return_retune_flags_and_refuses_the_visit) {
   struct SecondFails : FakeRadio {
     int retunes = 0;
@@ -197,12 +197,11 @@ TEST(failed_return_retune_flags_and_refuses_the_visit) {
   CHECK(d.survey.fa_ofdm == 13);
   CHECK(r.ch == 149);   // still parked on the candidate, not `back`
 }
-// Round 1 fix #2: main.cpp (Task 11) picks the dwell card per cycle and
-// must be able to repoint an already-constructed InflightScout at a
-// different card's control plane -- a reference can't be reseated, hence
-// the pointer member + set_radio() setter. Confirms the NEXT dwell after a
-// set_radio() call drives the new radio, not the one passed to the
-// constructor.
+// main.cpp picks the dwell card per cycle and must be able to repoint an
+// already-constructed InflightScout at a different card's control plane -- a
+// reference can't be reseated, hence the pointer member + set_radio() setter.
+// Confirms the NEXT dwell after a set_radio() call drives the new radio, not
+// the one passed to the constructor.
 TEST(set_radio_repoints_the_next_dwell) {
   FakeRadio r1, r2; int64_t t = 0;
   r1.ch = 200; r2.ch = 210;   // distinct starting channels so a mix-up is visible
@@ -215,13 +214,12 @@ TEST(set_radio_repoints_the_next_dwell) {
   CHECK(r2.log[0] == "retune 149" && r2.log[3] == "retune 136");
   CHECK(r2.ch == 136);
 }
-// Fix round 1 item 1: pin the CONTRACT stated on dwell()'s header docstring
-// (inflight_scout.h) -- main.cpp's sideport dwell/score attribution (Task
-// 12) depends on it and has no test of its own that would catch a
-// violation, since dwell_stats/scout_loop live in main.cpp and aren't
-// unit-testable without refactoring it. Asserted here instead, at the
-// level where the contract actually lives: false <=> flagged + no visit;
-// true <=> visit populated with visit.ch == the dwelled channel.
+// Pin the CONTRACT stated on dwell()'s header docstring (inflight_scout.h) --
+// main.cpp's sideport dwell/score attribution depends on it and has no test of
+// its own that would catch a violation, since dwell_stats/scout_loop live in
+// main.cpp and aren't unit-testable without refactoring it. Asserted here
+// instead, at the level where the contract actually lives: false <=> flagged +
+// no visit; true <=> visit populated with visit.ch == the dwelled channel.
 TEST(dwell_return_value_flag_and_visit_population_stay_in_lockstep) {
   // Failure path 1: the retune TO the candidate fails.
   {

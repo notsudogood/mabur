@@ -1,4 +1,4 @@
-// The page's config form model (spec 2026-09-27-web-ui §4.4). The form edits
+// The page's config form model. The form edits
 // the channel set + link channel (the overlay's [radio] channels/channel, in
 // both modes; --ch carries the start member, startChannel), width (--w and
 // [radio] width) and,
@@ -168,7 +168,7 @@ export function connectBlocker(cfg, mode, _radio = 'usb') {
   const cs = checkChannelSet(cfg.channels, cfg.link, cfg.width);
   if (cs) return cs;
   // No per-radio channel rule: the CPE relay tunes the whole 20 MHz grid
-  // 36-177 since mabur-openwrt 2c1c51f (2026-10-03), 144 included.
+  // 36-177 since mabur-openwrt 2c1c51f, 144 included.
   if (mode !== 'gs') return null;   // spotter's [link] is fixed (one rung at the page width)
   if (cfg.staticMcs >= 0) return null;   // pinned: the ladder is hidden and not sent (toOverlayToml)
   for (let i = 0; i < cfg.ladder.length; i++) {
@@ -250,7 +250,7 @@ export function loadRememberedChannel(storage) {
 export function saveRememberedChannel(storage, ch) {
   try { storage && storage.setItem(CHANNEL_STORE, String(ch)); } catch { /* page works without storage */ }
 }
-// What --ch carries: "start on this member" (spec 2026-10-04 §5.2). The pin
+// What --ch carries: "start on this member". The pin
 // wins; else the remembered channel if it is still a member; else the first.
 export function startChannel(cfg, remembered) {
   if (cfg.link !== 'auto') return cfg.link;

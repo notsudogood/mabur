@@ -34,8 +34,7 @@ import time
 CAL_HOST = "127.0.0.1"
 CAL_PORT = 8400
 
-# Where an operator's config actually lands, per the design doc's Applying
-# step (docs/superpowers/specs/2026-09-10-tx-power-calibration-design.md).
+# Where an operator's config actually lands when a calibration is applied.
 # The path is fixed, not something cal.log carries -- it is the drone's own
 # /etc/mabur.toml, always.
 CONFIG_PATH = "/etc/mabur.toml"
@@ -54,15 +53,14 @@ DEFAULT_DEBUG_LOG_DIR = "/media/dvr/log"
 
 # The marker versions the FILE. 3 is what maburgs writes now: every index
 # (wall/floor/idx) is SIGNED and RELATIVE to the drone chip's own anchor,
-# and the R line carries no base_ref at all (spec 2026-09-13, relative
-# walls). 1 and 2 are absolute-index formats still sitting on the DVR --
-# both carry base_ref (on the R line) and both key "undetermined" off
-# wall < 0, since -1 was their sentinel and never a real wall; 2 briefly
-# existed on 2026-09-11 (two per-card EVM columns on the C row, reverted
-# when the sweep frames turned out to carry no EVM reading -- see
-# docs/calibration.md). Since this reader has never stored C rows, a v2
-# file renders identically to a v1 one. All three stay readable because
-# recordings outlive the code that wrote them (CLAUDE.md).
+# and the R line carries no base_ref at all (relative walls). 1 and 2 are
+# absolute-index formats still sitting on the DVR -- both carry base_ref (on
+# the R line) and both key "undetermined" off wall < 0, since -1 was their
+# sentinel and never a real wall; 2 existed only briefly (two per-card EVM
+# columns on the C row, reverted when the sweep frames turned out to carry no
+# EVM reading -- see docs/calibration.md). Since this reader has never stored C
+# rows, a v2 file renders identically to a v1 one. All three stay readable
+# because recordings outlive the code that wrote them (CLAUDE.md).
 KNOWN_CALLOG_VERSIONS = (1, 2, 3)
 
 # flags: 1=no_dip 2=undetermined 4=narrow 8=saturated 16=card_disagree 32=drift
@@ -195,9 +193,9 @@ def _apply_status_line(run):
     """What the log can actually attest to about whether this run's
     measurements ever reached the drone's config.
 
-    cal.log has no record for the apply outcome itself -- Task 9's
+    cal.log has no record for the apply outcome itself -- cal_apply's
     OutOfRange/BackupFailed/WriteFailed/ReparseFailed results, and a
-    session that never gets a phase-2 command at all (Task 10's
+    session that never gets a phase-2 command at all (test_cal_sweep's
     await_next_timeout_returns_to_idle_without_applying), all end a run
     with nothing written and nothing on the wire for the GS to log. `V`
     records are the usable signal instead: CalSession emits one for every
@@ -205,7 +203,7 @@ def _apply_status_line(run):
     arrived there (pct 0 included) -- a planned-but-silent rate is exactly
     the thing this report needs to be able to say plainly, so the row must
     exist either way (see cal_log.h). The drone sweeps verify only after a
-    successful apply (design doc step 9), but due_result() opens the GS's
+    successful apply, but due_result() opens the GS's
     own verify window optimistically, with no ack to wait on -- so a run
     whose T_CAL_RESULT was lost on the uplink, or whose apply was refused,
     still gets a full set of V rows, every one of them 0%. A row's mere

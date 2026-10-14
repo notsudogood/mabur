@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Post-flight analysis of a mabur sideport flight.jsonl (schema v1 + link.ctl)
-or a maburgs ctl-NNNN_<date>.log (see gs/src/ctl_log.h; parses ctllog v1-v11,
+or a maburgs ctl-NNNN_<date>.log (see gs/src/ctl_log.h; parses ctllog v1-v12,
 warns on pre-v4, pre-v7, pre-v8, pre-v9 and pre-v10; prints a u/u3
 definition label -- arrival-booked vs completion-booked -- at the v11
 boundary). Format is auto-detected from the first line.
@@ -28,7 +28,7 @@ def is_sentinel(v):
 
 def load(path):
     # Binary read: a power-off mid-write leaves the DVR's tail as garbage
-    # bytes (flight-0023, 2026-09-05), and a text-mode iterator raises
+    # bytes (flight-0023), and a text-mode iterator raises
     # UnicodeDecodeError before json ever sees the line.
     rows = []
     with open(path, "rb") as f:
@@ -46,10 +46,10 @@ def _parse_ladder_token(raw):
     {"mcs": int, "bw": int, "ov_base": float, "ov_enh": float} rungs.
 
     v1-v7 wrote a single per-rung overhead x100 (`mcs/ov`, e.g. "5/25");
-    v8 (Task 5, same-rate-fixed-pairs) splits it into a base/enh pair
+    v8 (same-rate-fixed-pairs) splits it into a base/enh pair
     (`mcs/ovb:ove`, e.g. "5/25:50"). A single (pre-v8) value is treated as
-    both base and enh -- that rung had no split to lose. v12 (2026-09-24,
-    40 MHz rungs) prefixes the width (`bw:mcs/ovb:ove`, e.g. "40:3/50:25");
+    both base and enh -- that rung had no split to lose. v12 (40 MHz
+    rungs) prefixes the width (`bw:mcs/ovb:ove`, e.g. "40:3/50:25");
     older tokens are 20 MHz."""
     rungs = []
     if not raw:
@@ -99,7 +99,7 @@ def load_ctllog(path):
             if "=" not in tok: continue
             k, v = tok.split("=", 1)
             header[k] = v
-        # Structured ladder rungs (Task 5, same-rate-fixed-pairs): v8 splits
+        # Structured ladder rungs (same-rate-fixed-pairs): v8 splits
         # each rung's overhead into a base/enh pair (mcs/ovb:ove); v1-v7
         # wrote a single value per rung (mcs/ov) -- treated as both, since a
         # pre-split rung had no base/enh distinction to lose. Stored under
@@ -119,16 +119,16 @@ def load_ctllog(path):
                         "u": float(toks[3]), "snr_db": float(toks[4]),
                         "resid": float(toks[5]), "u3": float(toks[6]),
                         "resid3": float(toks[7]),
-                        # 2026-08-10 EVM label; absent on older logs.
+                        # EVM label; absent on older logs.
                         "evm_db": float(toks[8]) if len(toks) >= 9 else float("nan"),
-                        # 2026-08-14 attribution (ctllog 2); absent on older logs.
+                        # attribution (ctllog 2); absent on older logs.
                         "resid_cur": float(toks[9]) if len(toks) >= 10 else float("nan"),
-                        # 2026-08-14 fade deltas (ctllog 3); absent on older logs.
+                        # fade deltas (ctllog 3); absent on older logs.
                         "drssi": float(toks[10]) if len(toks) >= 12 else float("nan"),
                         "dsnr": float(toks[11]) if len(toks) >= 12 else float("nan"),
-                        # 2026-08-15 label RSSI (ctllog 5); absent on older logs.
+                        # label RSSI (ctllog 5); absent on older logs.
                         "rssi": float(toks[12]) if len(toks) >= 13 else float("nan"),
-                        # 2026-09-04 probe gate (ctllog 10); absent on older logs.
+                        # probe gate (ctllog 10); absent on older logs.
                         "probe_rung": int(toks[13]) if len(toks) >= 16 else -1,
                         "probe_u": float(toks[14]) if len(toks) >= 16 else float("nan"),
                         "probe_n": int(toks[15]) if len(toks) >= 16 else 0,
@@ -138,7 +138,7 @@ def load_ctllog(path):
                         "t_ms": float(toks[1]), "from": int(toks[2]),
                         "to": int(toks[3]), "reason": toks[4],
                         "u": float(toks[5]), "snr_db": float(toks[6]),
-                        # 2026-08-10 EVM label; absent on older logs.
+                        # EVM label; absent on older logs.
                         "evm_db": float(toks[7]) if len(toks) >= 8 else float("nan"),
                     })
                 elif tag == "P" and len(toks) >= 7:
@@ -146,7 +146,7 @@ def load_ctllog(path):
                         "t_ms": float(toks[1]), "rung": int(toks[2]),
                         "outcome": toks[3], "snr_db": float(toks[4]),
                         "u_pred": float(toks[5]), "dur_ms": float(toks[6]),
-                        # 2026-08-10 EVM label; absent on older logs.
+                        # EVM label; absent on older logs.
                         "evm_db": float(toks[7]) if len(toks) >= 8 else float("nan"),
                     })
                 elif tag == "N" and len(toks) >= 5:
@@ -175,7 +175,7 @@ def wall_fit(records):
     records: list of P dicts (one rung's worth). nan-snr probes are excluded
     from every stat but still counted. A FAIL whose snr exceeds the max PASS
     snr is an outlier (loss at high SNR is not an SNR wall -- see
-    docs/mcs6-bench-anomaly.md) and is excluded from the fit. Suggested wall
+    docs/findings/2026-07-27-mcs6-bench-anomaly.md) and is excluded from the fit. Suggested wall
     is the midpoint between the max inlier-fail snr and the min pass snr;
     "insufficient data" when either side is empty.
     """
@@ -221,8 +221,8 @@ def wall_fit(records):
 
 def print_rung_store_report(R):
     """Per-rung EWMA store summary from the FINAL R snapshot per rung, plus
-    a report-only inversion callout (spec 2026-08-13: analyzer prototype of
-    rung auto-skip — thresholds are defaults to be tuned on recordings)."""
+    a report-only inversion callout (an analyzer prototype of rung
+    auto-skip — thresholds are defaults to be tuned on recordings)."""
     if not R:
         return
     last = {}
@@ -420,7 +420,7 @@ def print_wall_report(ctllog):
             print(f"    fail snr: {min(fit['fail_snrs']):.1f}..{max(fit['fail_snrs']):.1f} dB")
         for s in fit["outlier_snrs"]:
             print(f"    outlier fail at snr={s:.1f} dB (loss at high SNR -- "
-                  f"not an SNR wall; see docs/mcs6-bench-anomaly.md)")
+                  f"not an SNR wall; see docs/findings/2026-07-27-mcs6-bench-anomaly.md)")
         if fit["wall"] is not None:
             print(f"    suggested wall: {fit['wall']:.1f} dB "
                   f"(between fail@{max(fit['inlier_fail_snrs']):.1f} "
@@ -527,13 +527,12 @@ def find_episodes(E, gap_ms=3000):
 
 def attribution_misses(E, window_ms=200):
     """Residual demotes firing within window_ms of ANY earlier E line.
-    Attribution is unconditional since 2026-08-15 (link.attrib was removed
-    and now fails boot; before that date it was a default-on kill switch),
-    so on any recording this should be ~zero; hits mean the transition
-    watermark missed a debris class (spec 2026-08-14 fade-demote §5). This
-    canary only scores `reason == "residual"` (s1); it does not cover the
-    s3-residual sliding-window mechanism described in the 2026-08-15 spec
-    §9 / CLAUDE.md — see find_episodes() for that split instead."""
+    Attribution is unconditional (link.attrib was removed and now fails
+    boot; before that it was a default-on kill switch), so on any recording
+    this should be ~zero; hits mean the transition watermark missed a debris
+    class. This canary only scores `reason == "residual"` (s1); it does not
+    cover the s3-residual sliding-window mechanism — see find_episodes() for
+    that split instead."""
     out = []
     for i, ev in enumerate(E):
         if ev["reason"] != "residual" or ev["to"] >= ev["from"]:
@@ -544,7 +543,7 @@ def attribution_misses(E, window_ms=200):
 
 
 def s3_settle_refires(E, settle_ms=300, slack_ms=60):
-    """Canary for the 2026-09-05 s3 debris double-step (flights 20/21: 13 of
+    """Canary for the s3 debris double-step (flights 20/21: 13 of
     14 s3_residual cascades took a second step at exactly s3_settle_ms and
     were promoted straight back). A demote whose predecessor is a demote of
     reason s3_residual landing settle_ms..settle_ms+slack_ms earlier is the
@@ -594,7 +593,7 @@ def probe_lead(E, P, horizon_ms=10000):
     Edges before the entry transition were scored while a different rung
     was held -- typically the pre-promote flapping that the 2 s clean
     streak then overrode -- and are not a warning about this hold, so they
-    never count (flight-0020, 2026-09-05: the unbounded search reported
+    never count (flight-0020: the unbounded search reported
     5-19 s "leads" that predated the promote by that much). `edges` is the
     number of lossy edges inside the hold. false_alarms = lossy edges whose
     next E line is not a demote within horizon_ms: a promote in between
@@ -622,10 +621,10 @@ def probe_lead(E, P, horizon_ms=10000):
 def load_probelog(path):
     """probe-NNNN_<date>.log / probe.log: 'probelog <v> bpb=<n>' then
     't_ms seq mcs enh_fid blocks_ok card_mask snr_c0 snr_c1 evm_c0 evm_c1'
-    plus, from probelog 2 (2026-09-05), 'first_ms': the radio's arrival
+    plus, from probelog 2, 'first_ms': the radio's arrival
     stamp of the body's first sight (mono ms, µs fraction) -- None on v1
     rows, whose t_ms is the ~10 ms finalize tick and useless for timing.
-    probelog 3 (2026-09-24, 40 MHz rungs) inserts 'bw' after mcs; older
+    probelog 3 (40 MHz rungs) inserts 'bw' after mcs; older
     rows are 20 MHz."""
     rows, bpb, version = [], 4, 1
     with open(path) as f:
@@ -656,7 +655,7 @@ def load_probelog(path):
 
 
 def load_aulog(path):
-    """flightrec's au-NNNN.log (docs/observability.md): '# aulog N' marker
+    """au.log (docs/observability.md; legacy flightrec au-NNNN.log): '# aulog N' marker
     then 't_us pts sid fid len flags nal0 [t_first t_complete enc dq]'.
     Only what the probe join needs: sid, fid, t_first/t_complete (mono µs).
     v1 rows (no marker) have no completion stamp and are skipped."""
@@ -997,7 +996,7 @@ def find_aulog_for(probe_path, pl):
     # Overlap alone does not discriminate: every boot's mono clock starts
     # near zero, so on a DVR holding many flights a dozen au logs overlap
     # the probe span within seconds of each other (probe-0353 vs
-    # au-0020..0032 picked au-0001, 2026-09-06). Among the overlapping
+    # au-0020..0032 picked au-0001). Among the overlapping
     # candidates take the one whose enh fids actually JOIN the probe rows;
     # overlap only breaks ties (and is the fallback when nothing joins).
     best, best_key = None, (0, 0)
@@ -1057,7 +1056,7 @@ def probelog_summary(pl):
     initial seq per daemon start (the SwEncoder restart contract), and
     across a starve the GS is deaf for > failsafe_ms while the drone keeps
     counting -- both read as billions of "lost" bodies otherwise
-    (probe-0352 mcs1, 2026-09-06). A backwards seq, a > PROBE_RESYNC_MS
+    (probe-0352 mcs1). A backwards seq, a > PROBE_RESYNC_MS
     silence or a > PROBE_RESYNC_BODIES jump re-anchors instead, counted in
     `resyncs` on the mcs of the body that re-anchored."""
     out = {}
@@ -1139,10 +1138,10 @@ def load_feclog(path):
     """fec.log (gs/src/fec_log.h): one row per loss episode a video layer's
     decoder closed. A rejoined session re-states the marker partway
     through; `# dropped N` is the LogWriter's gap marker. Both skipped,
-    everything else is a row. feclog 2 (2026-09-24, 40 MHz rungs) inserts
-    `bw` after mcs; feclog 1 rows carry no bw and are 20 MHz. feclog 3
-    (2026-10-05, software NACK) inserts `rtx` (symbols the episode
-    received via retransmit) after `rec`; feclog 1/2 rows read rtx=0."""
+    everything else is a row. feclog 2 (40 MHz rungs) inserts `bw` after
+    mcs; feclog 1 rows carry no bw and are 20 MHz. feclog 3 (software NACK)
+    inserts `rtx` (symbols the episode received via retransmit) after
+    `rec`; feclog 1/2 rows read rtx=0."""
     rows = []
     version = 1
     with open(path) as f:
@@ -1574,7 +1573,7 @@ def sniff_ctllog(path):
 
 
 def drone_rx_samples(rows):
-    """drone.radio.rx (cca-on 2026-09-23) is a PER-TELEMETRY-PERIOD count
+    """drone.radio.rx (cca-on) is a PER-TELEMETRY-PERIOD count
     the exporter repeats on every record until the next Telem, so a sample
     is one distinct drone.tlm_seq, never one record. Returns a list of
     (own, foreign, crcfail) tuples in order; empty on recordings that
@@ -1597,7 +1596,7 @@ def drone_rx_samples(rows):
 def print_drone_rx_report(rows):
     """DRONE RX: what the drone's own receiver saw on the channel, per
     telemetry period -- the altitude view the GS cards cannot measure. With
-    carrier sense ON (2026-09-23) `foreign` (CRC-clean, not ours) and
+    carrier sense ON `foreign` (CRC-clean, not ours) and
     `crcfail` (preamble heard, payload undecodable) are the frames the
     drone's transmitter deferred to; the hop verdict only reacts above
     hop.verdict.foreign_pps (50), so this is the number that says whether
@@ -1878,7 +1877,7 @@ def print_listen_report(rows, lat_path=None):
 def drone_tx_samples(rows):
     """One dict per distinct drone.tlm_seq (the exporter repeats a Telem
     on every record until the next one arrives) carrying the drone-side
-    TX-path fields the 2026-09-30 telem diet kept for exactly this report:
+    TX-path fields the telem diet kept for exactly this report:
     txq_wait_ms (per-period max), cumulative txq.drops / radio.usb_fail,
     sys.cpu_pct, and the congestion/failsafe shed flags. Empty when the
     recording has no drone section."""
@@ -1926,8 +1925,8 @@ def print_drone_tx_report(rows):
     """DRONE TX PATH: the drone-side reasons video can go missing that look
     exactly like RF loss from the ground -- TxQueue wait and drop-oldest,
     USB bulk-OUT failures, SoC CPU, and the congestion shed that silences
-    the enh layer. Kept on the wire for this section (telem diet
-    2026-09-30); the queue counters there used to be maburtop-only."""
+    the enh layer. Kept on the wire for this section (telem diet); the
+    queue counters there used to be maburtop-only."""
     s = drone_tx_samples(rows)
     if not any(v is not None for x in s for v in x.values()):
         return
@@ -1953,7 +1952,7 @@ def print_drone_tx_report(rows):
 
 
 def print_nack_report(rows):
-    """NACK (spec 2026-10-05 fec-nack): the software selective-repeat on the
+    """NACK (fec-nack): the software selective-repeat on the
     base layer. link.nack counters are cumulative (a maburgs rejoin
     restarts them: the rate counts the post-reset value, never a negative
     delta); drone.nack are per Telem period from the drone, repeated on
@@ -2120,7 +2119,7 @@ def print_nack_ab(rows):
 
 
 def print_slice_salvage_report(rows):
-    """SLICE SALVAGE (spec 2026-10-10-h265-slices): truncated AUs maburgs
+    """SLICE SALVAGE: truncated AUs maburgs
     rebuilt from their complete slices plus skip-slice fills. Cumulative
     link.video counters (a maburgs restart restarts them; _counter_growth
     sums the post-reset value). Silent on recordings without the keys."""
@@ -2145,7 +2144,7 @@ def print_slice_salvage_report(rows):
 
 
 def print_salvage_report(rows):
-    """SALVAGE: what rx.keep_corrupted (2026-09-08) bought. The sideport's
+    """SALVAGE: what rx.keep_corrupted bought. The sideport's
     per-card crc_fail and per-stream corrupt/salvaged/sub_fail are
     cumulative; sum their per-interval deltas over the recording and
     attribute each interval's movement to the rung the ladder reports at
@@ -2173,7 +2172,7 @@ def print_salvage_report(rows):
         return cur if (reset or cur < prev) else cur - prev
 
     keys = ("corrupt", "salvaged", "salvage_only", "sub_fail", "abandoned")
-    # salvage_only (2026-09-09) is younger than the section: print it only
+    # salvage_only is younger than the section: print it only
     # when the recording carries the key, so older jsonl reads unchanged.
     have_so = any("salvage_only" in (s or {})
                   for r in srows for s in stream_map(r).values())
@@ -2230,13 +2229,13 @@ def load_scanlog(path):
     cca crc rssi snr drssi nhm_busy|- own_air]...' (scanlog 4, 10-field
     blocks) -- the stride is picked from the marker version seen so far,
     since a rejoined session's later section can be v4 while its header
-    line is still the old marker. scanlog 5 (2026-10-03 auto-channel-set)
+    line is still the old marker. scanlog 5 (auto-channel-set)
     keeps the v4 10-field stride unchanged.
 
     scanlog 5: M loses the "split_home"/"reunite" reasons (older files
     still carry them and are read as-is -- M's `reason` field is tokenised
     generically, with no reason-specific parsing to update -- and gains
-    "link_found" (2026-10-04) the same way), and H gains "relocate" (the
+    "link_found" the same way), and H gains "relocate" (the
     order that moves the link from where the drone was found to where it
     should live -- the boot pick's move included -- placed through the hop
     controller like a live retune; see _HOP_ORDER_KINDS).
@@ -2251,7 +2250,7 @@ def load_scanlog(path):
     word, and it costs nothing to keep it robust against a future kind that
     isn't.
 
-    scanlog 6 (2026-10-05 cpe-relay-hop): D gains a trailing rx % (relay
+    scanlog 6 (cpe-relay-hop): D gains a trailing rx % (relay
     sweep entries; '-' for USB dwells); older D lines read rx None.
 
     Returns {"version": int, "V": [...], "H": [...], "D": [...], "M": [...]}.
@@ -2272,7 +2271,7 @@ def load_scanlog(path):
             # session starts under the old binary's header with the new
             # binary's marker (and all its V/H/D records) further down. The
             # highest marker seen decides the version; the old sections hold
-            # no record kind this report reads. (Bench 2026-09-15: reading
+            # no record kind this report reads. (Bench: reading
             # only line 1 skipped the HOP section on the session with the
             # first real hop.)
             if tag == "scanlog" and len(toks) >= 2 and toks[1].isdigit():
@@ -2352,15 +2351,15 @@ def sniff_scanlog(path):
 # (idle_tick's fresh trigger, and verifying_tick's retry-after-fail); the
 # rest either continue an open attempt (lead_confirm, one_card_retune) or
 # close one (verify_pass, withdraw, and the two hold variants).
-# "escape" (2026-09-26) places one too: the controller's way out of a hold
+# "escape" places one too: the controller's way out of a hold
 # on a BLOCKED channel -- from idle (a fresh row) or in place of the
 # verify-fail hold (then, like a verify_fail retry, it also closes the
 # failed attempt).
-# "relocate" (scanlog 5, 2026-10-04 auto-channel-set final review): moves
+# "relocate" (scanlog 5, auto-channel-set): moves
 # the link from where the drone was found to where it should live (the pin
 # or the boot pick), placed through the SAME hop controller as a live
 # retune -- a fresh row, exactly like "order". "boot_order" is its name in
-# the pre-merge 2026-10-03 bench builds, read the same way.
+# the pre-merge auto-channel-set bench builds, read the same way.
 _HOP_ORDER_KINDS = {"order", "relocate", "boot_order", "verify_fail", "escape"}
 # A hold is a STATE, and HopController logs only its EDGES: hold_cap /
 # hold_exhausted / verify_fail on the way in, "hold_end" on the way out,
@@ -2375,13 +2374,13 @@ _HOP_ORDER_KINDS = {"order", "relocate", "boot_order", "verify_fail", "escape"}
 # about a flight that ended in a hold. Recordings from before the
 # edge-logging fix still parse: their first per-tick hold line closes the
 # row exactly as the single one does now.
-# "session_lost" (2026-09-24): HopController::on_session_lost withdrew an
+# "session_lost": HopController::on_session_lost withdrew an
 # order that was still waiting for its confirm when the link's session
 # dropped -- the attempt is over, with its own outcome.
-# "withdraw_undelivered" (2026-09-26, Task 12 (f)): a withdraw after the
+# "withdraw_undelivered": a withdraw after the
 # confirm extension (the op read blocked, so the order was held past
 # confirm_ms) -- the target is backed off as undelivered, not failed.
-# "confirm_extend" (same day) marks entry into that extension and is
+# "confirm_extend" marks entry into that extension and is
 # informational: the attempt stays open.
 _HOP_TERMINAL_ONLY_KINDS = {"withdraw", "withdraw_undelivered", "session_lost", "hold_cap",
                             "hold_exhausted", "hold_end"}
@@ -2592,14 +2591,14 @@ def _print_hop_table(rows, V):
 
 
 def print_hop_report(scanlog, ctllog):
-    """HOP section (Task 13): one row per hop attempt (onset->order->video
+    """HOP section: one row per hop attempt (onset->order->video
     ->restore, outcome), the per-card dwell cost summary, and -- on a
     session with zero REAL hops -- the verdict histogram, which for a
-    hop.enable=false flight (every hop this plan's first flight will ever
-    log) is the entire signal on whether the verdict engine is classifying
-    right. hop.enable=false does not mean zero H events: the controller
-    still runs and still logs every decision with a "would_" prefix, so a
-    log full of would_order/would_withdraw pairs is handled as SHADOW rows
+    hop.enable=false flight is the entire signal on whether the verdict
+    engine is classifying right. hop.enable=false does not mean zero H
+    events: the controller still runs and still logs every decision with a
+    "would_" prefix, so a log full of would_order/would_withdraw pairs is
+    handled as SHADOW rows
     (see build_hop_rows) printed in their own table, in addition to the
     histogram -- not silently collapsed into "zero hops". Alongside the
     histogram: the evidence bitmask decoded per bit, and per-card medians
@@ -2627,8 +2626,8 @@ def print_hop_report(scanlog, ctllog):
               else "verdicts: (none)")
         blocked = sum(1 for v in V if v["evidence"] & 0x20)
         print(f"blocked windows: {blocked} (evidence & 0x20)")
-        # Calibration instrument (spec Open Items: "the observe-only
-        # flights are the calibration") -- a verdict name alone can't tell
+        # Calibration instrument (the observe-only flights are the
+        # calibration) -- a verdict name alone can't tell
         # contention from a weak signal from fading, nor which card drove
         # it, so decode the evidence bitmask and show how close each
         # per-card threshold actually sat to tripping.
@@ -2641,16 +2640,16 @@ def print_hop_report(scanlog, ctllog):
                   f"foreign={m['foreign']:.0f} fa={m['fa']:.0f} "
                   f"rssi={m['rssi_dbm']:.1f} snr={m['snr_db']:.1f}")
 
-    # Task 11: how often the controller escaped a blocked hold, and how many
+    # How often the controller escaped a blocked hold, and how many
     # windows read `starved` (no own frame on any valid card, evidence 0x40).
     escapes = sum(1 for h in H if _strip_would(h["kind"]) == "escape")
     starved = sum(1 for v in V if v["evidence"] & 0x40)
-    # 2026-10-11: sustained unexplained loss (hop.verdict.sustained_*), the
-    # term that lets an `unknown`-only channel hop.
+    # Sustained unexplained loss (hop.verdict.sustained_*), the term that lets
+    # an `unknown`-only channel hop.
     sustained = sum(1 for v in V if v["evidence"] & 0x80)
     print(f"escapes: {escapes}  starved windows: {starved} (evidence & 0x40)  "
           f"sustained-loss windows: {sustained} (evidence & 0x80)")
-    # Task 12 (f): orders held past confirm_ms because the op read blocked,
+    # Orders held past confirm_ms because the op read blocked,
     # and how many of those still never landed.
     extends = sum(1 for h in H if _strip_would(h["kind"]) == "confirm_extend")
     undelivered = sum(1 for h in H if _strip_would(h["kind"]) == "withdraw_undelivered")
@@ -2703,7 +2702,7 @@ def main(path, aulog=None, probelog_path=None, scanlog_path=None):
         else:
             # Sibling probe body log: same NNNN as the ctl log
             # (ctl-NNNN_<date>.log / probe-NNNN_<date>.log), written alongside it
-            # by the same GS session (Task 11, probe-stream). Absent on older
+            # by the same GS session (probe-stream). Absent on older
             # recordings and on ctl logs from a probe-less session.
             m = re.search(r"ctl-(\d+)_", os.path.basename(path))
             if m:
@@ -2735,7 +2734,8 @@ def main(path, aulog=None, probelog_path=None, scanlog_path=None):
     # SNR scale. There are TWO half-dB problems in one datagram and they
     # need saying separately, because only one of them is in the past.
     #
-    # (1) cards[].classes[].snr changed 2026-08-04 (half-dB -> dB).
+    # (1) cards[].classes[].snr changed scale (half-dB -> dB; dated in
+    #     docs/data-provenance.md).
     #     Recordings straddling that change are not comparable; flag it
     #     rather than quietly averaging two scales together.
     #
@@ -2749,7 +2749,7 @@ def main(path, aulog=None, probelog_path=None, scanlog_path=None):
     #     are the SAME NUMBER, and nothing in the datagram distinguishes
     #     them -- the schema is additive-only under v:1 and carries no scale
     #     tag. Silence here means "not obviously old", never "confirmed dB".
-    #     Date the recording instead.
+    #     Date the recording instead (docs/data-provenance.md).
     snrs = [k["snr"] for r in rows for c in r.get("cards", [])
             for k in c.get("classes", {}).values()
             if isinstance(k.get("snr"), (int, float))]
@@ -2779,7 +2779,7 @@ def main(path, aulog=None, probelog_path=None, scanlog_path=None):
               "compare with newer files. Saw max %.1f (= %.1f dB)."
               % (max(up_snr), max(up_snr) / 2.0), file=sys.stderr)
 
-    # (3) link.streams changed shape 2026-08-29 (4 UEP layers -> 2: BASE
+    # (3) link.streams changed shape (4 UEP layers -> 2: BASE
     #     sid0 + ENH sid1), in the SAME commit that changed the meaning of
     #     the wire's overhead field itself (RC_VERSION 4): the old field was
     #     a per-layer uep_layer_overhead fraction, the new one is the LITERAL
@@ -2885,7 +2885,7 @@ def main(path, aulog=None, probelog_path=None, scanlog_path=None):
     print_listen_report(rows)
     print_drone_tx_report(rows)
 
-    # link.attrib.suppressed was removed from the sideport 2026-09-02 with
+    # link.attrib.suppressed was removed from the sideport with
     # the packet-level delivery window it was defined against. Old
     # recordings still carry it; report it there and say what it means.
     sup = [((r.get("link") or {}).get("attrib") or {}).get("suppressed")
@@ -2932,7 +2932,7 @@ if __name__ == "__main__":
         print_display_clock_report(s.au, s.lat)
         print_display_smoothness_report(s.au, s.lat)
         print_recording_report(s.lat)
-        # fec.log (2026-09-15) is a sibling too: the FEC EPISODES section
+        # fec.log is a sibling too: the FEC EPISODES section
         # rides along whichever primary the session offered.
         if s.fec:
             print_fec_report(load_feclog(s.fec))

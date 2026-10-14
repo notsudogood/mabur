@@ -17,10 +17,8 @@ inline constexpr uint8_t kFlagDiscont = 0x02;  // pts/frame_id re-base point
 struct FrameHdr {
   uint16_t frame_id = 0;
   uint8_t flags = 0;
-  // H.265 row slices (spec 2026-10-10-h265-slices §5.1): 64-px CTU rows per
-  // slice of THIS access unit; 0 = the AU is one slice. Byte 3 carried an
-  // always-H.265 codec id until 2026-10-10 (wire flag day: both ends deploy
-  // together, docs/deploy.md).
+  // H.265 row slices: 64-px CTU rows per slice of THIS access unit; 0 = the
+  // AU is one slice.
   uint8_t slice_rows = 0;
   uint32_t pts_us = 0;  // capture time, µs, u32-truncated (from VencFrameMeta)
 };

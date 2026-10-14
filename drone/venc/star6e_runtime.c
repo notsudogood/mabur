@@ -71,12 +71,13 @@ static void idle_wait(int timeout_ms)
  *   TRAIL_N = 0x00   (type=0, layer_msb=0)
  *
  * A by-frame + H.265 slice-split pack puts every slice of the picture in
- * ONE packetInfo entry (findings 2026-10-09), so each entry must be walked
- * whole rather than patched at its first NAL only — otherwise a split
- * picture could land with some slices TRAIL_R and some TRAIL_N.  An entry
- * that begins directly at its NAL header (no start code) still gets that
- * header patched.  No-op on VPS/SPS/PPS or any already-TRAIL_N/layered NAL,
- * left to h26x_util_hevc_patch_entry_trail_r_to_n(). */
+ * ONE packetInfo entry (docs/findings/2026-10-09-venc-slice.md), so each
+ * entry must be walked whole rather than patched at its first NAL only —
+ * otherwise a split picture could land with some slices TRAIL_R and some
+ * TRAIL_N.  An entry that begins directly at its NAL header (no start code)
+ * still gets that header patched.  No-op on VPS/SPS/PPS or any
+ * already-TRAIL_N/layered NAL, left to
+ * h26x_util_hevc_patch_entry_trail_r_to_n(). */
 static void star6e_patch_pack_to_trail_n(MI_VENC_Pack_t *pack)
 {
 	if (!pack || !pack->data || pack->length == 0)

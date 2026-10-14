@@ -18,7 +18,7 @@
 namespace maburgs {
 
 // BENCH RIG — compiled only under MABUR_LOSS_SIM (CMake option, default
-// OFF; prod maburgs contains none of this). Mainlined 2026-08-29 so
+// OFF; prod maburgs contains none of this). Mainlined so
 // resilience gates can build it with -DMABUR_LOSS_SIM=ON instead of
 // merging a scaffolding branch.
 //
@@ -26,7 +26,7 @@ namespace maburgs {
 // can walk loss upward while watching maburplay instead of restarting maburgs
 // between every step of a sweep.
 //
-// Binds 127.0.0.1 ONLY. The GS answers on 10.18.0.1 and this must never be
+// Binds 127.0.0.1 ONLY. The GS is reachable on its LAN address and this must never be
 // reachable from the drone or a bench laptop.
 //
 // Non-blocking; poll() is called from the core loop next to Aggregator::poll,

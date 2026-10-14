@@ -35,10 +35,10 @@ TEST(trigger_orders_best_and_video_confirms_then_verify_passes) {
   a = h.tick(T(1080, interfered(5), 149, 136, /*video=*/true));
   CHECK(a.kind == HopAction::Confirm && h.state() == HopState::Verifying);
   for (double t = 1100; t < 2100; t += 150) CHECK(h.tick(T(t, healthy(), 120, 149)).kind == HopAction::None);
-  // VerifyPass is the caller's cue to thaw HopVerdict's frozen references
-  // (spec section 2's "or after a hop's verify window ends"); before the
-  // fix the verify window closed with no action at all and
-  // HopVerdict::reset() had no caller anywhere in the tree.
+  // VerifyPass is the caller's cue to thaw HopVerdict's frozen references (the
+  // end of a hop's verify window is a thaw point); before the fix the verify
+  // window closed with no action at all and HopVerdict::reset() had no caller
+  // anywhere in the tree.
   CHECK(h.tick(T(2150, healthy(), 120, 149)).kind == HopAction::VerifyPass);
   CHECK(h.tick(T(2300, healthy(), 120, 149)).kind == HopAction::None);   // once, not every tick
   CHECK(h.state() == HopState::Idle && h.hops() == 1);
@@ -200,7 +200,7 @@ TEST(re_entering_a_hold_after_it_ended_counts_a_second_episode) {
 }
 MTEST_MAIN
 
-// ---- session lost mid-hop (bench 2026-09-24, GS session 0207) ----------
+// ---- session lost mid-hop (bench, GS session 0207) ----------------------
 // run_radio() only ticks this controller while the link is in SESSION, and
 // ChannelPlan::tick() ignores link loss entirely while a hop is in flight.
 // A session that dropped while an order was still unconfirmed therefore
@@ -280,7 +280,7 @@ TEST(verify_fail_never_retries_the_channel_it_fled) {
   CHECK(a.kind == HopAction::Hold);
 }
 
-// ---- the verify ignores the landing's own debris (bench 2026-09-24) ----
+// ---- the verify ignores the landing's own debris (bench) ---------------
 // The first verify window that counted used to start ANY time after the
 // confirm, and the hop's own retune gap is still being repaired then: 40
 // failed its verify on 85 then 32 recovered symbols in windows starting
@@ -299,7 +299,7 @@ TEST(verify_ignores_a_window_that_starts_inside_the_landing_settle) {
   CHECK(a.kind == HopAction::Order && a.target == 165);
 }
 
-// ---- Task 11: hop-logic fixes after the 2026-09-26 long-frame jam run ----
+// ---- hop-logic fixes after the long-frame jam bench run ----
 static VerdictOut blocked_here(int ref = 5) {
   VerdictOut o = interfered(ref); o.evidence = kEvImpaired | kEvBlocked; return o;
 }
@@ -423,8 +423,8 @@ TEST(escape_after_verify_fail) {
   CHECK(g.tick(m).kind == HopAction::Hold);
 }
 
-// ---- Task 12 (f): undelivered orders are not channel failures ----------
-// Bench 2026-09-26 (GS session 0232): the jammer next to the drone also
+// ---- undelivered orders are not channel failures ----------------------
+// Bench (GS session 0232): the jammer next to the drone also
 // jammed the uplink, so the order (carried by every RCF) never arrived;
 // after confirm_ms the controller backed the clean target off as FAILED,
 // the escape (which skips Failed) had nowhere to go, and the link held 30 s
@@ -563,11 +563,10 @@ TEST(verify_pass_clears_undelivered_backoff) {
   CHECK(!has(h.backed_off(7201), 112));
 }
 
-// ---- relocation (final review C1, 2026-10-04): the link formed where the
-// drone was found, or the boot pick wants another pair; the caller moves it
-// to where it should live with one order, logged "relocate", that must not
-// flee the channel it leaves -- that channel is merely not the wanted one,
-// not bad.
+// ---- relocation: the link formed where the drone was found, or the boot pick
+// wants another pair; the caller moves it to where it should live with one
+// order, logged "relocate", that must not flee the channel it leaves -- that
+// channel is merely not the wanted one, not bad.
 TEST(relocate_does_not_flee_the_current_channel) {
   HopController h(cfg());
   HopTick k = T(1000, interfered(), 149, 136); k.relocate = true;
@@ -614,7 +613,7 @@ TEST(relocate_ignores_cooldown) {
 // A pinned relocation has exactly one legal destination, so "is the new
 // channel better than the one we left" -- the verify window's question --
 // has no meaning: the confirm lands it. A dirty pin must not read as a
-// failed hop (bench 2026-10-04: relocate 64 -> 40 under the 36-48 router
+// failed hop (bench: relocate 64 -> 40 under the 36-48 router
 // logged verify_fail +332 ms, backed the pin off and held). Revert (drop
 // no_verify): the third tick reads Hold/verify_fail and the pin is backed off.
 TEST(pinned_relocation_lands_on_confirm_without_a_verify_window) {

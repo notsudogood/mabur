@@ -182,8 +182,8 @@ struct BurnRecorder::Impl {
   //
   // Both stages are hardware waits (GPU/RGA ~13-22 ms, rkvenc ~13 ms at
   // 1080p) and serialising them on one thread capped the burned DVR at
-  // 26-32 fps with a third of the admitted frames dropped (bench
-  // 2026-09-17). Overlapped, the DVR runs at max(stage) instead of the sum,
+  // 26-32 fps with a third of the admitted frames dropped (bench).
+  // Overlapped, the DVR runs at max(stage) instead of the sum,
   // and the GPU is busy enough for devfreq to actually clock it up.
   //
   // ct_out is a one-deep, latest-wins mailbox like `box`: a slow encoder
@@ -783,11 +783,11 @@ void BurnRecorder::set_osd(const Surface& s, const DirtyRect* rects, size_t n_re
   // to say "only the rare FULL one is longer than ~10 us", which was wrong
   // by more than two orders of magnitude for the GS overlay):
   //   MSP steady state, a few cells        ~10 us          -- as claimed
-  //   GS single field, 6,068 px            ~0.13 ms A55
-  //   GS all fields, 179,392 px @1080p     ~2.2 ms A55     -- the quantize
-  //   GS all fields, 649,429 px @2160p     ~6.1 ms A55        half alone
-  //   full pass, whole surface             ~5.1 ms A55 @1080p
-  // (tools/bench/gs_overlay_bench.cpp.) So an INCREMENTAL quantize can hold
+  //   GS single field, ~9 k px @1080p      <0.15 ms A55    -- draw included
+  //   GS all fields, 151,590 px @1080p     ~1.8 ms A55     -- the quantize
+  //   GS all fields, 564,328 px @2160p     ~5.2 ms A55        half alone
+  //   full pass, whole surface             ~5.0 ms A55 @1080p
+  // (tools/bench/gs_osd_bench.cpp.) So an INCREMENTAL quantize can hold
   // this mutex for milliseconds, and the encoder thread blocks on it for
   // exactly that long. The all-fields cases are why osd_compose.cpp scopes
   // its burn restate to the fields an MSP collision actually hit instead of

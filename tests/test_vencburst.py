@@ -3,7 +3,7 @@
 capture: quiet scene far under the command, a scene change that overshoots
 the programmed rate for half a second, then convergence. The analyzer must
 find the one cycle and report the four metrics the bench plan asks for
-(docs/handover-venc-overshoot-2026-09-03.md): quiet rate, peak 100 ms rate
+(docs/findings/2026-09-03-handover-venc-overshoot.md): quiet rate, peak 100 ms rate
 as a multiple of the PROGRAMMED rate (kbps x 1024 -- the encoder's unit,
 not RcAgent's), integrated excess bytes (what the TxQueue holds), and the
 time back inside +10%."""
@@ -143,7 +143,7 @@ class TwoCycles(unittest.TestCase):
 
 
 class SteadyToBurst(unittest.TestCase):
-    """The bench lens-uncover shape (2026-09-03): no quiet stretch at all --
+    """The bench lens-uncover shape: no quiet stretch at all --
     CBR spends its budget on a covered lens too -- then ONE scene-cut frame
     of ~6x the budget and straight back. Must be found via the steady->burst
     trigger and classified as a single >2x frame."""

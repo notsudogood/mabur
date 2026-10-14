@@ -156,7 +156,7 @@ TEST(confirm_with_no_hop_in_flight_is_a_no_op) {
   CHECK(p.release_scout());
 }
 
-// ---- final review C1 (redirected): link where the drone is found, then
+// ---- link where the drone is found, then
 // relocate with a hop order. want = where the link SHOULD live; op = where
 // it does. Every move of a linked link is a hop order; a DISC only finds.
 

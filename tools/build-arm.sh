@@ -2,10 +2,10 @@
 # Cross-build the drone-side ARM binaries with the OpenIPC Buildroot
 # toolchain: maburd (DYNAMIC glibc, armv7-a hard-float) plus the bench TX
 # harness (linkbench; txagcbench was deleted along with bench/txagcbench/
-# when the TX-power calibration kit superseded it, 2026-09-10). This
-# replaced the musl/static build on 2026-08-29 with the venc fold-in flag
-# day (was tools/build-arm-glibc.sh; the musl script and cmake/arm-musl.cmake
-# are deleted).
+# when the TX-power calibration kit superseded it). This replaced the
+# musl/static build with the venc fold-in flag day (was
+# tools/build-arm-glibc.sh; the musl script and cmake/arm-musl.cmake are
+# deleted).
 #
 # Why glibc-dynamic, not musl-static any more: maburd now runs the encoder
 # in-process, and the SigmaStar MI libraries it drives (libmi_venc.so and
@@ -76,7 +76,7 @@ export CPATH
 
 # Every chip we do not fly is switched OFF by name. New devourer releases add
 # new DEVOURER_<chip> options that default ON, so they opt themselves in on the
-# next sync: DEVOURER_8733B did exactly that on 2026-09-03 and cost +385 KB
+# next sync: DEVOURER_8733B did exactly that once and cost +385 KB
 # (982 KB -> 1.37 MB) on a rootfs with ~3 MB free that holds two maburd
 # generations. After syncing ../devourer, diff its CMakeLists option() lines
 # against this list.

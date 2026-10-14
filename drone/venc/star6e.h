@@ -478,7 +478,7 @@ typedef enum {
 } MI_VENC_RcPriority_e;
 
 /* SuperFrame policy (mi_venc.h): bounds one encoded access unit. Thresholds
- * are BITS. Measured on star6e 2026-08-27 (waybeam 0.69.2 probe, local
+ * are BITS. Measured on star6e (waybeam 0.69.2 probe, local
  * stack): REENCODE with a P threshold is a real, next-frame, keyframe-free
  * P-frame ceiling (11.1 kB -> 3.2 kB under 6000 B, no drops); an I
  * threshold below the IDR size makes the SDK abort and regenerate the GOP
@@ -525,7 +525,7 @@ _Static_assert(sizeof(MI_VENC_ParamRef_t) == 12,
 
 /* H.265 multi-slice split (mi_venc_datatype.h:558) — u32SliceRowCount is
  * 32-px rows PER SLICE, not a slice count, and NOT CTU rows: the encoder's
- * CTU is 64 (measured 2026-08-20, SPS 30x17 CTBs at 1080p) and the SDK
+ * CTU is 64 (measured: SPS 30x17 CTBs at 1080p) and the SDK
  * rounds the request up to whole CTU-64 rows.  Symbol is exported by both
  * star6e and maruko libmi_venc.so; Maruko adds VeDev and therefore binds it
  * through its backend-specific loader. */

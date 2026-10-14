@@ -95,7 +95,7 @@ class TopBarTest(unittest.TestCase):
         self.assertIn("MCS 5/20", text)
         self.assertIn("restarts 0", text)
         self.assertTrue(any(style == "good" for _, _, style in spans))
-        # link.key_fp (link pairing, 2026-10-01): the sideport's key
+        # link.key_fp (link pairing): the sideport's key
         # fingerprint, so a config mismatch shows up without reading logs.
         self.assertIn("key a1b2", text)
 
@@ -148,7 +148,7 @@ class DronePanelTest(unittest.TestCase):
                      "shed CONG",
                      "-58.9", "-58.0", "19.4", " 61", "14.3%"):
             self.assertIn(cell, joined)
-        # Keys that left the sideport 2026-09-30 must not be rendered.
+        # Keys that have left the sideport must not be rendered.
         for gone in ("gen", "roi", "ring", "vring", "van ", "rf Δ", "sent",
                      "air ", "applied", "idr"):
             self.assertNotIn(gone, joined)
@@ -167,7 +167,7 @@ class DronePanelTest(unittest.TestCase):
         self.assertIn("shed --", "\n".join(texts(panel_drone(_fresh(d), 100.2))))
 
     def test_auth_reject_bad_span(self):
-        # drone.auth_reject (Telem flags bit1, link pairing 2026-10-01):
+        # drone.auth_reject (Telem flags bit1, link pairing):
         # >=1 control frame failed verification this telemetry period.
         d = dict(DGRAM)
         d["drone"] = dict(DGRAM["drone"], auth_reject=True)
@@ -185,7 +185,7 @@ class DronePanelTest(unittest.TestCase):
         self.assertNotIn("AUTH!", "\n".join(texts(panel_drone(_fresh(d), 100.2))))
 
     def test_vtx_rec_cell(self):
-        # drone.rec (spec 2026-09-26): state 1 = recording, 2 = error + code;
+        # drone.rec: state 1 = recording, 2 = error + code;
         # a datagram from before the key existed renders nothing, not a crash.
         d = dict(DGRAM)
         d["drone"] = dict(DGRAM["drone"], rec={"state": 1, "err": 0})
@@ -199,7 +199,7 @@ class DronePanelTest(unittest.TestCase):
         self.assertNotIn("VREC", "\n".join(texts(panel_drone(_fresh(d), 100.2))))
 
     def test_shed_cell_ignores_old_air_key(self):
-        # The AIR tier left with drone.air_shed (2026-09-30): an old
+        # The AIR tier left with drone.air_shed: an old
         # recording that still carries air_shed=True reads "off", not AIR.
         self.assertEqual(_shed_cell({"failsafe_shed": True,
                                       "congestion_shed": True}), "FS")
@@ -229,7 +229,7 @@ class DronePanelTest(unittest.TestCase):
     def test_deaf_cell_bad_span(self):
         d = dict(DGRAM)
         # DEAF is derived from drone.radio.rx since the radio_rx_ok flag
-        # left the wire (2026-09-30): nothing at all heard last period.
+        # left the wire: nothing at all heard last period.
         d["drone"] = dict(DGRAM["drone"],
                           radio=dict(DGRAM["drone"]["radio"],
                                      rx={"own": 0, "foreign": 0, "crcfail": 0}))
@@ -493,7 +493,7 @@ class LinksPanelTest(unittest.TestCase):
         self.assertIn("probe: r1 mcs3 clean 54b u0.12 n60 | c0 0.00 c1 0.05", joined)
 
     def test_ladder_panel_shows_nack_line_when_present(self):
-        # spec 2026-10-05 fec-nack: link.nack / drone.nack render as one
+        # fec-nack: link.nack / drone.nack render as one
         # extra LADDER row right after the probe line.
         d = dict(DGRAM)
         d["link"] = dict(DGRAM["link"], ctl={

@@ -2,7 +2,7 @@
 # image (../sbc-groundstations-gilankpam, radxa_zero3_defconfig). Used for
 # maburplay ONLY (tools/build-arm64.sh stage 6): its burned-DVR colortrans
 # stage links Mesa EGL/GLESv2/GBM + librga, which exist only as glibc shared
-# objects, so maburplay is glibc-dynamic from 2026-09-16 on. maburgs stays on
+# objects, so maburplay is glibc-dynamic. maburgs stays on
 # cmake/aarch64-musl.cmake (static). See docs/colortrans.md.
 #
 # MABUR_BR_HOST = <buildroot output>/host, exported by build-arm64.sh.

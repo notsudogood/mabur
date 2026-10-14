@@ -8,13 +8,12 @@
 
 namespace maburgs {
 
-// maburgs' own compact adaptive-link log (spec
-// docs/superpowers/specs/2026-08-05-s3-probe-promote-design.md section 5).
-// Writes `ctl.log` inside the session directory (DebugSession::dir()) via
-// the shared LogWriter -- the 2026-09-06 consolidation collapsed the
-// per-boot indexed `ctl-NNNN_<date>.log` naming into one session directory
-// per boot, so the index and date suffix are gone; DebugSession::index()
-// carries that identity now. The learning dataset must not depend on any
+// maburgs' own compact adaptive-link log. Writes `ctl.log` inside the
+// session directory (DebugSession::dir()) via the shared LogWriter -- the
+// debug-log consolidation replaced the legacy per-boot indexed
+// `ctl-NNNN_<date>.log` files with one session directory per boot, so the
+// index and date suffix are gone; DebugSession::index() carries that
+// identity now. The learning dataset must not depend on any
 // sideport consumer being alive, so this is maburgs writing its own record
 // independent of StatsExporter/maburtop/flightreport's live feed.
 //
@@ -40,19 +39,19 @@ namespace maburgs {
 // resid stays the TOTAL residual (abandoned/expected over the whole decode
 // window); resid_cur is its attributed sibling -- the same ratio scored only
 // against symbols the ladder could still have acted on (excludes stale
-// abandons attributable to a transition already past), added 2026-08-14.
+// abandons attributable to a transition already past), added in ctllog 2.
 //
 // drssi/dsnr are the fade-trigger deltas (baseline-minus-fast, raw dB;
-// LadderController::fade_drssi()/fade_dsnr()), added 2026-08-14 (ctllog 3).
+// LadderController::fade_drssi()/fade_dsnr()), added in ctllog 3.
 // Each reads nan until its underlying signal has ever been sampled -- nan is
 // a normal steady-state value on a GS whose RF labels are stale, not a bug.
 //
-// ctllog 12 (2026-09-24, 40 MHz rungs): no column change. The header's
+// ctllog 12 (40 MHz rungs): no column change. The header's
 // ladder= token is bw:mcs/ovb:ove per rung (was mcs/ovb:ove); with 20/3 and
 // 40/3 both in one ladder the MCS alone no longer names a rung. Rung
 // indices in S/E/P/N/R are unchanged; width follows from the header.
 //
-// ctllog 11 (2026-09-05, arrival tracker): no column change. The S line's
+// ctllog 11 (arrival tracker): no column change. The S line's
 // <u> and <u3> (and the E line's u for util/probation reasons) are now
 // ARRIVAL-booked pre-FEC loss (SwDecoder::arr_*, current-only side) --
 // before this they were completion-booked (delivered+recovered+abandoned)
@@ -60,7 +59,7 @@ namespace maburgs {
 // 50-100 % loss on the first post-blank tick. Do not pool u across the
 // version boundary (docs/data-provenance.md).
 //
-// ctllog 10 (2026-09-04, probe-stream): the S line gains three trailing
+// ctllog 10 (probe-stream): the S line gains three trailing
 // fields -- probe_rung, probe_u, probe_n -- describing the CONTINUOUS probe
 // gate's commanded state at the sample instant (LadderController::
 // probe_gate()), not a discrete probe attempt: probe_rung is -1 and
@@ -93,14 +92,14 @@ namespace maburgs {
 // samples/s while a probe candidate is parked), so an R row's probe_u now
 // updates far more often and never freezes between discrete attempts.
 //
-// ctllog 9 (2026-09-02, residual-phantom-demotes): line formats are
+// ctllog 9 (residual-phantom-demotes): line formats are
 // UNCHANGED from v8, but every RESIDUAL quantity changes MEANING. Through
 // v8, resid/resid_cur (S) and resid (R) were computed from the PACKET-level
 // delivery window -- FRAG-seq continuity of completed packets,
 // 1 - delivered/expected. That measure inferred loss from seq gaps and could
 // not tell a lost unit from one that had not completed yet, so a late
 // sliding-window FEC repair (completing an older unit after a newer one)
-// fabricated loss: on the 2026-09-02 bench, 200 spurious `residual` demotes
+// fabricated loss: on the bench, 200 spurious `residual` demotes
 // in 57 minutes while the FEC decoder's own abandonment counter sat frozen
 // at 139 across 6.2M packets. From v9 all of them come from that abandonment
 // counter instead (syms_abandoned / syms_abandoned_stale, order-independent
@@ -126,7 +125,7 @@ namespace maburgs {
 // Attribution itself is UNCHANGED in spirit: resid_cur is still current-rung
 // only, now via syms_abandoned_stale rather than the packet stale buckets.
 //
-// ctllog 8 (2026-08-30, same-rate-fixed-pairs): a HEADER-ONLY change -- the
+// ctllog 8 (same-rate-fixed-pairs): a HEADER-ONLY change -- the
 // S/E/P/N/R line formats carry no overhead field at all (rung overhead only
 // ever appeared in the header's `ladder=` token), so nothing in the per-tick
 // records moved. The header's `ladder=<mcs>/<ov>,...` token becomes
@@ -136,36 +135,36 @@ namespace maburgs {
 // v1-v7 logs keep their single value per rung; a parser reading an old log
 // treats it as both base and enh (they were the same rung table entry).
 //
-// ctllog 7 (2026-08-30, airtime-balance-uep): line formats are UNCHANGED
+// ctllog 7 (airtime-balance-uep): line formats are UNCHANGED
 // from v6, but the u3/resid3/evm_db/drssi/dsnr MEANING shifts again: the
 // link collapsed from 4 UEP streams to 2 (BASE sid 0, ENH sid 1), and every
 // quantity that used to read "stream 3" (the probe/enhancement layer) now
 // reads sid 1, while the ordinary s1 quantities (u, resid) that used to read
 // "stream 1" now read sid 0 (BASE; it rode mcs-1 when v7 landed, the same
-// rung mcs as ENH since 2026-08-30).
+// rung mcs as ENH from ctllog 8).
 // The pooled RF label source moved with it: base+enh (sid0+sid1), not
 // s1+s3. budget()/util3() are also now the LITERAL FEC command overhead
 // (overhead / (1 + overhead)) rather than a per-layer uep_layer_overhead
-// scaling -- the two were numerically identical since the 2026-08-29 UEP
+// scaling -- the two were numerically identical since the UEP
 // flatten, so no logged value actually moved, only what it is computed from.
 //
-// ctllog 6 (2026-08-15): the S line's <rung> is now the rung the sample was
+// ctllog 6: the S line's <rung> is now the rung the sample was
 // MEASURED on (LadderController::measured_rung()), not the live rung. They
 // differ on exactly the rows that matter: a demote steps the live rung down
 // before the row is written, so v5 and earlier filed post-FEC loss against
 // the rung the link demoted TO, hiding the rung that caused it. Measured on
-// flights 2026-08-15: 15/16 and 13/13 loss samples landed within 200 ms of a
+// flights: 15/16 and 13/13 loss samples landed within 200 ms of a
 // demote, which made per-rung tables name the wrong culprit every time. Rows
 // with no transition are unchanged. The R lines were always correct
 // (RungStore observes before the decision blocks).
 //
-// ctllog 4 (2026-08-15): line formats are UNCHANGED from v3, but snr_db,
+// ctllog 4: line formats are UNCHANGED from v3, but snr_db,
 // evm_db, drssi and dsnr all change MEANING -- the label source is the
 // s1+s3 pooled track rather than the s1 class, and the fade deltas are no
 // longer periodically zeroed by the card-hop re-baseline. The bump exists
 // so a recording identifies its own semantics; this repo has twice been
-// bitten by recordings that could not (the 2026-08-04 SNR scale break, the
-// 2026-08-14 EVM freshness gate).
+// bitten by recordings that could not (the SNR scale break, the EVM
+// freshness gate -- docs/data-provenance.md).
 //
 // Two encoding notes callers must know:
 //  - S's u3 reads 0 while a probe is active (steady-state ENH/sid1
@@ -178,10 +177,10 @@ namespace maburgs {
 // u3 (S) and u_pred (P) both come from LadderController ratios that carry a
 // 1e9 zero-guard sentinel when the divisor budget is 0 (see
 // ladder_controller.cpp); CtlLog clamps both to <= 1e3 at the write site
-// (mirrors the Task 8 sideport's clamp_util()) so a degenerate config never
+// (mirrors the sideport's clamp_util()) so a degenerate config never
 // puts a nonsense magnitude in the log. The clamp also applies to E's u for
 // s3_* reasons, since that field is u3 under the hood.
-//  - R lines (spec 2026-08-13) are the per-rung EWMA store: one line per
+//  - R lines are the per-rung EWMA store: one line per
 //    rung with any data, every debug_log.rung_period_s AND a
 //    full snapshot right after every E line. u/u3/probe_u get the same
 //    <= 1e3 clamp; evm/evm_sd are nan until the rung has an EVM sample;

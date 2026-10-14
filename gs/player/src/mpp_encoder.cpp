@@ -7,7 +7,7 @@
 #include <rockchip/rk_mpi.h>
 
 // Real rockchip_mpp encoder MPI, mirroring the sequence bench/encosd proved
-// on hardware (docs/superpowers/specs/2026-08-04-mpp-enc-osd-spike.md):
+// on hardware:
 // mpp_create -> mpp_init(MPP_CTX_ENC, HEVC) -> mpp_enc_cfg_init +
 // MPP_ENC_GET_CFG -> prep:/rc:/h265: keys -> MPP_ENC_SET_CFG ->
 // MPP_ENC_SET_HEADER_MODE(EACH_IDR) -> internal DRM|CACHABLE buffer group ->
@@ -416,7 +416,7 @@ bool MppEncoder::init(const EncCfg& cfg, NalSink sink) {
   mpp_enc_cfg_set_s32(c, "rc:qp_min_i", 10);
   mpp_enc_cfg_set_s32(c, "rc:qp_ip", 2);
   // Main profile, level 4.0 -- the MPP h265e defaults (h265e_api.c), spelled
-  // out because the brief asks for them. MPP_PROFILE_HEVC_MAIN itself lives
+  // out explicitly. MPP_PROFILE_HEVC_MAIN itself lives
   // in the private mpp/common/h265_syntax.h, so the literal is used.
   mpp_enc_cfg_set_s32(c, "h265:profile", 1);
   mpp_enc_cfg_set_s32(c, "h265:level", 120);  // covers 1080p60

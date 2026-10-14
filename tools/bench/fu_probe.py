@@ -3,7 +3,7 @@
 RTP stream. The trustworthy successor to rtpsniff.py for loss/truncation
 NUMBERS (rtpsniff keeps the richer per-gap log, but its default-size
 AF_PACKET buffer drops captures under load and massively over-counts loss
-— reconfirmed 2026-07-17: it reported 4.7% missing / 62% bad frames on a
+— reconfirmed on the bench: it reported 4.7% missing / 62% bad frames on a
 stream this probe measured at 0.02% missing / 0 truncations).
 
 What it fixes over rtpsniff:
@@ -17,7 +17,7 @@ What it fixes over rtpsniff:
     mid-frame truncation — with zero transport loss around it, that means
     the slice tail was overwritten in waybeam's venc ring BEFORE maburd
     read it (drone drain ceiling exceeded; see
-    docs/source-truncation-drain-ceiling.md).
+    docs/findings/2026-07-17-source-truncation-drain-ceiling.md).
 
 Run ON THE GS (root, python3):  python3 fu_probe.py [iface] [port] [seconds]
 Healthy stream @60fps: fps ~59.5+, hard=0, missing ~0.
@@ -107,4 +107,4 @@ print(f"fu chains: closed_E={closed_e} end_via_marker={end_marker} "
 if closed_e + end_hard:
     pct = 100.0 * end_hard / (closed_e + end_hard)
     print(f"hard truncation: {pct:.1f}% "
-          f"{'** SOURCE OVERLOAD — see docs/source-truncation-drain-ceiling.md **' if pct > 2 else '(healthy)'}")
+          f"{'** SOURCE OVERLOAD — see docs/findings/2026-07-17-source-truncation-drain-ceiling.md **' if pct > 2 else '(healthy)'}")

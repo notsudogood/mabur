@@ -20,7 +20,7 @@ namespace maburgs {
 // Loopback-only UDP command listener that lets an operator ssh'd into the
 // GS box start, inspect, or abort a TX-power calibration run.
 //
-// Binds 127.0.0.1 ONLY. The GS answers on 10.18.0.1, and a calibration
+// Binds 127.0.0.1 ONLY. The GS is reachable on its LAN address, and a calibration
 // sweep silences the GS's own transmit path for whole phases at a time
 // (CalSession::radio_silent) -- something the drone or a bench laptop must
 // never be able to trigger by accident or on purpose. The loopback bind is

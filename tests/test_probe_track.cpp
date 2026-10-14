@@ -71,8 +71,8 @@ TEST(delivered_body_finalizes_with_its_au) {
   CHECK(t.union_counts().arrived_blocks == 4);
 }
 
-// Probe per AU (2026-09-16): the drone trails EVERY video AU with a probe,
-// base (sid 0) as well as enh (sid 1), so an expectation books for both.
+// Probe per AU: the drone trails EVERY video AU with a probe, base (sid 0) as
+// well as enh (sid 1), so an expectation books for both.
 TEST(base_au_books_an_expectation_like_enh) {
   auto t = make();
   t.set_commanded(0x06, 0);

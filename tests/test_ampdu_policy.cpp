@@ -1,8 +1,8 @@
 // Per-rung, per-width A-MPDU policy. 20 MHz: agg6 loses 6-13 points vs
-// singles at mcs0-3 (docs/bandwidth-sweep-findings-2026-09-17.md), so the
+// singles at mcs0-3 (docs/findings/2026-09-17-bandwidth-sweep.md), so the
 // threshold is 4. 40 MHz: frames are half as long on air, the fixed
 // per-PPDU cost doubles its share, and aggregation pays from mcs2
-// (docs/bw40-sweep-findings-2026-09-23.md "Findings" 3) -- a separate
+// (docs/findings/2026-09-23-bw40-sweep.md "Findings" 3) -- a separate
 // threshold per width.
 #include "mtest.h"
 #include "ampdu_policy.h"

@@ -4,8 +4,7 @@
 
 namespace mabur {
 
-// Pre-FEC loss booked at ARRIVAL time, in a SwDecoder's virtual-seq space
-// (spec docs/superpowers/specs/2026-09-05-arrival-loss-design.md §3).
+// Pre-FEC loss booked at ARRIVAL time, in a SwDecoder's virtual-seq space.
 //
 // Why: the completion counters (delivered/recovered/abandoned) book a lost
 // symbol only when FEC repairs it or gives up on it, tens of ms after the
@@ -31,11 +30,11 @@ class ArrivalTracker {
   // ring cannot hold yet (>= settle_ + ring) moves the settle line forward
   // first, booking what it passes, so its bit never aliases an unbooked seq.
   // clean: the body's FCS verdict. A copy salvaged out of an FCS-corrupt
-  // body (rx.keep_corrupted, 2026-09-08) still counts as heard; a seq that
+  // body (rx.keep_corrupted) still counts as heard; a seq that
   // settles heard but never clean books `salvage_only` -- what salvage
   // actually bought, as opposed to UepDecoder's subblocks_salvaged, which
   // also counts sub-blocks the other card delivered clean anyway
-  // (docs/sbi-salvage-flights-2026-09-09.md).
+  // (docs/findings/2026-09-09-sbi-salvage-flights.md).
   void on_source(uint64_t v, uint64_t stale_end, bool clean = true) {
     if (!anchored_) anchor(v);
     if (v < settle_) { ++late_; return; }

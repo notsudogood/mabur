@@ -15,12 +15,12 @@
 # maburgs.nack, which speaks the RC 14 spike wire and cannot link an RC 15
 # drone).
 #
-# Env: DUR (s, 300), PPS (jammer frames/s, 180 = the 2026-10-05 calibration;
+# Env: DUR (s, 300), PPS (jammer frames/s, 180 = the bench calibration;
 # recalibrate per docs/fec-nack.md), CH (op channel, 144), ARMS, GSBIN (the
 # side GS binary each arm runs; killed by name between arms), GSARGS (extra
 # args, e.g. "--loss-sim 8303" for a loss-sim build).
-cd /home/gilankpam/Projects/drone/mabur
-G=root@10.18.0.1
+cd "$(dirname "$0")/../../.."
+G=${GS:?set GS=root@<gs-ip>}
 DUR=${DUR:-300}; PPS=${PPS:-180}; CH=${CH:-144}
 GSBIN=${GSBIN:-/usr/local/bin/maburgs.fecnack}; GSARGS=${GSARGS:-}
 # Each arm killalls GSBIN by basename: never let that name the production

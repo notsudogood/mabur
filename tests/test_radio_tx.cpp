@@ -269,7 +269,7 @@ TEST(probe_stream_rides_third_slot) {
   const auto& f = sink.frames_[0];
   const uint16_t rl = read_le16(&f[2]);
   devourer::TxMode want_mode = to_tx_mode(probe, probe.bw);
-  want_mode.no_agg = true;  // the probe layer always airs alone (task 4)
+  want_mode.no_agg = true;  // the probe layer always airs alone
   const auto want = devourer::build_stream_radiotap(want_mode);
   REQUIRE(rl == want.size());
   CHECK(std::equal(want.begin(), want.end(), f.begin()));
@@ -297,7 +297,7 @@ static bool radiotap_no_agg(const std::vector<uint8_t>& frame) {
 
 TEST(probe_frames_are_no_agg_and_video_frames_are_not) {
   // With A-MPDU on, the chip folds co-queued frames into one PPDU at ONE
-  // rate/width (docs/bw40-sweep-findings-2026-09-23.md "Aggregation"): a
+  // rate/width (docs/findings/2026-09-23-bw40-sweep.md "Aggregation"): a
   // probe at the next rung pulled into the current rung's aggregate
   // measures nothing. The probe layer therefore airs alone.
   CaptureSink sink;

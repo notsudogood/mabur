@@ -8,8 +8,8 @@ namespace maburgs {
 
 const char* to_string(CtlReason r) {
   // Lowercase: this is the operator-visible contract (the ctl: stderr line
-  // and the sideport's link.ctl.last_event.reason), per the design spec's
-  // reason enum (residual | util | probation | starved | timeout | promote).
+  // and the sideport's link.ctl.last_event.reason), one of the reason enum
+  // (residual | util | probation | starved | timeout | promote).
   switch (r) {
     case CtlReason::None: return "none";
     case CtlReason::Residual: return "residual";
@@ -117,7 +117,7 @@ void LadderController::set_probe_state(ProbeGateState s, int rung, double u,
   probe_state_since_ms_ = now_ms;
 }
 
-// Continuous probe verdict (spec 2026-09-04 §4.3). Runs on every valid
+// Continuous probe verdict. Runs on every valid
 // sample before the decision blocks so the RungStore sees the sample that
 // triggers a decision, and so the gate is current when block 6 consults it.
 void LadderController::update_probe_gate(const LinkHealth& h, double now_ms) {
@@ -237,7 +237,7 @@ int LadderController::probation_ms_left(double now_ms) const {
   return 0;
 }
 
-// Check order (a spec contract; the block numbers below follow it):
+// Check order (a contract; the block numbers below follow it):
 //   starved -> s1 residual -> fade -> s3 residual -> s1 util -> s3 util ->
 //   clean/probe-gated promote.
 // The probe verdict is not a check: it is scored once, up front, and only
@@ -265,7 +265,7 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
     if (starved_since_ms_ < 0.0) starved_since_ms_ = now_ms;
     // Debounce: a rung transition re-keys the drone's FEC stream and
     // reliably yields 1-2 zero-completion decode windows on a healthy link
-    // (hw 2026-07-27). Withhold decisions but do not demote until the
+    // (hw). Withhold decisions but do not demote until the
     // starved run has persisted starved_confirm_ms.
     if (now_ms - starved_since_ms_ < cfg_.starved_confirm_ms) return false;
     if (idx_ == 0) return false;
@@ -288,7 +288,7 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
   // S1 window produced a real sample; stamping last_feedback_ms_ here would
   // let a stream of sample_valid=false health (with video still arriving)
   // suppress on_tick()'s blind-side timeout forever, holding an aggressive
-  // rung on zero real measurements (reviewer finding 2026-07-27). Only a
+  // rung on zero real measurements (reviewer finding). Only a
   // genuine sample counts as "feedback received."
   if (!h.sample_valid) return false;
 
@@ -302,8 +302,8 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
   // exactly the loss phase of a fade, and a feed that only happens on ticks
   // that reach 4b freezes fade_drssi/fade_dsnr (sideport link.ctl.fade, the
   // ctl-log S line) through the episodes this feature will be tuned from —
-  // then applies the whole multi-second gap as one dt step (review finding
-  // 2026-08-14). Nothing between here and 4b reads the EWMAs, so the decision
+  // then applies the whole multi-second gap as one dt step (review
+  // finding). Nothing between here and 4b reads the EWMAs, so the decision
   // ordering contract in 4b is untouched.
   //
   // The starved and !sample_valid paths above still do not feed. Both withhold
@@ -324,10 +324,10 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
   // anything — only block 6 reads the verdict.
   update_probe_gate(h, now_ms);
 
-  // Observe-only rung statistics (spec 2026-08-13): gated on the same
+  // Observe-only rung statistics: gated on the same
   // post-transition blank as s3 decisions — FEC re-key artifacts must not
   // be attributed to the new rung (up to ~200 ms of pre-transition symbols
-  // can outlive the blanking; see CLAUDE.md tuning invariant). Fed BEFORE
+  // can outlive the blanking; see docs/link-adaptation.md "Demote inputs and transition handling"). Fed BEFORE
   // the decision blocks so the sample that triggers a demote still lands
   // on the rung it actually measured.
   if (now_ms >= s3_blank_until_ms_ && now_ms >= blank_store_until_ms_) {
@@ -365,7 +365,7 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
   // from there on measured pressure, at the shortened in-regime confirms.
   // Never books probation-fail or penalty: this is rung-independent RF
   // evidence, not proof the rung was marginal.
-  // Ordering is a spec contract: after block 4 (residual wins the tick) and
+  // Ordering is a contract: after block 4 (residual wins the tick) and
   // before 5a (fade beats the confirm-window tiers). The EWMA feed itself
   // lives above block 4 — see the comment there.
   if (cfg_.fade.predict) {
@@ -377,7 +377,7 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
     // OBSERVED recovery — both deltas measurably back under threshold — is the
     // only thing that re-arms the latch, and it is deliberately NOT the !over
     // branch below. !over is also true on a NaN tick, and absence of evidence
-    // is not evidence of recovery: one telemetry gap mid-fade (Task 4's
+    // is not evidence of recovery: one telemetry gap mid-fade (the
     // staleness gate NaNs these labels on purpose) would release the brake and
     // let the same ongoing fade fire a second demote trigger_ms later.
     // Breaking the pre-fire sustain run on !over errs toward NOT demoting;
@@ -412,8 +412,8 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
 
   // 5a. s3 steady-state measurement and early warning: s3's smaller FEC
   // budget exhausts before s1's, so confirmed s3 residual/util pressure
-  // demotes without waiting for the base layer to degrade (spec 2026-08-05
-  // section 1b). Suspended inside the post-transition blanking window (FEC
+  // demotes without waiting for the base layer to degrade. Suspended
+  // inside the post-transition blanking window (FEC
   // re-key artifacts read as loss). The probe stream is its own sid and does
   // not disturb this reading any more, so there is nothing else to suspend
   // it for.
@@ -449,7 +449,7 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
     s3_last_live_ms_ = now_ms;
     // A ladder entry whose enh overhead is zero has no s3 budget at all; any
     // loss there is infinite utilization rather than a division by zero.
-    // Since same-rate-fixed-pairs (Task 4), s3 rides sid 1's own literal
+    // With same-rate fixed pairs, s3 rides sid 1's own literal
     // overhead_enh, not sid 0's — budget3_for() is gone, this is
     // budget_enh_for() directly.
     const double b3 = budget_enh_for(idx_);
@@ -480,9 +480,9 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
   };
 
   // s3 residual (post-FEC abandonment) demotes IMMEDIATELY, like s1's, and
-  // like it is exempt from min_between_changes_ms. It was a confirmed
-  // window until 2026-08-15 because a single abandoned window reads as a
-  // normal shed/blip -- but a shed window carries no s3 traffic at all, so
+  // like it is exempt from min_between_changes_ms. It needs no confirm
+  // window even though a single abandoned window could look like a
+  // normal shed/blip -- a shed window carries no s3 traffic at all, so
   // s3_live is false and no s3 decision runs. What actually needed the
   // window was transition debris, and attribution removes that from the
   // input outright: the watermark is in symbol-sequence space
@@ -567,12 +567,12 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
         now_ms - last_down_ms_ >= cfg_.hold_after_down_ms &&
         now_ms - last_change_ms_ >= cfg_.min_between_changes_ms &&
         !is_penalized(static_cast<int>(next), now_ms)) {
-      // Probe gate (spec 2026-09-04 §4.4): with a probe commanded, only a
+      // Probe gate: with a probe commanded, only a
       // clean streak of probe.clean_bodies may commit; Lossy AND NoInfo hold —
       // a commanded-but-absent probe is exactly the blind promote the
       // stream exists to prevent. No penalty: nothing was tried.
       //
-      // probe_holds (spec §4.4) counts Lossy/NoInfo hold EPISODES only. A
+      // probe_holds counts Lossy/NoInfo hold EPISODES only. A
       // Clean-but-short streak is "wait, it's working, just not long
       // enough yet" -- a fundamentally different reason to not promote --
       // so it returns false without touching probe_hold_active_ or the

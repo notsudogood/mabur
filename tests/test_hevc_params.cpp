@@ -126,7 +126,7 @@ TEST(hvcc_layout_matches_field_plan) {
 
   std::vector<uint8_t> h = hp.hvcc();
 
-  // Byte-for-byte expected header (23 bytes) per the field plan.
+  // Byte-for-byte expected header (23 bytes) per the hvcC field layout.
   std::vector<uint8_t> expect_header = {
       0x01,                                            // configurationVersion
       0x10, 0x11, 0x12, 0x13, 0x14, 0x15,               // profile_tier_level[0..5]
@@ -282,7 +282,7 @@ TEST(feed_prefixed_stops_at_a_truncated_length) {
 }
 
 // ---- sps_dimensions --------------------------------------------------
-// Real x265 SPS NALs (header included, escaped), captured 2026-09-28 with
+// Real x265 SPS NALs (header included, escaped), captured with
 // ffmpeg -f lavfi testsrc2 -c:v libx265.
 const std::vector<uint8_t> kSps720 = {
     0x42, 0x01, 0x01, 0x01, 0x60, 0x00, 0x00, 0x03, 0x00, 0x90, 0x00, 0x00, 0x03, 0x00, 0x00,

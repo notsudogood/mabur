@@ -4,8 +4,8 @@
 
 namespace maburgs {
 
-// One scout visit's worth of the scouting card's own counters (spec
-// 2026-09-13-auto-channel-select §5). Never compared across cards.
+// One scout visit's worth of the scouting card's own counters. Never
+// compared across cards.
 struct RankSample {
   uint8_t ch = 0;
   uint32_t cca = 0, fa = 0, own = 0, foreign = 0;
@@ -31,7 +31,7 @@ struct RankEntry {
 // "clean" bar beyond the margin below. The blocked tier sorts ahead of
 // worst_busy: a channel whose worst-visit NHM busy % reaches blocked_pct
 // ranks after every unblocked channel regardless of worst_busy, tiebroken
-// among the blocked by lower busy (spec 2026-09-25-nhm-airtime §7) -- see
+// among the blocked by lower busy -- see
 // is_blocked() below.
 //
 // There is no fixed home: proposal(current) plays the current channel's
@@ -45,7 +45,7 @@ class ChannelRanker {
  public:
   // margin: a candidate replaces `current` only when its worst visit is at
   // least this many busy units below current's (0 = lowest worst wins, the
-  // original rule). Bench 2026-09-13: clean channels tie within ~10 units,
+  // original rule). Bench: clean channels tie within ~10 units,
   // so without it the pick among clean channels is a coin toss that costs
   // a calibrated current channel for nothing.
   // busy_margin_pct > 0: the 20 MHz twin of pair_proposal's airtime rule
@@ -65,7 +65,7 @@ class ChannelRanker {
   uint8_t proposal(uint8_t current, int min_rounds) const;
   static uint32_t busy(const RankSample& s);
   // A channel whose worst-visit NHM busy % has reached blocked_pct: ranks
-  // last regardless of event score (spec 2026-09-25-nhm-airtime §7).
+  // last regardless of event score.
   bool is_blocked(const RankEntry& e) const { return e.busy_valid && e.worst_busy_pct >= blocked_pct_; }
 
  private:

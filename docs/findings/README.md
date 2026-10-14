@@ -1,0 +1,97 @@
+# Findings — dated historical records
+
+A findings record is a snapshot of one investigation, bench run, spike or
+flight: what was measured, on what build, on what date, and what was
+concluded from it. Findings are **never rewritten to match later code** —
+the numbers, the broken thing, and the reasoning stay exactly as they were
+on the day they were written, even after the mechanism they describe ships,
+gets superseded, or is deleted outright. The reference pages in `docs/*.md`
+are what describe *current* behaviour; every record below carries a
+`**Status:**` line (right under its title) pointing at whichever reference
+page now owns the topic, or saying what superseded it.
+
+New records go here, named `YYYY-MM-DD-topic.md` by the date the
+measurement/investigation happened (not the date it was written up or
+merged), and get a row added to the table below.
+
+| Date | Record | Question → answer |
+|---|---|---|
+| 2026-10-11 | [2026-10-11-cu-ht40-tx](2026-10-11-cu-ht40-tx.md) | Why does an RTL8812CU VTX stall on 40 MHz rungs? → devourer-side: DISDATAFB=0 wedged the first HT40 frame, and on a quiet channel the 8822C receiver below IGI 0x24 never reads the secondary idle; fixed in devourer `cu-ht40-tx` (DISDATAFB=1 + IGI floor 0x26 at 40/80 on the C die) |
+| 2026-10-10 | [2026-10-10-web-gs-8812cu](2026-10-10-web-gs-8812cu.md) | Does the web GS run on an RTL8812CU? → Yes natively (spotter, 0 loss); driver-disk eject and ~20 s bring-up are the caveats. |
+| 2026-10-10 | [2026-10-10-slice-salvage](2026-10-10-slice-salvage.md) | Do slice salvage + streamed decode both ship? → Yes; 94–97% truncated-AU rescue, `dec` p50 −2.7 ms. |
+| 2026-10-09 | [2026-10-09-venc-slice](2026-10-09-venc-slice.md) | Can VENC slices cut latency via early output? → No; the by-frame split was reused for loss confinement instead, shipped. |
+| 2026-10-07 | [2026-10-07-web-gs-nack-bench](2026-10-07-web-gs-nack-bench.md) | Does software NACK work over USB/relay/browser? → USB passed, relay borderline, browser fill-latency tail; stays on by default. |
+| 2026-10-06 | [2026-10-06-fec-nack-bench](2026-10-06-fec-nack-bench.md) | Does the shipped NACK pass its own bench gate? → Base-loss criteria pass (0 truncations); wasted-request/rung-0-fill criteria fail. |
+| 2026-10-06 | [2026-10-06-util-window-clear](2026-10-06-util-window-clear.md) | Should util decision windows clear at an op change? → Yes, shipped in `TransitionEdge`. |
+| 2026-10-05 | [2026-10-05-fec-nack-spike](2026-10-05-fec-nack-spike.md) | Is a host-side software NACK viable alongside FEC? → Yes, −95% truncations; became the built fec-nack feature. |
+| 2026-10-05 | [2026-10-05-cpe-relay-hop-bench](2026-10-05-cpe-relay-hop-bench.md) | Can a relay-only GS detect, sweep, rank and hop? → Yes, passed (most rows); three findings still open. |
+| 2026-10-04 | [2026-10-04-channel-set-bench](2026-10-04-channel-set-bench.md) | Does the no-home auto channel set bench-validate? → Mostly (rows 1-5, 9, 10 pass); ranker fooled by a co-located jammer (row 6 fail). |
+| 2026-10-03 | [2026-10-03-cpe-relay-full-chantable](2026-10-03-cpe-relay-full-chantable.md) | Does the CPE510 tune the full 5 GHz grid (incl. ch144)? → Yes, done via a mabur-openwrt kmod patch. |
+| 2026-10-02 | [2026-10-02-cpe-relay-remote-card-bench](2026-10-02-cpe-relay-remote-card-bench.md) | Does the CPE510 relay work as a `maburgs` RemoteCard? → Yes, passed; one `alive()` fix landed. |
+| 2026-10-01 | [2026-10-01-link-pairing-bench](2026-10-01-link-pairing-bench.md) | Does link pairing (RC_VERSION 14) gate and pass on hardware? → Yes, shipped and links. |
+| 2026-09-29 | [2026-09-29-web-gs-raw-dvr-irap-sync](2026-09-29-web-gs-raw-dvr-irap-sync.md) | Why was the mac-recorded raw DVR unplayable? → Sync point wasn't IRAP-only; fixed 2026-09-29. |
+| 2026-09-29 | [2026-09-29-cpe-relay-tx-wss](2026-09-29-cpe-relay-tx-wss.md) | Is wss worth it on the CPE relay? → No, too expensive; TX mode (v3/v4) passed instead. |
+| 2026-09-28 | [2026-09-28-cpe-relay-rx-spike](2026-09-28-cpe-relay-rx-spike.md) | Can the CPE510 decode mabur's video rungs? → Yes, once tuned to the link width; became the `mabur-relay` remote card. |
+| 2026-09-27 | [2026-09-27-web-gs-validation](2026-09-27-web-gs-validation.md) | Do the web GS page features bench-validate? → Yes, every feature benched here shipped and passed. |
+| 2026-09-26 | [2026-09-26-sd-record](2026-09-26-sd-record.md) | Does SD recording cost link latency? → No, if bound before the link channel. |
+| 2026-09-26 | [2026-09-26-vtx-recorder-bench](2026-09-26-vtx-recorder-bench.md) | Does the SD recorder ship as measured? → Yes, RC_VERSION 11, bind-before-link. |
+| 2026-09-26 | [2026-09-26-inflight-hop-fix-history](2026-09-26-inflight-hop-fix-history.md) | How were the in-flight-hop fixes found? → Historical narrative; all fixes shipped, old home-fallback config now gone. |
+| 2026-09-26 | [2026-09-26-bw40-channel-candidates](2026-09-26-bw40-channel-candidates.md) | What explains the unexplained loss on channel 60+64? → Still unresolved; current channel-set rules live in channel-select.md/bw40.md. |
+| 2026-09-25 | [2026-09-25-nhm-airtime-spike](2026-09-25-nhm-airtime-spike.md) | Does the NHM blocked-bit/ranker fix work? → Yes, hw-verified; now built and shipped. |
+| 2026-09-25 | [2026-09-25-analog-vtx](2026-09-25-analog-vtx.md) | Does the hop ever fire on an analog VTX carrier? → No (preamble-blind); the NHM-based fix is now built. |
+| 2026-09-24 | [2026-09-24-bw40-rungs-bench](2026-09-24-bw40-rungs-bench.md) | Do the bw40 rungs bench-pass? → Yes; TX wedge and hop-split issues resolved elsewhere; ladder now all-40. |
+| 2026-09-23 | [2026-09-23-cca-on](2026-09-23-cca-on.md) | Does carrier-sense-on fix the GS-send self-collision? → Yes, confirmed and shipped both ends. |
+| 2026-09-23 | [2026-09-23-bw40-sweep](2026-09-23-bw40-sweep.md) | Does 40 MHz help at every rung? → Only ≥~52 Mb/s; bottom rungs stay 20 MHz, now shipped. |
+| 2026-09-21 | [2026-09-21-bitrate-ceiling](2026-09-21-bitrate-ceiling.md) | How much bitrate can the drone push before CPU-bound? → ~20 Mb/s wall; three CPU-diet fixes shipped in response. |
+| 2026-09-20 | [2026-09-20-low-power-ladder-bench](2026-09-20-low-power-ladder-bench.md) | How does the ladder behave under the low-power thin stream? → Two of three issues fixed, one mitigated. |
+| 2026-09-19 | [2026-09-19-low-power-spike](2026-09-19-low-power-spike.md) | What cools the drone while disarmed? → Capping bitrate (not CPU clock); shipped next day as low-power mode. |
+| 2026-09-17 | [2026-09-17-bandwidth-sweep](2026-09-17-bandwidth-sweep.md) | Is real air capacity close to nominal? → No (0.71–0.87×); per-rung A-MPDU + efficiency table shipped. |
+| 2026-09-17 | [2026-09-17-colortrans-recording-latency](2026-09-17-colortrans-recording-latency.md) | Does burned-DVR colortrans cost display latency while recording? → All three causes fixed 2026-09-17. |
+| 2026-09-16 | [2026-09-16-probe-per-au-bench](2026-09-16-probe-per-au-bench.md) | Does probing every AU (not just periodically) ship? → Yes, 60/s probe trailing every AU. |
+| 2026-09-16 | [2026-09-16-fec-log-overhead-bench](2026-09-16-fec-log-overhead-bench.md) | Was the 1.0/0.5 rung overhead pair oversized? → First bench read; ladder since shipped tighter at 0.5/0.25 every rung. |
+| 2026-09-15 | [2026-09-15-handover-inflight-hop-bench](2026-09-15-handover-inflight-hop-bench.md) | Is in-flight channel hop ready to ship? → Bench passed (4 fixes); later became the production hop controller. |
+| 2026-09-15 | [2026-09-15-inflight-hop-bench-matrix](2026-09-15-inflight-hop-bench-matrix.md) | What did the first in-flight-hop bench matrix find? → Historical record; several early limitations later fixed. |
+| 2026-09-14 | [2026-09-14-chanmig-spike](2026-09-14-chanmig-spike.md) | Can the GS tell interference from a fade, where would it jump, does one card work? → Yes via foreign/FA sensors (not devourer's verdict); one card verdicts but dwells cost video. |
+| 2026-09-13 | [2026-09-13-channel-scan](2026-09-13-channel-scan.md) | Can devourer auto-select a clean channel? → Yes; sensor validated here, boot-time auto-pick shipped later. |
+| 2026-09-13 | [2026-09-13-channel-select-bench](2026-09-13-channel-select-bench.md) | Does the home/candidates channel-select design survive? → No, superseded; only silent-dwell + leak-subtraction logic survives. |
+| 2026-09-11 | [2026-09-11-maburcal-bench](2026-09-11-maburcal-bench.md) | Does the maburcal kit work end to end? → Yes; EVM recording reverted, one noisy-cell defect still open. |
+| 2026-09-09 | [2026-09-09-sbi-salvage-flights](2026-09-09-sbi-salvage-flights.md) | Does SBI sub-block salvage help, and how much? → ~9.6% of misses avoided (flight 0046); free, not worth tuning for. |
+| 2026-09-07 | [2026-09-07-boot-time](2026-09-07-boot-time.md) | Can boot time be cut? → Yes, U-Boot + rcS reorder flashed on the real drone, −35%. |
+| 2026-09-06 | [2026-09-06-air-clock-flight](2026-09-06-air-clock-flight.md) | Does the air-clock gate work in flight, and at what config? → Yes; adopted exactly as flown. |
+| 2026-09-06 | [2026-09-06-iqp-cap](2026-09-06-iqp-cap.md) | Does `venc.min_iqp` cap demote/promote IDR size? → Yes, flat 2.2 kB; flight-scale latency win unproven on bench. |
+| 2026-09-05 | [2026-09-05-switch-loss](2026-09-05-switch-loss.md) | What causes loss specifically at a rung change? → The GS's own op-change repeat-burst RCF send; later deleted. |
+| 2026-09-05 | [2026-09-05-probe-stream-flight](2026-09-05-probe-stream-flight.md) | Was `link.probe.max_util` 0.2 safe in first flights? → No, too loose; current default is 0.05. |
+| 2026-09-05 | [2026-09-05-probe-blanking-fix](2026-09-05-probe-blanking-fix.md) | What actually fixed GS-inflicted probe loss? → `RcfSlotter` now releases on probe arrival, not AU completion. |
+| 2026-09-05 | [2026-09-05-arrival-loss](2026-09-05-arrival-loss.md) | Does arrival-time loss booking hold up on bench? → Yes, deployed to the GS. |
+| 2026-09-04 | [2026-09-04-probe-stream](2026-09-04-probe-stream.md) | Does the always-on probe stream (PR #44) pass acceptance? → Yes, deployed. |
+| 2026-09-04 | [2026-09-04-handover-probe-blanking](2026-09-04-handover-probe-blanking.md) | Why does the probe canary lose ~2× what video loses? → Diagnosis handover, superseded by the next day's fix writeup. |
+| 2026-09-03 | [2026-09-03-handover-venc-overshoot](2026-09-03-handover-venc-overshoot.md) | Why does the encoder overshoot its commanded bitrate? → Not QP floor — scene-cut P-frames; fixed with a SuperFrame P-cap. |
+| 2026-09-02 | [2026-09-02-gs-uplink-self-blanking](2026-09-02-gs-uplink-self-blanking.md) | Why does the bench lose ~0.35% of video PPDUs with no RF cause? → GS's own RCF uplink blasts both cards deaf; fixed by RCF slotting. |
+| 2026-09-02 | [2026-09-02-ladder-settle-blank](2026-09-02-ladder-settle-blank.md) | Does settle-blanking the s1/s3 windows at op change ship? → Yes, `TransitionEdge` 150 ms blank. |
+| 2026-09-02 | [2026-09-02-regulator-chain-budget](2026-09-02-regulator-chain-budget.md) | What `chain_budget` value ships for one-vsync-late chains? → 3 (0 = unbounded). |
+| 2026-09-01 | [2026-09-01-handover-fec-compute](2026-09-01-handover-fec-compute.md) | Does the `fec` span serialize behind the async FEC repair worker? → No — worker exonerated; feed/copy + core affinity was the real cost. |
+| 2026-08-31 | [2026-08-31-latency-budget](2026-08-31-latency-budget.md) | Where does the ~75-100 ms glass-to-glass latency go, segment by segment? → First real breakdown; biggest items fixed in follow-ups. |
+| 2026-08-31 | [2026-08-31-handover-fec-latency](2026-08-31-handover-fec-latency.md) | Is A-MPDU feasible on the drone's 8812EU to cut the fec per-body tax? → Handover cut mid-probe; answered (yes) the next day. |
+| 2026-08-31 | [2026-08-31-dq-spike](2026-08-31-dq-spike.md) | What does `dq` actually measure, and what caps the fec/dq pace? → Ring-wait + FEC compute, not queueing; fixed via streaming push + core affinity. |
+| 2026-08-30 | [2026-08-30-wall2-deadline](2026-08-30-wall2-deadline.md) | Is `decode_deadline_ms` dead weight worth deleting? → Measured safe (KEEP by the numbers), but overruled and deleted anyway. |
+| 2026-08-30 | [2026-08-30-same-rate-uep](2026-08-30-same-rate-uep.md) | Should the link go back to one PHY rate for both streams with UEP via overhead only? → Yes — shipped as same-rate fixed pairs. |
+| 2026-08-30 | [2026-08-30-pair-ab-field](2026-08-30-pair-ab-field.md) | Does the asymmetric fade-protection pair (100:50) beat flat (50:50) in real flight? → No — flat wins. |
+| 2026-08-30 | [2026-08-30-dejitter](2026-08-30-dejitter.md) | What removes the mailbox repeat/skip judder? → A pts-anchored regulator, shipped then superseded by the vsync-locked servo. |
+| 2026-08-29 | [2026-08-29-deploy-flag-days](2026-08-29-deploy-flag-days.md) | What do the historical flag-day runbooks show? → All changes now live both ends; current rules in `docs/deploy.md`. |
+| 2026-08-29 | [2026-08-29-airtime-model-history](2026-08-29-airtime-model-history.md) | What superseded the AirBalancer/UEP-flatten history? → A per-rung overhead pair + fixed bitrate inputs. |
+| 2026-08-29 | [2026-08-29-airtime-balance-spike](2026-08-29-airtime-balance-spike.md) | Does a nominal `len·(1+ov)/rate` model predict air balance? → No, ~2× gain error at large frames; superseded. |
+| 2026-08-14 | [2026-08-14-ladder-attribution-fade-wave](2026-08-14-ladder-attribution-fade-wave.md) | Does unconditional attribution + pooled RF labels ship? → Yes, all shipped as the 2026-08-14 defaults. |
+| 2026-08-14 | [2026-08-14-rcf-uplink-loss](2026-08-14-rcf-uplink-loss.md) | Why did Part C show no close_ms gain? → 30-50% of uplink RCFs lost to half-duplex self-collision; later superseded by RcfSlotter + CCA-on. |
+| 2026-08-14 | [2026-08-14-handover-rc-drain-close-ms](2026-08-14-handover-rc-drain-close-ms.md) | Did the 5 ms RCF drain decouple reduce close_ms? → No measurable gain; root cause found in the follow-up doc. |
+| 2026-08-13 | [2026-08-13-lag-investigation](2026-08-13-lag-investigation.md) | Is the pause-and-jump lag the drone's TX pipeline? → No, exonerated; caught the venc-ring vanish mechanism firing live instead. |
+| 2026-08-12 | [2026-08-12-venc-ring-vanish](2026-08-12-venc-ring-vanish.md) | Why do frames vanish invisibly in the drone? → CPU famine starving maburd's hot thread; self-IDR redesign never merged. |
+| 2026-08-12 | [2026-08-12-handover-venc-ring-vanish](2026-08-12-handover-venc-ring-vanish.md) | What's the state of the idr-request work? → Working handover, not a finding; superseded by the committed finding doc. |
+| 2026-08-10 | [2026-08-10-evm-sweep](2026-08-10-evm-sweep.md) | Does EVM explain the 14 dB ladder swing? → Yes (PA compression), but EVM was later dropped as a live signal. |
+| 2026-08-09 | [2026-08-09-shed-lag](2026-08-09-shed-lag.md) | Is the shed-lag freeze bug still fixed? → Yes, synchronized shed is the current bitrate-policy behaviour. |
+| 2026-08-04 | [2026-08-04-s3-loss](2026-08-04-s3-loss.md) | Is the ladder still blind to s3 (enh-layer) loss? → Structurally yes, but the probe stream later gave the GS an s3-loss signal. |
+| 2026-08-02 | [2026-08-02-ladder-walk](2026-08-02-ladder-walk.md) | Is `down_util` 0.35 still the adopted value? → Yes. |
+| 2026-07-27 | [2026-07-27-mcs6-bench-anomaly](2026-07-27-mcs6-bench-anomaly.md) | Is the mcs6+STBC PHY-hole fix still in production? → Yes, `symbol_size` 332 + full mcs6 rung shipped. |
+| 2026-07-25 | [2026-07-25-gs-frame-stall-after-drone-restart](2026-07-25-gs-frame-stall-after-drone-restart.md) | Is the post-restart GS stall bug still fixed? → Yes, hardware-verified. |
+| 2026-07-25 | [2026-07-25-fec-symbol-size-328](2026-07-25-fec-symbol-size-328.md) | Is `symbol_size` 328 still production? → No, superseded 4 days later by 332 (mcs6 PHY-corner fix). |
+| 2026-07-17 | [2026-07-17-source-truncation-drain-ceiling](2026-07-17-source-truncation-drain-ceiling.md) | Did the drain-ceiling truncation bug get fixed in the policy? → Yes, the bitrate formula is now airtime-exact. |
+| 2026-07-16 | [2026-07-16-txagc-calibration](2026-07-16-txagc-calibration.md) | Is the TXAGC bench tool still how units get calibrated? → No, replaced by `maburcal`; its measured data is still ground truth. |

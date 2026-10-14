@@ -1,7 +1,8 @@
 # Link pairing: the authenticated control plane
 
 Spec: `docs/superpowers/specs/2026-10-01-link-pairing-design.md`
-(gitignored; this page is the committed, as-built record). RC_VERSION 14.
+(gitignored; this page is the committed, as-built record). Hardware gate:
+`docs/findings/2026-10-01-link-pairing-bench.md`.
 
 The drone applies control only from a ground end that holds the shared
 link key, and a recorded session cannot be replayed to it. Video, the MSP
@@ -37,9 +38,7 @@ key_file = "/etc/mabur.key"   # the pairing key; same file on the ground station
 ```
 
 on both the drone (`bundle/mabur.default.toml`) and the GS
-(`gs/bundle/maburgs.default.toml`) — the slot `link.vtx_id` used to
-occupy; an old config carrying `vtx_id` fails boot (strict keys). The GS
-alone also accepts an inline `[link] key = "<32 hex>"` — the web page's
+(`gs/bundle/maburgs.default.toml`). The GS alone also accepts an inline `[link] key = "<32 hex>"` — the web page's
 overlay path (`web/ui/src/lib/config.js` builds it, `web/src/web_main.cpp`
 `load_cfg` merges it into `link.key`). That parser is `gs/src/config.cpp`,
 shared by the web core and `maburgs`, so `maburgs` itself also accepts
@@ -53,8 +52,7 @@ exist** (`ENOENT` only — an empty file fails the format above, and an
 unreadable path, e.g. no permission or a directory, is a boot failure
 `<path>: <strerror>`) uses it and logs one boot line; a
 web page with no key loaded does the same. A fresh or wiped install links
-out of the box exactly as `vtx_id 1` did before this feature; pairing is
-strictly opt-in. The default offers no security: every default install
+out of the box; pairing is strictly opt-in. The default offers no security: every default install
 pairs with every other.
 
 **Fingerprint.** `mabur::key_fingerprint(key)`: `"default"` for the
@@ -72,24 +70,29 @@ as 4 lowercase hex characters. Never the key itself. Shown:
 Not on the OSD (no room, and the fingerprint alone doesn't help a pilot
 mid-flight — see "Known edges").
 
-## The wire (RC_VERSION 14)
+## The wire
 
-`link.vtx_id` (u32) is gone from every frame and both configs — it
-defaulted to 1 everywhere and never separated two mabur setups at one
-field; the key is the identity now. In its place:
+No frame carries a VTX id: the key is the identity. Every GS-to-drone
+control frame carries an 8-byte SipHash-2-4 tag (`kTagLen`) right before
+its CRC; the drone-to-GS frames stay untagged:
 
-- **DISC** (GS to drone): + an 8-byte SipHash-2-4 tag before the existing
-  CRC, over the frame bytes alone (no session exists yet — tagged with
+- **DISC** (GS to drone): tagged over the frame bytes alone (no session exists yet — tagged with
   the key only).
-- **DISC_ACK** (drone to GS): + u32 `vtx_nonce`, + u8 `flags` (bit0 =
+- **DISC_ACK** (drone to GS): carries u32 `vtx_nonce` and u8 `flags` (bit0 =
   `kAckKeyMismatch`, `0x01`). Unauthenticated — the drone has nothing of
   the GS's to prove yet, and a forged ack can only confuse a display, not
   move the aircraft (see "Not defended").
-- **RCF** (GS to drone): + the 8-byte tag, computed over the frame bytes
+- **RCF** (GS to drone): tagged over the frame bytes
   plus `vrx_nonce ‖ vtx_nonce ‖ seq32` (`TagCtx`) — session-bound, not
   just key-bound.
 - **CAL_CMD / CAL_RESULT**: same tag, same `TagCtx` inputs (minus
   `seq32`: cal freshness is the cal nonce, see "Session and the nonces").
+- **NACK** (GS to drone, `docs/fec-nack.md`): same session-bound tag, with
+  the request's own `counter` as `seq32`. The drone accepts only a counter
+  greater than the last one it accepted under the current pair
+  (`RcAgent::check_nack` → `verify_session_tagged` +
+  `accept_nack_counter`, on the RX thread); a tag or counter failure sets
+  `auth_reject`, a parse failure does not.
 - **Telem** (drone to GS): flags bit1 is `kTelemAuthReject`
   (`0x02`) — at least one control frame failed verification this
   telemetry period. (Bit1 was `radio_rx_ok` before the 2026-09-30 telem
@@ -97,11 +100,12 @@ field; the key is the identity now. In its place:
   `docs/data-provenance.md`.)
 
 `rc::verify_control(buf, len, key, ctx)` is the one place a tag is
-checked — on the drone, for DISC/RCF on the agent thread and for
-CAL_CMD/CAL_RESULT on the TX writer thread (`RcAgent::verify_cal_frame`).
-It finds the tag at the frame's **structural** offset, derived from the
-type (`DISC_LEN`, `RCF_HEAD_LEN`, `kCalResultLen`, or
-`kCalCmdFixedLen + n_windows * 4`), never at `len - 10`: on hardware the
+checked — on the drone, for DISC/RCF on the agent thread, for
+CAL_CMD/CAL_RESULT on the TX writer thread (`RcAgent::verify_cal_frame`)
+and for NACK on the RX thread. It finds the tag at the frame's
+**structural** offset, derived from the type (`DISC_LEN`, `RCF_HEAD_LEN`,
+`kCalResultLen`, `kCalCmdFixedLen + n_windows * 4`, or
+`kNackFixedLen + n * kNackEntryLen`), never at `len - 10`: on hardware the
 drone's RC body still carries devourer's trailing 4-byte 802.11 FCS
 (`Packet.Data`), and bytes past the CRC are ignored exactly as `parse_*`
 ignores them. `common/include/mabur/siphash.h` + `common/src/siphash.cpp`
@@ -181,8 +185,9 @@ Cold start:
 5. GS: `VrxController::note_drone_state(2)` on that LINKED Telem — or,
    if it's lost, `kMoveAfterRcfs = 5` RCFs sent under the new session —
    arms `take_move_edge()`; GS main follows to the agreed channel on that
-   edge. The existing split-and-reunite beaconing
-   (`radio.scan.split_after_ms`) is the fallback if both are lost.
+   edge. If the GS never follows, the drone hears no accepted RCF on the
+   new channel within `link.move_confirm_ms` and returns to the channel
+   it came from (`docs/channel-select.md`).
 
 Keep-alive DISC while LINKED: verified like any DISC, acked with the
 *same* `vtx_nonce` already issued for that `vrx_nonce` — nothing else
@@ -193,7 +198,7 @@ crash mid-flight must not drop the drone to the bottom rung).
 
 ### The stranger rule, as implemented
 
-**As built:** the GS enters `VrxState::KEY_MISMATCH` when a flagged ack
+The GS enters `VrxState::KEY_MISMATCH` when a flagged ack
 arrives and the current flagged-only run (no unflagged ack since its first
 flagged ack) satisfies BOTH:
 
@@ -205,16 +210,15 @@ flagged ack) satisfies BOTH:
 In BEACONING (20 ms DISCs) the time term dominates: ~1 s. In SESSION the
 DISCs are the 1 s keep-alives, so the beacon term does: ~3 s, the ack to
 the third keep-alive after the first flagged one. That is what keeps a
-foreign-key drone in range (it answers every DISC flagged, since without
-`vtx_id` every drone answers) from tripping the state when one or two of
+foreign-key drone in range (it answers every DISC flagged, since with no
+VTX id in the frames every drone answers) from tripping the state when one or two of
 our own drone's acks are lost. Any unflagged ack resets both terms and,
 if already in `KEY_MISMATCH`, leaves it immediately. In `KEY_MISMATCH` the
 GS sends no RCFs (no cal either) and keeps beaconing, so a corrected
 config on either end recovers without a restart on the other.
 
-The held `vtx_nonce_` is **kept across `KEY_MISMATCH`**, not dropped —
-a controller ruling made during implementation, not what a literal
-reading of the spec's rendezvous text might suggest. Clearing it would
+The held `vtx_nonce_` is **kept across `KEY_MISMATCH`**, not dropped.
+Clearing it would
 make our own drone's next same-`vrx_nonce` ack read as a brand-new
 session, resetting the GS's `seq32` counter — and the still-LINKED drone
 (`seq32` strictly increasing) would then reject every RCF under the
@@ -238,20 +242,19 @@ flag in the first place.
 - **Both restart.** Cold start.
 - **maburgs to phone takeover.** The second controller's first verified
   RCF steals the session. Running both controllers at once makes the
-  drone flip between sessions and ladders and is unsupported (same as
-  before this feature: two GSs with different seq positions fight over
-  the op point). Signature: sustained `auth_reject`.
+  drone flip between sessions and ladders and is unsupported (two GSs
+  with different seq positions fight over the op point). Signature:
+  sustained `auth_reject`.
 
 ## Not defended
 
-Carried straight from the spec's threat model (section 1) — nothing here
-changed during implementation: jamming/DoS; a captured drone or a stolen
+Out of scope by design (the spec's threat model): jamming/DoS; a captured drone or a stolen
 GS config leaking the key (change it); the browser's key storage, whose
 security is the phone's lock screen; spoofed telemetry/DISC_ACK toward
 the GS (unauthenticated by design — can confuse a display, never move
 the aircraft); confidentiality of anything (video/OSD/telemetry stay
-clear). **Same-key strangers**, not in the spec's list: without
-`vtx_id`'s accidental filtering, a nearby default-key GS beaconing on the
+clear). **Same-key strangers**: with no VTX id in the frames, a nearby
+default-key GS beaconing on the
 same channel is answered exactly like our own GS — it only fails to win
 a session because our GS's unflagged acks keep winning "newest wins",
 not because the drone refuses it. It can thrash the drone's single
@@ -264,14 +267,13 @@ keep-alive DISC re-pairs — DoS, out of scope.
 
 ## Known edges
 
-All self-healing; found during the Task 9 reviews, not hardware bugs.
+All self-healing.
 
 - **Stranger + three lost acks.** A foreign-key drone in range plus
   three consecutive lost acks from our own drone (~3 s of keep-alives in
   SESSION) still makes the GS's flagged-only run look like a real
   mismatch and enter `KEY_MISMATCH` mid-session; it leaves on the next
-  unflagged ack, same as any entry. One or two lost acks no longer do
-  (the time-only rule tripped on those).
+  unflagged ack, same as any entry. One or two lost acks do not.
 - **Promote Telem drains counters out of cadence.** The immediate Telem
   a session promotion sends is extra and off the regular period — it
   drains the drone's per-period counters early, shortening the next
@@ -280,8 +282,8 @@ All self-healing; found during the Task 9 reviews, not hardware bugs.
 
 ## Observability
 
-- Sideport: `link.key_fp` (`"default"` or 4 hex), `link.state` gains
-  `key_mismatch`, `drone.auth_reject` (bool, this period). Three causes
+- Sideport: `link.key_fp` (`"default"` or 4 hex), `link.state` =
+  `key_mismatch` (else `session` / `beaconing`), `drone.auth_reject` (bool, this period). Three causes
   set `auth_reject`: a drone/GS restart or failsafe re-pair (one period,
   expected); two controllers fighting over the session (sustained); and a
   foreign-key GS in range — its DISCs fail the tag and set the bit every
@@ -300,8 +302,8 @@ All self-healing; found during the Task 9 reviews, not hardware bugs.
 - `maburgs` stderr: one line on the `KEY_MISMATCH` edge (entry and
   exit) — `link KEY MISMATCH -- the drone rejects our tag; both ends
   need the same /etc/mabur.key (our key <fp>)` / `link key accepted
-  (our key <fp>)`. `ctl.log` is untouched (`ctllog 12` unchanged):
-  KEY_MISMATCH is a rendezvous state, not a ladder-controller event.
+  (our key <fp>)`. `ctl.log` does not record it: KEY_MISMATCH is a
+  rendezvous state, not a ladder-controller event.
 - Web page: `Key mismatch` status tag, `Drone rejects our link key
   (<fp>) — load the same mabur.key on both ends` text. Spotter mode
   hides the key row and writes no overlay.
@@ -346,36 +348,3 @@ Five cases:
    after failsafe is rejected (`auth_reject`, still FAILSAFE); once the
    uplink returns the next keep-alive re-pairs under a new `vtx_nonce`
    (measured 190 ms after restore; bound one keep-alive + one RCF).
-
-## Bench results
-
-Filled in by the operator during the Task 9 Step 6 hardware gate — the
-four timed recoveries, mirroring the spec's "Restart cases" above
-(cold start / drone restart / GS restart / takeover), stopwatched from
-`maburtop`.
-
-| case | expected | measured |
-|---|---|---|
-| cold rendezvous, default keys on both ends | ~1 s | 2026-10-01: `session` on the first sideport sample after both daemons came up (not stopwatched); ladder 0→4 in ~8 s; ausniff 30 s 1815 AUs, 60.5 fps, 0 incomplete, 0 gaps, 0 resyncs |
-| drone power cycle with GS running | <= 1.2 s | 2026-10-01: `session` 6.5 s after power-on, of which ~4 s is the drone's boot to maburd; `drone.auth_reject` set for exactly one Telem period at link-up, then 0 of 100 samples |
-| `restart maburgs` with drone running | <= 1.2 s | 2026-10-01: `session` 0.2 s after the first beacon (≈6 s after the restart command, the rest is the GS radio bring-up); drone untouched (same PID) |
-| maburgs stopped, phone page connected with the key loaded | <= 1.2 s | not run 2026-10-01 (no phone on the bench session) |
-
-Wrong-key run, 2026-10-01 (key `2263` on the drone only, `restart maburd`):
-the GS went BEACONING when the drone's video stopped, re-entered SESSION
-on its held nonce when video returned, had its RCFs rejected
-(`drone.auth_reject = true`, drone `rendezvous`) and showed
-`link.state = key_mismatch` 1.2 s after the first rejected period, with
-the `maburgs: link KEY MISMATCH` stderr line. Copying the same key to
-the GS and `restart maburgs` recovered to `session` with `key_fp = 2263`
-on both boot logs without touching the drone. Not run that day: the
-stranger drone (the .126 board is on vendor firmware), the web spotter
-row, and the cold-boot `vtx_nonce` check (nothing logs the nonce).
-
-Also on the hardware gate: confirm the drone's first `vtx_nonce` differs
-across cold boots (`RcAgent::fresh_vtx_nonce_` seeds from
-`std::random_device` very early in boot on the 4.9 kernel). Nothing logs
-the nonce today: capture the first DISC_ACK off the air on two
-consecutive power cycles, or add a temporary print.
-Also confirm the drone links at all — the host suite feeds exact-length
-frames, and the FCS-tail bug fixed in `verify_control` was invisible to it.

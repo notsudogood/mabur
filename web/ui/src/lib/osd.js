@@ -1,4 +1,4 @@
-// MSP OSD overlay (spec 2026-09-27-web-msp-osd). The core publishes the FC's
+// MSP OSD overlay. The core publishes the FC's
 // DisplayPort grid as Module.onOsd(rows, cols, Uint16Array), cell =
 // char | page << 8; this file lays it out over the visible video box and
 // paints glyphs from the Betaflight atlas (web/ui/public/font_btfl.png, made

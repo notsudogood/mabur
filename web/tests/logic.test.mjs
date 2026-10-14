@@ -100,7 +100,7 @@ test('annexbToLengthPrefixed rewrites 3- and 4-byte start codes as u32 BE length
     [0, 0, 0, 3, 0x40, 1, 7, 0, 0, 0, 4, 0x02, 1, 9, 9]);
 });
 
-test('GDR parameter-set AUs never arm the gate: WebCodecs needs an IRAP key (final review)', () => {
+test('GDR parameter-set AUs never arm the gate: WebCodecs needs an IRAP key', () => {
   const g = new Gate();
   assert.deepEqual(g.onAu(au(GDR)), { type: null, reset: false, skip: 'awaiting-irap' });
   assert.equal(g.armed, false);
@@ -109,7 +109,7 @@ test('GDR parameter-set AUs never arm the gate: WebCodecs needs an IRAP key (fin
 
 import { DecoderSlot } from '../ui/src/lib/logic.mjs';
 
-test('DecoderSlot.replace closes the previous decoder unless already closed (final review)', () => {
+test('DecoderSlot.replace closes the previous decoder unless already closed', () => {
   const mk = () => ({ state: 'configured', closed: 0, close() { this.closed++; this.state = 'closed'; } });
   const slot = new DecoderSlot();
   const a = mk(), b = mk(), c = mk();
@@ -344,7 +344,7 @@ test('parseRelayAddr', () => {
 });
 
 test('relayBlocker: https needs an LNA-exempt host, bad address blocks, empty = default', () => {
-  // Revert check: the pre-2026-09-29 blocker refused every https origin.
+  // Revert check: the old blocker refused every https origin.
   assert.equal(relayBlocker('https:', '10.83.11.1:8311'), null);
   assert.equal(relayBlocker('https:', '10.0.0.5'), null);
   assert.equal(relayBlocker('https:', '172.20.1.1:9000'), null);

@@ -5,7 +5,7 @@
 
 namespace maburgs {
 
-// Min-anchor pts→mono clock map (extracted 2026-08-30 from maburplay's
+// Min-anchor pts→mono clock map (extracted from maburplay's
 // FrameRegulator so daemon and player share one implementation; the
 // fork-lineage stack independently converged on the same rolling-min
 // bridge as its pts-bias fix). Anchors on the FASTEST observed frame:
@@ -103,7 +103,7 @@ class PtsAnchor {
   uint32_t warm_ = 0;
 };
 
-// link-rtt (2026-09-02): absolute network floor from an anchor base plus
+// link-rtt: absolute network floor from an anchor base plus
 // the telem-derived (pts − GS-mono) offset. base_us = min(mono − pts64) =
 // min_transit − offset, so base + offset = min_transit — except the
 // anchor's pts64 space seeds from the TRUNCATED 32-bit slot pts while the

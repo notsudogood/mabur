@@ -9,9 +9,8 @@ namespace mabur {
 namespace {
 // Transition boundaries older than this are force-closed and disarmed: a
 // straggler this old is not transition debris. Structural, not config.
-// (Pre-2026-09-02 this also bounded a u16 FRAG watermark against wrapping
-// into false stale matches; that watermark died with the delivery window,
-// and SwDecoder's own boundary tracking is virtual-seq based.)
+// (SwDecoder's own boundary tracking is virtual-seq based, so this bounds
+// no wrapping watermark.)
 constexpr uint64_t kBoundaryExpiryMs = 1000;
 }  // namespace
 

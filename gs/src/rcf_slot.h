@@ -1,6 +1,6 @@
 #pragma once
 // RcfSlotter — slot the GS uplink into the drone's inter-AU idle
-// (docs/gs-uplink-self-blanking-findings-2026-09-02.md).
+// (docs/findings/2026-09-02-gs-uplink-self-blanking.md).
 //
 // Why: a GS control-frame send (RCF, DISC, repeat copies) blasts the
 // sibling RX card at ~-4 dBm and deafens the TX card, so any drone PPDU
@@ -25,25 +25,26 @@
 // passes through — that covers rendezvous, so DISC needs no bypass.
 // hold_max_ms 0 disables the slotter.
 //
-// Probe tail (spec 2026-09-04 probe-stream, fixed 2026-09-05): the
-// probe-stream body is the LAST PPDU of every ENH burst, and the AU
+// Probe tail: the
+// probe-stream body is the LAST PPDU of every video AU's burst while a
+// probe is commanded (probe per AU), and the AU
 // completes before it lands (bench: the probe's radio stamp is 0.9 ms p50
 // / 4 ms p99 after the completion stamp; a send's USB+chip latency is
 // 1-1.5 ms). A send released at the completion therefore puts the blast
 // exactly where the probe is -- measured 2x the enh stream's own loss,
 // and a fixed "one body airtime" deferral did nothing because it moved
 // the blast from one part of that spread to another
-// (docs/handover-probe-blanking-2026-09-04.md). So an ENH completion
-// releases NOTHING by itself: the release is the probe's own arrival
+// (docs/findings/2026-09-04-handover-probe-blanking.md). So a probe-trailed
+// completion releases NOTHING by itself: the release is the probe's own arrival
 // (on_probe_tail, fed from the probe sink), which is the exact "burst is
 // off air" signal at any MCS and frame size. A lost probe never arrives,
-// so each ENH completion also arms a deadline at completion + tail_ub,
+// so each such completion also arms a deadline at completion + tail_ub,
 // where tail_ub is learned from the observed completion->probe offsets
 // (a decaying max, floored at probe_tail_ms = the body's own airtime,
 // plus 1 ms). Both the probe release and the deadline release re-check
 // idle_ahead() at the instant they fire, with no extra delay charged;
-// the completion itself charges nothing. A base-AU completion is never
-// trailed by a probe and releases at once, as before. The grace window
+// the completion itself charges nothing. A completion with no probe
+// following (none commanded, or a non-video sid) releases at once. The grace window
 // opens at the burst end -- the probe's arrival, or the estimate
 // completion + tail_ub while it is still expected.
 //
@@ -60,8 +61,8 @@ struct RcfSlotCfg {
   int grace_ms = 2;          // offered this soon after a good AU -> send now
   int lead_ms = 3;           // send -> on air + blast (USB + chip + ~0.2 ms)
   int guard_ms = 1;          // margin before the predicted next burst
-  // Airtime of the probe-stream body that trails every ENH burst (spec
-  // 2026-09-04 probe-stream), ms, rounded up; 0 when no probe is commanded.
+  // Airtime of the probe-stream body that trails every ENH burst, ms,
+  // rounded up; 0 when no probe is commanded.
   // Floor of the learned completion->probe offset (tail_ub_ms()): the
   // burst cannot end sooner than one probe body after the completion.
   int probe_tail_ms = 0;

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Aggregate pcsample rows by function via addr2line. usage: symbolize.py pc.txt"""
 import subprocess, sys, collections, os
-B="/home/gilankpam/Projects/drone/openipc-builder/openipc/output"
+B=os.environ.get("OPENIPC_OUTPUT") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "../../../../openipc-builder/openipc/output")
 A2L=B+"/host/bin/arm-openipc-linux-gnueabihf-addr2line"
 READELF=B+"/host/bin/arm-openipc-linux-gnueabihf-readelf"
 SYS=B+"/host/arm-buildroot-linux-gnueabihf/sysroot"

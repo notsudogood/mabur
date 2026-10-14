@@ -1,12 +1,12 @@
-/* venc_record.c -- the VTX onboard recorder's VENC channel (spec
- * docs/superpowers/specs/2026-09-26-vtx-recorder-design.md).
+/* venc_record.c -- the VTX onboard recorder's VENC channel
+ * (docs/vtx-recorder.md).
  *
  * One H.265 CBR channel (STAR6E_RECORD_CHANNEL) bound FRAMEBASE to the VPE
  * port the link channel taps (or, at a record.size other than the link's, to
  * the same VPE channel's second scaler, port 1), created and bound BEFORE the
  * link channel so
  * the link is the newest peer and its encode runs first (bench R1 vs R2-R4,
- * docs/sd-record-findings-2026-09-26.md).
+ * docs/findings/2026-09-26-sd-record.md).
  *
  * Idle (no StartRecvPic) until venc_record_start(). A drain thread waits on
  * the channel fd (poll, 20 ms cap -- correctness never depends on the fd

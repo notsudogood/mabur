@@ -46,7 +46,7 @@ bool FrameRegulator::offer(const DmaFrame& f, uint64_t mono_us,
     } else {
       release = r.release_us;
       target_v = r.vblank_us;
-      // Sequential-slot assignment (hw 2026-08-31): base+enh of a
+      // Sequential-slot assignment (hw): base+enh of a
       // capture pair complete together (FEC generation close), so their
       // decodes land within ~1 ms while their pts sit a full frame
       // apart. Arrival-time targeting alone aims both at the same vblank

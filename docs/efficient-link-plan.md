@@ -48,7 +48,7 @@ The two places the link is inside the frontier:
 1. **Range at the floor.** Since 2026-09-26 the bundle ladder runs every rung
    at 40 MHz. The range test it replaced said the same MCS reaches 3.5–5 dB
    less at 40 MHz, MCS0 4–6 dB less, and that bottom rungs stay 20 MHz
-   (`docs/bw40-sweep-findings-2026-09-23.md`). No measurement accompanied the
+   (`docs/findings/2026-09-23-bw40-sweep.md`). No measurement accompanied the
    switch (commit 6d9d6ba, a config-comment cleanup).
 2. **Protection paid as FEC on every frame, at the same weight on every
    rung.** 0.5/0.25 is heavier than both
@@ -147,7 +147,7 @@ late frames by making every frame later.
      ~1.3 ms/s from ~34 to ~51 ms and snaps back every 12–13 s, and the camera
      makes ~4.7 frames a minute more than the screen can show (one thrown
      away per wrap). The earlier "59.939 fps sensor, slower than the panel"
-     (`docs/dejitter-findings-2026-08-30.md`) does not describe this
+     (`docs/findings/2026-08-30-dejitter.md`) does not describe this
      firmware; a 59.94 Hz screen mode would make the beat twice as fast.
    - *Built (off by default):* maburplay measures, per frame, the phase from
      the frame's capture to the next release deadline (clock-only, no link
@@ -271,7 +271,7 @@ late frames by making every frame later.
 
 `gilankpam/mabur` slice-salvage (4c66e11, which contains master b627b9a)
 is merged into this branch. What it brings, all upstream-measured
-(`docs/fec-nack.md`, `docs/fec-nack-bench-findings-2026-10-06.md`,
+(`docs/fec-nack.md`, `docs/findings/2026-10-06-fec-nack-bench.md`,
 `docs/slices.md`, `docs/venc-slice-findings-2026-10-09.md`):
 
 - **Slices + salvage (step 4 above):** the drone encodes 4 row slices; the

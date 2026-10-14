@@ -102,7 +102,7 @@ test('debug Client group shows the local recorder', () => {
 });
 
 test('debug Drone group shows IDR req in GS, n/a in spotter', () => {
-  // The drone's served count (Telem.idr_gs) left the wire 2026-09-30: the
+  // The drone's served count (Telem.idr_gs) has left the wire: the
   // page sees for itself whether a key frame arrived.
   const args = { connected: true, mode: 'gs', core: { mode: 'gs', idr_req: 4 },
     rcfPct: null, ausRate: 60, hitches60: 0, hitchesTotal: 0, seg: { w1: {}, w60: {} } };
@@ -139,7 +139,7 @@ test('status text and link tag', () => {
   assert.equal(statusText({ state: 'live', mode: 'gs', ch: 136, w: 40, core: { peer_acked: false },
     sinceStartMs: 12000, hiddenBanner: false, hasPicture: false }),
     'No drone on ch 136 / 40 MHz (still trying)');
-  // A frozen gate never paints over the video once a picture exists (spec 2026-09-28).
+  // A frozen gate never paints over the video once a picture exists.
   assert.equal(statusText({ state: 'live', mode: 'spotter', ch: 136, w: 40, core: {},
     sinceStartMs: 3000, hiddenBanner: false, hasPicture: true }), '');
   assert.equal(statusText({ state: 'live', mode: 'gs', ch: 136, w: 40, core: { peer_acked: true },
@@ -286,7 +286,7 @@ test('debugGroups Channel group for a spotter: channel + follow rows', () => {
   assert.equal(sp.find((x) => x.title === 'Channel').rows.length, 1);
 });
 
-// Software NACK group (fec-nack web port 2026-10-06): the core's "nack"
+// Software NACK group (fec-nack web port): the core's "nack"
 // block (null = off or spotter).
 test('debug NACK group: tracker outcomes, fill ms, drone counters; off/null/spotter read as such', () => {
   const nack = { req: 120, rep: 18, syms: 140, tail: 9, fill: 100, late: 12, waste: 20, drop: 8, sup: 1,

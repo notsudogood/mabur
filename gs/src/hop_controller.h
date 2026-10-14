@@ -23,7 +23,7 @@ struct HopTick {
   uint8_t cur_op = 0;
   int n_cards = 2;
   int lead_card = -1;                // non-TX card index, -1 = one card
-  // Relocation (final review C1, 2026-10-04): the link formed where the
+  // Relocation: the link formed where the
   // drone was found (ChannelPlan::link_found) or the boot pick wants another
   // pair, and the caller moves it to ChannelPlan::want() -- set on the tick
   // that places the order. Order kind "relocate"; the channel left is not
@@ -37,9 +37,9 @@ struct HopTick {
   // GS relocating onto its pin), so the verify window's question -- is the
   // channel we landed on better than the one we left -- has no answer. The
   // confirm lands it: VerifyPass on the next tick, no verify_fail, no
-  // backoff of the pin (bench 2026-10-04: a dirty pin read as a failed hop).
+  // backoff of the pin (bench: a dirty pin read as a failed hop).
   bool no_verify = false;
-  // The escape from a blocked hold (Task 11 (d)): the best UNBLOCKED
+  // The escape from a blocked hold: the best UNBLOCKED
   // candidate that is not verify-failed (fled channels allowed). Used only
   // when there is no `best` and the current verdict's evidence carries
   // kEvBlocked.
@@ -50,8 +50,8 @@ struct HopTick {
 struct HopAction {
   // VerifyPass: the verify window closed clean and the hop stands. The
   // only action with no radio/plan consequence -- it exists so the caller
-  // can run spec section 2's second thaw rule, HopVerdict::reset(), at the
-  // one instant the spec names ("after a hop's verify window ends").
+  // can run the verdict engine's second thaw rule, HopVerdict::reset(), at
+  // the one instant it names ("after a hop's verify window ends").
   enum Kind { None, Order, OneCardRetune, Confirm, Withdraw, Hold, VerifyPass } kind = None;
   uint8_t target = 0;
   uint8_t epoch = 0;
@@ -71,11 +71,11 @@ struct HopEvent {
 // Turns a persistent HopVerdict::trigger into an actual hop order, confirms
 // it off lead-card video, verifies it holds, withdraws a hop that never
 // confirms, backs off targets that fail verify, and rate-limits the whole
-// thing (spec 2026-09-14-inflight-channel-hop §5). Pure: no I/O, no
+// thing. Pure: no I/O, no
 // threads, no hardware, clock strictly as the caller's now_ms. Does not
 // query HopRanker -- the caller has already picked `best` for this tick.
 // No home: this feature has no fallback channel any more -- exhausted
-// (nothing ranked, no escape) holds (spec 2026-10-03-auto-channel-set §5).
+// (nothing ranked, no escape) holds.
 class HopController {
  public:
   explicit HopController(HopCfg cfg);
@@ -123,7 +123,7 @@ class HopController {
   // back-off overwrites the reason and keeps doubling.
   enum class BackoffWhy { Fled, Failed, Undelivered };
   void back_off(uint8_t ch, double now, BackoffWhy why = BackoffWhy::Failed);
-  // Task 11 (d): the escape from a blocked hold. Orders in.escape when
+  // The escape from a blocked hold. Orders in.escape when
   // there is nothing else to go to and the channel we are on is blocked.
   bool escape_allowed(const HopTick& in) const;
   bool is_backed_off(uint8_t ch, double now) const;

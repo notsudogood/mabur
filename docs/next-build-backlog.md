@@ -336,16 +336,38 @@ granular stays out of the menu and is set over ssh via the GS's open AP.
 
 Design mock-up (v4, 2026-10-11): https://claude.ai/artifact/5AtztQm49YgZR5PNwLD2CR
 
-Open questions from the mock-up, still unanswered:
-1. Does it match the Ascent closely enough? A photo of the real menu would
-   settle spacing, icons and wording.
-2. Which resolutions to list: 720p, 1080p, 1440p, 4K (greyed by sensor)?
-   Above 1080p the IMX415 drops to 30 fps and the live picture lagged badly
-   on the bench, so 1440p and 4K may belong off the live list entirely.
-3. Should the drone SD copy follow the live size and frame rate (the draft
-   does), keeping its own keys for ssh only?
-4. Is "Smooth video" the right name for genlock, or should genlock stay out
-   of the menu?
+Reference: the Caddx Ascent VRX Quick Start Guide V1.0 (operator-supplied
+PDF, 2026-10-17; not committed). Its screens differ from mock-up v4, which
+used a left sidebar and an orange highlight:
+- Top tab bar: Channel | Settings | Playback; the open tab is light grey.
+  SD card icon + free space top right, a red dot while recording.
+- Settings: a title row ("Settings <"), a row of sub-tabs (Camera |
+  Display | Record Set | Device), then a 3-column grid of cells, each
+  "Label  value" with up/down chevrons: the value changes in place, no
+  sub-page. Selection is a white outline on dark grey cells over black.
+- Top level holds the everyday items: Transmit Power, Resolution
+  (720p / 1080p only), Frame Rate (60 fps), Bandwidth (Auto / 10 / 20),
+  Standby Mode (lower power while disarmed: our [low_power]), Preference
+  (Smooth / High Quality / Long Range presets), Battery Warning, Language.
+  The sub-tabs hold the detail.
+- Channel: one row of channel cells, each with coloured signal bars
+  (green / yellow / orange) and its frequency range; the current one light
+  grey, selection a white outline; "Hop" toggle and "Refresh" top right.
+- Bottom bar on the live screen: VTX volts, VRX volts, bitrate, latency,
+  distance, a status message, channel + signal bars.
+- 5-way stick scrolls and confirms; Back returns; Record starts/stops.
+
+Open questions from the mock-up (the guide answers 1 and leans on 2-4):
+1. ~~Does it match the Ascent?~~ No: redo the mock-up on the layout above.
+2. Which resolutions to list? The Ascent offers 720p and 1080p only for
+   live video. Above 1080p the IMX415 drops to 30 fps and the live picture
+   lagged badly on the bench, so 1440p and 4K probably stay off.
+3. Should the drone SD copy follow the live size and frame rate? The Ascent
+   gives the recording its own resolution under Record Set.
+4. Genlock's name: the Ascent's "Smooth" is a link preset (Preference),
+   so "Smooth video" for genlock would clash with that word. A Preference
+   preset of our own (e.g. Smooth / High Quality / Long Range mapped onto
+   the ladder) is a separate idea, not yet agreed.
 
 ## Proposed, not yet agreed
 

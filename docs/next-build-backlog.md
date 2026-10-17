@@ -326,6 +326,27 @@ pinned at MCS4/80 50 Mb/s, drone cpuprobe): if cpu0 has room, this item
 can wait. Otherwise A/B "rest" vs "hot" at 50 Mb/s with motion: cpu0,
 cpu1, txq, e2e, and recorded-frame drops.
 
+## 9. GS on-screen menu (agreed 2026-10-10 for a later build)
+
+Operator's spec: model the look on the Caddx Ascent goggles menu, simple,
+driven by the RunCam's 5-way stick. Camera items only change resolution and
+frame rate, offering what the auto-detected sensor can do and greying out
+the rest (IMX415: no 1080p120; IMX335: everything open). Everything
+granular stays out of the menu and is set over ssh via the GS's open AP.
+
+Design mock-up (v4, 2026-10-11): https://claude.ai/artifact/5AtztQm49YgZR5PNwLD2CR
+
+Open questions from the mock-up, still unanswered:
+1. Does it match the Ascent closely enough? A photo of the real menu would
+   settle spacing, icons and wording.
+2. Which resolutions to list: 720p, 1080p, 1440p, 4K (greyed by sensor)?
+   Above 1080p the IMX415 drops to 30 fps and the live picture lagged badly
+   on the bench, so 1440p and 4K may belong off the live list entirely.
+3. Should the drone SD copy follow the live size and frame rate (the draft
+   does), keeping its own keys for ssh only?
+4. Is "Smooth video" the right name for genlock, or should genlock stay out
+   of the menu?
+
 ## Proposed, not yet agreed
 
 Gaps found while building gs8 / d8. Ask before scheduling.

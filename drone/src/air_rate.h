@@ -15,7 +15,8 @@
 namespace mabur {
 
 inline double delivered_mbps(const rc::LayerTxSpec& s, const AirClockCfg& c) {
-  const std::array<double, 8>& eff = s.bw == 40 ? c.efficiency_40 : c.efficiency_20;
+  const std::array<double, 8>& eff =
+      s.bw == 80 ? c.efficiency_80 : s.bw == 40 ? c.efficiency_40 : c.efficiency_20;
   const size_t i = s.mcs < eff.size() ? s.mcs : eff.size() - 1;
   return rc::phy_rate_mbps(s) * eff[i];
 }

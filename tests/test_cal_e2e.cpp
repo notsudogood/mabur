@@ -32,6 +32,7 @@
 #include "cal_plan.h"
 #include "cal_session.h"
 #include "cal_sweep.h"
+#include "power_plan.h"
 #include "mabur/cal_wire.h"
 #include "mabur/rc_proto.h"
 #include "radio_tx.h"
@@ -53,7 +54,7 @@ namespace {
 // Per-rate true PA compression wall on the simulated vtx: delivery is
 // clean at and below it and collapses above it. Rates 0-2 never dip
 // inside the sweep range (BPSK/QPSK on real hardware), so they take the
-// no_dip path through the RSSI knee.
+// no_dip path: undetermined, kept at pre-calibration power.
 constexpr int kTrueWall[8] = {127, 127, 127, 95, 73, 54, 51, 49};
 
 // The drone chip's own anchor, as read back by SimPower::read_anchor_idx()
@@ -253,6 +254,8 @@ struct Pair {
     mabur::CalWrite w;
     for (int r = 0; r < 8; ++r) w.walls[r] = result.walls[r];
     w.legacy_wall = result.legacy_wall;
+    // kConfig is power_mode = "none": undetermined rows keep stock power.
+    mabur::fill_undetermined_with_stock(w.walls, w.legacy_wall, drone_margin_db);
 
     std::string err;
     if (mabur::apply_calibration(cfg_path, w, drone_margin_db, &err) !=
@@ -269,7 +272,7 @@ struct Pair {
     verify.settle_ms = maburgs::kSettleMs;
     verify.gap_us = maburgs::kGapUs;
     for (uint8_t r = 0; r < 8; ++r) {
-      if (w.walls[r] == mabur::rc::kWallUndetermined) continue;
+      if (result.walls[r] == mabur::rc::kWallUndetermined) continue;
       const int park = w.walls[r] - m;
       if (park < mabur::rc::kRelMin || park > mabur::rc::kRelMax) continue;
       const int8_t idx = static_cast<int8_t>(park);
@@ -405,13 +408,12 @@ TEST(full_cycle_over_a_clean_channel) {
 
   // The measured table, in the relative index space the wire (and the
   // config) carries. Rates 3-7 have a real dip and must land on their
-  // true wall; 0-2 never dip, so they park at the rail -- kRailRel, the
-  // top of the chip's 7-bit per-rate diff field -- flagged no_dip. Never
-  // beyond it: that derives a diff the drone refuses to load.
+  // true wall; 0-2 never dip, so they come out with no wall, flagged
+  // no_dip, and the drone keeps them at their pre-calibration power.
   const auto& w = p.gs.walls();
   for (int r = 0; r < 3; ++r) {
     CHECK((w[r].flags & maburgs::kCalNoDip) != 0);
-    CHECK(w[r].wall == maburgs::kRailRel);
+    CHECK(w[r].wall == maburgs::kNoWall);
   }
   for (int r = 3; r < 8; ++r) {
     CHECK((w[r].flags & maburgs::kCalUndetermined) == 0);
@@ -419,11 +421,13 @@ TEST(full_cycle_over_a_clean_channel) {
   }
 
   // Invariant: margin is applied exactly once, on the drone. The config
-  // on disk carries the RAW walls, and power_mode flipped to offset.
+  // on disk carries the RAW walls, and power_mode flipped to offset. The
+  // no-dip rows 0-2 and legacy (from MCS0) are the 8822E stock shape +
+  // the 1 dB margin (power_plan.h): diff = wall - 4 lands on stock.
   const std::string cfg = read_file(p.cfg_path);
-  CHECK(cfg.find("rate_walls_rel  = [63, 63, 63, 42, 20, 1, -2, -4]") !=
+  CHECK(cfg.find("rate_walls_rel  = [28, 28, 24, 42, 20, 1, -2, -4]") !=
         std::string::npos);
-  CHECK(cfg.find("legacy_wall_rel = 63") != std::string::npos);
+  CHECK(cfg.find("legacy_wall_rel = 28") != std::string::npos);
   CHECK(cfg.find("base_ref_idx") == std::string::npos);
   CHECK(cfg.find("power_mode = \"offset\"") != std::string::npos);
   // ...and every comment survived the line-surgical patch.
@@ -519,7 +523,7 @@ TEST(a_lossy_control_plane_still_produces_the_right_table) {
   // on a Telem that may never come.
   CHECK(!p.gs_talked_during_sweep);
   const auto& w = p.gs.walls();
-  for (int r = 0; r < 3; ++r) CHECK(w[r].wall == maburgs::kRailRel);
+  for (int r = 0; r < 3; ++r) CHECK(w[r].wall == maburgs::kNoWall);
   for (int r = 3; r < 8; ++r) CHECK(w[r].wall == kTrueWallRel(r));
   CHECK(read_file(p.cfg_path).find("power_mode = \"offset\"") !=
         std::string::npos);
@@ -527,16 +531,14 @@ TEST(a_lossy_control_plane_still_produces_the_right_table) {
 
 TEST(a_lossy_measurement_never_reads_a_wall_HIGHER_than_the_truth) {
   // Loss on the sweep frames themselves is a different animal: it IS the
-  // measurement, and at 20 frames per coarse cell against a 90% threshold
+  // measurement, and at 50 frames per coarse cell against a 99% threshold
   // even a few percent of random loss drops cells below the line and cuts
   // the first contiguous run short. That is not a defect to fix but a
   // property to pin, because the direction matters: truncating a run can
   // only move the wall DOWN (under-power, the safe direction), never up
   // past the true compression point. The one run extension that exists --
   // a lone shallow coarse miss read as noise (CalThresholds::noise_pct,
-  // 2026-10-10) -- must not change that: it lets mcs0-2 reach the rail
-  // through random loss (on this seed mcs0/1 do, flagged noise_cell), and
-  // the rail is still under their true wall. If this ever fails, some path
+  // 2026-10-10) -- must not change that. If this ever fails, some path
   // is extending a run across a real dip -- landing inside the comb and
   // overdriving the PA, which is the one outcome this kit exists to
   // prevent.
@@ -605,7 +607,7 @@ TEST(a_second_run_in_the_same_session_window_anchors_correctly) {
   p.run();
   REQUIRE(p.gs.state() == CalSession::State::Done);
   const std::string kExpectedWalls =
-      "rate_walls_rel  = [63, 63, 63, 42, 20, 1, -2, -4]";
+      "rate_walls_rel  = [28, 28, 24, 42, 20, 1, -2, -4]";
   CHECK(read_file(p.cfg_path).find(kExpectedWalls) != std::string::npos);
 
   // Deliberately do NOT let the drone's session time out: start again

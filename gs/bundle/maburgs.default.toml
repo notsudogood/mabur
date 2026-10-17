@@ -5,18 +5,21 @@
 # Keys marked "must match the drone" have a twin in the drone's mabur.toml.
 
 [radio]
-channels = [40, 64, 112, 144]   # the channel set: the drone parks on a member, the GS picks among them.
-                                # Both ends must list the same set (the drone's may be a superset).
-                                # 40 MHz: pair primaries sharing one offset; spur pairs and 124+128
-                                # (weather radar) left out. A CPE510 relay cannot tune 144: drop it here.
-                                # PROVISIONAL until bench row 8 (maburcal on 64 and 112; swap 64 for 128
-                                # if it fails), docs/channel-select.md "Config".
+channels = [36, 132]   # the channel set: the drone parks on a member, the GS picks among them.
+                       # Both ends must list the same set (the drone's may be a superset).
+                       # 80 MHz: each member is an 80 MHz block's lowest channel (36 52 100 116 132
+                       # 149); 36 and 132 are the blocks with no 8812EU spur, 149 works but carries
+                       # one. 52-144 are DFS channels: your call where you fly.
+                       # For 40 MHz only, the old set was [40, 64, 112, 144] with width = 40
+                       # (spur pairs and 124+128 left out; a CPE510 relay cannot tune 144).
 channel  = "auto"               # "auto" = measure the set at start and move the link to the cleanest
                                 # member once (boot hop); a member number = pin the link there.
                                 # Either way the link first forms wherever the drone is found, then
                                 # a hop order moves it to the pick or the pin. A pinned member is static:
                                 # the in-flight hop below runs only in auto mode.
-width   = 40               # 20 or 40 MHz; 40 is needed for the 40 MHz link speeds in [[link.ladder]] below
+width   = 80               # 20, 40 or 80 MHz: the widest rung in [[link.ladder]] below. At 80 the cards
+                           # sit at 40 and widen to 80 only while an 80 MHz rung flies or is probed
+                           # (docs/bw80.md "GS card widths"); relays stay at 40
 tx_card = -1               # card that transmits to the drone; -1 = pick the one with the best signal
 relays  = []               # CPE510 mabur-relay units, "ipv4:port" each (UDP 8310, numeric -- no hostnames); each is a card after the USB cards
 
@@ -95,7 +98,8 @@ static_overhead_base   = 0.5    # FEC overhead with static_mcs only
 static_overhead_enh    = 0.5    # ...and on the enhance layer
 
 # Ladder rungs, from most robust to fastest. Each rung is an MCS, a channel
-# width (20 or 40 MHz; 40 needs radio.width = 40 here and on the drone) and
+# width (20, 40 or 80 MHz; 40 needs radio.width 40 or 80 here and on the
+# drone, 80 needs 80; 80 MHz rungs fly as VHT, the rest as HT) and
 # the extra FEC repair data per layer (0.5 = +50 %). Keep
 # overhead_base >= overhead_enh on every rung: the base layer is the one
 # every frame depends on.
@@ -147,14 +151,25 @@ bw  = 40
 overhead_base = 0.5
 overhead_enh  = 0.25
 
-# Added 2026-10-11 with the drone's per-rung bitrate caps ([[encoder.rung]]
-# in mabur.toml: 35 Mbps here, 25 at mcs 4 / 40). Unflown at the time of
-# writing; delete this rung to go back to mcs 4 / 40 as the top.
+# 80 MHz top (2026-10-17). The drone caps each with [[encoder.rung]] in
+# mabur.toml: 25 Mbps at mcs 4 / 40, 35 at mcs 3 / 80, 50 at mcs 4 / 80.
+# Light repair data here: at 50 Mbps the drone's CPU is the limit, and these
+# rungs only fly on a strong link. Bench 2026-10-17: mcs 4 / 80 reached
+# ~2-2.5 dB further than mcs 5 / 40 (which these replace), but a GS card
+# tuned 80 hears the 20/40 rungs ~1-1.5 dB worse, so the cards widen only
+# while these fly. Unflown at the time of writing; delete both to go back
+# to mcs 4 / 40 as the top.
 [[link.ladder]]
-mcs = 5
-bw  = 40
-overhead_base = 0.5
-overhead_enh  = 0.25
+mcs = 3
+bw  = 80
+overhead_base = 0.4
+overhead_enh  = 0.1
+
+[[link.ladder]]
+mcs = 4
+bw  = 80
+overhead_base = 0.2
+overhead_enh  = 0.1
 
 # Before stepping up, the drone sends test packets at the next rung; the
 # step happens only if they arrive clean.

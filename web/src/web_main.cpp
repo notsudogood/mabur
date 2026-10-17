@@ -296,6 +296,7 @@ int run_replay(const ReplayOpts& o) {
   webgs::Opts wo;
   wo.adaptive_gap = !o.fixed_gap;
   wo.rz_nonce = 1;   // reproducible DISC nonce + RCF tags (native/WASM parity)
+  webgs::drop_80mhz_rungs(cfg);
   webgs::WebGs g(cfg, o.mode, cfg.radio.channels.front(), cfg.radio.width, {}, 0, std::move(io), wo);
 
   uint64_t last_us = 0;
@@ -550,6 +551,8 @@ int run_live(const LiveOpts& o) {
     report_error("bad channel/width: %s", o.bad_chw.c_str());
     return 2;
   }
+  if (const int n = webgs::drop_80mhz_rungs(cfg))
+    std::fprintf(stderr, "webgs: %d 80 MHz ladder rung(s) left out: the web GS tunes 20 or 40\n", n);
   const int ch_i = o.ch >= 0 ? o.ch : (cfg.radio.pin ? *cfg.radio.pin : cfg.radio.channels.front());
   const int width = o.width >= 0 ? o.width : cfg.radio.width;
   // maburgs's own loader checks on the override (the page picks ch/w, not

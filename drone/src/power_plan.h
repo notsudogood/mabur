@@ -39,6 +39,30 @@ struct PowerPlan {
   int8_t mcs[8];
 };
 
+// The 8822E's own per-rate shape, the one power_mode = "none" flies:
+// devourer's phy_reg_pg walk programs diff = pg[rate] - pg[HT MCS7], which
+// is the same on 2.4 and 5 GHz for HT MCS0-7 and 6M
+// (devourer hal/phydm/rtl8822e/Hal8822e_PhyTables.c, read 2026-10-17).
+// MCS0 sits 6 dB over MCS7. VHT1SS MCS0-7 carry the same shape in stock;
+// note that a custom table (power_mode = "offset") leaves every VHT rate at
+// the anchor, i.e. MCS7's level (devourer src/TxPower.h).
+constexpr std::array<int, 8> kStockMcsDiff8822e = {24, 24, 20, 16, 12, 8, 4, 0};
+constexpr int kStockLegacyDiff8822e = 24;  // 6M
+
+// A calibration row left undetermined -- no dip up to the top of the field,
+// or never reaching the pass bar -- keeps its PRE-calibration power
+// (docs/next-build-backlog.md item 2). From power_mode = "none" that is the
+// stock shape: wall = stock + m, so diff = wall - m lands exactly on it. From
+// "offset" the config's own wall is already what flies, so the row stays
+// undetermined and apply_calibration keeps it.
+inline void fill_undetermined_with_stock(std::array<int, 8>& walls, int& legacy_wall,
+                                         double margin_db) {
+  const int m = static_cast<int>(std::lround(margin_db * 4.0));
+  for (size_t r = 0; r < 8; ++r)
+    if (walls[r] == rc::kWallUndetermined) walls[r] = kStockMcsDiff8822e[r] + m;
+  if (legacy_wall == rc::kWallUndetermined) legacy_wall = kStockLegacyDiff8822e + m;
+}
+
 inline PowerPlan make_power_plan(const std::array<int, 8>& walls_rel,
                                   int legacy_wall_rel, double margin_db,
                                   int anchor_idx) {

@@ -200,7 +200,7 @@ TEST(encoder_rung_table_rejects_bad_entries_naming_them) {
       // sets nothing
       "[[encoder.rung]]\nmcs = 5\nbw = 40\n",
       // bad width / mcs / unknown key
-      "[[encoder.rung]]\nmcs = 5\nbw = 80\nmax_kbps = 30000\n",
+      "[[encoder.rung]]\nmcs = 5\nbw = 60\nmax_kbps = 30000\n",
       "[[encoder.rung]]\nmcs = 9\nbw = 40\nmax_kbps = 30000\n",
       "[[encoder.rung]]\nmcs = 5\nbw = 40\nmax_kbps = 30000\nfps = 30\n",
       // above the encoder's ceiling
@@ -1582,17 +1582,26 @@ TEST(nack_section_defaults_and_bounds) {
 
 // ---- radio.width is real (40 MHz rungs) ---------------------------------
 
-TEST(radio_width_accepts_20_and_40_only) {
+TEST(radio_width_accepts_20_40_and_80) {
   auto p20 = write_temp_toml("[radio]\nchannels = [136]\nwidth = 20\n");
   CHECK(load_config(p20.string()).radio.width == 20);
   std::filesystem::remove(p20);
   auto p40 = write_temp_toml("[radio]\nchannels = [136]\nwidth = 40\n");
   CHECK(load_config(p40.string()).radio.width == 40);
   std::filesystem::remove(p40);
-  auto p80 = write_temp_toml("[radio]\nchannels = [136]\nwidth = 80\n");
-  std::string msg = what_of([&] { (void)load_config(p80.string()); });
-  CHECK(msg.find("radio.width") != std::string::npos);
+  auto p80 = write_temp_toml("[radio]\nchannels = [36, 132]\nwidth = 80\n");
+  CHECK(load_config(p80.string()).radio.width == 80);
   std::filesystem::remove(p80);
+  // 80 holds every channel to an 80 MHz block's lowest 20; 136 is inside 132-144.
+  auto p80bad = write_temp_toml("[radio]\nchannels = [136]\nwidth = 80\n");
+  std::string msg = what_of([&] { (void)load_config(p80bad.string()); });
+  CHECK(msg.find("radio.channels") != std::string::npos);
+  CHECK(msg.find("80 MHz block") != std::string::npos);
+  std::filesystem::remove(p80bad);
+  auto p60 = write_temp_toml("[radio]\nchannels = [136]\nwidth = 60\n");
+  msg = what_of([&] { (void)load_config(p60.string()); });
+  CHECK(msg.find("radio.width") != std::string::npos);
+  std::filesystem::remove(p60);
 }
 
 TEST(radio_width_40_needs_a_standard_pair) {

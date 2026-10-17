@@ -679,11 +679,22 @@ TEST(ladder_rung_bw_40_needs_radio_width_40) {
   CHECK(threw);
 }
 
-TEST(radio_width_is_20_or_40_and_40_needs_a_pair) {
+TEST(radio_width_is_20_40_or_80_and_each_needs_its_channels) {
   CHECK(maburgs::load_config(write_tmp("[radio]\nwidth = 40\n")).radio.width == 40);
+  CHECK(maburgs::load_config(write_tmp("[radio]\nchannels = [36, 132]\nwidth = 80\n")).radio.width ==
+        80);
   bool threw = false;
-  try { maburgs::load_config(write_tmp("[radio]\nwidth = 80\n")); }
+  try { maburgs::load_config(write_tmp("[radio]\nwidth = 60\n")); }
   catch (const std::exception& e) { threw = std::string(e.what()).find("radio.width") != std::string::npos; }
+  CHECK(threw);
+  // 80 needs every channel to be an 80 MHz block's lowest 20 (the VHT80
+  // primary devourer tunes): 40 sits inside the 36-48 block.
+  threw = false;
+  try { maburgs::load_config(write_tmp("[radio]\nchannels = [36, 40]\nwidth = 80\n")); }
+  catch (const std::exception& e) {
+    threw = std::string(e.what()).find("radio.channels") != std::string::npos &&
+            std::string(e.what()).find("80 MHz block") != std::string::npos;
+  }
   CHECK(threw);
   threw = false;
   // A channel-set member with no 40 MHz pair is caught by channel_set_issue
@@ -925,11 +936,11 @@ TEST(ladder_empty_array_rejected) {
   CHECK(threw);
 }
 
-// Spec: ladder must have 1-8 entries. A 9-rung ladder must be rejected even
+// Spec: ladder must have 1-10 entries. An 11-rung ladder must be rejected even
 // though every individual rung is otherwise valid.
-TEST(ladder_over_eight_entries_rejected) {
+TEST(ladder_over_ten_entries_rejected) {
   std::string toml_body;
-  for (int i = 0; i < 9; ++i) {
+  for (int i = 0; i < 11; ++i) {
     toml_body += "[[link.ladder]]\nmcs = " + std::to_string(i % 8) +
                  "\nbw = 20\noverhead_base = 0.25\noverhead_enh = 0.25\n\n";
   }

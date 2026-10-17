@@ -13,10 +13,14 @@ namespace maburgs {
 constexpr uint32_t kHtPreambleUs = 40;  // L-STF/LTF/SIG + HT-SIG/STF/LTF1
 constexpr uint32_t kStbcExtraUs = 4;    // STBC 1SS -> 2 space-time streams: one extra HT-LTF
 
+// HT-1SS at 20/40, VHT-1SS at 80 (the 80 MHz rungs): MCS0-7 share the 20
+// MHz rates, scaled by data subcarriers -- 108/52 at 40, 234/52 at 80. The
+// VHT preamble is ~4 us longer than HT's; not modelled.
 inline double ht_rate_mbps(uint8_t mcs, uint8_t bw_mhz, bool sgi) {
   static constexpr double k20[8] = {6.5, 13, 19.5, 26, 39, 52, 58.5, 65};
   if (mcs > 7) return 0.0;
-  double r = k20[mcs] * (bw_mhz == 40 ? 2.0769230769230769 : 1.0);  // 40 MHz: 108/52 subcarriers
+  const double scale = bw_mhz == 80 ? 4.5 : bw_mhz == 40 ? 2.0769230769230769 : 1.0;
+  double r = k20[mcs] * scale;
   if (sgi) r = r * 10.0 / 9.0;
   return r;
 }

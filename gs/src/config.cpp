@@ -1,6 +1,7 @@
 #include "config.h"
 #include <arpa/inet.h>
 
+#include <algorithm>
 #include <fstream>
 #include <stdexcept>
 
@@ -124,8 +125,15 @@ std::array<mabur::UepLayerCfg, 2> Config::uep_layers() const {
 }
 
 std::optional<ConfigIssue> radio_width_issue(uint8_t channel, int width) {
-  if (width != 20 && width != 40)
-    return ConfigIssue{"radio.width", "must be 20 or 40 (HT20 / HT40)"};
+  if (width != 20 && width != 40 && width != 80)
+    return ConfigIssue{"radio.width", "must be 20, 40 or 80"};
+  // 80 = the cards sit at 40 on the block's lower 40 and widen to 80 only
+  // while an 80 MHz rung is flown or probed (width_policy.h); the channel
+  // must be the block's lowest 20 (channel_set_issue checks the set).
+  if (width == 80 && !mabur::vht80_block_lowest(channel))
+    return ConfigIssue{"radio.width", "80 MHz needs the lowest channel of an 80 MHz block "
+                                      "(36 52 100 116 132 149) and channel " +
+                                          std::to_string(static_cast<int>(channel)) + " is not one"};
   if (width == 40 && mabur::ht40_offset(channel) == 0)
     return ConfigIssue{"radio.width", "40 MHz needs a standard 5 GHz pair and channel " +
                                           std::to_string(static_cast<int>(channel)) +
@@ -134,12 +142,16 @@ std::optional<ConfigIssue> radio_width_issue(uint8_t channel, int width) {
 }
 
 std::optional<ConfigIssue> link_width_issue(const LinkCfg& link, int width) {
-  for (std::size_t i = 0; i < link.ladder_cfg.ladder.size(); ++i)
-    if (link.ladder_cfg.ladder[i].bw == 40 && width != 40)
+  for (std::size_t i = 0; i < link.ladder_cfg.ladder.size(); ++i) {
+    const int bw = link.ladder_cfg.ladder[i].bw;
+    if (bw > width)
       return ConfigIssue{"link.ladder[" + std::to_string(i) + "].bw",
-                         "40 MHz rung but radio.width is 20: the GS could not receive it"};
-  if (link.static_bw == 40 && width != 40)
-    return ConfigIssue{"link.static_bw", "40 MHz pin but radio.width is 20"};
+                         std::to_string(bw) + " MHz rung but radio.width is " +
+                             std::to_string(width) + ": the GS could not receive it"};
+  }
+  if (link.static_bw > width)
+    return ConfigIssue{"link.static_bw", std::to_string(link.static_bw) +
+                                             " MHz pin but radio.width is " + std::to_string(width)};
   return std::nullopt;
 }
 
@@ -174,7 +186,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
   if (j.contains("radio")) {
     const Value& r = j["radio"];
     check_keys(r, "radio", {"channel", "channels", "width", "cards", "tx_card", "scan", "relays"});
-    c.radio.width = static_cast<uint8_t>(get_int(r, "width", 20, 20, 40, "radio"));
+    c.radio.width = static_cast<uint8_t>(get_int(r, "width", 20, 20, 80, "radio"));
     if (r.contains("channels")) {
       g_line = r["channels"].line();
       if (!r["channels"].is_array()) fail("radio.channels", "not an array");
@@ -413,9 +425,9 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
         get_num(r, "static_overhead_base", 0.5, 0.1, 2.0, "link");
     c.link.static_overhead_enh =
         get_num(r, "static_overhead_enh", 0.5, 0.1, 2.0, "link");
-    c.link.static_bw = static_cast<int>(get_int(r, "static_bw", 20, 20, 40, "link"));
-    if (c.link.static_bw != 20 && c.link.static_bw != 40)
-      fail("link.static_bw", "must be 20 or 40");
+    c.link.static_bw = static_cast<int>(get_int(r, "static_bw", 20, 20, 80, "link"));
+    if (c.link.static_bw != 20 && c.link.static_bw != 40 && c.link.static_bw != 80)
+      fail("link.static_bw", "must be 20, 40 or 80");
 
     // Measured-loss ladder: rungs (c.link.ladder_cfg.ladder already holds the
     // struct default 6-rung ladder; an explicit "ladder" array replaces it
@@ -424,8 +436,11 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
     if (r.contains("ladder")) {
       if (!r["ladder"].is_array() || r["ladder"].empty())
         fail("link.ladder", "must be a non-empty array");
-      if (r["ladder"].size() > 8)
-        fail("link.ladder", "must have at most 8 entries");
+      // 10, not 8, since the 80 MHz rungs (2026-10-17): five 20s, two 40s
+      // and two 80s is nine. Nothing indexes rungs into a fixed array; the
+      // cap only stops a runaway list.
+      if (r["ladder"].size() > 10)
+        fail("link.ladder", "must have at most 10 entries");
       std::vector<Rung> parsed;
       int i = 0;
       for (const Value& rj : r["ladder"]) {
@@ -437,9 +452,10 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
         // default -- a rung silently airing at 20 when the author meant 40
         // (or vice versa) is exactly the wrong-width mistake this is meant
         // to catch.
-        if (!rj.contains("bw")) fail(where + ".bw", "required: 20 or 40 (per-rung width)");
-        rung.bw = static_cast<int>(get_int(rj, "bw", 20, 20, 40, where));
-        if (rung.bw != 20 && rung.bw != 40) fail(where + ".bw", "must be 20 or 40");
+        if (!rj.contains("bw")) fail(where + ".bw", "required: 20, 40 or 80 (per-rung width)");
+        rung.bw = static_cast<int>(get_int(rj, "bw", 20, 20, 80, where));
+        if (rung.bw != 20 && rung.bw != 40 && rung.bw != 80)
+          fail(where + ".bw", "must be 20, 40 or 80 (80 = VHT)");
         // Actual-air overhead (airtime-balance-uep): literal, not a scaled
         // cmd value -- old cmd default/range 1.0 [0.05, 1.0] x2 everywhere.
         // Same-rate fixed pairs: base/enh pair, same default/range.
@@ -618,6 +634,15 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
   // and link sections are settled, and after the max_mcs filter above: a
   // rung filtered out by max_mcs is not checked here, which matches "what
   // will fly".
+  // The web GS's overlay (the only caller passing one) sets the page's
+  // width, 20 or 40, over a bundle whose ladder may top out at 80 MHz
+  // (docs/bw80.md): those rungs are out of the page's reach, so they are
+  // left out rather than failing the page's config. maburgs itself never
+  // gets here with an overlay, so its ladder is checked whole.
+  if (!overlay_path.empty() && c.radio.width < 80) {
+    auto& l = c.link.ladder_cfg.ladder;
+    l.erase(std::remove_if(l.begin(), l.end(), [](const Rung& r) { return r.bw == 80; }), l.end());
+  }
   if (auto e = link_width_issue(c.link, c.radio.width)) fail(e->field, e->why);
   // ---------------------------------------------------------------------
 

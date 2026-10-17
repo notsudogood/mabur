@@ -10,8 +10,10 @@ namespace maburgs {
 namespace {
 // Rebuild an OpPoint from the ladder's current rung. Power is constant and
 // is not part of the operating point.
+// 80 MHz exists only as VHT; the 20/40 rungs stay HT (their frames, rate
+// tables and per-MCS walls were all measured as HT).
 OpPoint op_from_rung(const Rung& r) {
-  return OpPoint{false, r.mcs, r.bw, false, r.overhead_base, r.overhead_enh, 0.0};
+  return OpPoint{r.bw == 80, r.mcs, r.bw, false, r.overhead_base, r.overhead_enh, 0.0};
 }
 }  // namespace
 
@@ -72,7 +74,7 @@ std::optional<VrxController::Out> VrxController::step(double now_ms,
   if (cfg_.pin_mcs >= 0) {
     // Static-link mode: fixed op, ladder fully out of the loop (never
     // ticked/updated — health is ignored entirely).
-    cur_op_ = OpPoint{false, cfg_.pin_mcs, cfg_.pin_bw, false,
+    cur_op_ = OpPoint{cfg_.pin_bw == 80, cfg_.pin_mcs, cfg_.pin_bw, false,
                      cfg_.pin_overhead_base, cfg_.pin_overhead_enh, 0.0};
   } else if (ctrl_.on_tick(now_ms)) {
     sync_op_();
@@ -141,9 +143,11 @@ mabur::rc::Rcf VrxController::build_rcf() {
   } else if (const int pr = ctrl_.probe_rung(); pr >= 0) {
     // The PROBE rung's own width, not the current op's: sitting on 20/4
     // with 40/3 above, the probe must fly 40 MHz.
+    // Mode from the probe rung too: a 40 -> 80 probe flies VHT.
     const Rung& prung = cfg_.ladder.ladder[static_cast<std::size_t>(pr)];
     r.probe_profile = mabur::rc::encode_profile(
-        mode, static_cast<uint8_t>(prung.mcs), static_cast<uint8_t>(prung.bw));
+        prung.bw == 80 ? mabur::rc::PhyMode::VHT : mabur::rc::PhyMode::HT,
+        static_cast<uint8_t>(prung.mcs), static_cast<uint8_t>(prung.bw));
   }
   return r;
 }

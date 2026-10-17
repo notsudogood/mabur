@@ -291,14 +291,14 @@ void RcAgent::apply_ladder_op(const std::array<LayerTxSpec, 2>& ladder,
   if (probe_profile != rc::kNoProbeProfile) {
     // The probe flies the probe rung's own (mcs, bw) — not the current op's
     // width — so a 20->40 promote is actually measured at 40
-    // (docs/bw40.md). Only the mode is kept from the
-    // current op's ladder: the wire profile byte doesn't vary mode
-    // independently of mcs/bw in practice, and ladder[1].mode is already
-    // validated/known-good, so there's no reason to trust a decoded mode
-    // over it.
+    // (docs/bw40.md). The mode follows the probe's width, as the GS's
+    // rungs do: 80 MHz exists only as VHT, the 20/40 rungs are HT, so a
+    // 40 -> 80 probe flies VHT while the op is still HT.
     PhyMode pm; uint8_t pmcs, pbw;
     rc::decode_profile(probe_profile, pm, pmcs, pbw);
-    applied_.probe = rc::ladder_from(ladder[1].mode, pmcs, pbw, cfg_.radio.ldpc)[1];
+    if (pbw == 80 && cfg_.radio.width != 80) pbw = 40;  // see on_rc_frame's clamp
+    const PhyMode probe_mode = pbw == 80 ? PhyMode::VHT : PhyMode::HT;
+    applied_.probe = rc::ladder_from(probe_mode, pmcs, pbw, cfg_.radio.ldpc)[1];
   }
   applied_.shed[0] = false;
   // shed_level_ still counts 0..3 (congestion semantics untouched — see
@@ -694,6 +694,22 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
     PhyMode mode;
     uint8_t mcs, bw;
     rc::decode_profile(r->profile, mode, mcs, bw);
+    // 80 MHz only on a drone set up for it: radio.width = 80 is what makes
+    // the loader hold every channel to an 80 MHz block's lowest 20, where
+    // the VHT80 tune is legal. A GS with an 80 MHz rung paired with a drone
+    // at 20/40 gets the rung flown at 40 (HT), logged once so the mismatch
+    // shows. 40 on a width-20 drone is unchanged: it always flew.
+    if (bw == 80 && cfg_.radio.width != 80) {
+      if (!width_clamp_logged_) {
+        width_clamp_logged_ = true;
+        std::fprintf(stderr,
+                     "maburd: GS commanded an 80 MHz rung but radio.width is %d -- flying it at "
+                     "40 (set radio.width = 80 on both ends for the 80 MHz rungs)\n",
+                     cfg_.radio.width);
+      }
+      bw = 40;
+      mode = PhyMode::HT;
+    }
     auto ladder = rc::ladder_from(mode, mcs, bw, cfg_.radio.ldpc);
 
     State prev_state = state_;

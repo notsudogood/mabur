@@ -36,7 +36,10 @@ struct DvrCfg {
 // daemons, separate config files, so this pairing is a deploy-time
 // invariant neither binary can validate on its own.
 struct OsdCfg {
-  bool enable = false;
+  // On by default, like the shipped maburplay.default.toml: a config file
+  // that lost its [osd] sections (a FAT /config damaged by a power cut
+  // truncated one to 0 bytes, 2026-10-17) must not silently drop the OSD.
+  bool enable = true;
   int port = 14560;
   std::string font = "/usr/local/share/mabur/font_btfl.mfont";
   std::string scale = "sharp";  // "sharp" | "fill"
@@ -56,7 +59,7 @@ struct OsdCfg {
   // neither binary can validate on its own, exactly like osd.port <->
   // msp.out.port. The 10 s silence warning is the mitigation.
   struct GsCfg {
-    bool enable = false;
+    bool enable = true;   // same reason as OsdCfg::enable
     int port = 8302;
     std::string font = "/usr/local/share/mabur/gs_osd.gfont";
     // Dim (never blank) after this much sideport silence. 3000 = 6 missed

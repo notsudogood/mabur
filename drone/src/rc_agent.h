@@ -404,6 +404,7 @@ class RcAgent {
   // Telem.rcf_rx. Never reset (a session-boundary reset would make the GS's
   // rate computation, which is over a measured interval, ambiguous).
   uint64_t rcf_accepted_ = 0;
+  bool width_clamp_logged_ = false;
   uint64_t genlock_rx_ = 0;
   uint64_t genlock_applied_ = 0;
   uint64_t genlock_refused_ = 0;

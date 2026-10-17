@@ -1,6 +1,7 @@
 #include "player_config.h"
 
 #include <fstream>
+#include <cstdio>
 #include <stdexcept>
 
 #include "mabur/toml.h"
@@ -159,7 +160,14 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
 
     if (o.contains("gs")) {
       const Value& g = o["gs"];
-      check_keys(g, "osd.gs", {"enable", "port", "font", "stale_ms"});
+      // style: the second GS layout is gone, but a /config/maburplay.toml
+      // saved before that still names it, and refusing to boot on it left
+      // the screen on the splash after an image upgrade (2026-10-17).
+      // Accepted and ignored, with a line saying so.
+      check_keys(g, "osd.gs", {"enable", "port", "font", "stale_ms", "style"});
+      if (g.contains("style"))
+        std::fprintf(stderr, "maburplay: config: osd.gs.style is no longer used (one GS layout); "
+                             "ignored -- delete the line\n");
       c.osd.gs.enable = get_bool(g, "enable", c.osd.gs.enable, "osd.gs");
       c.osd.gs.port = static_cast<int>(get_int(g, "port", c.osd.gs.port, 1, 65535, "osd.gs"));
       c.osd.gs.font = get_str(g, "font", c.osd.gs.font, "osd.gs");

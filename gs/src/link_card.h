@@ -33,6 +33,10 @@ class LinkCard : public ScoutRadio {
   virtual bool set_width(uint8_t ch, uint8_t width_mhz) = 0;
   virtual uint8_t channel() const = 0;
   virtual uint8_t width() const = 0;
+  // Widest RX tuning this card can take: 80 for the USB 8812EU cards
+  // (VHT80), 40 for anything else (a CPE510 relay is 11n). width_policy.h
+  // widens only cards that can.
+  virtual uint8_t max_width() const { return 40; }
   virtual int tuned_central() = 0;   // -1 unknown
   // Energy reads exist (FA/CCA/NHM): may serve as boot or in-flight scout.
   virtual bool can_scout() const = 0;

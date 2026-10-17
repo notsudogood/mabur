@@ -16,8 +16,12 @@
 using namespace webgs;
 
 namespace {
+// The bundle as the web GS runs it: 80 MHz rungs left out (drop_80mhz_rungs),
+// since the page tunes 20 or 40.
 maburgs::Config cfg() {
-  return maburgs::load_config(MABUR_SOURCE_DIR "/gs/bundle/maburgs.default.toml");
+  auto c = maburgs::load_config(MABUR_SOURCE_DIR "/gs/bundle/maburgs.default.toml");
+  webgs::drop_80mhz_rungs(c);
+  return c;
 }
 // Feed a fresh gen_bodies run (new drone encoder: new seqs, frame_ids from 0)
 // shifted to start at t0_us, ticking after every body. Returns the last stamp.

@@ -1776,6 +1776,48 @@ TEST(probe_rcf_airs_at_the_probe_profiles_own_width) {
   CHECK(op2.probe.bw == 40);
 }
 
+// 80 MHz rungs (docs/bw80.md): VHT, and only on a drone at radio.width 80.
+// The probe's mode follows its width, so a 40 -> 80 promote probe flies VHT
+// while the op is still HT.
+TEST(an_80_mhz_rung_flies_vht_at_width_80_and_40_ht_below) {
+  Config cfg = make_cfg();
+  cfg.radio.channels = {36, 132};
+  cfg.radio.width = 80;
+  MockActuator act;
+  RcAgent agent(cfg, act);
+  agent.tick(0, RadioHealth{});
+  const uint32_t vtx = ack_agent(agent, act);
+  auto wire = make_rcf_wire(1, encode_profile(PhyMode::HT, 4, 40), 8, 8,
+                            encode_profile(PhyMode::VHT, 3, 80), vtx);
+  agent.on_rc_frame(wire.data(), wire.size(), 100);
+  REQUIRE(!act.applied.empty());
+  CHECK(act.applied.back().ladder[1].bw == 40);
+  CHECK(act.applied.back().ladder[1].mode == PhyMode::HT);
+  CHECK(act.applied.back().probe.bw == 80);
+  CHECK(act.applied.back().probe.mode == PhyMode::VHT);
+  auto wire2 = make_rcf_wire(2, encode_profile(PhyMode::VHT, 4, 80), 8, 8,
+                             encode_profile(PhyMode::VHT, 4, 80), vtx);
+  agent.on_rc_frame(wire2.data(), wire2.size(), 200);
+  CHECK(act.applied.back().ladder[1].bw == 80);
+  CHECK(act.applied.back().ladder[1].mode == PhyMode::VHT);
+
+  // The same commands to a drone at radio.width 40 fly at 40, HT: its
+  // channels need not be 80 MHz primaries, so a VHT80 tune there is wrong.
+  Config cfg40 = make_cfg();
+  MockActuator act40;
+  RcAgent agent40(cfg40, act40);
+  agent40.tick(0, RadioHealth{});
+  const uint32_t vtx40 = ack_agent(agent40, act40);
+  auto wire3 = make_rcf_wire(1, encode_profile(PhyMode::VHT, 4, 80), 8, 8,
+                             encode_profile(PhyMode::VHT, 4, 80), vtx40);
+  agent40.on_rc_frame(wire3.data(), wire3.size(), 100);
+  REQUIRE(!act40.applied.empty());
+  CHECK(act40.applied.back().ladder[1].bw == 40);
+  CHECK(act40.applied.back().ladder[1].mode == PhyMode::HT);
+  CHECK(act40.applied.back().probe.bw == 40);
+  CHECK(act40.applied.back().probe.mode == PhyMode::HT);
+}
+
 // Link pairing: a DISC no longer links, so it no longer
 // latches link_established either -- the first verified RCF does.
 TEST(link_established_latches_on_first_rcf_not_on_disc) {

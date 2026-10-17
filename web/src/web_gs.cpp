@@ -42,6 +42,15 @@ std::optional<std::string> channel_width_error(const maburgs::Config& cfg, Mode 
   return std::nullopt;
 }
 
+int drop_80mhz_rungs(maburgs::Config& cfg) {
+  auto& l = cfg.link.ladder_cfg.ladder;
+  const auto n = l.size();
+  l.erase(std::remove_if(l.begin(), l.end(), [](const auto& r) { return r.bw == 80; }), l.end());
+  if (cfg.radio.width == 80) cfg.radio.width = 40;
+  if (cfg.link.static_bw == 80) cfg.link.static_bw = 40;
+  return static_cast<int>(n - l.size());
+}
+
 std::string relay_stats_fields(const maburgs::RelayStatsIn& r) {
   char b[640];
   std::snprintf(b, sizeof b,

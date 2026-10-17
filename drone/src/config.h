@@ -218,6 +218,7 @@ struct AmpduCfg {
   // the bundle ships 2. 0 = aggregate at every rung of that width.
   int min_mcs_20 = 0;
   int min_mcs_40 = 0;
+  int min_mcs_80 = 0;   // VHT 80 MHz rungs; frames are a quarter as long on air as 20
 };
 
 // Drone air clock: per-frame virtual air-serialization model + enh admission.
@@ -238,6 +239,12 @@ struct AirClockCfg {
   // air clock. All ones = nominal.
   std::array<double, 8> efficiency_20 = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
   std::array<double, 8> efficiency_40 = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+  // 80 MHz (VHT 1SS, mcs 0..7): measured, not all ones, because no flight
+  // config predates it -- the bench 2026-10-17 linkbench run carried 0.76 at
+  // mcs3 (agg6) and >= 0.67 at mcs4 with the drone's cpu0 at 94 % (a floor,
+  // not the air's ceiling). mcs0-2 are unmeasured and take mcs3's 0.76;
+  // mcs5-7 take mcs4's 0.67 (findings 2026-10-17-bw80-bench).
+  std::array<double, 8> efficiency_80 = {0.76, 0.76, 0.76, 0.76, 0.67, 0.67, 0.67, 0.67};
   int body_us = 0;
 };
 

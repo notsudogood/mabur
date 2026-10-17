@@ -15,7 +15,7 @@ def overlay(text):
 # The bundle's set does not hold 136: a one-member set so --ch 136 is a
 # member. channel = "auto" (not a pin), so a relay-only GS roster takes the
 # core's relay search-only path (no boot scan) rather than the pin's.
-OVERLAY = overlay('[radio]\nchannels = [136]\nchannel = "auto"\n')
+OVERLAY = overlay('[radio]\nchannels = [136]\nchannel = "auto"\nwidth = 40\n')
 # What the page sends at 20 MHz for a set with no 40 MHz pair: [radio] width
 # 20 (the loader checks the set at 20, not the bundle's 40) and a ladder at 20.
 LINK20 = ('\n[link]\nstatic_mcs = -1\nstatic_bw = 20\nmax_mcs = 7\n'

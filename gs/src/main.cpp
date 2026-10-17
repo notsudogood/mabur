@@ -301,7 +301,10 @@ static int run_radio(const maburgs::Config& cfg) {
     }
     fc.channel = start_ch;
     // The scout card always starts at 20: it searches at 20 even when pinned.
-    fc.width_mhz = (boot_scout_card >= 0 && i == boot_scout_card) ? 20 : cfg.radio.width;
+    // radio.width 80: cards start at the home width (40) and widen per
+    // rung (width_policy.h, ChannelCore).
+    fc.width_mhz = (boot_scout_card >= 0 && i == boot_scout_card) ? 20
+                                                                  : maburgs::home_width(cfg.radio.width);
     fc.card_id = static_cast<uint8_t>(i);
     for (size_t s = 0; s < 2; ++s)
       fc.sbi_block_payload[s] = mabur::UepDecoder::block_payload(cfg.uep_layers()[s]);
@@ -311,7 +314,7 @@ static int run_radio(const maburgs::Config& cfg) {
     maburgs::RemoteCard::Cfg rc;
     rc.addr = cfg.radio.relays[static_cast<size_t>(k)];
     rc.channel = start_ch;
-    rc.width_mhz = cfg.radio.width;  // never the boot scout: full width from the start
+    rc.width_mhz = maburgs::home_width(cfg.radio.width);  // never the boot scout; relays never widen to 80
     rc.card_id = static_cast<uint8_t>(n_usb + k);
     fronts.push_back(std::make_unique<maburgs::RemoteCard>(rc, queue));
     std::fprintf(stderr, "cards: card %d = relay %s\n", n_usb + k, rc.addr.c_str());
@@ -1411,6 +1414,13 @@ static int run_radio(const maburgs::Config& cfg) {
     cin.cal_running = cal_session.running();
     cin.tx_card = sel.selected();
     cin.agg = &agg;
+    cin.op_bw = vrx.cur_op().bw;
+    if (const uint8_t pp = vrx.probe_profile(); pp != mabur::rc::kNoProbeProfile) {
+      mabur::rc::PhyMode pm;
+      uint8_t pmcs = 0, pbw = 0;
+      mabur::rc::decode_profile(pp, pm, pmcs, pbw);
+      cin.probe_bw = pbw;
+    }
     chan.tick(cin);
     const bool fw = in_session && (vrx.peer_caps() & mabur::rc::CAP_FRAME_WIRE);
     // Told every tick (CalSession::set_peer): whether the link is up and

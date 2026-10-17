@@ -21,7 +21,7 @@ namespace mabur {
 
 inline devourer::AmpduMode ampdu_mode_for(const AmpduCfg& c, uint8_t mcs, uint8_t bw) {
   devourer::AmpduMode m;  // enabled=false: singles, the chip's post-InitWrite state
-  const int min_mcs = bw == 40 ? c.min_mcs_40 : c.min_mcs_20;
+  const int min_mcs = bw == 80 ? c.min_mcs_80 : bw == 40 ? c.min_mcs_40 : c.min_mcs_20;
   if (c.max_num <= 0 || mcs < min_mcs) return m;
   m.enabled = true;
   m.tid = 0;

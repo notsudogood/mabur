@@ -39,7 +39,10 @@ ChannelCore::ChannelCore(ChannelCoreCfg cfg, std::vector<LinkCard*> cards, VrxCo
       ranker_(cfg_.hop, cfg_.radio.scan.busy, cfg_.radio.channels, 0),
       hopc_(cfg_.hop),
       cur_ch_(static_cast<size_t>(n_cards_), cfg_.start_ch),
-      width_tried_(static_cast<size_t>(n_cards_), false),
+      home_w_(home_width(cfg_.radio.width)),
+      width_dynamic_(cfg_.radio.width == 80),
+      can_widen_(static_cast<size_t>(n_cards_), false),
+      width_fail_want_(static_cast<size_t>(n_cards_), 0),
       energy_last_(static_cast<size_t>(n_cards_)),
       dwell_stats_(static_cast<size_t>(n_cards_)),
       window_prev_(static_cast<size_t>(n_cards_)),
@@ -55,6 +58,9 @@ ChannelCore::ChannelCore(ChannelCoreCfg cfg, std::vector<LinkCard*> cards, VrxCo
   for (int i = 0; i < n_cards_; ++i)
     can_sweep_[static_cast<size_t>(i)] = cards_[static_cast<size_t>(i)]->can_sweep();
   snr_ok_.assign(static_cast<size_t>(n_cards_), true);
+  for (int i = 0; i < n_cards_; ++i)
+    can_widen_[static_cast<size_t>(i)] =
+        width_dynamic_ && cards_[static_cast<size_t>(i)]->max_width() >= 80;
   for (int i = 0; i < n_cards_; ++i) {
     can_scout_[static_cast<size_t>(i)] = cards_[static_cast<size_t>(i)]->can_scout();
     snr_ok_[static_cast<size_t>(i)] = cards_[static_cast<size_t>(i)]->caps().snr_ok;
@@ -85,7 +91,7 @@ ChannelCore::ChannelCore(ChannelCoreCfg cfg, std::vector<LinkCard*> cards, VrxCo
     sc.pick_margin = static_cast<uint32_t>(cfg_.radio.scan.pick_margin);
     sc.pick_busy_margin_pct = cfg_.radio.scan.pick_busy_margin_pct;
     sc.one_card = one_card_ || relay_search_only_;   // a sole relay interleaves op windows like a sole USB card
-    sc.link_width_mhz = cfg_.radio.width;
+    sc.link_width_mhz = home_w_;   // the boot scout parks at the home width; 80 is per-rung
     sc.busy_dbm = cfg_.radio.scan.busy.busy_dbm;
     sc.blocked_pct = cfg_.radio.scan.busy.blocked_pct;
     sc.leak_per_frame = cfg_.leak_per_frame;
@@ -108,7 +114,7 @@ ChannelCore::ChannelCore(ChannelCoreCfg cfg, std::vector<LinkCard*> cards, VrxCo
     // ever returns scout_card_ and inflight_ is never driven.
     inflight_ = std::make_unique<InflightScout>(
         InflightScoutCfg{cfg_.hop.dwell_observe_ms, cfg_.hop.dwell_period_ms,
-                         cfg_.radio.channels, cfg_.radio.width, cfg_.radio.scan.busy.busy_dbm},
+                         cfg_.radio.channels, home_w_, cfg_.radio.scan.busy.busy_dbm},
         *cards_[static_cast<size_t>(scout_card_)],
         [this] { return static_cast<int64_t>(now_us_()); },
         [this](int ms) { sleep_(ms); });
@@ -156,6 +162,9 @@ ChannelTickOut ChannelCore::tick(const ChannelTickIn& in) {
   tx_card_now_.store(in.tx_card, std::memory_order_relaxed);
   in_session_atomic_.store(in.in_session, std::memory_order_relaxed);
   cal_running_atomic_.store(in.cal_running, std::memory_order_relaxed);
+  op_bw_ = in.op_bw;
+  probe_bw_ = in.probe_bw;
+  in_session_ = in.in_session;
   // The scout thread starts once its card is up (threaded), or one step
   // runs here (tests).
   if (scout_ && !scout_started_ && cards_[static_cast<size_t>(scout_card_)]->ready()) {
@@ -205,7 +214,7 @@ void ChannelCore::on_card_died(int card) {
       sink_.log(logf_("maburgs channel: scout card %d died at %llu rounds; search held "
                       "until it reopens, card rejoins at %u MHz",
                       card, static_cast<unsigned long long>(scout_->rounds()),
-                      static_cast<unsigned>(cfg_.radio.width)));
+                      static_cast<unsigned>(home_w_)));
     }
     scout_search_req_ = false;
     scout_->set_search(false);
@@ -214,7 +223,7 @@ void ChannelCore::on_card_died(int card) {
 
 void ChannelCore::on_card_reopened(int card) {
   cur_ch_[static_cast<size_t>(card)] = cards_[static_cast<size_t>(card)]->channel();
-  width_tried_[static_cast<size_t>(card)] = false;
+  width_fail_want_[static_cast<size_t>(card)] = 0;
   if (card == scout_card_) scout_card_down_ = false;
 }
 
@@ -225,6 +234,7 @@ void ChannelCore::shutdown() {
   if (inflight_started_ && scout_thread2_.joinable()) scout_thread2_.join();
   if (scout_) scout_->stop();
   if (scout_started_ && scout_thread_.joinable()) scout_thread_.join();
+  if (width_thread_.joinable()) width_thread_.join();
 }
 void ChannelCore::on_rc_body(uint8_t rx_ch) { rc_body_rx_ch_ = rx_ch; }
 
@@ -279,7 +289,7 @@ void ChannelCore::freeze_pick_(double t, const char* why) {
                      : cfg_.radio.scan.min_rounds;
   const auto all = scout_->ranking();
   bool any = false;
-  if (cfg_.radio.width == 40) {
+  if (home_w_ == 40) {
     any = any_pair_ranked(all, cfg_.radio.channels, mr);
   } else {
     for (const auto& e : all) any = any || e.visits >= static_cast<uint32_t>(mr);
@@ -357,7 +367,7 @@ void ChannelCore::step_scout_inputs_() {
   const bool w = scout_owns_();
   if (scout_was_working_ && !w) {
     cur_ch_[static_cast<size_t>(scout_card_)] = cards_[static_cast<size_t>(scout_card_)]->channel();
-    width_tried_[static_cast<size_t>(scout_card_)] = false;
+    width_fail_want_[static_cast<size_t>(scout_card_)] = 0;
   }
   scout_was_working_ = w;
   scout_working_atomic_.store(scout_owns_(), std::memory_order_relaxed);
@@ -715,22 +725,104 @@ void ChannelCore::step_drains_() {
 }
 
 void ChannelCore::step_width_resync_() {
+  // Results first: a finished switch updates this card's bookkeeping on the
+  // core thread (the worker only tunes).
+  drain_width_done_();
   if (!width_resync_open(!scout_owns_(), scout_ != nullptr, /*scout_frozen=*/!boot_pick_.open())) return;
+  if (width_job_) return;   // one switch in flight at a time
+  if (width_thread_.joinable()) width_thread_.join();
+  // What the cards should be: the home width, plus (radio.width 80) one or
+  // all cards at 80 while an 80 MHz rung is probed or flown.
+  const WideNeed raw = width_dynamic_ ? wide_need(in_session_, op_bw_, probe_bw_) : WideNeed::None;
+  wide_need_ = held_need(wide_hold_, raw, now_ms_cur_, kWideHoldMs);
+  probe_card_ = wide_need_ == WideNeed::None
+                    ? -1
+                    : pick_probe_card(can_widen_, tx_card_now_.load(), probe_card_);
+  probe_wide_.store(wide_need_ == WideNeed::Probe, std::memory_order_relaxed);
+  const std::vector<uint8_t> want = width_targets(wide_need_, can_widen_, probe_card_, home_w_, 80);
+  std::vector<uint8_t> cur(static_cast<size_t>(n_cards_));
+  std::vector<bool> eligible(static_cast<size_t>(n_cards_));
   for (int i = 0; i < n_cards_; ++i) {
-    auto& fe = *cards_[static_cast<size_t>(i)];
-    const WidthCard wc{fe.ready(), fe.width(), width_tried_[static_cast<size_t>(i)],
-                       dwell_busy_.load() && dwell_card_.load() == i};
-    if (!needs_width_fix(wc, cfg_.radio.width)) continue;
-    width_tried_[static_cast<size_t>(i)] = true;
+    const size_t k = static_cast<size_t>(i);
+    auto& fe = *cards_[k];
+    cur[k] = fe.width();
+    const bool dwelling = dwell_busy_.load() && dwell_card_.load() == i;
+    eligible[k] = fe.ready() && !dwelling && width_fail_want_[k] != want[k];
+  }
+  const int card = next_width_switch(cur, want, eligible, tx_card_now_.load());
+  if (card < 0) return;
+  // Spaced: the card just switched needs a moment back on the air before
+  // the next one goes deaf. The boot fix-up (home width after the scout)
+  // passes straight through: nothing switched before it.
+  if (now_ms_cur_ - last_width_switch_ms_ < kWidthGapMs) return;
+  const uint8_t w = want[static_cast<size_t>(card)];
+  if (!cfg_.threaded) {
+    last_width_switch_ms_ = now_ms_cur_;
+    width_job_ = true;
+    run_width_switch_(card, w);
+    drain_width_done_();
+    return;
+  }
+  // A full SetMonitorChannel takes tens of ms: off the core loop, which
+  // keeps decoding the other card's video meanwhile. Marked as a dwell, so
+  // every step that already steps around a dwelling card (energy windows,
+  // mechanical retunes, TX selection) steps around this one. Started only
+  // under inflight_mu_ with no dwell running: the in-flight scout sets the
+  // same flags under that mutex, and checks width_pending_ there before it
+  // dwells, so the two never overwrite each other's marks.
+  std::unique_lock<std::mutex> ilk(inflight_mu_, std::try_to_lock);
+  if (!ilk.owns_lock() || dwell_busy_.load()) return;   // a dwell is running: a later tick
+  last_width_switch_ms_ = now_ms_cur_;
+  width_job_ = true;
+  width_pending_.store(true);
+  dwell_card_.store(card);
+  dwell_busy_.store(true);
+  width_thread_ = std::thread([this, card, w] { run_width_switch_(card, w); });
+}
+
+void ChannelCore::run_width_switch_(int card, uint8_t want) {
+  WidthDone d{card, want, false, 0, 0};
+  {
     std::lock_guard<std::mutex> ilk(inflight_mu_);
-    const uint8_t ch = fe.channel();
-    if (fe.set_width(ch, cfg_.radio.width)) {
-      cur_ch_[static_cast<size_t>(i)] = fe.channel();
-      nhm_win_[static_cast<size_t>(i)].invalidate();
+    auto& fe = *cards_[static_cast<size_t>(card)];
+    d.ch = fe.channel();
+    const uint64_t t0 = now_us_();
+    d.ok = fe.set_width(d.ch, want);
+    d.us = now_us_() - t0;
+    // Energy windows spanning the retune are not one measurement.
+    dwell_gen_[static_cast<size_t>(card)].fetch_add(1, std::memory_order_release);
+  }
+  {
+    std::lock_guard<std::mutex> lk(width_mu_);
+    width_done_.push_back(d);
+  }
+  if (cfg_.threaded) {
+    dwell_busy_.store(false);
+    dwell_card_.store(-1);
+    width_pending_.store(false);
+  }
+}
+
+void ChannelCore::drain_width_done_() {
+  std::vector<WidthDone> done;
+  {
+    std::lock_guard<std::mutex> lk(width_mu_);
+    done.swap(width_done_);
+  }
+  for (const auto& d : done) {
+    width_job_ = false;
+    const size_t k = static_cast<size_t>(d.card);
+    if (d.ok) {
+      cur_ch_[k] = cards_[k]->channel();
+      nhm_win_[k].invalidate();
+      width_fail_want_[k] = 0;
     } else {
-      sink_.log(logf_("maburgs radio: card %d width resync to %u MHz on ch %u failed", i,
-                      static_cast<unsigned>(cfg_.radio.width), static_cast<unsigned>(ch)));
+      width_fail_want_[k] = d.want;
     }
+    const char* why = d.want == home_w_ ? "home" : wide_need_ == WideNeed::All ? "80 MHz rung" : "80 MHz probe";
+    sink_.log(logf_("maburgs radio: card %d width -> %u MHz on ch %u %s in %llu ms (%s)", d.card,
+                    static_cast<unsigned>(d.want), static_cast<unsigned>(d.ch),
+                    d.ok ? "done" : "FAILED", static_cast<unsigned long long>(d.us / 1000), why));
   }
 }
 
@@ -783,6 +875,9 @@ void ChannelCore::inflight_body_() {
   if (!in_session_atomic_.load() || cal_running_atomic_.load() || hopping_atomic_.load() ||
       scout_working_atomic_.load() || n_cards_ < 2)
     return;
+  // One card is wide for an 80 MHz probe and is the only one that can hear
+  // it: a dwell would punch holes in the probe and fail it.
+  if (probe_wide_.load()) return;
   const int card = pick_inflight_scout(can_scout_, tx_card_now_.load());
   if (card < 0) return;
   auto& fe = *cards_[static_cast<size_t>(card)];
@@ -798,6 +893,7 @@ void ChannelCore::inflight_body_() {
     for (int i = 0; i < 20 && au_seq_.load() == s0; ++i) sleep_(1);
   }
   std::lock_guard<std::mutex> ilk(inflight_mu_);
+  if (width_pending_.load()) return;   // a card width switch owns the busy marks
   inflight_->set_radio(fe);
   dwell_card_.store(card);
   dwell_busy_.store(true);

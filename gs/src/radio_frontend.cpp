@@ -217,10 +217,13 @@ void RadioFrontend::on_packet(const Packet& pkt) {
     own_.fetch_add(1, std::memory_order_relaxed);
     // Own airtime, CRC-good own frames only.
     const uint16_t r = a.data_rate;
+    // HT-1SS (Jaguar 0x0C+n, Kestrel 0x80+n) or VHT-1SS (Jaguar 0x2C+n, the
+    // 80 MHz rungs); RxAtrib.bw 0/1/2 = 20/40/80.
     const uint8_t mcs = (r >= 0x0C && r <= 0x13) ? static_cast<uint8_t>(r - 0x0C)
-                        : (r >= 0x80 && r <= 0x87) ? static_cast<uint8_t>(r - 0x80) : 255;
+                        : (r >= 0x80 && r <= 0x87) ? static_cast<uint8_t>(r - 0x80)
+                        : (r >= 0x2C && r <= 0x33) ? static_cast<uint8_t>(r - 0x2C) : 255;
     own_air_.on_frame(pkt.Data.size(), mcs, a.physt,
-                      a.bw == 1 ? 40 : 20, a.stbc != 0, a.sgi != 0);
+                      a.bw == 2 ? 80 : a.bw == 1 ? 40 : 20, a.stbc != 0, a.sgi != 0);
     own_air_us_.store(own_air_.total_us(), std::memory_order_relaxed);
     if (cfg_.usb_late_gauge) late_.add(static_cast<int64_t>(now), a.tsfl);
   }

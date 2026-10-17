@@ -101,25 +101,18 @@ RateWall analyze_rate(const std::vector<CalCell>& cells,
 
   const int last_idx = static_cast<int>(cells.back().idx);
   if (wall >= last_idx) {
-    // Never dipped: this rate has no compression wall inside the swept
-    // range, so there is nothing for delivery to find and nothing to back
-    // off from. Park it at the rail instead -- kRailRel, the top of the
-    // relative range every unit's diff field can express, regardless of
-    // where this unit's own anchor happens to sit.
-    //
-    // The rail IS the top cell of the coarse sweep -- kCoarseLo is -41
-    // precisely so the grid lands on kRailRel exactly (gs/src/cal_plan.h)
-    // -- so the parked index is an index this very run measured at >=90%
-    // delivery, not one past the end of the sweep. That is a
-    // stronger guarantee than the RSSI "saturation knee" this replaced,
-    // which was an inference from a curve -- and an unreproducible one: on
-    // one unit it read 72, 56, 84 and 56 across four runs, and once put
-    // mcs0 and mcs1, the same PA and the same modulation class, 3 dB apart.
+    // Never dipped: no compression wall inside the swept range. The row is
+    // reported UNDETERMINED (kNoWall) rather than parked at the rail, so the
+    // drone keeps that rate at its pre-calibration power
+    // (docs/next-build-backlog.md item 2). Parking at the rail was the
+    // flight 2026-10-12 failure: MCS0-3 went ~9 dB over the chip's stock
+    // level, delivered >=90% on the bench where SNR hides distortion, and
+    // flew at EVM -10.5 dB against -16.5 dB at stock. Delivery alone cannot
+    // tell "no wall" from "a wall delivery cannot see yet".
     out.flags |= kCalNoDip;
-    out.wall = kRailRel;
-  } else {
-    out.wall = wall;
+    return out;
   }
+  out.wall = wall;
 
   if (out.wall - floor_idx <= th.narrow_span) out.flags |= kCalNarrow;
 

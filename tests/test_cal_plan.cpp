@@ -15,14 +15,13 @@ TEST(coarse_plan_covers_all_eight_rates) {
     CHECK(c.windows[r].idx_hi == kCoarseHi);
     CHECK(c.windows[r].idx_step == 4);
   }
-  CHECK(c.frames_per_cell == 20);
+  CHECK(c.frames_per_cell == 50);  // the 99% bar needs every frame of a cell
 }
 
 TEST(coarse_plan_is_216_cells) {
   // 8 rates x 27 indices (-41,-37,...,63). kCoarseLo is -41 rather than the
-  // rounder -40 precisely so the last cell lands ON kRailRel (63): a no-dip
-  // row parks at the rail, and the rail has to be an index this very sweep
-  // measured at >=90% delivery, not one index past the top of the sweep.
+  // rounder -40 precisely so the last cell lands ON kRailRel (63): "no dip"
+  // has to mean no dip up to the top of the diff field.
   // This count also drives the duration estimate the GS uses to know when
   // the drone stops transmitting.
   const auto c = make_coarse_plan(1);
@@ -34,8 +33,8 @@ TEST(coarse_plan_is_216_cells) {
 
 TEST(fine_plan_only_covers_rows_that_dipped) {
   std::array<RateWall, 8> coarse{};
-  for (int r = 0; r < 3; ++r) {           // mcs0-2: no dip, knee-derived
-    coarse[static_cast<size_t>(r)].wall = 91;
+  for (int r = 0; r < 3; ++r) {           // mcs0-2: no dip, no wall
+    coarse[static_cast<size_t>(r)].wall = kNoWall;
     coarse[static_cast<size_t>(r)].flags = kCalNoDip;
   }
   for (int r = 3; r < 7; ++r) {           // mcs3-6: real dips

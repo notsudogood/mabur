@@ -346,7 +346,7 @@ struct RealActuator : mabur::Actuator {
     if (!dev) return;
     const uint8_t mcs = op.ladder[1].mcs;
     const uint8_t bw = op.ladder[1].bw;
-    const int min_mcs = bw == 40 ? ampdu.min_mcs_40 : ampdu.min_mcs_20;
+    const int min_mcs = bw == 80 ? ampdu.min_mcs_80 : bw == 40 ? ampdu.min_mcs_40 : ampdu.min_mcs_20;
     const devourer::AmpduMode want = ampdu_mode_for(ampdu, mcs, bw);
     if (ampdu_mode_same(want, last_ampdu)) {
       if (!ampdu_logged) {
@@ -1319,9 +1319,13 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     if (two_core_target()) pin_self_to(kHotCore);
     try {
       const uint8_t ch = start_ch;
-      rtl_device->InitWrite(cfg.radio.width == 40
-                                ? SelectedChannel{ch, mabur::ht40_offset(ch), CHANNEL_WIDTH_40}
-                                : SelectedChannel{ch, 0, CHANNEL_WIDTH_20});
+      // 80: ch is the block's lowest 20 (channel_set_issue), which devourer
+      // makes the primary; 20 and 40 MHz rungs ride that primary and the
+      // block's lower 40 inside the 80 tune (bench 2026-10-17: all three
+      // widths arrived in equal counts at an 80-tuned GS card).
+      rtl_device->InitWrite(cfg.radio.width == 80   ? SelectedChannel{ch, 0, CHANNEL_WIDTH_80}
+                            : cfg.radio.width == 40 ? SelectedChannel{ch, mabur::ht40_offset(ch), CHANNEL_WIDTH_40}
+                                                    : SelectedChannel{ch, 0, CHANNEL_WIDTH_20});
     } catch (...) {
       radio_init_error = std::current_exception();
     }
@@ -2377,6 +2381,11 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
       CalWrite w;
       for (int r = 0; r < 8; ++r) w.walls[r] = result.walls[r];
       w.legacy_wall = result.legacy_wall;
+      // Undetermined rows keep their pre-calibration power: written out as
+      // the stock shape when the unit was flying it, left alone (the config
+      // wall stays) when it was already on "offset".
+      if (cfg.radio.power_mode != "offset")
+        fill_undetermined_with_stock(w.walls, w.legacy_wall, cfg.radio.wall_margin_db);
 
       std::string err;
       const ApplyResult ar =
@@ -2426,7 +2435,10 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
       verify.settle_ms = 100;        // gs/src/cal_plan.h kSettleMs
       verify.gap_us = 2000;          // gs/src/cal_plan.h kGapUs
       for (uint8_t r = 0; r < 8; ++r) {
-        if (w.walls[r] == rc::kWallUndetermined) continue;  // nothing to verify
+        // The WIRE verdict, not w.walls: a row filled with the stock shape
+        // above was undetermined to the GS, whose verify plan skips it
+        // (make_verify_plan); verifying it here would desync the two plans.
+        if (result.walls[r] == rc::kWallUndetermined) continue;  // nothing to verify
         const int park = w.walls[r] - m;  // relative parked index
         if (park < rc::kRelMin || park > rc::kRelMax) continue;
         verify.windows.push_back({r, static_cast<int8_t>(park),
@@ -3034,6 +3046,15 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
                    "warning: SetTxPowerRateDiffs failed; power_mode=offset "
                    "falls back to the chip's default TX power\n");
     }
+    // The custom table covers HT MCS0-7 only; devourer leaves every VHT
+    // rate at the anchor, MCS7's stock level (src/TxPower.h). The 80 MHz
+    // rungs are VHT, so they fly 3-4 dB under stock (VHT MCS3 +4 dB, MCS4
+    // +3 dB over MCS7 in the 8822E table) until the table covers VHT.
+    if (cfg.radio.width == 80)
+      std::fprintf(stderr,
+                   "warning: power_mode = \"offset\" with radio.width = 80: the 80 MHz (VHT) "
+                   "rungs fly at MCS7's power, 3-4 dB under stock; use power_mode = \"none\" "
+                   "for 80 MHz\n");
   }
 
   // A-MPDU TX aggregation is NOT programmed here: the mode follows the ladder

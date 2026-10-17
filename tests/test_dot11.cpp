@@ -54,7 +54,7 @@ TEST(vht80_frame_keeps_raw_rate_code_and_width) {
   m.bw = 2;                // 80 MHz
   mabur::node::RxBody b;
   REQUIRE(fill_rx_body(f.data(), f.size(), m, b) == RxVerdict::Body);
-  CHECK(b.mcs == 255);     // attribution stays HT-only
+  CHECK(b.mcs == 4);       // VHT-1SS maps like HT: the 80 MHz rungs attribute
   CHECK(b.rate_code == 0x30);
   CHECK(b.rx_bw == 2);
 }

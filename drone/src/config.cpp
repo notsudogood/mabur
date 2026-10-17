@@ -90,8 +90,8 @@ void parse_radio(const Value& j, RadioCfg& r) {
   assign_if_present(j, "usb_vid", r.usb_vid, "radio");
   assign_if_present(j, "usb_pid", r.usb_pid, "radio");
   assign_if_present(j, "width", r.width, "radio");
-  if (r.width != 20 && r.width != 40)
-    fail("radio.width", "must be 20 or 40 (HT20 / HT40; nothing else is measured)");
+  if (r.width != 20 && r.width != 40 && r.width != 80)
+    fail("radio.width", "must be 20, 40 or 80 (80 = tuned VHT80 on the block's lowest 20)");
   if (j.contains("channels")) {
     const Value& a = j["channels"];
     if (!a.is_array()) fail("radio.channels", "not an array");
@@ -272,7 +272,7 @@ void parse_encoder(const Value& j, EncoderCfg& e) {
         assign_if_present(rj, "airtime_budget", r.airtime_budget, where);
       if (rj.contains("max_kbps")) assign_if_present(rj, "max_kbps", r.max_kbps, where);
       if (r.mcs < 0 || r.mcs > 7) fail(where + ".mcs", "must be in [0,7]");
-      if (r.bw != 20 && r.bw != 40) fail(where + ".bw", "must be 20 or 40");
+      if (r.bw != 20 && r.bw != 40 && r.bw != 80) fail(where + ".bw", "must be 20, 40 or 80");
       if (rj.contains("airtime_budget") && (r.airtime_budget <= 0.0 || r.airtime_budget > 1.0))
         fail(where + ".airtime_budget", "must be in (0,1]");
       if (rj.contains("max_kbps") &&
@@ -667,15 +667,18 @@ void parse_nack(const Value& j, NackDroneCfg& n) {
 }
 
 void parse_ampdu(const Value& j, AmpduCfg& a) {
-  check_known_keys(j, {"max_num", "max_time", "min_mcs_20", "min_mcs_40"}, "ampdu");
+  check_known_keys(j, {"max_num", "max_time", "min_mcs_20", "min_mcs_40", "min_mcs_80"}, "ampdu");
   assign_if_present(j, "max_num", a.max_num, "ampdu");
   assign_if_present(j, "max_time", a.max_time, "ampdu");
   assign_if_present(j, "min_mcs_20", a.min_mcs_20, "ampdu");
   assign_if_present(j, "min_mcs_40", a.min_mcs_40, "ampdu");
+  assign_if_present(j, "min_mcs_80", a.min_mcs_80, "ampdu");
   if (a.min_mcs_20 < 0 || a.min_mcs_20 > 7)
     fail("ampdu.min_mcs_20", "must be an HT MCS in [0,7] (0 = aggregate at every 20 MHz rung)");
   if (a.min_mcs_40 < 0 || a.min_mcs_40 > 7)
     fail("ampdu.min_mcs_40", "must be an HT MCS in [0,7] (0 = aggregate at every 40 MHz rung)");
+  if (a.min_mcs_80 < 0 || a.min_mcs_80 > 7)
+    fail("ampdu.min_mcs_80", "must be a VHT MCS in [0,7] (0 = aggregate at every 80 MHz rung)");
   if (a.max_num < 0 || a.max_num > 31)
     fail("ampdu.max_num", "must be in [0,31] (5-bit MAX_AGG_NUM; 0 = off)");
   if (a.max_time < 0 || a.max_time > 255)
@@ -687,7 +690,8 @@ void parse_ampdu(const Value& j, AmpduCfg& a) {
 }
 
 void parse_air_clock(const Value& j, AirClockCfg& a) {
-  check_known_keys(j, {"shed_ms", "efficiency_20", "efficiency_40", "body_us"}, "air_clock");
+  check_known_keys(j, {"shed_ms", "efficiency_20", "efficiency_40", "efficiency_80", "body_us"},
+                   "air_clock");
   assign_if_present(j, "shed_ms", a.shed_ms, "air_clock");
   auto parse_eff = [&](const char* key, std::array<double, 8>& out) {
     if (!j.contains(key)) return;
@@ -706,6 +710,7 @@ void parse_air_clock(const Value& j, AirClockCfg& a) {
   };
   parse_eff("efficiency_20", a.efficiency_20);
   parse_eff("efficiency_40", a.efficiency_40);
+  parse_eff("efficiency_80", a.efficiency_80);
   assign_if_present(j, "body_us", a.body_us, "air_clock");
   if (a.shed_ms < 0 || a.shed_ms > 60000)
     fail("air_clock.shed_ms", "must be in [0,60000] (0 = observe only)");

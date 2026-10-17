@@ -90,6 +90,16 @@ would need ~120 % of a core.
 
 ## 2. maburcal: stop calibrating rates to full power
 
+**Done in gs8 / d8 (2026-10-17), not yet bench-checked:** changes 1-3
+below. A no-dip row goes out undetermined and the drone keeps it at its
+pre-calibration power (from `power_mode = "none"`: the 8822E stock shape,
+`drone/src/power_plan.h`); the pass bar is 99 % with 50 coarse frames per
+cell (coarse ~43 s, was ~30 s); the noise-cell rule forgives at most 2 of
+50 lost. Change 4 (EVM) is not done: the sweep frames still carry none.
+Counterpart: at a 99 % bar a few frames of random loss end a run early, so
+walls can come out low (under-power, the safe direction). And a calibrated
+table leaves the VHT (80 MHz) rates at MCS7's level -- see docs/bw80.md.
+
 Evidence (flight 2026-10-12, d4 drone + gs4 GS, calibrated on the bench the
 same morning): the calibration wrote `rate_walls_rel = [63, 63, 63, 63, 40,
 21, 23, 17]` and switched `power_mode` to `"offset"`. In flight the GS
@@ -209,6 +219,10 @@ drone and GS CPU probes, GS `fec` flat. 50 Mb/s also needs item 4 for the
 air: at 40 MHz it is ~85 % of what MCS5 delivers.
 
 ## 4. 80 MHz top rung
+
+**Built in gs8 / d8 (2026-10-17), unflown:** MCS3/80 and MCS4/80 rungs,
+GS cards widen only for them (`docs/bw80.md`). Bench:
+`docs/findings/2026-10-17-bw80-bench.md`.
 
 Plan, constraints and go/no-go measurements: `docs/bw80-research-2026-10-12.md`.
 First step is `linkbench --bw 80` plus a bench drone build carrying it; flight

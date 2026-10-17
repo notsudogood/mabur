@@ -31,6 +31,7 @@
 #include "hop_verdict.h"
 #include "inflight_scout.h"
 #include "link_card.h"
+#include "width_policy.h"
 #include "mabur/link_key.h"
 #include "mabur/rc_proto.h"
 #include "nhm_window.h"
@@ -91,6 +92,10 @@ struct ChannelTickIn {
   bool cal_running = false;    // CalSession::running()
   int tx_card = 0;             // TxSelector::selected()
   const Aggregator* agg = nullptr;   // per-card crc_fail/rssi_a_ema/snr_ema, decoder stats
+  // The commanded rung's width and the probed rung's (0 = no probe): at
+  // radio.width 80 they decide which cards widen (width_policy.h).
+  int op_bw = 0;
+  int probe_bw = 0;
 };
 
 struct ChannelTickOut {
@@ -206,7 +211,30 @@ class ChannelCore {
 
   // ---- per-card bookkeeping (core thread) ----
   std::vector<uint8_t> cur_ch_;
-  std::vector<bool> width_tried_;
+  // Card widths (width_policy.h): home width, the 80 MHz option, and which
+  // cards can take it. width_fail_want_[i] = a target that failed on card i
+  // (not retried until the target changes or the card reopens; 0 = none).
+  uint8_t home_w_ = 20;
+  bool width_dynamic_ = false;
+  std::vector<bool> can_widen_;
+  std::vector<uint8_t> width_fail_want_;
+  WideHold wide_hold_;
+  WideNeed wide_need_ = WideNeed::None;
+  int probe_card_ = -1;
+  int op_bw_ = 0, probe_bw_ = 0;
+  bool in_session_ = false;
+  double last_width_switch_ms_ = -1e18;
+  static constexpr double kWideHoldMs = 3000;     // keep a need this long after it was last seen
+  static constexpr double kWidthGapMs = 250;      // between two card switches
+  struct WidthDone { int card; uint8_t want; bool ok; uint8_t ch; uint64_t us; };
+  bool width_job_ = false;                        // core thread: a switch is in flight
+  std::thread width_thread_;
+  std::mutex width_mu_;
+  std::vector<WidthDone> width_done_;
+  std::atomic<bool> probe_wide_{false};           // one card wide for a probe: no in-flight dwells
+  std::atomic<bool> width_pending_{false};        // a switch thread owns dwell_busy_/dwell_card_
+  void run_width_switch_(int card, uint8_t want);
+  void drain_width_done_();
   std::vector<std::optional<StatsEnergyIn>> energy_last_;
   std::vector<std::optional<StatsDwellIn>> dwell_stats_;
   std::vector<ScoutFrames> window_prev_;

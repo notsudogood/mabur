@@ -6,12 +6,16 @@
 [radio]
 usb_vid    = 3034        # Realtek USB vendor ID (0x0bda) in decimal
 usb_pid    = 0           # 0 = find the card automatically (8812EU or 8812CU)
-channels   = [40, 64, 112, 144]   # the channel set, same as the ground station's (a superset is fine);
-                                  # the drone parks on the remembered member and follows the GS to any member.
-                                  # PROVISIONAL until bench row 8 (maburcal on 64 and 112; swap 64 for 128
-                                  # if it fails), docs/channel-select.md "Config".
-width      = 40        # HT40 on each member's standard pair; per-rung width comes from the GS ladder (docs/bw40.md)
-power_mode = "none"      # "none" = card's default TX power; "offset" = use the calibrated walls below
+channels   = [36, 132]  # the channel set, same as the ground station's (a superset is fine);
+                         # the drone parks on the remembered member and follows the GS to any member.
+                         # At width 80 every member must be an 80 MHz block's lowest channel
+                         # (36 52 100 116 132 149); 36 and 132 are the two blocks with no 8812EU spur
+                         # (149 works but carries one). 52-144 are DFS channels: your call where you fly.
+                         # For 40 MHz only, the old set was [40, 64, 112, 144] with width = 40.
+width      = 80        # 20, 40 or 80. 80 = the 80 MHz rungs can fly; the 20/40 rungs ride the block's lower
+                       # 20/40. Per-rung width comes from the GS ladder (docs/bw40.md, docs/bw80.md)
+power_mode = "none"      # "none" = card's default TX power; "offset" = use the calibrated walls below.
+                         # Keep "none" for the 80 MHz rungs: "offset" leaves them (VHT) at MCS7's power
 tx_threads = 4           # parallel USB senders; 4 is needed to reach full link speed
 tx_threads_hot = 0       # how many of those senders run on CPU 1 (beside the video packer) instead of CPU 0.
                          # 0 = all on CPU 0. A bench setting for high bitrates: see docs/next-build-backlog.md item 3
@@ -20,7 +24,8 @@ ldpc       = true        # LDPC coding on every frame. false only for an RTL8821
 # TX-power calibration ("walls"). These numbers belong to ONE card: the
 # author's 8812EU. They do nothing while power_mode = "none". To calibrate
 # your own card, run `maburcal start` on the ground station: it measures the
-# walls, writes them here and switches power_mode to "offset" for you.
+# walls, writes them here and switches power_mode to "offset" for you. A
+# rate that shows no wall keeps the power it had before calibrating.
 # On an 8812CU, calibrate on the channel you fly most.
 rate_walls_rel  = [63, 63, 62, 45, 22, 6, 9, 5]   # per MCS 0..7
 legacy_wall_rel = 63
@@ -51,10 +56,17 @@ roi_qp_normal      = 0
 # Either key may be left out; the [encoder] value above is used for it.
 # A rung with no entry uses both [encoder] values.
 [[encoder.rung]]
-mcs            = 5
-bw             = 40
+mcs            = 4
+bw             = 80
 airtime_budget = 0.60
-max_kbps       = 35000     # only flies if the GS ladder has an mcs 5 / 40 MHz rung
+max_kbps       = 50000     # top rung. Bench 2026-10-17: 50 Mbps costs CPU 0 ~60% in linkbench,
+                           # more with the camera running; watch the drone's cpu0 before trusting it
+
+[[encoder.rung]]
+mcs            = 3
+bw             = 80
+airtime_budget = 0.60
+max_kbps       = 35000
 
 [[encoder.rung]]
 mcs            = 4
@@ -135,6 +147,7 @@ max_num    = 6             # frames per aggregate (0 = off)
 max_time   = 32            # how long the radio waits to fill an aggregate (32 = about 0.8 ms; 1..8 turns it off)
 min_mcs_20 = 4             # aggregate only from this MCS up at 20 MHz
 min_mcs_40 = 2             # ...and at 40 MHz
+min_mcs_80 = 0             # ...and at 80 MHz (only MCS 3 and 4 fly there)
 
 [air_clock]
 # How much of the nominal link rate is really delivered, per MCS 0..7.
@@ -142,6 +155,8 @@ min_mcs_40 = 2             # ...and at 40 MHz
 shed_ms       = 25         # skip droppable enhance frames while the air backlog exceeds this
 efficiency_20 = [0.93, 0.88, 0.84, 0.80, 0.76, 0.76, 0.78, 0.76]  # at 20 MHz
 efficiency_40 = [0.77, 0.75, 0.75, 0.75, 0.74, 0.77, 0.76, 0.75]  # at 40 MHz
+efficiency_80 = [0.76, 0.76, 0.76, 0.76, 0.67, 0.67, 0.67, 0.67]  # at 80 MHz: MCS3 0.76 and MCS4 >= 0.67 measured
+                                                                  # 2026-10-17 (MCS4 was CPU-limited, so a floor)
 body_us       = 0          # fixed extra airtime per transmission, in microseconds
 
 [record]

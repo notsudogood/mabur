@@ -60,9 +60,9 @@ TEST(the_old_dvr_enabled_key_is_rejected) {
   CHECK(threw);
 }
 
-TEST(osd_defaults_are_off_and_conventional) {
+TEST(osd_defaults_are_on_and_conventional) {
   auto c = maburplay::load_config(write_tmp_play("backend = \"null\"\n"));
-  CHECK(c.osd.enable == false);
+  CHECK(c.osd.enable == true);   // like the shipped default file
   CHECK(c.osd.port == 14560);
   CHECK(c.osd.scale == "sharp");
   // 5 s = 5 missed snapshots at the drone's default msp.update_rate_hz of
@@ -144,9 +144,9 @@ TEST(dvr_burned_bounds_are_enforced) {
   CHECK(threw == true);
 }
 
-TEST(gs_osd_defaults_are_off_on_8302) {
+TEST(gs_osd_defaults_are_on_on_8302) {
   auto c = maburplay::load_config(write_tmp_play("backend = \"null\"\n"));
-  CHECK(c.osd.gs.enable == false);
+  CHECK(c.osd.gs.enable == true);
   CHECK(c.osd.gs.port == 8302);
   // 3 s = 6 missed samples at the sideport's 500 ms cadence.
   CHECK(c.osd.gs.stale_ms == 3000);
@@ -160,7 +160,7 @@ TEST(gs_osd_defaults_survive_an_osd_block_without_gs) {
   auto c = maburplay::load_config(write_tmp_play(
       "backend = \"null\"\n\n[osd]\nenable = true\nport = 15000\n"));
   CHECK(c.osd.enable == true);
-  CHECK(c.osd.gs.enable == false);
+  CHECK(c.osd.gs.enable == true);
   CHECK(c.osd.gs.port == 8302);
   CHECK(c.osd.gs.stale_ms == 3000);
   CHECK(c.osd.gs.font == "/usr/local/share/mabur/gs_osd.gfont");
@@ -176,17 +176,15 @@ TEST(gs_osd_keys_parse) {
   CHECK(c.osd.gs.stale_ms == 1500);
 }
 
-// There is one GS layout, so there is no style key: a config still
-// carrying one must refuse to boot like any other unknown key, not be
-// quietly accepted.
-TEST(gs_osd_style_key_is_gone) {
+// There is one GS layout, so style does nothing -- but a config saved
+// before the second layout went still carries it, and refusing to boot on
+// it left the screen on the splash after an image upgrade. Accepted,
+// ignored (with a stderr line), and the rest of the block still parses.
+TEST(gs_osd_style_key_is_ignored) {
   for (const char* v : {"compact", "essential"}) {
-    bool threw = false;
-    try {
-      maburplay::load_config(write_tmp_play(
-          (std::string("[osd.gs]\nstyle = \"") + v + "\"\n").c_str()));
-    } catch (const std::exception&) { threw = true; }
-    CHECK(threw == true);
+    auto c = maburplay::load_config(write_tmp_play(
+        (std::string("[osd.gs]\nstyle = \"") + v + "\"\nport = 9100\n").c_str()));
+    CHECK(c.osd.gs.port == 9100);
   }
 }
 

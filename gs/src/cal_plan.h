@@ -10,22 +10,22 @@ namespace maburgs {
 
 // The coarse grid is [kCoarseLo, kCoarseHi] step kCoarseStep: -41, -37,
 // ..., 59, 63. kCoarseLo is -41 and not the rounder -40 SO THAT THE LAST
-// CELL LANDS EXACTLY ON kRailRel (63). A row that never dips parks at the
-// rail (gs/src/cal_analysis.cpp), and the whole argument for the rail over
-// the old RSSI knee is that it sits inside territory this very run measured
-// at >=90% delivery -- which is only true while the rail IS a swept cell.
-// With -40 the top cell was 60 and the rail sat three indices past the top
-// of the sweep, unmeasured. Move kCoarseLo and kCoarseHi together or that
-// property silently breaks again.
+// CELL LANDS EXACTLY ON kRailRel (63), the top of the diff field. "Never
+// dipped" (kCalNoDip, gs/src/cal_analysis.cpp) then means no wall anywhere
+// the drone could be set to; such a row keeps its pre-calibration power
+// (2026-10-17; before that it parked at the rail). Move kCoarseLo and
+// kCoarseHi together or the top of the range goes unmeasured again.
 constexpr int kCoarseLo = -41;
 constexpr int kCoarseHi = 63;
 constexpr uint8_t kCoarseStep = 4;
 static_assert((kCoarseHi - kCoarseLo) % kCoarseStep == 0,
               "the coarse grid must land on kCoarseHi exactly");
 static_assert(kCoarseHi == mabur::rc::kRailRel,
-              "a no-dip row parks at kRailRel, so the sweep must measure it");
+              "no-dip must mean no wall up to the top of the field");
 constexpr int kFineHalfWidth = 8;
-constexpr uint16_t kCoarseFrames = 20;
+// 50, not 20: the 99% pass bar (CalThresholds) needs every frame of a coarse
+// cell, and at 20 frames one lost frame was already 95%. Coarse runs ~43 s.
+constexpr uint16_t kCoarseFrames = 50;
 constexpr uint16_t kFineFrames = 100;
 constexpr uint16_t kVerifyFrames = 100;
 constexpr uint16_t kSettleMs = 100;   // MEASURE THIS ON HARDWARE -- see docs
@@ -33,9 +33,9 @@ constexpr uint16_t kGapUs = 2000;
 
 mabur::rc::CalCmd make_coarse_plan(uint32_t nonce);
 
-// Only rows whose coarse pass found a real dip get refined. A kCalNoDip row's
-// wall parks at the rail (kRailRel) on a flat ceiling, where +/-2 indices
-// costs no measurable power; a kCalUndetermined row has nothing to refine.
+// Only rows whose coarse pass found a real dip get refined. A kCalNoDip row
+// keeps its pre-calibration power and a kCalUndetermined row has nothing to
+// refine.
 mabur::rc::CalCmd make_fine_plan(uint32_t nonce,
                                  const std::array<RateWall, 8>& coarse);
 

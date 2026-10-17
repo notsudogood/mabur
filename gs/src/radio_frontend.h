@@ -98,6 +98,7 @@ class RadioFrontend : public LinkCard {
   // so the next open_and_start() comes up at it (width_resync.h).
   bool set_width(uint8_t ch, uint8_t width_mhz) override;
   uint8_t width() const override { return width_.load(std::memory_order_acquire); }  // current/desired RX width
+  uint8_t max_width() const override { return 80; }
   bool retune_width(uint8_t ch, uint8_t width_mhz) override { return set_width(ch, width_mhz); }
   ScoutEnergy read_energy(bool with_nhm) override;  // GetRxEnergy -> ScoutEnergy
   ScoutEnergy read_energy_scout() override;         // GetRxEnergyScout -> ScoutEnergy

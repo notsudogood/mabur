@@ -26,6 +26,16 @@ TEST(width_40_needs_pair_primaries_sharing_one_offset) {
   CHECK(channel_set_issue({165}, 20, "x") == std::nullopt);                              // 20 MHz: any channel
 }
 
+// Width 80: every member is an 80 MHz block's lowest 20, the VHT80 primary
+// devourer tunes (36 52 100 116 132 149); the size/duplicate rules still hold.
+TEST(width_80_needs_block_lowest_channels) {
+  CHECK(channel_set_issue({36, 132}, 80, "x") == std::nullopt);
+  CHECK(channel_set_issue({36, 52, 100, 116, 132, 149}, 80, "x") == std::nullopt);
+  CHECK(channel_set_issue({36, 40}, 80, "x")->why.find("80 MHz block") != std::string::npos);
+  CHECK(channel_set_issue({165}, 80, "x").has_value());
+  CHECK(channel_set_issue({36, 36}, 80, "x")->why.find("duplicate") != std::string::npos);
+}
+
 TEST(field_name_rides_through) {
   CHECK(channel_set_issue({}, 20, "radio.channels")->field == "radio.channels");
 }

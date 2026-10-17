@@ -16,7 +16,7 @@ constexpr int kRssiNone = -999;
 // signed diff-field range. -1 is a legal index.
 constexpr int kNoWall = -128;   // undetermined: caller leaves config untouched
 static_assert(kNoWall == mabur::rc::kWallUndetermined, "one sentinel");
-constexpr int kRailRel = mabur::rc::kRailRel;  // a no-dip row parks at the field's top
+constexpr int kRailRel = mabur::rc::kRailRel;  // top of the field; the coarse sweep ends here
 
 // One (rate, idx) measurement. `expected` comes from the plan the GS itself
 // sent, never from anything the drone reports -- so a drone that dies
@@ -31,7 +31,7 @@ struct CalCell {
 };
 
 enum CalFlag : uint32_t {
-  kCalNoDip = 1u << 0,          // never fell below threshold; wall = the rail
+  kCalNoDip = 1u << 0,          // never fell below threshold; wall = kNoWall (keep power)
   kCalUndetermined = 1u << 1,   // never reached threshold; no wall derivable
   kCalNarrow = 1u << 2,         // usable window too thin to trust
   kCalSaturated = 1u << 3,      // RX front-end compression suspected
@@ -41,7 +41,10 @@ enum CalFlag : uint32_t {
 };
 
 struct CalThresholds {
-  double deliver_pct = 90.0;    // the >=90% in "first contiguous >=90% run"
+  // The bar a cell must reach. 99%, the ladder's own probe gate: at 90% a
+  // rate losing ~10% at full power read as "no dip" (flight 2026-10-12,
+  // docs/next-build-backlog.md item 2). At 50 coarse frames that is all 50.
+  double deliver_pct = 99.0;
   double sat_rssi_dbm = -45.0;  // above this, suspect RX saturation
   int narrow_span = 4;          // wall - floor <= this => kCalNarrow
   int card_disagree = 2;        // per-card wall gap beyond this => flag
@@ -50,16 +53,19 @@ struct CalThresholds {
   // never compresses in two bench runs of four, dropping a rail-parked rate
   // onto a "wall" -- up to ~16 dB low had the cell sat at idx 40
   // (docs/calibration.md). So a cell does not end the run when ALL of:
-  //   - it has at most noise_max_frames frames (the 20-frame coarse pass;
-  //     the 100-frame fine pass keeps the strict bar),
-  //   - it delivered at least noise_pct (a shallow miss: 15+ of 20), and
+  //   - it has at most noise_max_frames frames (the coarse pass, 50 frames
+  //     since 2026-10-17; the 100-frame fine pass keeps the strict bar),
+  //   - it delivered at least noise_pct (a shallow miss), and
   //   - the next TWO cells are back at deliver_pct.
   // The last two guard the overdriving direction. Past a real wall the
   // bench saw deep dips (63%, 32%, 4%, 1%) and one island of good delivery
   // 5 indices wide (mcs6, idx 53-57, docs/findings/2026-07-16-txagc-calibration.md): two
   // coarse cells span 8, so the run cannot climb through that island. A
   // forgiven cell is flagged kCalNoiseCell in cal.log either way.
-  double noise_pct = 75.0;
+  // 2026-10-17: narrowed from 75% to 95% (at most 2 of 50 frames lost) so
+  // the rule cannot climb through the band where compression starts, which
+  // shows as a few percent lost per cell, not one deep miss.
+  double noise_pct = 95.0;
   uint16_t noise_max_frames = 50;
 };
 

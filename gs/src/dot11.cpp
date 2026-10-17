@@ -76,11 +76,15 @@ RxVerdict fill_rx_body(const uint8_t* d, size_t len, const RxMeta& meta,
   //    unclosed (link.attrib.close_ms null through 5 promotes).
   //  - kestrel (8852B/C): the AX 9-bit code, HT = 0x80 + mcs (the encoding
   //    RxPacket.h's comment describes; it does NOT apply to jaguar chips).
-  // Everything else (legacy CCK/OFDM, VHT, HE, 2SS) is "unknown" for
-  // attribution purposes -- the drone injects HT-1SS only.
+  //  - VHT-1SS on jaguar (0x2C + mcs): the 80 MHz rungs. Their MCS
+  //    differs from the 40 MHz rung beside them (4/40 -> 3/80 -> 4/80), so
+  //    the bare index still marks a rung boundary.
+  // Everything else (legacy CCK/OFDM, HE, 2SS) is "unknown" for
+  // attribution purposes.
   const uint16_t dr = meta.data_rate;
   m.mcs = (dr >= 0x0C && dr <= 0x13) ? static_cast<uint8_t>(dr - 0x0C)
           : (dr >= 0x80 && dr <= 0x87) ? static_cast<uint8_t>(dr - 0x80)
+          : (dr >= 0x2C && dr <= 0x35) ? static_cast<uint8_t>(dr - 0x2C)
                                        : 255;
   m.rate_code = dr;
   m.rx_bw = meta.bw;

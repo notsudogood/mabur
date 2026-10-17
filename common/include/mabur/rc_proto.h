@@ -295,7 +295,7 @@ struct CalCmd {
 // wall; "undetermined" is this sentinel, outside the range.
 constexpr int kRelMin = -64;
 constexpr int kRelMax = 63;
-constexpr int kRailRel = 63;  // a no-dip row's wall: rail to the top of the range
+constexpr int kRailRel = 63;  // top of the relative range; the coarse sweep ends here
 constexpr int16_t kWallUndetermined = -128;
 
 // VRX -> VTX: the measured table. A wall of kWallUndetermined is

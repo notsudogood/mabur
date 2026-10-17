@@ -22,7 +22,10 @@ inline bool channel_set_member(const std::vector<uint8_t>& set, uint8_t ch) {
 
 // nullopt = valid. 1-8 unique members in [1,177]; at 40 MHz every member is
 // a standard HT40 pair primary and all share one ht40_offset (FastRetune
-// keeps the offset; docs/bw40.md "Channels").
+// keeps the offset; docs/bw40.md "Channels"). At 80 MHz every member is the
+// lowest 20 of a standard 80 MHz block (vht80_block_lowest): devourer puts
+// the 80 MHz primary there, and the 40 MHz rungs ride the block's lower 40,
+// which is then always an HT40+ pair (docs/bw80-research-2026-10-12.md).
 inline std::optional<ChannelSetIssue> channel_set_issue(const std::vector<uint8_t>& set,
                                                         uint8_t width_mhz,
                                                         const std::string& field) {
@@ -35,6 +38,14 @@ inline std::optional<ChannelSetIssue> channel_set_issue(const std::vector<uint8_
     for (size_t j = 0; j < i; ++j)
       if (set[j] == ch)
         return ChannelSetIssue{field, "duplicate channel " + std::to_string(ch)};
+  }
+  if (width_mhz == 80) {
+    for (uint8_t ch : set)
+      if (!vht80_block_lowest(ch))
+        return ChannelSetIssue{field, "channel " + std::to_string(ch) +
+                                          " is not the lowest channel of an 80 MHz block "
+                                          "(36 52 100 116 132 149)"};
+    return std::nullopt;
   }
   if (width_mhz == 40) {
     const uint8_t off0 = ht40_offset(set[0]);

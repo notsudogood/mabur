@@ -166,6 +166,13 @@ std::string stats_json(const Stats& s);
 std::optional<std::string> channel_width_error(const maburgs::Config& cfg, Mode mode,
                                                int start_ch, int width);
 
+// The GS bundle may top out at 80 MHz (radio.width = 80 and 80 MHz ladder
+// rungs, docs/bw80.md); the page tunes 20 or 40. So the web GS flies the
+// ladder up to 40: it drops the 80 MHz rungs and treats radio.width 80 as
+// 40 (the 80 MHz block's lower 40, where the drone flies its 20/40 rungs).
+// Returns how many rungs it dropped.
+int drop_80mhz_rungs(maburgs::Config& cfg);
+
 // The page's relay stats fields, appended to each STATS line (keys as the
 // web relay client emits them; web/ui/src/lib/view.js reads them).
 std::string relay_stats_fields(const maburgs::RelayStatsIn& r);

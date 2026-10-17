@@ -8,6 +8,11 @@ Branch in the main checkout instead. Split checkouts drift here — a PR
 merges on GitHub while the main checkout sits behind, and merged work looks
 missing.
 
+**Next-build checklist:** `docs/next-build-backlog.md` is the running list
+of what goes into the next GS / drone build. Read it before planning a
+build; add an item there when the operator pins one ("pin that for now"),
+mark it when it ships.
+
 **Code review:** do NOT run Claude Code's built-in `/review` /
 `code-review` skill (nor `/code-review ultra`) on mabur work — too
 expensive for diffs that are gated on tests plus an inline read. This

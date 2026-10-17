@@ -296,3 +296,49 @@ Changes:
 
 Bench gate: auto vs pinned at 35 Mb/s, 3 min each, same setup: `fec` p99,
 loss, hop count and dwell count must match within noise. GS only.
+
+## 8. Drone: onboard recorder off cpu0 (pinned 2026-10-17)
+
+Question from the operator: will recording on the drone fit beside 50 Mb/s
+live video? Today the recorder threads (`mbr-rec`, `mbr-recdrain`) inherit
+the main thread's cpu0 pin, the core the USB senders and FEC worker
+already load to an estimated 80-85 % at 50 Mb/s (unmeasured with the
+camera running). The re-encode is the SoC's hardware encoder; the CPU part
+is the copy and the SD writes: after the 2026-09-26 drain rewrite ~2 % of
+a core user time plus ~7 % sys in the writer, kernel SD writeback and
+iowait (`docs/findings/2026-09-26-vtx-recorder-bench.md`, 40 Mb/s record).
+
+Changes:
+1. `record.core = "rest" | "hot"`, default `"rest"` (today's layout).
+2. Both recorder threads at the lowest priority (SCHED_IDLE or nice 19)
+   on whichever core, so the video packer always preempts them and a
+   short CPU costs recorded frames, not the live link.
+
+Risk: the 2026-10-13 bench (item 3's table) put the USB senders on cpu1
+and txq went from 4-6 ms to 15-17 ms under motion, because big motion
+frames hit the packer and the senders at once. The recorder is off the
+live path and light, but it copies those same frames at the same moment,
+and its SD writes run partly in the kernel where the packer cannot always
+preempt them.
+
+Bench gate: first the d8 test doc's optional step 4 (record to SD while
+pinned at MCS4/80 50 Mb/s, drone cpuprobe): if cpu0 has room, this item
+can wait. Otherwise A/B "rest" vs "hot" at 50 Mb/s with motion: cpu0,
+cpu1, txq, e2e, and recorded-frame drops.
+
+## Proposed, not yet agreed
+
+Gaps found while building gs8 / d8. Ask before scheduling.
+
+- **VHT rates in the calibrated power table.** With `power_mode =
+  "offset"`, devourer's custom table leaves every VHT rate at MCS7's level
+  (`devourer/src/TxPower.h`), so the 80 MHz rungs fly 3-4 dB under stock.
+  maburd warns at boot. Fix: extend `TxRateDiffsQdb` to VHT1SS MCS0-7
+  (a devourer contract change across generations).
+- **Channel 149 at 80 MHz.** The 149-161 block is non-DFS but carries an
+  8812EU spur at 155 (notched). A 5-minute bench run on 149 before adding
+  it to the default set `[36, 132]`.
+- **A better-looking bottom rung.** MCS0/20 flies 1080p60 at 500 kb/s:
+  robust but very blocky. A lower resolution or frame rate there would
+  look better; costs a keyframe on every switch into or out of it.
+

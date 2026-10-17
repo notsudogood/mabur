@@ -390,12 +390,26 @@ Open questions from the mock-up (the guide answers 1 and leans on 2-4):
 4. Genlock's name: the Ascent's "Smooth" is a link preset, which our
    Bandwidth switch now replaces; genlock stays out of the menu (ssh).
 
-New questions from v5:
-5. Hop switch on the Channel tab only (as the Ascent), or in the Settings
-   grid too?
-6. Spectrum as its own tab, or a button on the Channel tab?
-7. On Normal, channel boxes as 40 MHz pairs (e.g. 36-40) instead of the
-   80 MHz blocks?
+Decided on v5 (2026-10-17):
+5. Hop stays on the Channel tab only.
+6. Spectrum keeps its own tab, and its results colour the Channel tab's
+   signal bars (same thresholds and colours as its verdicts: Clear green,
+   Fair yellow, Busy red), so a busy 36 shows red there; the breakdown
+   stays on Spectrum.
+7. Channel boxes show whole 80 MHz blocks on Normal too: other pilots may
+   fly 80 MHz alongside, and their signal covers the whole block.
+8. **Spectrum steers the hop.** Today the in-flight hop ranks
+   `radio.channels` members from the spare card's in-flight dwells
+   (gs/src/hop_ranker.h: energy, decoded foreign frames, NHM busy) and holds
+   when no candidate qualifies. Add the last Spectrum scan as prior
+   evidence per member (aged out, then overtaken by in-flight visits),
+   weight Wi-Fi occupancy above other energy (routers stay put), and never
+   hop to a member the evidence rates Busy: hold instead. Goal: indoors the
+   link does not drop onto 36-48, where most routers sit. Counterpart: the
+   scan is taken where the GS stands, which suits the downlink it receives,
+   but up high the drone hears more routers than the GS does; the in-flight
+   dwells are what catch that, and backlog item 7 pauses them on the fast
+   rungs.
 
 ## 10. 10 MHz bottom rung, for penetration (agreed 2026-10-17, later)
 

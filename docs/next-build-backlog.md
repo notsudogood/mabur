@@ -334,7 +334,30 @@ frame rate, offering what the auto-detected sensor can do and greying out
 the rest (IMX415: no 1080p120; IMX335: everything open). Everything
 granular stays out of the menu and is set over ssh via the GS's open AP.
 
-Design mock-up (v4, 2026-10-11): https://claude.ai/artifact/5AtztQm49YgZR5PNwLD2CR
+Design mock-up (v5, 2026-10-17, on the Ascent layout below):
+https://claude.ai/artifact/5AtztQm49YgZR5PNwLD2CR
+
+Operator decisions 2026-10-17:
+- **Bandwidth: Normal / Wide** replaces the Ascent's Smooth / High Quality /
+  Long Range presets. Normal stops the ladder at MCS4/40 (25 Mb/s); Wide
+  re-enables the 80 MHz rungs (MCS3/80, MCS4/80, up to 50 Mb/s). Both keep
+  automatic width switching (20/40, plus 80 on Wide). Implementation is
+  cheap: Normal = the ladder without its 80 MHz rungs, as
+  `webgs::drop_80mhz_rungs` already does for the web GS; cards then never
+  widen (gs/src/width_policy.h).
+- **Channel hopping switch**, default on. In v5 it sits on the Channel tab
+  (where the Ascent has its Hop switch). On = `radio.channel = "auto"`
+  (boot pick + in-flight hop); Off = pinned to the channel the operator
+  presses.
+- **Spectrum tab**, after tipoman9/Spectrum
+  (https://github.com/tipoman9/Spectrum). Its `8812eu.py` reads the vendor
+  kernel driver's `/proc/net/rtl88x2eu/<if>/chan_info` (quality,
+  availability, utilization, Wi-Fi vs interference utilization) after a
+  passive scan. devourer reads the same counters itself (busy airtime /
+  `clm`, `nhm_env` for non-Wi-Fi energy, `ArmChannelBusy`), so the GS can
+  sweep 36-165 with the spare card while the link flies on the other one,
+  show Wi-Fi vs other signals per channel and a verdict per 80 MHz block
+  (40 MHz pair on Normal), and add or remove a block from the channel set.
 
 Reference: the Caddx Ascent VRX Quick Start Guide V1.0 (operator-supplied
 PDF, 2026-10-17; not committed). Its screens differ from mock-up v4, which
@@ -364,10 +387,27 @@ Open questions from the mock-up (the guide answers 1 and leans on 2-4):
    lagged badly on the bench, so 1440p and 4K probably stay off.
 3. Should the drone SD copy follow the live size and frame rate? The Ascent
    gives the recording its own resolution under Record Set.
-4. Genlock's name: the Ascent's "Smooth" is a link preset (Preference),
-   so "Smooth video" for genlock would clash with that word. A Preference
-   preset of our own (e.g. Smooth / High Quality / Long Range mapped onto
-   the ladder) is a separate idea, not yet agreed.
+4. Genlock's name: the Ascent's "Smooth" is a link preset, which our
+   Bandwidth switch now replaces; genlock stays out of the menu (ssh).
+
+New questions from v5:
+5. Hop switch on the Channel tab only (as the Ascent), or in the Settings
+   grid too?
+6. Spectrum as its own tab, or a button on the Channel tab?
+7. On Normal, channel boxes as 40 MHz pairs (e.g. 36-40) instead of the
+   80 MHz blocks?
+
+## 10. 10 MHz bottom rung, for penetration (agreed 2026-10-17, later)
+
+A new lowest rung below MCS0/20: MCS0 at 10 MHz narrowband, under both
+Bandwidth settings, for getting through walls and trees at the edge.
+devourer already does 5/10 MHz on the 8812EU (Jaguar3 narrowband,
+`FastSetBandwidth` for a cheap 20 <-> 10 switch). Needs: a 10 MHz rung in the
+ladder and profile byte, the GS cards following it (like the 80 MHz width
+policy, in the other direction), and a bench check of reach vs MCS0/20.
+Counterpart: half the airtime capacity of MCS0/20 (about 3 Mb/s nominal),
+so the 500 kb/s floor still fits but re-sends get tighter; and 10 MHz is
+more sensitive to frequency offset between the two radios.
 
 ## Proposed, not yet agreed
 

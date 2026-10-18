@@ -5,8 +5,9 @@ skip-slice fills, the software NACK, link pairing, the channel set) is
 merged, with three NACK fixes on top — section "Merged 2026-10-10" below.
 Step 4 (slices) is therefore built and on (`[venc] slices = 4`); NACK is
 built, off by default, with an in-flight on/off A/B. Step 1 (the ladder) is
-a config change ready to fly; step 2 (genlock) is built, flown twice, and
-on in the bundles from 2026-10-18 (both ends' code defaults stay off); step 5 is FEC shaped per rung, its
+a config change ready to fly; step 2 (genlock) flew twice and was retired
+on 2026-10-18 for Gilang's phase lock (merged from his master,
+`docs/phase-lock.md`; the history below is kept as the record); step 5 is FEC shaped per rung, its
 first half a config change.** This replaces the feedback-repair rollout
 (`docs/feedback-repair-rollout.md`, parked the same day — its results and why
 are recorded there) as the line of work on the link.
@@ -136,7 +137,12 @@ late frames by making every frame later.
      episodes. *Kill:* if the garage stretch loses no fewer frames than on the
      all-40 ladder, the bench range result does not carry to this site — keep
      whichever loses fewer.
-2. **Genlock: the camera locked to the screen.** The vsync-locked player this
+2. **Genlock: the camera locked to the screen.** *Retired 2026-10-18:
+   replaced by Gilang's phase lock (`docs/phase-lock.md`), which steers the
+   boot-trimmed sensor through `Rcf::snr_off` and places frames by capture
+   time while locked. `T_GENLOCK`/`CAP_GENLOCK` are gone from the wire
+   (RC_VERSION 16); old `[genlock]` / `display.genlock` config keys still
+   load and do nothing. What follows is the record of what ours did.* The vsync-locked player this
    step first named already exists (`gs/player/src/frame_regulator.h`,
    `vblank_estimator.h`, 2026-08-31, on in the bundle; `dsp` 5/5 ms in both
    2026-10-09 flights). What it cannot fix is the beat between two clocks:

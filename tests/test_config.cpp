@@ -1471,25 +1471,16 @@ TEST(low_power_defaults_are_disabled_and_parse) {
   }
 }
 
-TEST(genlock_defaults_off_and_parses) {
-  {
-    auto path = write_temp_toml("");
-    auto cfg = load_config(path.string());
-    CHECK(cfg.genlock.enable == false);
-    std::filesystem::remove(path);
-  }
-  {
-    auto path = write_temp_toml("[genlock]\nenable = true\n");
-    auto cfg = load_config(path.string());
-    CHECK(cfg.genlock.enable == true);
-    std::filesystem::remove(path);
-  }
-  {
-    auto path = write_temp_toml("[genlock]\nrate = 60\n");
-    std::string msg = what_of([&] { (void)load_config(path.string()); });
-    CHECK(msg.find("genlock") != std::string::npos);
-    std::filesystem::remove(path);
-  }
+TEST(retired_genlock_section_still_loads) {
+  // [genlock] was retired for the GS phase lock on 2026-10-18. A drone
+  // config written before then (sysupgrade without -n keeps it) must still
+  // load; the section is ignored whatever it holds.
+  auto path = write_temp_toml("[genlock]\nenable = true\n");
+  (void)load_config(path.string());
+  std::filesystem::remove(path);
+  auto path2 = write_temp_toml("[genlock]\nrate = 60\n");
+  (void)load_config(path2.string());
+  std::filesystem::remove(path2);
 }
 
 TEST(low_power_unknown_key_throws_naming_it) {

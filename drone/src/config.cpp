@@ -648,9 +648,13 @@ void parse_record(const Value& j, RecordCfg& r) {
     fail("record.min_free_mb", "must be in [0,1000000]");
 }
 
-void parse_genlock(const Value& j, GenlockCfg& g) {
-  check_known_keys(j, {"enable"}, "genlock");
-  assign_if_present(j, "enable", g.enable, "genlock");
+// [genlock] is retired (2026-10-18): the GS phase lock steers the sensor
+// through the RCF, on the boot trim, with no drone switch. An old file that
+// still carries the section loads, with one line saying it does nothing.
+void note_genlock_retired() {
+  std::fprintf(stderr,
+               "config: [genlock] is retired -- the ground station's phase lock steers the "
+               "camera now; the section is ignored and can be deleted\n");
 }
 
 void parse_nack(const Value& j, NackDroneCfg& n) {
@@ -746,7 +750,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
 
   static const char* kSections[] = {"radio", "fec", "encoder", "venc",
                                     "link", "msp", "ampdu", "air_clock", "low_power", "record",
-                                    "genlock", "nack"};
+                                    "nack"};
   check_known_keys(j, {"radio", "fec", "encoder", "venc", "link", "msp", "ampdu", "air_clock", "low_power", "record", "genlock", "nack"}, "");
 
   // A whole missing section means none of its keys are visited below, so
@@ -769,7 +773,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
   if (j.contains("air_clock")) parse_air_clock(j.at("air_clock"), cfg.air_clock);
   if (j.contains("low_power")) parse_low_power(j.at("low_power"), cfg.low_power);
   if (j.contains("record")) parse_record(j.at("record"), cfg.record);
-  if (j.contains("genlock")) parse_genlock(j.at("genlock"), cfg.genlock);
+  if (j.contains("genlock")) note_genlock_retired();
   if (j.contains("nack")) parse_nack(j.at("nack"), cfg.nack);
 
   // Cross-section checks, only when the mode is on: a disabled mode's

@@ -85,8 +85,6 @@ constexpr size_t kCalResultLen = 5 + 4 + 16 + 2;
 // magic(2) | ver | type | flags | counter(4) | sid | n | n * (first_seq(4) bitmap(4))
 constexpr size_t kNackFixedLen = 5 + 4 + 1 + 1;  // 11, INCLUDES the n byte at [10]
 constexpr size_t kNackEntryLen = 8;
-// magic(2) | ver | type | flags | counter(4) | mfps(4)
-constexpr size_t kGenlockLen = 5 + 4 + 4;  // 13
 
 }  // namespace
 
@@ -431,33 +429,6 @@ std::optional<Nack> parse_nack(const uint8_t* buf, size_t len) {
   return n;
 }
 
-std::vector<uint8_t> pack_genlock(const Genlock& g, const LinkKey& key, const TagCtx& ctx) {
-  std::vector<uint8_t> body;
-  body.reserve(kGenlockLen + kTagLen + 2);
-  put16(body, RC_MAGIC);
-  body.push_back(RC_VERSION);
-  body.push_back(T_GENLOCK);
-  body.push_back(0);  // flags: nothing
-  put32(body, g.counter);
-  put32(body, g.mfps);
-  put_tag(body, key, ctx);
-  put_crc(body);
-  return body;
-}
-
-std::optional<Genlock> parse_genlock(const uint8_t* buf, size_t len) {
-  if (len < kGenlockLen + kTagLen + 2) return std::nullopt;
-  if (get16(buf, 0) != RC_MAGIC || buf[2] != RC_VERSION || buf[3] != T_GENLOCK)
-    return std::nullopt;
-  if (get16(buf, kGenlockLen + kTagLen) != crc16_ccitt(buf, kGenlockLen + kTagLen))
-    return std::nullopt;
-  Genlock g;
-  g.counter = get32(buf, 5);
-  g.mfps = get32(buf, 9);
-  if (g.mfps > kGenlockMaxMfps) return std::nullopt;
-  return g;
-}
-
 bool verify_control(const uint8_t* buf, size_t len, const LinkKey& key, const TagCtx& ctx) {
   // The tag sits at the frame's STRUCTURAL end, never at len - 10: on
   // hardware the drone's body still carries devourer's trailing 4-byte
@@ -468,7 +439,6 @@ bool verify_control(const uint8_t* buf, size_t len, const LinkKey& key, const Ta
     case T_DISC: tag_at = DISC_LEN; break;
     case T_RCF: tag_at = RCF_HEAD_LEN; break;
     case T_CAL_RESULT: tag_at = kCalResultLen; break;
-    case T_GENLOCK: tag_at = kGenlockLen; break;
     case T_NACK: {
       if (len < kNackFixedLen) return false;
       const uint8_t n = buf[kNackFixedLen - 1];

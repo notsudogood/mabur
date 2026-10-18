@@ -477,7 +477,7 @@ Counterpart: half the airtime capacity of MCS0/20 (about 3 Mb/s nominal),
 so the 500 kb/s floor still fits but re-sends get tighter; and 10 MHz is
 more sensitive to frequency offset between the two radios.
 
-## 11. GS: channel-health reads off the core thread (Gilang's stall fix, agreed 2026-10-18)
+## 11. GS: channel-health reads off the core thread (Gilang's stall fix, agreed 2026-10-18; MERGED 522c3fd6, ships with the next image)
 
 Evidence (bench 2026-10-18, gs8 + d8 pinned at MCS4/80, test doc step 5):
 the `au_tail` gauge (last body's RX stamp to the AU's close on the core
@@ -500,10 +500,14 @@ device-use lock ordering it against teardown, bursts and dwells
 there. His numbers: 0.131 -> 0.019 stalls/s and queue-wait p99.9 11.7 ->
 6.0 ms with the window at 2000 ms. *Against it:* the residual 0.02/s is
 the USB I/O itself, which the sampler moves but does not remove; his
-result is his build on a Radxa. Gate: step 5's run A on the new image,
-same pin and scene, shows at most ~3 of 24 windows at 8 ms or more.
+result is his build on a Radxa. Gate: the new image, same pin (MCS4/80)
+and scene, shows at most ~3 of 24 five-second windows with an RX-queue wait
+of 8 ms or more. The new image no longer prints the `au_tail` gauge
+`stall.sh` reads (Gilang dropped it); the same wait is per AU in `au.log`
+(aulog 7: column 17 `t_last`, 18 `t_drain`, so `$18 - $17`), so the test
+doc's step 5 needs an au.log version of the script for that image.
 
-## 12. Gilang's phase lock in place of our genlock (agreed 2026-10-18)
+## 12. Gilang's phase lock in place of our genlock (agreed 2026-10-18; MERGED 522c3fd6, ours retired, ships with the next image)
 
 Evidence: his bench (Radxa, session 0148) unlocked e2e p50/p90/p99
 40.6/48.1/51.0 ms -> locked steady 35.4/36.3/37.0; Orange Pi 33.2/35.7/37.4;
@@ -524,9 +528,20 @@ drone, the GS and the hosted web GS together; conflicts with our genlock in
 `star6e_controls_apply_sensor_mfps` / `genlock_trim.h` against his boot trim
 plus offset). Merging his master also brings his Orange Pi GS work
 (v4l2req decode, colortrans CTM). On his master since 2026-10-18 (PR #85,
-master 5d642c0d; 116 commits not in ours, ~30 files conflict in a trial
-merge). Plan: merge his master, retire our genlock -- it is on in the
-bundles since 96959bcf, so the bundle default moves with it.
+master 5d642c0d), merged into ours as 522c3fd6 (31 files resolved), and our
+genlock removed in the commit after it: T_GENLOCK/CAP_GENLOCK off the wire,
+the drone's sensor_mfps path and debug verb gone, old `[genlock]` /
+`display.genlock` keys still load (one stderr line) so a kept config boots.
+Flag day: RC_VERSION 16, so the next GS and drone images go out together.
+Also arrives with the merge: demand refresh (`venc.gop_s` 0, the GS asks
+for an IDR on damage; our record-start keyframe ask gives way to his
+`refresh dvr`), reg.log/frame.log, and `display.chain_budget` 0 /
+`vsync_lead_ms` 5. Gate: on the bench, `reg.log` shows `lock=lock` within
+~20 s of video and stays there; flightreport's PHASE LOCK section reads it.
+Flash both ends to fresh defaults, as for gs8/d8 (drone `sysupgrade -n`, GS
+config files deleted): the code defaults keep `phase_lock`, `sched_cap_ms`
+and demand refresh OFF, so a config kept from gs8/d8 (which has none of
+those keys, and `gop_s` 0.5) would run without them.
 
 ## 13. Player OSD shows 80 MHz rungs as "/80" (done in code, ships with the next GS image)
 

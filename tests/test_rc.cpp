@@ -669,51 +669,6 @@ TEST(telem_ack_is_the_cal_active_bit_alone) {
   CHECK((got->flags & 0x40) != 0);
 }
 
-TEST(genlock_golden_bytes_round_trip_tag_and_fcs) {
-  // Pins the T_GENLOCK layout: a new type inside RC_VERSION 15, tagged like
-  // T_NACK with its own counter as the tag's seq32.
-  using namespace mabur::rc;
-  Genlock g;
-  g.counter = 0x04030201;
-  g.mfps = 59940;  // 0x0000EA24
-  TagCtx ctx{11, 22, g.counter};
-  auto b = pack_genlock(g, test_key(), ctx);
-  // magic(2) ver type flags counter(4) mfps(4) = 13, tag 8, crc 2
-  REQUIRE(b.size() == 23);
-  const uint8_t head[13] = {0x43, 0x52, RC_VERSION, 8, 0, 0x01, 0x02, 0x03,
-                            0x04, 0x24, 0xEA, 0x00, 0x00};
-  for (size_t i = 0; i < 13; ++i) CHECK(b[i] == head[i]);
-  CHECK(frame_type(b.data(), b.size()) == T_GENLOCK);
-  CHECK(verify_control(b.data(), b.size(), test_key(), ctx));
-  CHECK(!verify_control(b.data(), b.size(), test_key(), TagCtx{11, 22, g.counter + 1}));
-  CHECK(!verify_control(b.data(), b.size(), kDefaultLinkKey, ctx));
-  b.insert(b.end(), {0xde, 0xad, 0xbe, 0xef});  // the trailing FCS the RX path keeps
-  auto got = parse_genlock(b.data(), b.size());
-  REQUIRE(got.has_value());
-  CHECK(got->counter == g.counter);
-  CHECK(got->mfps == 59940);
-  CHECK(verify_control(b.data(), b.size(), test_key(), ctx));
-  auto bad = b;
-  bad[10] ^= 0x01;
-  CHECK(!parse_genlock(bad.data(), bad.size()).has_value());
-  CHECK(!parse_genlock(b.data(), 22).has_value());
-  // Not mistaken for another type's body.
-  CHECK(!parse_nack(b.data(), b.size()).has_value());
-}
-
-TEST(genlock_rejects_rates_no_sensor_runs_at) {
-  mabur::rc::Genlock g;
-  g.mfps = 0;  // release
-  auto b = mabur::rc::pack_genlock(g);
-  CHECK(mabur::rc::parse_genlock(b.data(), b.size()).has_value());
-  g.mfps = mabur::rc::kGenlockMaxMfps;
-  b = mabur::rc::pack_genlock(g);
-  CHECK(mabur::rc::parse_genlock(b.data(), b.size()).has_value());
-  g.mfps = mabur::rc::kGenlockMaxMfps + 1;
-  b = mabur::rc::pack_genlock(g);
-  CHECK(!mabur::rc::parse_genlock(b.data(), b.size()).has_value());
-}
-
 TEST(rc_version_is_sixteen) { CHECK(mabur::rc::RC_VERSION == 16); }
 
 TEST(nack_final_layout_round_trip_and_tag) {

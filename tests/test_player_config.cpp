@@ -400,19 +400,15 @@ TEST(display_chain_budget_key) {
   CHECK(threw == true);
 }
 
-TEST(display_genlock_keys) {
-  // Genlock: off by default (unproven per sensor), 10% allowed to miss.
-  const auto bare = maburplay::load_config(write_tmp_play(""));
-  CHECK(bare.display.genlock == false);
-  CHECK(bare.display.genlock_miss_pct == 10);
-  const auto cfg = maburplay::load_config(
+TEST(retired_genlock_keys_still_load) {
+  // display.genlock / genlock_miss_pct were retired for phase_lock on
+  // 2026-10-18. A GS config written before then must still load (the
+  // player would otherwise exit on boot), and the keys change nothing.
+  const auto old = maburplay::load_config(
       write_tmp_play("[display]\ngenlock = true\ngenlock_miss_pct = 5\n"));
-  CHECK(cfg.display.genlock == true);
-  CHECK(cfg.display.genlock_miss_pct == 5);
-  bool threw = false;
-  try { maburplay::load_config(write_tmp_play("[display]\ngenlock_miss_pct = 0\n")); }
-  catch (const std::exception&) { threw = true; }
-  CHECK(threw == true);
+  const auto bare = maburplay::load_config(write_tmp_play(""));
+  CHECK(old.display.phase_lock == bare.display.phase_lock);
+  CHECK(old.display.vsync_lead_ms == bare.display.vsync_lead_ms);
 }
 
 TEST(display_sched_cap_ms_key) {

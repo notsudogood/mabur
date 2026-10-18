@@ -222,7 +222,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
         static_cast<int>(get_int(d, "regulate_ms", 12, 0, 100, "display"));
     c.display.vsync_lock = get_bool(d, "vsync_lock", c.display.vsync_lock, "display");
     c.display.vsync_lead_ms =
-        static_cast<int>(get_int(d, "vsync_lead_ms", 6, 1, 10, "display"));
+        static_cast<int>(get_int(d, "vsync_lead_ms", 5, 1, 10, "display"));
     c.display.chain_budget =
         static_cast<int>(get_int(d, "chain_budget", 0, 0, 60, "display"));
     c.display.sched_cap_ms =
@@ -230,9 +230,13 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
     c.display.phase_lock = get_bool(d, "phase_lock", c.display.phase_lock, "display");
     c.display.phase_margin_ms =
         static_cast<int>(get_int(d, "phase_margin_ms", 4, 1, 10, "display"));
-    c.display.genlock = get_bool(d, "genlock", c.display.genlock, "display");
-    c.display.genlock_miss_pct =
-        static_cast<int>(get_int(d, "genlock_miss_pct", 10, 1, 50, "display"));
+    // genlock / genlock_miss_pct: our older camera steering, retired
+    // 2026-10-18 for phase_lock. Still accepted, so a config written before
+    // then loads; they do nothing.
+    if (d.contains("genlock") || d.contains("genlock_miss_pct"))
+      std::fprintf(stderr,
+                   "maburplay: config: display.genlock is retired -- phase_lock steers the "
+                   "camera now; the key is ignored and can be deleted\n");
   }
 
   if (c.display.phase_lock &&

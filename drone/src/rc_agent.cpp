@@ -587,30 +587,6 @@ void RcAgent::run_congestion_guard(uint64_t now_ms, const RadioHealth& health) {
 
 void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
   int type = rc::frame_type(body, len);
-  if (type == rc::T_GENLOCK) {
-    // Genlock (efficient-link plan step 2): a standing camera-rate setpoint.
-    // Only when this drone opted in -- without [genlock] enable it never
-    // advertised CAP_GENLOCK, so a setpoint here is a GS that ignored that.
-    // Tagged like T_NACK: the frame's counter is the tag's seq32, and only a
-    // counter above the last one accepted in this session is fresh.
-    auto g = rc::parse_genlock(body, len);
-    if (!g.has_value() || !cfg_.genlock.enable) return;
-    uint64_t session = 0;
-    if (!verify_session_tagged(body, len, g->counter, &session) ||
-        (session == genlock_session_ && g->counter <= genlock_counter_)) {
-      note_auth_reject();
-      return;
-    }
-    genlock_session_ = session;
-    genlock_counter_ = g->counter;
-    ++genlock_rx_;
-    genlock_mfps_ = g->mfps;
-    if (act_.set_sensor_mfps(g->mfps))
-      ++genlock_applied_;
-    else
-      ++genlock_refused_;
-    return;
-  }
   if (type == rc::T_DISC) {
     auto d = rc::parse_disc(body, len);
     if (!d.has_value()) return;
@@ -982,11 +958,7 @@ rc::DiscAck RcAgent::make_disc_ack(uint32_t vrx_nonce, uint32_t vtx_nonce, uint8
   // CAP_CALIBRATE: this build understands T_CAL_CMD/T_CAL_RESULT (main.cpp
   // wires them up) -- a real gate, unlike CAP_TELEMETRY:
   // gs/src/cal_session.cpp's start() refuses a session outright without it.
-  // CAP_GENLOCK: applies T_GENLOCK to the sensor rate -- only when the
-  // owner opted in ([genlock] enable), so the GS never steers a camera
-  // nobody asked it to.
   ack.chip_caps = rc::CAP_FRAME_WIRE | rc::CAP_TELEMETRY | rc::CAP_CALIBRATE;
-  if (cfg_.genlock.enable) ack.chip_caps |= rc::CAP_GENLOCK;
   // agreed is member_(op_channel) ? the DISC's proposed op_channel : the
   // current channel -- computed by the caller, which also stores it in the
   // pending pair whose promotion drives the actual retune, so the ack and the

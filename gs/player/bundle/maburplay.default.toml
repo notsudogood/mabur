@@ -56,9 +56,6 @@ chain_budget  = 0          # 0 = never drop a frame to cut a one-refresh-late ru
 sched_cap_ms  = 16         # a frame may arrive up to this many ms late and keep its capture-time slot; 0 = time frames by arrival; with phase_lock on, capture-time placement itself runs only while the lock holds
 phase_lock    = true       # steer the drone camera's frame rate so frames land a fixed margin before the screen refresh (flat latency, no judder)
 phase_margin_ms = 4        # that margin, ms: smaller is lower latency but less room for late frames
-# Our older camera steering, replaced by phase_lock above: leave it off.
-genlock          = false
-genlock_miss_pct = 10      # share of frames allowed to just miss their refresh (shown one refresh later)
 
 # Undo the drone camera's colour tuning (the "colortrans" sensor file in the
 # drone's venc.sensor_bin) on the screen, the OSD and the recording.

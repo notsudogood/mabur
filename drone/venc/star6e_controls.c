@@ -1,6 +1,5 @@
 /* ported from waybeam_venc f956a52:src/star6e_controls.c */
 #include "star6e_controls.h"
-#include "genlock_trim.h"
 #include "sensor_cal.h"
 
 #include "idr_rate_limit.h"
@@ -65,13 +64,6 @@ static uint32_t g_last_requested_kbps;
 #define RC_READBACK_AFTER_S 10.0
 static struct timespec g_rc_bind_ts;
 static int g_rc_readback_done;
-/* Genlock trim (see star6e_controls_apply_sensor_mfps): the milli-fps last
- * written to the sensor (0 = the configured integer rate), when, and how
- * many outcome lines have been printed. */
-static uint32_t g_sensor_mfps;
-static struct timespec g_sensor_mfps_ts;
-static unsigned g_sensor_mfps_logged;
-static unsigned g_sensor_mfps_refused_logged;  /* not-1:1 refusals printed */
 
 static uint32_t align_down(uint32_t value, uint32_t align)
 {
@@ -287,74 +279,6 @@ restore:
 int star6e_controls_apply_fps(uint32_t fps)
 {
 	return apply_fps(fps);
-}
-
-/* Genlock trim (efficient-link plan step 2): set the SENSOR's own frame
- * rate in milli-fps, live, so the GS can steer the camera onto its screen's
- * refresh grid.  SigmaStar sensor drivers read a MI_SNR_SetFps value above
- * 1000 as milli-fps and turn it into a frame-length (VTS) change, so the
- * rate moves in whole-line steps; a driver without that path rejects the
- * value, which is returned and logged, never retried here.
- *
- * Only on a 1:1 bind -- the encoder fed every frame the sensor makes at the
- * rate it runs (genlock_trim_allowed) -- since when the bind drops frames
- * (low power) a sensor trim does not put the delivered cadence on any grid.
- * Clamped to +-1% of that rate (genlock_trim_clamp).  0 restores the
- * configured integer rate.  An unchanged value is skipped for 5 s, then
- * re-written: the cold-boot fps re-kick, or anything else that rewrites
- * the sensor's timing, is undone within one re-assert.  A refusal before
- * the SDK call is logged too (the first few), so a silent no-op cannot
- * hide again. */
-int star6e_controls_apply_sensor_mfps(uint32_t mfps)
-{
-	Star6ePipelineState *p = g_star6e_control_ctx.pipeline;
-	struct timespec now;
-	uint32_t fps, v;
-	MI_S32 ret;
-	long age_ms;
-
-	if (!p || p->sensor.fps == 0)
-		return -1;
-	fps = p->sensor.fps;
-	if (!genlock_trim_allowed(fps, g_star6e_control_ctx.delivered_fps)) {
-		if (g_sensor_mfps_refused_logged < 4) {
-			++g_sensor_mfps_refused_logged;
-			printf("> genlock: not trimming -- sensor runs %u fps, encoder "
-				"fed %u fps (not 1:1)\n", (unsigned)fps,
-				(unsigned)g_star6e_control_ctx.delivered_fps);
-			fflush(stdout);
-		}
-		return -1;
-	}
-	v = genlock_trim_clamp(mfps, fps);
-
-	clock_gettime(CLOCK_MONOTONIC, &now);
-	age_ms = (now.tv_sec - g_sensor_mfps_ts.tv_sec) * 1000L +
-		(now.tv_nsec - g_sensor_mfps_ts.tv_nsec) / 1000000L;
-	if (v == g_sensor_mfps && g_sensor_mfps_ts.tv_sec != 0 && age_ms < 5000)
-		return 0;
-
-	ret = MI_SNR_SetFps(p->sensor.pad_id, v ? v : fps);
-	if (ret != 0) {
-		if (g_sensor_mfps_logged < 8) {
-			++g_sensor_mfps_logged;
-			printf("> genlock: MI_SNR_SetFps(pad %d, %u) failed %d -- "
-				"sensor driver has no milli-fps path?\n",
-				(int)p->sensor.pad_id, (unsigned)(v ? v : fps), (int)ret);
-			fflush(stdout);
-		}
-		return -1;
-	}
-	if (g_sensor_mfps_logged < 8 && v != g_sensor_mfps) {
-		++g_sensor_mfps_logged;
-		printf("> genlock: sensor rate %u.%03u fps (asked %u)\n",
-			(unsigned)((v ? v : fps * 1000) / 1000),
-			(unsigned)((v ? v : fps * 1000) % 1000), (unsigned)mfps);
-		fflush(stdout);
-	}
-	g_sensor_mfps = v;
-	g_sensor_mfps_ts = now;
-	return 0;
 }
 
 uint32_t star6e_controls_delivered_fps(void)
@@ -685,9 +609,6 @@ void star6e_controls_bind(Star6ePipelineState *pipeline, const VencCfg *cfg)
 	memset(&g_rc_defaults, 0, sizeof(g_rc_defaults));
 	clock_gettime(CLOCK_MONOTONIC, &g_rc_bind_ts);
 	g_rc_readback_done = 0;
-	g_sensor_mfps = 0;
-	memset(&g_sensor_mfps_ts, 0, sizeof(g_sensor_mfps_ts));
-	g_sensor_mfps_logged = 0;
 }
 
 void star6e_controls_reset(void)
@@ -702,9 +623,6 @@ void star6e_controls_reset(void)
 	memset(&g_rc_intent, 0, sizeof(g_rc_intent));
 	memset(&g_rc_defaults, 0, sizeof(g_rc_defaults));
 	g_rc_readback_done = 0;
-	g_sensor_mfps = 0;
-	memset(&g_sensor_mfps_ts, 0, sizeof(g_sensor_mfps_ts));
-	g_sensor_mfps_logged = 0;
 }
 
 int star6e_controls_set_superframe_p_pct(uint32_t pct)

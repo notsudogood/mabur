@@ -135,15 +135,6 @@ struct DisplayCfg {
   // Smaller is lower latency but lets allowance changes push frames across
   // the edge into the next refresh.
   int phase_margin_ms = 4;
-  // Genlock (docs/efficient-link-plan.md step 2, genlock.h): steer the
-  // drone camera's frame rate onto this screen's refresh grid. The phase is
-  // measured (and logged as the 1 Hz `genlock:` line) whenever vsync_lock
-  // is on; this switch only decides whether a setpoint is sent. Needs the
-  // drone's [genlock] enable too. Replaced by phase_lock: leave it off.
-  bool genlock = false;
-  // Share of frames, in percent, allowed to miss the refresh the lock aims
-  // them at (they show one refresh later). Lower = a later, safer phase.
-  int genlock_miss_pct = 10;
 };
 
 // GS-side reverse of the drone's ColorTrans sensor tuning (docs/colortrans.md).

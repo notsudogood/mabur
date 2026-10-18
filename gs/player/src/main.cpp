@@ -42,10 +42,8 @@
 #include "ring_client.h"
 #include "stream_feeder.h"
 #include "video_backend.h"
-#include "genlock_client.h"   // camera-rate setpoint to maburgs (genlock.h)
 #include "async_raw_dvr.h"    // raw recording on a writer thread (SD writes off this loop)
 #include "osd_recorder.h"     // dvr.osd_file: .osd/.srt next to a raw recording
-#include "genlock_control.h"  // maburgs::kGenlockControlPort
 #include "core_control_client.h"  // sends the button's VTX wish + refresh reports to maburgs
 #include "splash_image.h"  // startup splash asset + cover-fit painter
 
@@ -654,20 +652,6 @@ int main(int argc, char** argv) {
                                       cfg.display.vsync_lead_ms,
                                       cfg.display.chain_budget,
                                       cfg.display.sched_cap_ms);
-  // Genlock (genlock.h): measures the camera's phase against the screen's
-  // refresh on every servo frame whenever vsync_lock is on -- the 1 Hz
-  // `genlock:` line -- and, with display.genlock, steers the drone camera's
-  // rate through maburgs.
-  maburplay::Genlock::Params genlock_params;
-  genlock_params.miss_frac = cfg.display.genlock_miss_pct / 100.0;
-  maburplay::Genlock genlock(genlock_params);
-#ifdef MABUR_PLAYER_HW
-  bool rec_writing_prev = false;   // recording-started edge for genlock (below)
-#endif
-  if (cfg.display.vsync_lock) regulator.set_genlock(&genlock);
-  maburplay::GenlockClient genlock_cli;
-  if (cfg.display.genlock && !genlock_cli.open(maburgs::kGenlockControlPort))
-    std::fprintf(stderr, "maburplay: genlock: setpoint socket failed -- the camera will not be steered\n");
   // Phase lock (display.phase_lock; phase_lock.h): steers the drone's
   // sensor rate through maburgs and the RCF, and owns capture-time placement
   // while it holds.
@@ -2110,59 +2094,6 @@ int main(int argc, char** argv) {
       // gate ("fallback= climbs then stops after re-warm") has a periodic
       // line to watch live -- not just the final tally at exit.
       log_regulator_line();
-      // Genlock: measured every tick, steered only with display.genlock.
-      // Logged into the session's lat.log next to the lat: line (whose
-      // parsers match "lat:" only), so a flight shows the camera/screen
-      // phase whether or not the loop was steering.
-      if (cfg.display.vsync_lock) {
-        // A recording that starts writing inside genlock's calibration
-        // disturbs what it measures: start that calibration over. Edge-
-        // triggered on the file actually being written (raw: the first
-        // IRAP, which with "press record before arming" lands at the arm,
-        // just as calibration begins; burned: the recorder existing).
-        const bool rec_writing =
-            rec_on && rec_gs && (burned_mode ? burn != nullptr : dvr.opened());
-        if (rec_writing && !rec_writing_prev && genlock.restart_calibration()) {
-          std::fprintf(stderr, "maburplay: genlock: recording started during calibration -- "
-                               "calibrating again\n");
-          lat_log.write(mono_us(), "genlock-cal: restarted (recording started)");
-        }
-        rec_writing_prev = rec_writing;
-        const auto gt = genlock.tick(cfg.display.genlock, mono_us());
-        if (gt.send) genlock_cli.send(gt.cmd_mfps);
-        if (gt.valid) {
-          char gl_buf[240];
-          std::snprintf(gl_buf, sizeof(gl_buf),
-                        "genlock: on=%d cam=%.3f panel=%.3f phase=%.1f target=%.1f "
-                        "err=%.1f cmd=%u n=%d fps=%.1f pstep=%.0f pback=%d cal=%d ref=%llu",
-                        gt.steering ? 1 : 0, gt.cam_hz, gt.panel_hz, gt.phase_ms,
-                        gt.target_ms, gt.err_ms, static_cast<unsigned>(gt.cmd_mfps), gt.n,
-                        gt.fps, gt.pstep_us, gt.pts_back, gt.stage,
-                        static_cast<unsigned long long>(genlock.reference_steps()));
-          std::fprintf(stderr, "%s\n", gl_buf);
-          lat_log.write(mono_us(), gl_buf);
-        }
-        // Calibration's outcome, once: its own `genlock-cal:` tag so the
-        // per-tick parsers (which match `genlock:`) skip it.
-        if (gt.calibrated || gt.refused) {
-          const auto& c = genlock.cal();
-          char cal_buf[240];
-          if (gt.calibrated)
-            std::snprintf(cal_buf, sizeof(cal_buf),
-                          "genlock-cal: ok native=%.3f probe=%u probe_cam=%.3f seed=%u "
-                          "range=%u..%u",
-                          c.native_hz, static_cast<unsigned>(c.probe_mfps), c.probe_hz,
-                          static_cast<unsigned>(c.seed_mfps), static_cast<unsigned>(c.lo_mfps),
-                          static_cast<unsigned>(c.hi_mfps));
-          else
-            std::snprintf(cal_buf, sizeof(cal_buf),
-                          "genlock-cal: refused native=%.3f probe=%u probe_cam=%.3f -- the "
-                          "camera did not slow down; back to its configured rate, not steering",
-                          c.native_hz, static_cast<unsigned>(c.probe_mfps), c.probe_hz);
-          std::fprintf(stderr, "maburplay: %s\n", cal_buf);
-          lat_log.write(mono_us(), cal_buf);
-        }
-      }
     }
 #endif
     // ONE composition, for both overlays, into the buffer that is back right

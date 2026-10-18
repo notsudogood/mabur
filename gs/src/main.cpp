@@ -27,7 +27,6 @@
 #include "au_ring.h"
 #include "body_queue.h"
 #include "cal_control.h"
-#include "genlock_control.h"
 #include "rec_control.h"
 #include "cal_log.h"
 #include "cal_session.h"
@@ -376,20 +375,6 @@ static int run_radio(const maburgs::Config& cfg) {
     std::fprintf(stderr,
                  "warning: record control port %d unusable; the VTX recorder "
                  "will not follow the record button\n", maburgs::kRecControlPort);
-  // Genlock camera-rate setpoints from maburplay (genlock_control.h),
-  // forwarded to a CAP_GENLOCK drone as T_GENLOCK. Loopback only; a failure
-  // just means the camera is never steered.
-  maburgs::GenlockControl genlock_ctl;
-  if (!genlock_ctl.open(maburgs::kGenlockControlPort))
-    std::fprintf(stderr,
-                 "warning: genlock control port %d unusable; the drone camera "
-                 "will not be steered onto the screen's refresh\n",
-                 maburgs::kGenlockControlPort);
-  // T_GENLOCK is tagged like T_NACK: a per-session counter (the tag's
-  // seq32), restarted when the drone's session nonce changes.
-  uint32_t genlock_counter = 0;
-  uint32_t genlock_vtx_seen = 0;
-  uint64_t genlock_fwd = 0;
   // Demand refresh: decides when the RCF's idr_epoch byte changes (an IDR
   // request). Fed by the FrameStream end_frame callback, the stream's
   // dropped-AU count and the player's `refresh <reason>` lines; every
@@ -1613,33 +1598,6 @@ static int run_radio(const maburgs::Config& cfg) {
                             0, sel.selected(), false};
       rf.offered_ms = drained_ms;
       send_control_frame(rf);
-    }
-    // Genlock: forward each new setpoint once, only in session, only to a
-    // drone that opted in (CAP_GENLOCK), never during a calibration sweep.
-    // The player's ~1 Hz cadence is the repeat; a dropped one only delays
-    // the next correction. Straight through send_control_frame like T_NACK:
-    // the rate is ~1/s, nothing for the slotter to time.
-    {
-      const auto gctx = vrx.session_ctx();
-      if (gctx.vtx_nonce != 0 && gctx.vtx_nonce != genlock_vtx_seen) {
-        genlock_vtx_seen = gctx.vtx_nonce;
-        genlock_counter = 0;
-      }
-      if (genlock_ctl.poll() && in_session && gctx.vtx_nonce != 0 &&
-          (vrx.peer_caps() & mabur::rc::CAP_GENLOCK) && !cal_session.radio_silent(drained_ms)) {
-        mabur::rc::Genlock gl;
-        gl.counter = ++genlock_counter;
-        gl.mfps = genlock_ctl.mfps();
-        mabur::rc::TagCtx ctx = gctx;
-        ctx.seq32 = gl.counter;
-        maburgs::SlotFrame gf{mabur::rc::pack_genlock(gl, cfg.link.key, ctx), 0,
-                              sel.selected(), false};
-        gf.offered_ms = drained_ms;
-        send_control_frame(gf);
-        if (genlock_fwd++ == 0)
-          std::fprintf(stderr, "maburgs: genlock: first camera setpoint %u mfps sent\n",
-                       static_cast<unsigned>(gl.mfps));
-      }
     }
     // ctl: rung transition line — load-bearing for post-mortems (the
     // sideport has its own link.ctl block; this stderr line is independent of

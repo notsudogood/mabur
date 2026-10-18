@@ -109,12 +109,6 @@ class Actuator {
   // recorder. true = handed over (the recorder reports its own outcome in
   // Telem::rec_status); RcAgent latches the wish only on true.
   virtual bool set_record(bool on) = 0;
-  // Genlock (efficient-link plan step 2): the sensor's own frame rate in
-  // milli-fps, 0 = back to the configured rate. true iff the sensor took
-  // it. Fire-and-forget from RcAgent's side: the GS re-sends its setpoint
-  // about once a second, so a refused value is simply tried again.
-  // Default: no sensor to steer (tests, replay harnesses).
-  virtual bool set_sensor_mfps(uint32_t mfps) { (void)mfps; return false; }
   // Phase lock: the GS's sensor-rate offset (milli-fps on top of the boot
   // trim; 0 = the trim's own rate). No return: venc stores it and applies it
   // from the encoder thread once the trim has locked, clamped to its range.
@@ -213,12 +207,6 @@ class RcAgent {
   bool have_feedback() const { return have_last_fb_; }
   uint64_t last_feedback_ms() const { return last_fb_ms_; }
   uint64_t rcf_accepted() const { return rcf_accepted_; }
-  // Genlock: T_GENLOCK frames for this drone, how many the sensor took and
-  // refused, and the last setpoint heard (0 = none / release). Agent thread.
-  uint64_t genlock_rx() const { return genlock_rx_; }
-  uint64_t genlock_applied() const { return genlock_applied_; }
-  uint64_t genlock_refused() const { return genlock_refused_; }
-  uint32_t genlock_mfps() const { return genlock_mfps_; }
   // Session bookkeeping (link pairing). All RAM,
   // nothing persisted. A DISC from vrx_nonce gets a vtx_nonce (a PENDING
   // pair); the first RCF that verifies under it makes it CURRENT.
@@ -415,14 +403,6 @@ class RcAgent {
   // rate computation, which is over a measured interval, ambiguous).
   uint64_t rcf_accepted_ = 0;
   bool width_clamp_logged_ = false;
-  uint64_t genlock_rx_ = 0;
-  uint64_t genlock_applied_ = 0;
-  uint64_t genlock_refused_ = 0;
-  uint32_t genlock_mfps_ = 0;
-  // T_GENLOCK replay guard (agent thread only): the session pair the last
-  // accepted setpoint verified under, and its counter.
-  uint64_t genlock_session_ = 0;
-  uint32_t genlock_counter_ = 0;
 
   // IDR policy state. Every IDR producer
   // — the GS-driven RCF-after-failsafe path, the encoder's chain-break

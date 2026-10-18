@@ -68,12 +68,6 @@ struct MockActuator : Actuator {
     records.push_back(on);
     return record_ok;
   }
-  std::vector<uint32_t> mfps;
-  bool mfps_ok = true;
-  bool set_sensor_mfps(uint32_t v) override {
-    mfps.push_back(v);
-    return mfps_ok;
-  }
   std::vector<uint8_t> remembered;
   void remember_channel(uint8_t ch) override { remembered.push_back(ch); }
   std::vector<int> sensor_offsets;
@@ -704,74 +698,8 @@ TEST(disc_ack_advertises_frame_wire_cap) {
   auto parsed = parse_disc_ack(act.controls[0].data(), act.controls[0].size());
   REQUIRE(parsed.has_value());
   CHECK(parsed->chip_caps & mabur::rc::CAP_FRAME_WIRE);
-  // Genlock is opt-in: not advertised unless [genlock] enable.
-  CHECK(!(parsed->chip_caps & mabur::rc::CAP_GENLOCK));
-}
-
-TEST(disc_ack_advertises_genlock_only_when_enabled) {
-  Config cfg = make_cfg();
-  cfg.genlock.enable = true;
-  MockActuator act;
-  RcAgent agent(cfg, act);
-  agent.tick(0, RadioHealth{});
-  auto wire = make_disc_wire(0xCAFEF00D, 136, 40, 0, 2);
-  agent.on_rc_frame(wire.data(), wire.size(), 100);
-  REQUIRE(act.controls.size() == 1);
-  auto parsed = parse_disc_ack(act.controls[0].data(), act.controls[0].size());
-  REQUIRE(parsed.has_value());
-  CHECK(parsed->chip_caps & mabur::rc::CAP_GENLOCK);
-}
-
-TEST(genlock_setpoint_applied_only_when_enabled_tagged_and_fresh) {
-  // T_GENLOCK is tagged like T_NACK: under the session pair, with its own
-  // counter as the tag's seq32, and only a counter above the last accepted
-  // one in the session is fresh.
-  auto genlock_wire = [](uint32_t vtx_nonce, uint32_t counter, uint32_t mfps,
-                         const mabur::LinkKey& key = mabur::kDefaultLinkKey) {
-    mabur::rc::Genlock g;
-    g.counter = counter;
-    g.mfps = mfps;
-    return mabur::rc::pack_genlock(g, key, mabur::rc::TagCtx{kVrx, vtx_nonce, counter});
-  };
-  {
-    // Off (the default): ignored outright, nothing reaches the sensor.
-    auto cfg = make_cfg(); MockActuator act; RcAgent agent(cfg, act);
-    const uint32_t vtx = link_agent(agent, act, cfg);
-    auto w = genlock_wire(vtx, 1, 59940);
-    agent.on_rc_frame(w.data(), w.size(), 200);
-    CHECK(act.mfps.empty());
-    CHECK(agent.genlock_rx() == 0);
-  }
-  {
-    auto cfg = make_cfg(); cfg.genlock.enable = true;
-    MockActuator act; RcAgent agent(cfg, act);
-    const uint32_t vtx = link_agent(agent, act, cfg);
-    // Wrong key, then the wrong session: refused, nothing applied.
-    auto forged = genlock_wire(vtx, 1, 59940, *mabur::parse_key_hex("3f9a1c77e04b5d2290ab6ef1c8d34e5a"));
-    agent.on_rc_frame(forged.data(), forged.size(), 200);
-    auto stale = genlock_wire(vtx + 1, 1, 59940);
-    agent.on_rc_frame(stale.data(), stale.size(), 205);
-    CHECK(act.mfps.empty());
-    CHECK(agent.genlock_rx() == 0);
-    auto w = genlock_wire(vtx, 1, 59940);
-    agent.on_rc_frame(w.data(), w.size(), 210);
-    REQUIRE(act.mfps.size() == 1);
-    CHECK(act.mfps[0] == 59940);
-    CHECK(agent.genlock_applied() == 1);
-    CHECK(agent.genlock_mfps() == 59940);
-    // A replay of the same counter is refused.
-    agent.on_rc_frame(w.data(), w.size(), 215);
-    CHECK(act.mfps.size() == 1);
-    // Every fresh setpoint is handed on (the venc layer skips repeats
-    // itself); a refusal is counted, not retried here.
-    act.mfps_ok = false;
-    auto r = genlock_wire(vtx, 2, 0);
-    agent.on_rc_frame(r.data(), r.size(), 220);
-    REQUIRE(act.mfps.size() == 2);
-    CHECK(act.mfps[1] == 0);
-    CHECK(agent.genlock_refused() == 1);
-    CHECK(agent.genlock_rx() == 2);
-  }
+  // 0x0008 was CAP_GENLOCK, retired 2026-10-18: never advertised now.
+  CHECK(!(parsed->chip_caps & 0x0008));
 }
 
 // 2b. Keep-alive DISC while LINKED: ACK-ONLY. The drone must reply with a

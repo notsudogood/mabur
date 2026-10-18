@@ -279,15 +279,6 @@ struct RecordCfg {
   int width = 0, height = 0;
 };
 
-// Genlock (efficient-link plan step 2): let the GS trim the camera's frame
-// rate so its frames land on the GS screen's refresh grid. Off by default:
-// the trim goes through the sensor driver's milli-fps path, which is
-// unproven on a given sensor until a bench shows the rate actually moves.
-// Off = no CAP_GENLOCK in the DISC_ACK, so the GS never sends a setpoint.
-struct GenlockCfg {
-  bool enable = false;
-};
-
 // Software NACK (fec-nack): how long the drone keeps recently sent base-layer
 // source envelopes for re-sending, and the air budget a GS's T_NACK requests
 // may spend.
@@ -316,7 +307,6 @@ struct Config {
   AirClockCfg air_clock;
   LowPowerCfg low_power;
   RecordCfg record;
-  GenlockCfg genlock;
   NackDroneCfg nack;
   std::array<UepLayerCfg, 2> uep_layers() const;
 };

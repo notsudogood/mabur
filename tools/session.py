@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Resolve a debug-log session to the files inside it.
 
-One session is one directory: /media/dvr/log/NNNN/{ctl,probe,au,lat,scan,fec,arq,ta}.log
+One session is one directory: /media/dvr/log/NNNN/{ctl,probe,au,lat,frame,reg,scan,fec,arq,ta}.log
 plus flight.jsonl, all on one CLOCK_MONOTONIC clock (docs/observability.md).
 This
 module is the single place that knows that layout, so flightreport.py,
@@ -24,11 +24,13 @@ import re
 
 DEFAULT_ROOT = "/media/dvr/log"
 
-Session = collections.namedtuple("Session", "dir ctl probe au flight lat scan fec arq ta")
+Session = collections.namedtuple("Session",
+                                 "dir ctl probe au flight lat scan fec arq ta frame reg")
 
 _FILES = {"ctl": "ctl.log", "probe": "probe.log", "au": "au.log",
           "flight": "flight.jsonl", "lat": "lat.log", "scan": "scan.log",
-          "fec": "fec.log", "arq": "arq.log", "ta": "ta.log"}
+          "fec": "fec.log", "arq": "arq.log", "ta": "ta.log",
+          "frame": "frame.log", "reg": "reg.log"}
 _SESSION_DIR = re.compile(r"^\d{4,}$")
 
 
@@ -68,8 +70,14 @@ def _classify(path):
         return "arq"
     if first.startswith("talog "):
         return "ta"
-    if first.startswith("# aulog ") or first.startswith("# latlog "):
-        return "au" if "aulog" in first else "lat"
+    if first.startswith("# aulog "):
+        return "au"
+    if first.startswith("# latlog "):
+        return "lat"
+    if first.startswith("# framelog "):
+        return "frame"
+    if first.startswith("# reglog "):
+        return "reg"
     if first.lstrip().startswith("{"):
         return "flight"
     # A v1 au log has no marker at all; fall back to the name.
@@ -88,7 +96,8 @@ def resolve(arg=None, root=DEFAULT_ROOT):
     if arg is None:
         arg = latest(root)
         if arg is None:
-            return Session(None, None, None, None, None, None, None, None, None, None)
+            return Session(None, None, None, None, None, None, None, None,
+                           None, None, None, None)
     if os.path.isdir(arg):
         found = {}
         for key, name in _FILES.items():
@@ -96,11 +105,11 @@ def resolve(arg=None, root=DEFAULT_ROOT):
             found[key] = p if os.path.exists(p) else None
         return Session(arg, found["ctl"], found["probe"], found["au"],
                        found["flight"], found["lat"], found["scan"],
-                       found["fec"], found["arq"], found["ta"])
+                       found["fec"], found["arq"], found["ta"], found["frame"], found["reg"])
     slot = _classify(arg)
     fields = {k: None for k in _FILES}
     if slot:
         fields[slot] = arg
     return Session(None, fields["ctl"], fields["probe"], fields["au"],
                    fields["flight"], fields["lat"], fields["scan"],
-                   fields["fec"], fields["arq"], fields["ta"])
+                   fields["fec"], fields["arq"], fields["ta"], fields["frame"], fields["reg"])

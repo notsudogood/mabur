@@ -44,6 +44,16 @@ void *star6e_runtime_encoder_loop(void *opaque);
  *  handler. */
 void star6e_runtime_request_stop(void);
 
+/** Last measured sensor frame rate in milli-Hz from the boot-time trim
+ *  (sensor_cal.h); 0 until its first measurement window closes. */
+uint32_t star6e_runtime_sensor_mhz(void);
+
+/** Phase lock: store the GS's sensor-rate offset (milli-fps on the trim
+ *  request); the encoder thread applies it once the trim has locked. */
+void star6e_runtime_request_sensor_offset(int32_t mfps);
+/** The offset now on the sensor (milli-fps; 0 = the trim's own rate). */
+int32_t star6e_runtime_sensor_offset(void);
+
 /** Tear the pipeline and the MI libraries down. Idempotent per field. */
 void star6e_runtime_teardown(Star6eRunnerContext *ctx);
 

@@ -24,10 +24,13 @@ if(MABUR_BUILD_LINKBENCH)
   add_subdirectory(bench/nhmreset)
 endif()
 # encosd needs mabur_player_core + the MPP root, so it can only exist after
-# gs/player has been added and only in the MABUR_PLAYER_HW (aarch64) build --
-# its own CMakeLists returns early otherwise.
+# gs/player has been added and only in the MPP-decoder MABUR_PLAYER_HW
+# (aarch64) build -- its own CMakeLists returns early otherwise.
+# v4l2req_streamcheck likewise needs gs/player's decoder choice; it returns
+# early except on the V4L2-request build.
 if(MABUR_BUILD_GS)
   add_subdirectory(bench/encosd)
+  add_subdirectory(bench/v4l2req_streamcheck)
 endif()
 if(MABUR_BUILD_TESTS)
   enable_testing()

@@ -4,6 +4,7 @@
 #include "mtest.h"
 
 using mabur::annexb_to_length_prefixed;
+using mabur::au_is_entry_point;
 using mabur::au_is_irap;
 using mabur::HevcParams;
 using mabur::NalView;
@@ -91,6 +92,27 @@ TEST(au_is_irap_true_for_idr_false_for_trail) {
   std::vector<uint8_t> trail = cat({nal_header(1), {0xAA}});
   std::vector<uint8_t> au_not = cat({kSc4, trail});
   CHECK(!au_is_irap(au_not.data(), au_not.size()));
+}
+
+// An intra-refresh stream never sends an IRAP: its refresh AUs are a
+// VPS/SPS/PPS-led TRAIL_R. A decoder starts there, or at an IRAP; never at a
+// bare trailing picture, nor at parameter sets that carry no SPS.
+TEST(au_is_entry_point_irap_or_sps) {
+  std::vector<uint8_t> idr = cat({kSc3, nal_header(19), {0xAA}});
+  CHECK(au_is_entry_point(idr.data(), idr.size()));
+
+  std::vector<uint8_t> refresh = cat({kSc4, nal_header(32), {0x0C}, kSc3, nal_header(33), {0x0D},
+                                      kSc3, nal_header(34), {0x0E}, kSc3, nal_header(1), {0xAA}});
+  CHECK(!au_is_irap(refresh.data(), refresh.size()));
+  CHECK(au_is_entry_point(refresh.data(), refresh.size()));
+
+  std::vector<uint8_t> trail_r = cat({kSc4, nal_header(1), {0xAA}});
+  CHECK(!au_is_entry_point(trail_r.data(), trail_r.size()));
+  std::vector<uint8_t> trail_n = cat({kSc4, nal_header(0), {0xAA}});
+  CHECK(!au_is_entry_point(trail_n.data(), trail_n.size()));
+  std::vector<uint8_t> pps_only = cat({kSc3, nal_header(34), {0x0E}, kSc3, nal_header(1), {0xAA}});
+  CHECK(!au_is_entry_point(pps_only.data(), pps_only.size()));
+  CHECK(!au_is_entry_point(nullptr, 0));
 }
 
 TEST(hevc_params_feed_across_aus_flips_complete_on_second) {

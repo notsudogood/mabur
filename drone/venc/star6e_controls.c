@@ -1,6 +1,7 @@
 /* ported from waybeam_venc f956a52:src/star6e_controls.c */
 #include "star6e_controls.h"
 #include "genlock_trim.h"
+#include "sensor_cal.h"
 
 #include "idr_rate_limit.h"
 #include "pipeline_common.h"
@@ -14,6 +15,9 @@ typedef struct {
 	MI_SYS_ChnPort_t vpe_port;
 	MI_SYS_ChnPort_t venc_port;
 	volatile uint32_t sensor_fps;
+	/* The rate the sensor was set to (MI_SNR_SetFps): the full-rate mark
+	 * for sensor_cal_bind_dst_fps. */
+	uint32_t nominal_fps;
 	/* Current VPE->VENC bind delivery rate (true frames reaching the
 	 * encoder) — above STAR6E_VENC_INPUT_FPS_MAX this exceeds the RC
 	 * fpsNum and the bitrate budget must be compensated (see
@@ -180,6 +184,7 @@ static int apply_fps(uint32_t fps)
 	struct timespec t0, t1;
 	uint32_t sensor_fps = g_star6e_control_ctx.sensor_fps;
 	uint32_t old_fps = g_star6e_control_ctx.delivered_fps;
+	uint32_t bind_dst, old_bind_dst;
 	uint32_t rc_fps, gop;
 	MI_S32 ret;
 
@@ -207,19 +212,25 @@ static int apply_fps(uint32_t fps)
 	 * power on every parked link and each rebind costs one incomplete AU. */
 	if (fps == old_fps)
 		return 0;  /* idempotent: the 5 s re-assert is free */
+	/* Full rate binds src:src so the SDK's limiter never clips the
+	 * sensor's own rate; only a lower request decimates (sensor_cal.h). */
+	bind_dst = sensor_cal_bind_dst_fps(fps,
+		g_star6e_control_ctx.nominal_fps, sensor_fps);
+	old_bind_dst = sensor_cal_bind_dst_fps(old_fps,
+		g_star6e_control_ctx.nominal_fps, sensor_fps);
 	clock_gettime(CLOCK_MONOTONIC, &t0);
 
 	MI_SYS_UnBindChnPort(&g_star6e_control_ctx.vpe_port,
 		&g_star6e_control_ctx.venc_port);
 	ret = MI_SYS_BindChnPort2(&g_star6e_control_ctx.vpe_port,
-		&g_star6e_control_ctx.venc_port, sensor_fps, fps,
+		&g_star6e_control_ctx.venc_port, sensor_fps, bind_dst,
 		I6_SYS_LINK_FRAMEBASE, 0);
 	if (ret != 0) {
 		fprintf(stderr, "> Rebind VPE->VENC at %u:%u failed %d, restoring %u:%u\n",
-			(unsigned)sensor_fps, (unsigned)fps, (int)ret,
-			(unsigned)sensor_fps, (unsigned)old_fps);
+			(unsigned)sensor_fps, (unsigned)bind_dst, (int)ret,
+			(unsigned)sensor_fps, (unsigned)old_bind_dst);
 		ret = MI_SYS_BindChnPort2(&g_star6e_control_ctx.vpe_port,
-			&g_star6e_control_ctx.venc_port, sensor_fps, old_fps,
+			&g_star6e_control_ctx.venc_port, sensor_fps, old_bind_dst,
 			I6_SYS_LINK_FRAMEBASE, 0);
 		/* A failed RESTORE is the one path that can leave VENC unbound —
 		 * no frames at all until RcAgent's next fps verb re-binds it.
@@ -227,7 +238,7 @@ static int apply_fps(uint32_t fps)
 		if (ret != 0)
 			fprintf(stderr, "> Restore bind VPE->VENC at %u:%u FAILED %d "
 				"-- VENC may be unbound\n", (unsigned)sensor_fps,
-				(unsigned)old_fps, (int)ret);
+				(unsigned)old_bind_dst, (int)ret);
 		return -1;
 	}
 
@@ -250,7 +261,7 @@ static int apply_fps(uint32_t fps)
 	clock_gettime(CLOCK_MONOTONIC, &t1);
 	printf("> FPS delivered %u, RC fpsNum %u, gop %u (bind %u:%u) in %ld us\n",
 		(unsigned)fps, (unsigned)rc_fps, (unsigned)gop,
-		(unsigned)sensor_fps, (unsigned)fps,
+		(unsigned)sensor_fps, (unsigned)bind_dst,
 		(long)((t1.tv_sec - t0.tv_sec) * 1000000L +
 		       (t1.tv_nsec - t0.tv_nsec) / 1000L));
 	fflush(stdout);
@@ -258,18 +269,18 @@ static int apply_fps(uint32_t fps)
 
 restore:
 	fprintf(stderr, "> Encoder fps apply failed, restoring bind %u:%u\n",
-		(unsigned)sensor_fps, (unsigned)old_fps);
+		(unsigned)sensor_fps, (unsigned)old_bind_dst);
 	MI_SYS_UnBindChnPort(&g_star6e_control_ctx.vpe_port,
 		&g_star6e_control_ctx.venc_port);
 	ret = MI_SYS_BindChnPort2(&g_star6e_control_ctx.vpe_port,
-		&g_star6e_control_ctx.venc_port, sensor_fps, old_fps,
+		&g_star6e_control_ctx.venc_port, sensor_fps, old_bind_dst,
 		I6_SYS_LINK_FRAMEBASE, 0);
 	/* As above: a silent restore failure is the only way VENC ends up
 	 * unbound and starved. */
 	if (ret != 0)
 		fprintf(stderr, "> Restore bind VPE->VENC at %u:%u FAILED %d "
 			"-- VENC may be unbound\n", (unsigned)sensor_fps,
-			(unsigned)old_fps, (int)ret);
+			(unsigned)old_bind_dst, (int)ret);
 	return -1;
 }
 
@@ -344,6 +355,16 @@ int star6e_controls_apply_sensor_mfps(uint32_t mfps)
 	g_sensor_mfps = v;
 	g_sensor_mfps_ts = now;
 	return 0;
+}
+
+uint32_t star6e_controls_delivered_fps(void)
+{
+	return g_star6e_control_ctx.delivered_fps;
+}
+
+uint32_t star6e_controls_nominal_fps(void)
+{
+	return g_star6e_control_ctx.nominal_fps;
 }
 
 int star6e_controls_request_idr(void)
@@ -640,6 +661,8 @@ void star6e_controls_bind(Star6ePipelineState *pipeline, const VencCfg *cfg)
 	g_star6e_control_ctx.venc_port = pipeline->venc_port;
 	g_star6e_control_ctx.sensor_fps = pipeline->sensor.mode.maxFps ?
 		pipeline->sensor.mode.maxFps : pipeline->video.sensor_framerate;
+	g_star6e_control_ctx.nominal_fps = pipeline->sensor.fps ?
+		pipeline->sensor.fps : pipeline->video.sensor_framerate;
 	/* Mirror the create-path VPE->VENC bind: delivery = venc.fps
 	 * clamped to the mode's true rate (0 = full rate). */
 	g_star6e_control_ctx.delivered_fps = g_star6e_control_ctx.sensor_fps;

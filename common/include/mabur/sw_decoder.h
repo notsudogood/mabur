@@ -144,9 +144,11 @@ class SwDecoder {
   uint64_t symbols_dropped_stale() const { return symbols_dropped_stale_; }
   // Repairs dropped before any GF work because they could teach nothing: a
   // second copy of an admitted repair (the other card), or one whose whole
-  // window is already known (the usual case at low loss).
+  // window is already known (the usual case at low loss). repairs_skipped()
+  // is their sum, under the name Gilang's same change uses.
   uint64_t repairs_dup() const { return repairs_dup_; }
   uint64_t repairs_redundant() const { return repairs_redundant_; }
+  uint64_t repairs_skipped() const { return repairs_dup_ + repairs_redundant_; }
   uint64_t packets_out() const { return packets_out_; }
   uint64_t resets() const { return resets_; }
   size_t rows_in_flight() const { return rows_.size(); }

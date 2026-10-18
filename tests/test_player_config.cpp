@@ -42,7 +42,7 @@ TEST(values_and_strictness) {
   threw = false;
   try { maburplay::load_config(write_tmp_play("backend = \"vaapi\"\n")); }
   catch (const std::exception&) { threw = true; }
-  CHECK(threw);  // backend must be one of mpp|null
+  CHECK(threw);  // backend must be one of mpp|v4l2req|null
   threw = false;
   try { maburplay::load_config(write_tmp_play("[dvr]\nfragment_ms = 50\n")); }
   catch (const std::exception&) { threw = true; }
@@ -295,7 +295,7 @@ TEST(input_rec_rejects_a_missing_pin_bad_bias_and_unknown_keys) {
 TEST(display_vsync_defaults) {
   const auto cfg = maburplay::load_config(write_tmp_play(""));
   CHECK(cfg.display.vsync_lock == true);
-  CHECK(cfg.display.vsync_lead_ms == 6);
+  CHECK(cfg.display.vsync_lead_ms == 5);
 }
 
 TEST(display_vsync_lead_range_enforced) {
@@ -384,13 +384,16 @@ MTEST_MAIN
 
 TEST(display_chain_budget_key) {
   // display.chain_budget: frames a sequential-slot chain may run before
-  // the regulator cuts it with one drop. Default 3 (bench A/B,
-  // operator choice); 0 = unbounded; range [0, 60].
+  // the regulator cuts it with one drop. Default 0 = unbounded, the
+  // bundle's value too, so a config that omits the key gets what ships;
+  // range [0, 60].
   const auto bare = maburplay::load_config(write_tmp_play(""));
-  CHECK(bare.display.chain_budget == 3);
+  CHECK(bare.display.chain_budget == 0);
+  const auto empty_display = maburplay::load_config(write_tmp_play("[display]\n"));
+  CHECK(empty_display.display.chain_budget == 0);
   const auto cfg = maburplay::load_config(
-      write_tmp_play("[display]\nchain_budget = 0\n"));
-  CHECK(cfg.display.chain_budget == 0);
+      write_tmp_play("[display]\nchain_budget = 3\n"));
+  CHECK(cfg.display.chain_budget == 3);
   bool threw = false;
   try { maburplay::load_config(write_tmp_play("[display]\nchain_budget = 61\n")); }
   catch (const std::exception&) { threw = true; }
@@ -408,6 +411,21 @@ TEST(display_genlock_keys) {
   CHECK(cfg.display.genlock_miss_pct == 5);
   bool threw = false;
   try { maburplay::load_config(write_tmp_play("[display]\ngenlock_miss_pct = 0\n")); }
+  catch (const std::exception&) { threw = true; }
+  CHECK(threw == true);
+}
+
+TEST(display_sched_cap_ms_key) {
+  // display.sched_cap_ms: capture-time scheduling's allowance cap. 0 = off
+  // (arrival-based servo) in code; the bundle ships 16, used while the
+  // phase lock holds; range [0, 50].
+  const auto bare = maburplay::load_config(write_tmp_play(""));
+  CHECK(bare.display.sched_cap_ms == 0);
+  const auto cfg = maburplay::load_config(
+      write_tmp_play("[display]\nsched_cap_ms = 16\n"));
+  CHECK(cfg.display.sched_cap_ms == 16);
+  bool threw = false;
+  try { maburplay::load_config(write_tmp_play("[display]\nsched_cap_ms = 51\n")); }
   catch (const std::exception&) { threw = true; }
   CHECK(threw == true);
 }
@@ -462,4 +480,107 @@ TEST(decoder_stream_key) {
   try { maburplay::load_config(write_tmp_play("[decoder]\nstream = 1\n")); }
   catch (const std::exception& e) { msg = e.what(); }
   CHECK(msg.find("decoder.stream") != std::string::npos);
+}
+
+// backend "v4l2req" is a known name (the Cedrus/V4L2-request decoder).
+TEST(backend_v4l2req_accepted) {
+  auto c = maburplay::load_config(write_tmp_play("backend = \"v4l2req\"\n"));
+  CHECK(c.backend == "v4l2req");
+  std::string msg;
+  try { maburplay::load_config(write_tmp_play("backend = \"cedrus\"\n")); }
+  catch (const std::exception& e) { msg = e.what(); }
+  CHECK(msg.find("v4l2req") != std::string::npos);  // the error lists the valid names
+}
+
+// A config is checked against what this binary was built with.
+TEST(unsupported_on_build_rules) {
+  maburplay::Config c;
+  maburplay::BuildCaps mpp{true, false}, v4l{false, true}, host{false, false};
+
+  c.backend = "mpp"; c.dvr.mode = "burned";
+  CHECK(maburplay::unsupported_on_build(c, mpp).empty());
+  CHECK(!maburplay::unsupported_on_build(c, v4l).empty());   // no mpp backend here
+
+  c.backend = "v4l2req"; c.dvr.mode = "raw";
+  CHECK(maburplay::unsupported_on_build(c, v4l).empty());
+  CHECK(!maburplay::unsupported_on_build(c, mpp).empty());   // no v4l2req backend there
+
+  c.backend = "v4l2req"; c.dvr.mode = "burned";
+  CHECK(maburplay::unsupported_on_build(c, v4l) ==
+        "dvr.mode \"burned\" needs the MPP encoder; this build has none -- set dvr.mode = \"raw\"");
+
+  // The null backend decodes nothing, so burned mode is merely inert there
+  // (host e2e runs the shipped bundle's burned default under --backend null).
+  c.backend = "null"; c.dvr.mode = "burned";
+  CHECK(maburplay::unsupported_on_build(c, host).empty());
+  CHECK(maburplay::unsupported_on_build(c, v4l).empty());
+}
+
+// A Radxa toml (backend "mpp", dvr.mode "burned") started on the OPi image
+// (v4l2req only) fails two independent checks; both must be reported in one
+// string, joined, so the operator does not have to fix one, restart, and
+// only then see the second (S97maburplay does not respawn on exit 2).
+TEST(unsupported_on_build_reports_every_problem) {
+  maburplay::Config c;
+  maburplay::BuildCaps v4l{false, true};
+  c.backend = "mpp"; c.dvr.mode = "burned";
+  CHECK(maburplay::unsupported_on_build(c, v4l) ==
+        "backend \"mpp\" is not in this build (Rockchip MPP decoder); this build has: null, v4l2req; "
+        "dvr.mode \"burned\" needs the MPP encoder; this build has none -- set dvr.mode = \"raw\"");
+}
+
+// The "not in this build" message names the backend(s) this binary DOES
+// carry, so the operator knows what to put in the config instead of
+// guessing from the board.
+TEST(unsupported_on_build_names_available_backends) {
+  maburplay::Config c;
+  maburplay::BuildCaps mpp{true, false}, v4l{false, true}, host{false, false};
+
+  c.backend = "v4l2req"; c.dvr.mode = "raw";
+  CHECK(maburplay::unsupported_on_build(c, mpp) ==
+        "backend \"v4l2req\" is not in this build (V4L2-request decoder); this build has: null, mpp");
+
+  c.backend = "mpp"; c.dvr.mode = "raw";
+  CHECK(maburplay::unsupported_on_build(c, v4l) ==
+        "backend \"mpp\" is not in this build (Rockchip MPP decoder); this build has: null, v4l2req");
+  CHECK(maburplay::unsupported_on_build(c, host) ==
+        "backend \"mpp\" is not in this build (Rockchip MPP decoder); this build has: null");
+}
+
+static bool load_throws(const char* text) {
+  try { maburplay::load_config(write_tmp_play(text)); }
+  catch (const std::exception&) { return true; }
+  return false;
+}
+
+TEST(display_phase_lock_keys) {
+  // display.phase_lock / phase_margin_ms: off and 4 in code; the lock needs
+  // the vsync servo, capture-time scheduling and the regulator itself.
+  const auto bare = maburplay::load_config(write_tmp_play(""));
+  CHECK(!bare.display.phase_lock);
+  CHECK(bare.display.phase_margin_ms == 4);
+  const auto on = maburplay::load_config(write_tmp_play(
+      "[display]\nphase_lock = true\nphase_margin_ms = 6\nsched_cap_ms = 16\n"));
+  CHECK(on.display.phase_lock);
+  CHECK(on.display.phase_margin_ms == 6);
+  CHECK(load_throws("[display]\nphase_margin_ms = 0\n"));
+  CHECK(load_throws("[display]\nphase_margin_ms = 11\n"));
+  CHECK(load_throws("[display]\nphase_lock = true\nsched_cap_ms = 0\n"));
+  CHECK(load_throws("[display]\nphase_lock = true\nsched_cap_ms = 16\nvsync_lock = false\n"));
+  CHECK(load_throws("[display]\nphase_lock = true\nsched_cap_ms = 16\nregulate_ms = 0\n"));
+}
+
+TEST(screen_mode_must_parse) {
+  const auto c = maburplay::load_config(write_tmp_play("screen_mode = \"1920x1080@59.94\"\n"));
+  CHECK(c.screen_mode == "1920x1080@59.94");
+  CHECK(load_throws("screen_mode = \"1920x1080@60mhz\"\n"));
+  CHECK(load_throws("screen_mode = \"1080p\"\n"));
+}
+
+TEST(bundle_ships_the_phase_lock_on) {
+  const auto b = maburplay::load_config(
+      std::string(MABUR_PLAY_BUNDLE_DIR) + "/maburplay.default.toml");
+  CHECK(b.display.phase_lock);
+  CHECK(b.display.phase_margin_ms == 4);
+  CHECK(b.display.sched_cap_ms == 16);
 }

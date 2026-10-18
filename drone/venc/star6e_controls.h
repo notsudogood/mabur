@@ -11,6 +11,11 @@
 
 /** Bind pipeline and config to runtime control state. */
 void star6e_controls_bind(Star6ePipelineState *pipeline, const VencCfg *cfg);
+/* The rate the VPE->VENC bind currently delivers (the last fps verb) and
+ * the rate the sensor was set to; delivered < nominal means the bind is
+ * decimating and the encoded stream does not carry the sensor's rate. */
+uint32_t star6e_controls_delivered_fps(void);
+uint32_t star6e_controls_nominal_fps(void);
 
 /** Reset control state to defaults (called between pipeline restarts). */
 void star6e_controls_reset(void);

@@ -215,6 +215,25 @@ Consume the same numbers programmatically with:
   ~0 when healthy — before that it also swallowed the venc-ring wait and
   the FEC/SBI CPU (~6 ms standing; see the scale-break note in
   `docs/data-provenance.md`).
+### `link.refresh` — demand refresh
+
+`link.refresh{armed, requests, retries, heals, heal_ms_last, by_reason{hole,
+salvaged, lost, start, resync, decoder, dvr}}`: the GS's `RefreshRequester`,
+counters cumulative since the daemon started. `armed` is true while a
+request is outstanding (waiting on a complete base IRAP to clear it);
+`requests` counts arming events, `retries` the repeated asks before each one
+cleared (they only accrue while maburgs is in a session), `heals`
+completed clears and `heal_ms_last` the most recent arm-to-heal span —
+counted from arming, so a request armed before the link is up (the
+player's boot `start`) reads as a long heal; `by_reason` tallies every
+arming source as it fires, including ones that land while a request is
+already outstanding. maburtop
+draws a `refresh:` line in the LADDER panel, right after `nack:`, folding
+`start`/`resync`/`decoder`/`dvr` into one `player` figure. Mechanism:
+`docs/fec-nack.md` "Demand refresh"; the per-request/heal trace is
+`fec.log` below.
+
+### `cards[]` — per card
 
   Since 2026-10-10 (slice salvage) the marker is `# aulog 5`: the
   `aulog 4` twelve columns plus four trailing `slices kept filled
@@ -285,6 +304,25 @@ Consume the same numbers programmatically with:
   expected blocks (nonzero whenever `link.probe.pin_mcs >= 0`, 0
   otherwise) — so in pin mode only the probe rows, and the `probe.log`
   they summarize, carry information.
+Top level, unconditional (idle defaults while pinned): `hop = {verdict,
+evidence, ref_rung, epoch, state (idle|ordered|verifying|hold), target,
+hops, holds, last_ms, sweep_timeouts, sampler_dropped}` — `ref_rung` and
+`target` are `null` while unfrozen / before the first-ever order, `last_ms`
+is `null` until any hop event has fired. `sweep_timeouts` counts relay
+`SCAN`s that got no `SCAN_RESULT` before their timeout
+(`max(1000, passes·n·(observe_ms+40)+300)` ms); 0 on a GS that never sweeps
+a relay. `sampler_dropped` counts channel-health window records the
+sampler thread published that the core loop never consumed (replaced by
+the next window): the core consumes only the newest record, and a
+replaced one hands its FA/CCA delta on to the record that replaced it; a
+record sampled before a hop-active edge is discarded uncounted. It grows
+only when the core loop falls a whole `hop.window_ms` behind -- which a
+dwell burst does by design: the core runs the burst for longer than a
+window, so a record published just before the burst can be replaced by
+the one the sampler publishes once the burst releases the card.
+maburtop's header shows `hop <state>/<verdict>`. Full key semantics, the
+OSD `(h)` mark and the `flightreport.py` HOP section:
+`docs/inflight-channel-hop.md`.
 
   Per-body raw probe log: with `debug_log.enable` on, maburgs also writes
   `probe.log` into the session directory (`gs/src/probe_log.h`) — one row
@@ -465,6 +503,183 @@ way it moves the turnaround by one short control frame's airtime.
 `radio.scan.energy_period_ms`: the in-flight hop's verdict-window reads
 (§below) replaced it as the in-session energy source, at ~150 ms cadence
 instead of 1 Hz:
+maburgs writes a per-session directory when `debug_log.enable` is set
+(shipped default `false` — the bench GS turns it on): `<debug_log.dir>/NNNN/`
+holding `flight.jsonl`, `ctl.log`, `probe.log`, `au.log`, `fec.log` and
+`scan.log` (`au.log` only while `[au_ring] enable`); maburplay writes
+`lat.log` and `frame.log` into the same directory by following the
+`/tmp/mabur-session` marker and holds no logging config of its own
+(`gs/src/debug_session.h`). Nothing is written until the knob is set, and
+`enable = false` removes the marker, which stops maburplay too.
+
+- **Session identity.** NNNN is one past the highest existing index — never
+  a timestamp, since the GS RTC is wrong at boot. The marker lives in tmpfs,
+  so a reboot starts a new session while a 2 s wrapper respawn rejoins the
+  current one and appends (which is why a format-marker line can appear more
+  than once in a file).
+- **A drone restart is a new flight.** When T_TELEM's `tlm_seq` steps
+  backwards by more than 100 (maburd restarts it from 0; a fade or
+  re-rendezvous keeps it climbing; `gs/src/drone_restart.h`) maburgs rotates
+  in place — next NNNN, marker rewritten, all six files reopened under it
+  with their format marker at the top — with no process restart and no video
+  blink; maburplay's `lat.log` and `frame.log` follow the marker within 5 s. Cumulative
+  sideport counters do NOT reset at a rotation (same maburgs process), so the
+  new `flight.jsonl` starts at nonzero values; `flightreport.py` differences
+  within the file. A maburd crash-restart mid-flight therefore splits that
+  flight in two, by design.
+- **One clock.** Every file stamps CLOCK_MONOTONIC, so any two rows join
+  directly.
+- **One writer thread.** All six maburgs files go through one writer thread
+  (`gs/src/log_writer.h`) whose per-stream ring can fill under load; when it
+  does, the writer counts the dropped lines and at its next 1 Hz flush
+  appends `# dropped N` into the affected file, so a gap is visible in the
+  data itself. `flight.jsonl` opts out (`mark_drops=false`: NDJSON can't
+  carry a comment line, and a gap is already visible from the datagram's own
+  `seq`). Every logger is non-fatal.
+
+Older recordings (`ctl-NNNN_<date>.log`, `au-NNNN.log`, `lat-NNNN.log`,
+`# sync` anchors, wall-clock `t_us`) and every previous format version are
+described in `docs/data-provenance.md`; the analyzers still read them.
+
+### `flight.jsonl`
+
+One sideport snapshot per `stats.interval_ms`, written straight from
+`StatsExporter` (no UDP round-trip). No format marker; the datagram's `v`
+and `seq` are the self-description.
+
+### `ctl.log` (`ctllog 12`)
+
+The adaptive-link record, written also in static-pin mode. Header
+`ctllog 12 <header_info>` (the ladder with per-rung width, thresholds), then
+compact lines — formats locked in `gs/src/ctl_log.h`:
+
+- `S` — dwell sample every `debug_log.ctl_period_ms`: rung, util `u`/`u3`
+  (arrival-booked pre-FEC loss), residuals, RF labels, fade deltas, and three
+  trailing probe columns `probe_rung probe_u probe_n` (`-1 nan 0` when
+  nothing is commanded).
+- `E` — rung transition with reason.
+- `P` — probe gate STATE EDGE (`clean|lossy|noinfo`) — a gate edge, not a
+  probe outcome.
+- `N` — penalty booked. `R` — per-rung EWMA store snapshot, every
+  `debug_log.rung_period_s`.
+
+In static-pin mode (`link.static_mcs >= 0`) the `S` line's controller
+columns are frozen (`u`/`util` read 0, `E`/`P`/`N`/`R` never fire); only
+its probe columns move, `<probe_rung> nan <probe_n>` — `probe_rung` is
+`min(probe.rung_offset, top)` off a frozen rung 0, `u` is `nan` because the
+gate never leaves `Off`, and `probe_n` is nonzero whenever
+`link.probe.pin_mcs >= 0`. In pin mode only the probe rows, and
+`probe.log`, carry information.
+
+`flightreport.py`'s `PROBE GATE` report scores the edges as a demote
+predictor: per demote episode, `lead` is the time from the FIRST lossy edge
+since the held rung was entered (the last `E` line before the episode,
+either direction) — edges before that transition were measured under a
+different hold and never count — and a lossy edge is a false alarm unless
+the next `E` line is a demote within 10 s. The episode report also prints
+an "s3-settle-refire canary" (demotes landing 300–360 ms after an
+`s3_residual` demote, the debris double-step `transition_edge.h` removed;
+~0 expected). Controller invariants behind these lines:
+`docs/link-adaptation.md`.
+
+### `probe.log` (`probelog 3`)
+
+One row per finalized received probe body — roughly one per AU, far denser
+than the ctl log's `S` lines (`gs/src/probe_log.h`). Header
+`probelog 3 bpb=<bpb>`, then
+`<t_ms> <seq> <mcs> <bw> <enh_fid> <blocks_ok> <card_mask> <snr_c0> <snr_c1> <evm_c0> <evm_c1> <first_ms>`.
+`t_ms` is the finalize tick (~10 ms coarse), `first_ms` the radio's arrival
+stamp of the body's first sight on any card (mono ms to 3 decimals, same
+clock as `au.log`'s `t_complete`), `blocks_ok` the union of surviving
+blocks, `card_mask` the cards that delivered any block, snr/evm per card in
+dB (`nan` when that card heard nothing). A row is written for EVERY
+finalized body, on- or off-profile: `mcs`/`bw` are that body's OWN profile,
+so an RCF-lag body (arrives just after a profile switch) logs at its stale
+mcs instead of vanishing. A wholly-lost body is the only case with no row;
+`flightreport.py` derives losses from `seq` gaps and joins rows to `au.log`
+on `enh_fid` (nearest completion in time — the id wraps every ~36 min) to
+print the completion→probe offset percentiles. `tools/bench/probesend.py`
+adds the GS send stamps from a `MABUR_GAPLOG=1` run to place every send
+against the probe (`docs/findings/2026-09-05-probe-blanking-fix.md`).
+
+### `au.log` (`# aulog 7`)
+
+Per-AU meta rows, fed in-process from `AuRingWriter::last_record()`
+(`gs/src/main.cpp`'s FrameStream finish callback; `gs/src/au_log.h`) —
+maburgs is the ring WRITER, so the log cannot miss an AU to a ring overrun.
+Twenty columns:
+
+    t_us pts sid fid len flags nal0 t_first t_complete enc dq air slices kept filled after_hole t_last t_drain t_push vcl
+
+`t_us` is CLOCK_MONOTONIC µs. `t_first`/`t_complete` are the AU's mono-µs
+latency stamps (first body / finish()). `enc`/`dq` are the drone's
+SBI-latched `enc_us`/`drone_q_ms` (venc encode time, true TxQueue wait —
+~0 when healthy) carried on the AU's first fragment. `air` is the drone's
+modelled air backlog at that frame (`AirClock`, `docs/link-adaptation.md`
+"Drone air clock"). `slices kept filled after_hole` are slice salvage
+(`docs/slices.md`), all 0 on an AU that was neither split nor salvaged.
+The next three are GS stamps (mono µs, 0 = unknown) that split the fec
+segment per frame. `t_last` is the arrival of the AU's LAST body:
+`t_last − t_first` is the arrival span (drone hand-off plus air),
+`t_complete − t_last` the GS publish tail. `t_drain` and `t_push` belong to
+the AU's last-pushed fragment and split that tail further: `t_drain −
+t_last` is the wait in the RX queue before the core thread drained the
+body's batch, `t_push − t_drain` the work on earlier bodies of that batch
+plus FEC decode, `t_complete − t_push` FrameStream emit and the ring write.
+`vcl` is the first slice NAL type of a complete, parameter-set-led AU
+(IRAP 16..21, a refresh start's TRAIL_R is 1), 0 when the AU did not open
+with VPS/SPS/PPS — the GS-requested-IDR clearing signal.
+
+### `fec.log` (`feclog 4`)
+
+Per-episode FEC loss record (`gs/src/fec_log.h`), the measurement behind
+"is the rung table's overhead pair oversized". A *loss episode* is a run of
+source symbols on one video layer that the channel never delivered directly
+(repair-recovered-then-heard symbols do NOT count: the repair merely won an
+arrival race), merged with any other such run within one repair window of
+it, since those compete for the same repairs. `SwDecoder` books it at
+horizon eviction — the only point where "never delivered" is final — so a
+row lands roughly a horizon after the loss. Header `feclog 3`, then
+`<t_ms> <sid> <mcs> <bw> <ov> <first_seq> <span> <m> <rec> <rtx> <aband> <stale> <r> <w>`:
+drain tick (mono ms, ~10 ms coarse), video layer (0 base / 1 enh), the op
+MCS and width and that sid's commanded overhead at drain time (so a row
+scores against its own rung with no ctl.log join), wire seq of the first
+missing source, seqs spanned, missing = recovered + rtx + abandoned (`rtx`:
+filled by a software-NACK retransmit, `docs/fec-nack.md`), of those how many
+fell below the transition watermark (`stale`, the debris class the ladder
+excludes), distinct covering repairs received (`r`, a two-card copy counts
+once) and the repair window as flown (`w`).
+
+`flightreport.py`'s FEC EPISODES section groups rows per (sid, mcs, bw, ov)
+and prints, for the non-stale ones, the overhead each episode would have
+needed, `ov_req = (sqrt(1+4c)−1)/2` with `c = m·ov·(1+ov)/r` — at overhead
+x the same lost air carries `m(1+ov)/(1+x)` sources against `r·x/ov`
+covering repairs — plus how many episodes would have failed at
+0.25/0.35/0.50/0.75/1.00. Read it as the input to a *static* retune of
+`[[link.ladder]]`'s `overhead_base`/`overhead_enh`. Nothing consumes the
+file live; `fec.log` alone is also a valid `flightreport.py` argument. The
+first ~18 s after a maburgs restart log a block of rung-0 boot warm-up
+episodes — drop them by time. Bench record:
+`docs/findings/2026-09-16-fec-log-overhead-bench.md`.
+
+`feclog 4` adds two row kinds that start with a letter instead of a
+timestamp digit, so an episode row is still distinguishable by its leading
+`t_ms`: `I <t_ms> <reason> <epoch>` logs an IDR request going out (`reason`
+is whatever armed it — `hole`, `salvaged`, `lost`, `start`, `resync`,
+`decoder`, `dvr` — and a retry repeats the same reason; retries only go
+out while maburgs is in a session, so an outage adds no rows), and
+`H <t_ms> <heal_ms> <retries>` logs a complete base IRAP clearing that
+request (`heal_ms` counts from arming, dead time before the link came up
+included). `load_feclog()` skips both; they are read by `load_refresh_rows`,
+and `flightreport.py`'s REFRESH section (requests by reason, retries,
+heal_ms distribution, and how many requests fall within 2 s of a ladder
+demote / a FEC episode) prints from it — on a bare `fec.log` argument and
+in session mode alike.
+
+### `scan.log` (`scanlog 6`)
+
+The channel-selection record (`gs/src/scan_log.h`, formats locked there).
+Six record letters, one line each:
 
 - `C` — a card's adapter-caps identity plus sensor validity flags, once at
   bring-up.
@@ -573,6 +788,74 @@ different from before this date too — see `docs/data-provenance.md`.
 gate line: `probe: r3 mcs5 clean 54b u0.12 n48 | c0 0.00 c1 0.05` (`54b` =
 the clean streak in bodies), and its
 signal panel gains the `probe` class in `CLASS_ORDER`.
+maburplay's 1 Hz `lat:` stderr line, also appended to `lat.log` in the
+current session directory: `# latlog 2`, then one `<mono_us> <lat-payload>`
+line per second, line-buffered (`gs/player/src/lat_log.h`). The marker is
+re-read every 5 s; a missing session or failed open (DVR not mounted yet)
+never blocks and never spams, and the stderr line keeps going regardless.
+
+The player's three session files (`lat.log`, `frame.log`, `reg.log`) are
+each written by their own writer thread: the main loop, which also drives
+decode and display, only queues a row. Every marker read, open, write and
+flush happens on that thread, so an SD card that stalls on writeback (the
+burned DVR streams to the same card) delays the log, never the picture. The
+queue holds 256 KiB, about 20 s of `frame.log`; a row that does not fit is
+dropped and counted, and the file gets one `# dropped N` line where the gap
+is, as maburgs' own files do.
+`tools/bench/latab.py latA.log latB.log` reads a pair of these logs and
+prints the vsync A/B verdict (four log-derived gates: `e2e` p50 B≤A−8,
+`dsp` p50 B≤6 (level), `dsp` p99 B≤A−8, `dsp` p50 4 s-bucket sweep ≤3
+(flatness) — `anchor=warm` windows are excluded from all four, with a
+printed count).
+
+### `frame.log` (`# framelog 3`)
+
+The per-frame rows behind the `lat:` line, from the same `LatTracker`
+window (`gs/player/src/lat_tracker.h` `FrameRow`): one row per frame that
+completed the whole chain and joined the window — a displaced frame or one
+submitted on a cold anchor gets no row, exactly as it is absent from the
+`lat:` percentiles. Written by the same follow-the-marker writer as
+`lat.log`, in the same 1 Hz burst, on its own writer thread and buffered
+so each burst reaches the file in one write. Twenty-two
+columns:
+
+    t_flip pts fid sid len flags slices t_submit t_complete t_decoded t_release enc dq air fec dec reg dsp e2e exact t_commit pbits
+
+`t_flip` is the frame's scanout-start stamp (mono µs); `t_submit` is when
+the player handed the AU (or its first slice) to the decoder, `t_complete`
+the ring's finish stamp (as `au.log`), `t_decoded` when the decoded picture
+came back, `t_release` when the regulator released it. `enc dq air fec dec
+reg dsp e2e` are the frame's own segments (µs, `dec = t_decoded −
+t_complete`, `e2e` the sum); `exact` is 1 when `t_flip` came from a real
+vblank event. `pts` joins the row to `au.log` (same value), which carries
+`nal0`, `t_first` and the GS stamps; `fid`, `sid`, `len`, `flags` and
+`slices` are copied from the AU record so a row reads on its own, `flags`
+in hex as `au.log` prints it (`framelog 1` printed it in decimal). A
+streamed frame has `t_submit < t_complete`, so `t_decoded − t_submit` is
+not decode time for it; split `dec` with `t_complete` instead.
+
+`t_commit` is when the frame's atomic commit ioctl returned (mono µs; 0
+when the presenter parked the frame in its mailbox because a flip was
+still in flight, or the commit failed), so `t_commit − t_release` is the
+present() path's own cost and `t_flip − t_commit` the kernel's latch.
+`pbits` are the presenter's commit bits in hex
+(`DrmPresenter::CommitBits`): `0x01` the OSD plane rode along (a
+vsync-paced two-plane commit), `0x02` `PAGE_FLIP_ASYNC` was set, `0x04`
+parked, `0x08` the commit failed, `0x10` a blocking modeset commit.
+`framelog 2` and earlier rows end at `exact`.
+
+### `reg.log` (`# reglog 2`)
+
+The 1 Hz `regulator:` line ("Regulator line" below), written by the same
+follow-the-marker writer as `lat.log`: `<mono_us> regulator: held= ...`.
+Its counters are cumulative since maburplay started; difference adjacent
+rows for the per-second rate. It exists because `pend`/`pdrop`/`heals` are
+the presenter's side of a missed latch, and `/tmp/maburplay.log` does not
+outlive a power-off. reglog 2 adds the phase-lock fields `lock= lerr=
+loff= lctr=` (docs/phase-lock.md); reglog 1 rows end at `lslot=` before
+`present=`.
+
+### `cal.log` (`callog 3`)
 
 **Loss-sim rig covers the probe stream too.** `LossSim::kStreams` (bench
 rig, `MABUR_LOSS_SIM` builds only, see `docs/airtime-model.md` §4) is
@@ -585,6 +868,294 @@ separate from the normal `build/`).
 
 **Rule of thumb: if you want to KNOW something about the running link,
 read the sideport. Reach for other tools only in these cases:**
+### Analyzers
+
+All take a session directory (resolved by `tools/session.py`), a single
+legacy file classified by its format marker, or no argument (the
+highest-numbered session under `/media/dvr/log` — highest index, never
+newest mtime).
+
+- `tools/flightreport.py` — the post-flight report over the whole session
+  (sections named above, plus BW40, NACK, REFRESH, wall/rung-store, episode
+  reports).
+- `tools/flightjitter.py` — reproduces the player's jitter EMA from the AU
+  rows (arrival basis `t_complete`), splits it into size-explained vs
+  residual (`docs/airtime-model.md` §4), and classifies each stutter event —
+  `gap` / `rung-change` / `size` / `fec-wait` / `loss-recovery` /
+  `transport` — using the jsonl for ladder and loss context. `fec-wait` is
+  direct per-frame evidence (the stutter AU's own `t_complete − t_first >
+  20 ms`), checked before the jsonl-inferred `loss-recovery` class so it
+  wins when both apply. Tests: `ctest -R test_flightjitter`.
+- `tools/bench/airdrain.py` — see "Tools: which one when".
+- `tools/bench/probesend.py` — see `probe.log` above.
+
+## Player (maburplay) stderr lines and OSD
+
+maburplay logs to `/tmp/maburplay.log` (tmpfs). maburgs' 1 Hz `stats:`
+line is in `/tmp/maburgs.log`, maburd's in `/tmp/mabur.log`. These are
+numerically redundant with the sideport but persist on disk until reboot;
+the UDP feed is ephemeral — they are the post-mortem when no consumer was
+listening.
+
+### `stream:` line (streamed decode)
+
+Every 5 s, printed by the decoder-input thread (FeedLoop;
+`docs/slices.md` "Part 2 (as built)"): `on|off:<reason>`, `streamed` (of
+them `salvaged`), `aborted` (`stream_aborted`, one rkvdec reset each),
+`whole`, `opened`/`open_aborted` (ring records seen open / ended without
+closing), `wake_us=p50/p99` and `n` (closed-record delivery − maburgs'
+`t_complete`, µs), `refused` (STREAM_APPENDs the decoder refused,
+`MppBackend::stream_errors`) and `parks`. `maburplay --oneshot` JSON carries
+`streamed`, `stream_aborted` and `stream`. On shutdown maburplay logs
+`maburplay: shutdown: <stream idle|stream finished|stream aborted> pts=…
+waited=… ms…` (how the picture that was streaming when SIGTERM arrived was
+finished before decoder teardown) and `maburplay: feed: delivered=…
+submits=… parks=… notes_dropped=…` (the feed thread's tally for the run).
+
+### Regulator line
+
+The 1 Hz `regulator:` line (stderr, and `reg.log` in the session
+directory): `held= late= replaced= disconts= hold_ema=
+present_jitter= vsync= skips= fallback= pend= heals= pdrop= chained= chain=
+chain_max= chains= cuts= alw= lslot= lock= lerr= loff= lctr= present= acq=
+req= ioctl=`.
+
+- `present=N acq=p50/max req=p50/max ioctl=p50/max` — the N present()
+  calls since the previous line, split into the framebuffer acquire (the
+  dma-buf import plus `drmModeAddFB2`, served from the presenter's
+  framebuffer cache, `gs/player/src/fb_cache.h`: a pool buffer seen again
+  is a lookup, a new one an import of ~3 ms), the atomic request build and
+  the commit ioctl, µs. `display.vsync_lead_ms` has to cover their sum: a
+  frame whose present() path runs past the lead latches a vblank late and
+  the frame behind it is a `pdrop` (`frame.log`'s `t_commit` shows it per
+  frame).
+- `vsync=locked|fallback` — whether the vblank estimator is locked (servo
+  release) or has fallen back to the `anchor_floor(pts) + regulate_ms`
+  rule.
+- `skips=` — deep-burst slot claims in servo mode: a frame whose natural
+  vblank slot AND the next slot are both occupied claims the later one and
+  the older occupant is dropped. Ordinary servo drops surface as
+  `replaced=` evictions instead. The sensor/panel beat (the drone's fps vs
+  the panel's 60 Hz) produces periodic panel repeats, visible in
+  `--fps-log`, not here.
+- `fallback=` — frames released via the fallback rule while
+  `display.vsync_lock` is on (climbs during a cold start or a stale
+  estimator; cold start needs 8 exact flips to first warm, validity is
+  recency-based, so after a stall the counter stops within one fresh exact
+  flip).
+- `pend=` — the presenter's present()-while-flip-in-flight mailbox
+  engagements, 0 with no presenter.
+- `heals=` — chain-break slips: pending releases pushed one slot after two
+  mailbox engagements within 100 ms (a backstop that fires ~only at
+  startup).
+- `pdrop=` — paced-mode mailbox drops: with the servo locked, a parked
+  frame is a missed latch and is dropped at flip completion instead of
+  resubmitted a period late, which keeps a single miss from becoming a
+  one-vsync-late chain. A `pend` increment in servo mode therefore costs one
+  dropped frame in the common case (two when the mailbox was already
+  occupied — the replaced parked frame counts in `--fps-log`'s `repl=`).
+  `pend`, `pdrop`, `replaced=` and `--fps-log`'s `repl=` together are the
+  full drop accounting.
+- `chained=`/`chain=`/`chain_max=`/`chains=`/`cuts=` — sequential-slot
+  chains, the one-vsync-late chain the servo itself creates: one collision
+  (two decodes inside one vblank window) shifts every following frame a
+  period late until an arrival gap wider than a period frees a slot.
+  `chained` = cumulative frames that took natural+1 vblank, `chain` the
+  current run, `chain_max` the longest, `chains` runs started (chains/s ×
+  mean length = chained/s), `cuts` runs cut by `display.chain_budget` (the
+  frame that would extend a run past the budget takes its natural slot and
+  the held occupant is displaced — one dropped frame, counted in
+  `replaced=` too). The extra period lands in the `lat:` line's `reg`
+  segment, so read `chained/held` per second next to `reg` p50. Code and
+  bundle default to budget 0 (never cut): a chain then ends only on an arrival gap, so
+  through the part of the sensor/panel beat where arrivals sit just past
+  the release point the whole stream runs one period late (the `lat:` p50
+  sawtooth) but nothing is dropped, and a key frame's ~10 ms of extra
+  encode, air and decode fits inside that slack. A budget N instead keeps
+  the lower latency and pays one dropped frame per cut; with a periodic
+  refresh (`venc.gop_s > 0`, the config these benches ran) the
+  refresh-start frame misses its release in about half of each beat cycle
+  on a clean link and every miss then costs a repeat plus a cut (bench:
+  budget 3 = 59–73 % of seconds with a visible event and 1.6–2.5 drops/s,
+  budget 0 = 14 % and 0.16 drops/s, at +12.5 ms median). Records:
+  `docs/findings/2026-09-02-regulator-chain-budget.md` (budget 3 chosen),
+  `docs/findings/2026-10-15-regulator-chain-cuts.md` (budget 0 chosen).
+- `alw=`/`lslot=` — capture-time scheduling (`display.sched_cap_ms`, 0 = off
+  in code; the bundle runs 16, the phase lock's placement switch —
+  docs/phase-lock.md; bench result and cost:
+  `docs/findings/2026-10-15-capture-sched.md`). In servo mode a frame's vblank follows its
+  capture time, not its arrival: the first vblank whose release is at or
+  after capture + delivery floor + `alw`. The window holds each frame's
+  transit, arrival − capture pts on the raw clocks, measured before the
+  regulator's own hold (enc+dq+air+fec+dec, not `reg`/`dsp`); raw rather
+  than against the pts anchor, whose floor snaps down on one fast frame
+  and would shift every later sample. The floor is its p1 over the last
+  600 frames (~10 s), `alw` is p99 − p1 + 1 ms capped at `sched_cap_ms`,
+  and salvaged AUs stay out of the window. A late-tail frame within `alw`
+  keeps its slot, so in the phases where frames arrive near the latch the
+  repeat/skip judder (OSD LAT p99 a refresh above p50) becomes one extra
+  refresh on every frame instead (p50 meets p99). `lslot` counts frames
+  that missed their capture slot (loss, or a delivery shift beyond the
+  cap); they are placed by the arrival rule above, and the next on-time
+  frame that claims the same vblank wins it, so a stall costs a local
+  freeze and catch-up with no trailing chain.
+- `lock=`/`lerr=`/`loff=`/`lctr=` — the phase lock's state (`off` when
+  `display.phase_lock` is false), last window's error, the offset it sends
+  and its centre, mfps (docs/phase-lock.md).
+
+### fps-log, display bring-up, MSP OSD
+
+- `--fps-log` prints a once-per-second `fps-log:` line; with a burned DVR
+  it carries the recorder fields including `burn_ctfb=`/`burn_ct_ms=`/
+  `burn_enc_ms=` (`docs/colortrans.md`).
+- The MSP OSD is rendered by maburplay from the UDP snapshot feed maburgs
+  emits; its startup line and blanking notices land in
+  `/tmp/maburplay.log`.
+- maburplay drives the display from process start: it modesets immediately
+  with a splash image (`/usr/local/share/mabur/splash.bin`, raw XRGB8888,
+  regenerate with `tools/gen_splash.py`) so the sink locks a mode before
+  video exists, and retries display acquisition once a second while none is
+  connected — a display plugged in after the player started is picked up
+  without a restart. That holds only if a display was NEVER acquired: one
+  that disconnects after a successful acquire is deliberately not recovered
+  (KMS retains CRTC state and a replug normally re-lights it on its own).
+  Neither has a config key. The splash shows only until the first decoded
+  frame — it is an aerial photo that would read as a live feed mid-flight,
+  so a mid-flight replug comes up on video. Log lines:
+  `no display at startup -- retrying …`, `display acquired after N.N s`;
+  per-attempt DRM failures are silenced on purpose (/tmp is tmpfs).
+
+### GS link-status OSD
+
+maburplay draws it from the SAME datagram `maburtop` reads (`osd.gs.port`
+= one of maburgs' `[[stats.out]]` ports), so the screen and the recorder
+cannot disagree — if the OSD shows something surprising, the answer is in
+`flight.jsonl`. Config is `[osd.gs]` in `/etc/maburplay.toml` (`enable`,
+code default false, bundle true; `stale_ms` dims every link-derived field
+after silence; fps/jitter/bitrate/REC are player-measured and never dim).
+There is one layout, the compact bar — two rows along the bottom edge,
+radio above and picture below, each item an icon, a space and its figures,
+with the REC indicator alone in the top-right corner
+(`gs/player/src/gs_compact.cpp`). `[name]` below stands for the icon:
+
+```
+                                              ● REC 12:47   <- top right
+...
+[wifi] 149 [tune-vertical] 5/40 [chart-donut] 62% [signal] -70/-72 [waveform] 22/20 [thermometer] 41
+[speedometer] 8.1 [aspect-ratio] 720p [filmstrip] 60 [pulse] 5.2 [timer-outline] 45/78 [link-variant-off] 0.3/0.0
+```
+
+| icon | item | source |
+|---|---|---|
+| wifi | channel the RECEIVER is tuned to, `(a)` auto-selected / `(h)` hopped suffix; `KEY?` replaces the item on a link-key mismatch | `link.channel` |
+| tune-vertical | MCS / channel width (MHz) | `link.ctl.rung` (else `link.op`) |
+| chart-donut | airtime % | `link.air_pct` |
+| signal | RSSI per GS card, dBm | `cards[]` |
+| waveform | SNR per GS card, dB | `cards[]` |
+| thermometer | drone SoC temperature, °C | `drone.sys.soc_temp_c` |
+| speedometer | video bitrate, Mb/s | player-measured |
+| aspect-ratio | decoded picture height + `p` (1440×1080 reads `1080p`) | player-measured |
+| filmstrip | fps on screen | player-measured |
+| pulse | frame-interval jitter, ms | player-measured |
+| timer-outline | latency p50/p99, ms | player-measured |
+| link-variant-off | loss before/after FEC, % | `link.pre_fec_loss` / `link.residual_loss` |
+
+The icons are Material Design icons baked from JetBrains Mono Nerd Font
+Mono (`gs_icon` in `gs_compact.h`, `BAR_ICONS` in
+`tools/msp/gen_gsfont.py`); each is one cell wide. Only the icons come
+from that font — the figures stay upstream JetBrains Mono, whose hinting
+the Nerd Fonts patcher changes. A missing value reads
+`--`, never zero. `lat` reads `--/--` while the latency anchor is cold —
+each figure is ONE REAL FRAME from the last 1 s window, ranked by e2e, and
+the pair is read together because p99 alone is a tail statistic that gets
+misread as typical (`docs/findings/2026-08-31-dq-spike.md` §20); the
+per-segment breakdown is not on the glass (the `lat:` line, `lat.log` and
+`flightreport.py` carry it). No meters or bars. Two colour exceptions,
+both single-threshold: the fps item turns caution while `drone.low_power`
+is set, and temperature turns caution from 70 °C; both tints drop while
+the sideport is stale. An icon takes its item's colour. The REC indicator
+is a red dot, `REC` and an mm:ss clock (`REC FAULT` in amber), with a VTX
+leg sized by `dvr.target` (`docs/vtx-recorder.md`); armed draws nothing.
+It sits in the corner because in a row it would eat into the bar's width
+and shift that row whenever the recorder was merely armed.
+
+The two rows share columns: each item starts at the same x as the item
+above or below it (ch/bitrate, mcs/res, air/fps, rssi/jit, snr/lat,
+temp/loss), each column as wide as the wider of its two items' worst
+cases, and the grid as a whole is centred. Every item sits in a box sized
+for its WORST-CASE string (four cards), so short values leave trailing
+space — that is what stops a row reflowing every time a figure gains a
+digit. Only a card-count change moves the columns. The
+type size is one size for both rows, and it is pinned: the largest baked
+size at which a 76-character, 6-item reference row fits between the insets
+— 25/37/48/75 px at 720p/1080p/1440p/2160p with the shipped asset
+(`tests/test_gs_asset.cpp` pins them). That reference is the widest row
+from when the items carried text labels; the icons made the real rows
+narrower, and the freed width stays slack instead of growing the bar into
+the picture. The worst-case grid (72 cells plus 5 gaps) must fit too, so a
+wider item can never overflow. Two rows because all twelve items on one line would cap the type
+too small to read on the GS screen.
+
+The glyph atlas is `/usr/local/share/mabur/gs_osd.gfont`, committed and
+staged by `tools/build-arm64.sh` — if it is missing, maburplay logs the
+reason and runs with the MSP overlay only. Host-side you can see the actual
+pixels without hardware: `maburplay --gs-render` dumps a rendered frame
+(`--res WxH` and `--lat P50/P99` set the bar's player-measured fields; the
+render is pixel-gated in `tests/integration/run_player_e2e.sh` PART D),
+`tests/test_gs_asset.cpp` gates the real asset's layout at
+720p/1080p/1440p/2160p, and `tools/bench/gs_osd_bench.cpp` measures
+draw+quantize per update at 1080p and 2160p. Read that bench before
+changing anything on this path: it runs on the 2 ms pump loop, and the rule
+of thumb is that anything projecting past ~1.5 ms on the A55 is a defect. A
+full repaint costs more than that and is accepted, because it is a
+startup/re-layout event (the quantize half is burned-DVR-only, and
+`ring.pump(2)` is a `poll()` ceiling over a slotted shm ring, so the cost
+lands as one-vsync-late presentation rather than a lost AU). What is NOT
+accepted is anything that puts a full repaint on a *cadence*: the burn
+restate after an MSP collision is scoped to the fields the collision
+actually hit (`osd_compose.cpp`).
+
+### Record button (GPIO)
+
+`maburplay` toggles the DVR from a button on the GS header: `[input.rec]`
+in `/etc/maburplay.toml` (`pin` is the header pin number, required,
+resolved at startup by matching the kernel's line names — the Radxa ZERO 3
+names its header `PIN_7`…`PIN_40` across gpiochip1/3/4;
+`active_low`/`bias` default to a button between the pin and GND with the
+internal pull-up). No `[input.rec]` table means no button. Short press,
+50 ms debounce, edge-triggered; `kill -USR1 $(pidof maburplay)` is the same
+press for benches. `dvr.target` (`gs` | `vtx` | `both`) picks what a press
+records (`docs/vtx-recorder.md`); on the GS, each start produces one file
+in whichever `dvr.mode` is configured:
+
+- **raw** waits for the next sync point before the file opens, so the OSD
+  REC indicator visibly lags the press. The sync point is decided by
+  `mabur::RawDvr` (`common/include/mabur/raw_dvr.h`, shared with the web
+  GS's local recording): a complete IRAP (`au_is_irap()`) once VPS+SPS+PPS
+  are known. Older raw files that open on a non-IRAP need repair — see
+  `docs/findings/2026-09-29-web-gs-raw-dvr-irap-sync.md`.
+- **burned** resumes at the next decoded frame (`docs/colortrans.md`).
+
+Files are `record-NNNN.mp4` under `dvr.dir`, indexed one past the highest
+`record-NNNN` already on the card (`common/include/mabur/dvr_name.h`) — no
+timestamp, since the GS RTC is wrong at boot — so the index climbs across
+boots and never overwrites an earlier flight; files not matching the
+pattern are ignored. `dvr.autostart` picks whether the player boots
+recording or armed. There is no config kill switch and no `--no-dvr` flag:
+`autostart = false` with no button is a player that never records, so give
+a `--decode-only` measurement run a config with `autostart = false` —
+otherwise the decode gate writes a raw file and charges SD-card I/O to the
+fps number. Startup logs the resolved mapping and every toggle logs
+START/STOP; the OSD REC field is the live indicator. GPIO failures (pin not
+found, line held by another consumer) are non-fatal and logged once.
+
+The same loopback socket the player uses to tell `maburgs` its `vtx_rec`
+wish also carries one-shot `refresh <reason>` lines — `start`, `resync`,
+`decoder`, `dvr` — each one arming a demand-refresh IDR request
+(`docs/vtx-recorder.md` "Wire"; mechanism: `docs/fec-nack.md` "Demand
+refresh").
+
+## Tools: which one when
 
 - **Verifying maburgs itself → `tools/bench/ausniff.py`** (on the GS:
   `python3 ausniff.py --ring /dev/shm/mabur-au --seconds 30 --json`). It
@@ -1034,6 +1605,30 @@ had to rebuild) was 0.008 %. Bench sweep at rung 5: guard 64 → 0.67 %, 96 →
 `streams[*].recovered` + `abandoned` per second, or `fec.log`; to compare a
 pre-2026-09-23 recording's `pre_fec_loss` against a new one, remember the
 old number carries the artefact (`docs/data-provenance.md`).
+- `GET /venc` → `{"req_bitrate_kbps", "ring_fill_pct", "full_drops",
+  "frames", "sensor_mhz"}`. `req_bitrate_kbps` is the REQUESTED rate — what
+  RcAgent last successfully commanded — not a readback of what the encoder
+  programmed. `sensor_mhz` is the sensor's measured frame rate in milli-Hz
+  from the boot-time trim (`docs/airtime-model.md` §3), 0 until its first
+  1 s window closes; healthy is a few tens of mHz under `venc.fps`.
+  `frames` advancing is the cheapest "is the camera alive" check, and the
+  one that distinguishes a stalled encoder (fps flat, ring empty) from a
+  starved link. There is no `qp`: this SDK has no encoder-QP readback
+  (`h265Info.startQual` is 0 on every frame, no `GetChnStat` QP).
+- `GET /snapshot.jpg` → a JPEG straight off the encoder's snapshot channel
+  at `venc.snapshot_quality`. Answers 503 on a build without the venc core,
+  500 on a capture failure — deliberately distinguishable.
+- `POST /venc/set?k=v`, whitelist `bitrate` / `qp_delta` / `roi_qp` /
+  `max_ipprop` / `superframe_p_pct` / `min_iqp` / `max_iqp` / `fps` /
+  `ov_base_pct` / `ov_enh_pct` (`max_ipprop`/`superframe_p_pct` are
+  volatile encoder pokes, `docs/airtime-model.md` §3; `ov_*_pct` is a
+  per-layer FEC overhead override, `-1` clears, 0..300 %, and works without
+  the venc core). Nothing is persisted. **A bitrate/ROI-QP override is
+  bounded:** RcAgent re-asserts its computed values every
+  `RcAgent::kReassertMs` (5000 ms) on top of the pushes at every rung
+  transition, failsafe/LINKED entry and ROI threshold crossing, so an
+  override lasts at most ~5 s on a parked link — a bench procedure must
+  re-POST inside that window (`docs/link-adaptation.md`).
 
 **2026-09-23 (carrier sense on).** `drone.radio.rx = {own, foreign,
 crcfail}` is the drone's own RX-side view of the channel for the last
@@ -1062,6 +1657,15 @@ The next on retries; the drone never retries by itself. The value is repeated on
 maburtop shows `VREC` / `VREC!<OFF|NOSLOT|NOCARD|NOMNT|FULL|WRERR>` on
 the drone line. The player turns the value into the REC field's VTX leg
 (`docs/vtx-recorder.md`). Recordings made before this date have no key.
+maburd's own stderr (`/tmp/mabur.log`): the 1 Hz `stats:` line (incl.
+`enc_pk100=`, the peak 100 ms encoder byte rate in kbit/s inside that
+second, `lp=`/`armed=` for low-power mode, `snr_mhz=`, the trimmed
+sensor rate in milli-Hz (same value as `GET /venc`'s `sensor_mhz`), and
+`snr_off=`, the phase-lock offset on the sensor in milli-fps (0 = the
+trim's own rate); `rc: low_power ENTER/EXIT` lines mark transitions,
+`[sensor] cal:` lines the trim's rounds and lock, `[sensor] steer:` lines
+the phase lock's first offset, clamps and refusals) and the 5 s
+`frame_ring:` line (below).
 
 **2026-09-30 (telem diet, RC_VERSION 13).** `T_TELEM` shrank 98 → 48
 bytes: every field only maburtop read is gone (the key list is in

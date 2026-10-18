@@ -6,11 +6,15 @@
 
 namespace maburplay {
 
-// A decoder that takes a picture slice by slice while it decodes (rkvdec2
-// stream mode through the fpvOS-patched MPP). MppBackend implements it next
-// to VideoBackend (whose shape stays frozen); StreamFeeder drives it; tests
-// use a fake. One thread only: the decoder-input thread (main when there is
-// none).
+// A decoder that takes a picture slice by slice while it decodes.
+// MppBackend (rkvdec2 stream mode through the fpvOS-patched MPP) and
+// V4l2ReqBackend (libav's v4l2request hwaccel, mabur's FFmpeg patch) both
+// implement it next to VideoBackend (whose shape stays frozen); StreamFeeder
+// drives it; tests use a fake. abort() ends an open picture early with
+// what the decoder has: MPP takes an empty LAST append, V4l2Req sends an
+// AUD packet. One thread only: the decoder-input thread (main when there
+// is none) -- except abort(), which may also run on main while that
+// thread is parked, same as flush().
 // Kept free of any SDK include: mpp_backend.h pulls it in on every build.
 class StreamDecoder {
  public:

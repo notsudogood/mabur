@@ -160,24 +160,43 @@ branch.
 
 ## 2. Verdict engine (`gs/src/hop_verdict.{h,cpp}`, pure)
 
-`HopVerdict::window()` runs every `hop.window_ms` (150 ms) while the link
-is in `SESSION` and the boot scout owns no card (`hop_active()` in
-`hop_burst_gate.h`; the engine is reset on the falling edge — run
-unconditionally, the boot rendezvous read as `interfered` and the shadow
-controller ordered every candidate before the boot pick had committed),
-fed straight from a dedicated read block in `gs/src/main.cpp` (OFDM
-FA/CCA via `read_energy_scout()`, foreign-frame and CRC-fail deltas from
-the aggregator, RSSI/SNR EMAs converted from devourer raw units by
-`rssi_raw_to_dbm()`/`snr_raw_to_db()` in `hop_verdict.h` — the first bench
-run fed the raw values and `weak` could never trip) — **a card mid-dwell
-that window is skipped**
-(`VerdictCardIn::valid = false`). Link-level: the s1 (BASE) pre-FEC loss
-window and the FEC recovered-symbol delta. The loss input is the verdict's
-own 500 ms window (`s1_hop_loss` in `gs/src/main.cpp`, fed like `s1_loss`),
-blanked when a hop lands (`HopAction::Confirm` + 150 ms settle,
-`hop_verdict_loss_blank_until` in `gs/src/hop_blank.h`) so a verify is
-judged on the channel it verifies; `s1_loss` itself, which feeds the
-sideport/ctl-log/OSD gauge, is never blanked.
+`HopVerdict::window()` runs every `hop.window_ms` (150 ms) while
+`hop_active()` (`gs/src/hop_burst_gate.h`: the link is in `SESSION` and no
+calibration run is active).
+
+The card reads the window needs -- the NHM busy counters and their re-arm,
+the OFDM FA/CCA delta, the frame counters, a relay's survey window -- are
+synchronous USB register I/O, and devourer serializes them with the card's
+own coex tick (10-26 ms every 2 s) on one per-device lock. They therefore
+run on `WindowSampler` (`gs/src/window_sampler.{h,cpp}`), not on the core
+thread: every `hop.window_ms` the sampler samples each card and publishes
+one `WindowRecord`; `ChannelCore::step_hop_edge_and_window_` takes the
+latest record and runs the verdict on it, reading its own in-memory inputs
+(per-card CRC failures, RSSI/SNR EMAs, recovered symbols, AU count) at that
+moment. Per-window spans (`own_air_pct`) are measured between sample
+instants. The sampler runs on its own thread wherever `ChannelCore` runs
+threaded -- maburgs, and the web GS page build (`core_threads`); with
+`threaded = false` (tests, the web GS without `core_threads`) `tick()` runs
+one sampler step inline. The core tells the sampler what it may touch
+through atomics: the op channel, a card the boot scout owns or a relay
+sweep holds, a dwell in progress, and two per-card generation counters --
+one bumped after every in-flight scout dwell, one around every core-thread
+retune, width change or dwell burst -- that pin an NHM arm to the state the
+card had when it was armed. Device use itself is serialized per card by
+the sampler's device-use lock (`WindowSampler::hold_card`, forwarded as
+`ChannelCore::hold_card`): a sampler pass holds it across all of a card's
+reads, the core's dwell burst and the in-flight scout's dwell hold it for
+their whole retune-away-and-back, and maburgs's card lifecycle holds it
+across `stop()` + `open_and_start()`, so no read lands on a card being
+torn down or tuned away. Lock order: `inflight_mu_` before the card lock.
+
+On every edge of `hop_active`, `ChannelCore::
+step_hop_edge_and_window_()` resets the engine, re-primes the `au_seq` and
+recovered baselines and calls `HopVerdict::new_session()`; on the falling
+edge it also hands `HopController::on_session_lost()`'s action to the
+dispatcher. Without the gate the boot rendezvous (80–90 % s1 loss while
+the link comes up) and a calibration run (video stopped on purpose) read as
+`interfered`.
 
 Eight independent evidence bits, OR'd together every window
 (`gs/src/hop_verdict.h`'s `kEvImpaired/kEvWeak/kEvFading/kEvContended/
@@ -240,26 +259,28 @@ the frame rate before an outage is no baseline for the session after it.
 A mean under 2 AUs/window is no baseline and disables the
 term; 60→30 fps low-power is a 0.5 drop, so keep `starved_frac` below it.
 
-`blocked` is the NHM-airtime evidence added 2026-09-25 (spec
-`docs/superpowers/specs/2026-09-25-nhm-airtime-design.md`; bench numbers
-in `docs/findings/2026-09-25-nhm-airtime-spike.md`). The other five bits
-are all derived from the preamble detector (`foreign`, `fa`) or from RSSI/
-SNR, so an interferer that fills airtime without tripping the correlator —
-a long-frame 802.11 jam at low pps, or a co-channel analog VTX carrier,
-which desenses the front end and reads as a fade with SNR intact
-(`docs/findings/2026-09-25-analog-vtx.md`) — was invisible to every one of
-them. `nhm_busy_pct` comes from the chip's NHM histogram (airtime above
-`radio.scan.busy_dbm`, an `nf::kNhmAbsThDbm` bucket edge — config validation rejects
-any other value), armed and read once per verdict window per op card
-(§below); `own_air_pct` is the GS's own reconstruction of that card's
-airtime from the CRC-good frames it decoded (bytes·8 / HT rate, plus one
-preamble per PPDU from the `physt` A-MPDU boundary). A card's busy reading
-is invalid — `blocked` simply can't fire off it — under the same kind of
-condition that already invalidates a verdict window: the chip has no NHM,
-the card was mid-dwell, its channel changed mid-window, or an in-flight
-scout dwell landed inside the armed window (caught by a per-card dwell-
-generation counter, since `InflightScout::dwell()`'s `FastRetune` doesn't
-disturb devourer's NHM-ready state or the period it reports).
+**`blocked` and NHM busy.** The other evidence bits come from the preamble
+detector (`foreign`, `fa`) or RSSI/SNR, so an interferer that fills airtime
+without tripping the correlator — a long-frame 802.11 jam at low pps, or a
+co-channel analog VTX carrier that desenses the front end and reads as a
+fade with SNR intact (`docs/findings/2026-09-25-analog-vtx.md`) — is
+invisible to them. `nhm_busy_pct` comes from the chip's NHM histogram
+(airtime above `radio.scan.busy_dbm`, which config validation requires to
+be an `nf::kNhmAbsThDbm` bucket edge), armed and read once per verdict
+window per op card; `own_air_pct` is the GS's own reconstruction of that
+card's airtime from the CRC-good frames it decoded (bytes·8 / HT rate, plus
+one preamble per PPDU from the `physt` A-MPDU boundary). A busy reading is
+invalid — `blocked` can't fire off it — when the chip has no NHM, the card
+was mid-dwell, its channel changed mid-window, or an in-flight scout dwell
+landed inside the armed window (per-card dwell-generation counter, since
+`InflightScout::dwell()`'s `FastRetune` does not disturb devourer's
+NHM-ready state); the arm is also pinned to the card's tune-generation
+counter, so a window armed before a core-thread retune or width change is
+never read against the card's post-retune state. The MINIMUM across cards
+is taken because a weakly receiving diversity card counts our own frames
+in its NHM busy but decodes few of them, so it reads "foreign" busy with
+no interferer present. Bench numbers:
+`docs/findings/2026-09-25-nhm-airtime-spike.md`.
 
 `blocked` takes the MINIMUM foreign-busy reading across cards with a
 reading, not any single card's (final-review fix, 2026-09-25). A weakly-

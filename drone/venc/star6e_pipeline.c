@@ -1,5 +1,6 @@
 /* ported from waybeam_venc f956a52:src/star6e_pipeline.c */
 #include "star6e_pipeline.h"
+#include "sensor_cal.h"
 
 #include "star6e_awb.h"
 
@@ -750,7 +751,9 @@ static int star6e_pipeline_apply_intra_refresh(MI_VENC_CHN chn,
 	uint32_t rows;
 	uint32_t sweep_frames;
 
-	if (!cfg || cfg->intra_refresh_frames == 0)
+	/* No GOP means no GOP start for a sweep to run at: the stripe is off
+	 * whatever intra_refresh_frames says. */
+	if (!cfg || cfg->intra_refresh_frames == 0 || cfg->gop_s <= 0.0)
 		return 0;
 	if (!g_mi_venc.fnSetIntraRefresh) {
 		fprintf(stderr, "[venc] WARNING: intra_refresh_frames=%u requested "
@@ -1188,12 +1191,16 @@ static int bind_and_finalize_pipeline(Star6ePipelineState *state,
 
 	bind_src_fps = state->sensor.mode.maxFps ?
 		state->sensor.mode.maxFps : pconf->sensor_framerate;
-	bind_dst_fps = cfg->fps;
-	if (bind_dst_fps == 0 || bind_dst_fps > bind_src_fps)
+	/* At full rate the bind is src:src: a dst at the sensor's set rate
+	 * would engage the SDK's frame-rate limiter, whose clock is never
+	 * quite the sensor's, and clip one frame per beat (sensor_cal.h).
+	 * Only a venc.fps below the sensor's set rate decimates here.  The RC
+	 * fpsNum is separately capped to STAR6E_VENC_INPUT_FPS_MAX — see
+	 * venc_fps in pipeline_start. */
+	bind_dst_fps = sensor_cal_bind_dst_fps(cfg->fps ? cfg->fps : bind_src_fps,
+		state->sensor.fps, bind_src_fps);
+	if (bind_dst_fps > bind_src_fps)
 		bind_dst_fps = bind_src_fps;
-	/* Deliver the TRUE sensor rate to VENC (e.g. ~143 for the 144 mode) so
-	 * the encoder actually outputs it.  The RC fpsNum is separately capped
-	 * to STAR6E_VENC_INPUT_FPS_MAX — see venc_fps in pipeline_start. */
 
 	/* VTX onboard recorder: bound BEFORE the link channel, so the link is
 	 * the newest VPE peer and its encode runs first on the single-task
@@ -1202,7 +1209,7 @@ static int bind_and_finalize_pipeline(Star6ePipelineState *state,
 	 * Non-fatal: a failure leaves the recorder reporting Disabled. */
 	(void)venc_record_attach(&state->vpe_port, state->image_width,
 		state->image_height, pconf->precrop.w, pconf->precrop.h,
-		bind_src_fps);
+		bind_src_fps, state->sensor.fps);
 
 	/* FRAMEBASE is the only link mode this hop accepts.
 	 * I6_SYS_LINK_LOWLATENCY was tried on hardware (it would

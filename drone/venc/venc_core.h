@@ -38,6 +38,7 @@ int venc_set_max_ipprop(int prop);   /* boot + debug endpoint only; u32MaxIPProp
 int venc_set_superframe_p_pct(int pct); /* debug endpoint; 0 = off, 100..1000 (SuperFrame P cap) */
 int venc_set_min_iqp(int qp);          /* debug endpoint; u32MinIQp 1..51 (I-frame QP floor = IDR size cap) */
 int venc_set_max_iqp(int qp);          /* debug endpoint; u32MaxIQp 1..51 */
+int venc_set_sensor_offset(int mfps);  /* RcAgent: phase-lock offset on the trim request (mfps); stored, applied by the encoder thread once the trim has locked */
 
 /* Signals — read on demand (agent tick / telemetry / debug endpoint). */
 typedef struct {
@@ -45,6 +46,10 @@ typedef struct {
   uint32_t ring_fill_pct;   /* 0..100 */
   uint32_t frames_encoded;  /* lifetime */
   int cur_bitrate_kbps;     /* last applied via venc_set_bitrate_kbps, -1 before first */
+  uint32_t sensor_mhz;      /* measured sensor frame rate, milli-Hz; 0 until the
+                             * boot-time trim's first window (sensor_cal.h) */
+  int32_t sensor_off_mfps;  /* phase-lock offset now on the sensor, milli-fps
+                             * on the trim request; 0 = the trim's own rate */
   /* No encoder QP: MI_VENC_Stream_t h265Info.startQual reads 0 on every
    * frame this firmware emits and there is no GetChnStat QP. */
 } VencStats;

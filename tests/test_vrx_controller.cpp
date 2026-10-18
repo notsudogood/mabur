@@ -798,6 +798,24 @@ TEST(rcf_carries_the_rec_wish) {
   CHECK(r->rec == (mabur::rc::kRecKnown | mabur::rc::kRecOn));
 }
 
+TEST(rcf_carries_the_snr_off) {
+  auto vrx = make();
+  vrx.set_snr_off(-37);
+  link(vrx, 0.0);
+  vrx.on_video(0.0);
+  std::optional<VrxController::Out> out;
+  double now = 0;
+  LinkHealth h{true, 0.0, 0.05, false};
+  while (!out || out->is_disc) {
+    now += 10;
+    vrx.on_video(now);
+    out = vrx.step(now, h);
+  }
+  auto r = mabur::rc::parse_rcf(out->frame.data(), out->frame.size());
+  REQUIRE(r.has_value());
+  CHECK(r->snr_off == -37);
+}
+
 TEST(rcf_carries_the_idr_epoch) {
   // first_rcf() (file helper, ~line 495) acks the rendezvous and returns the
   // first non-DISC frame; t carries forward between calls.

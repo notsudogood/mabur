@@ -2,10 +2,11 @@
 # docs/superpowers/specs/2026-08-04-mpp-enc-osd-spike.md).
 #
 # aarch64 cross build only: it drives the real vepu54x through
-# librockchip_mpp, so it needs MABUR_PLAYER_HW's MPP root exactly the way
-# maburplay does. Reuses mabur_player_core for the OSD font/layout/rasterizer
-# rather than carrying a second copy of the glyph blitter.
-if(NOT MABUR_PLAYER_HW)
+# librockchip_mpp, so it needs the MPP root exactly the way maburplay's MPP
+# decoder build does -- and nothing on a V4L2-request (Cedrus) build.
+# Reuses mabur_player_core for the OSD font/layout/rasterizer rather than
+# carrying a second copy of the glyph blitter.
+if(NOT MABUR_PLAYER_HW OR NOT MABUR_PLAYER_DECODER STREQUAL "mpp")
   return()
 endif()
 

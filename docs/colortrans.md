@@ -2,15 +2,17 @@
 
 The drone's `venc.sensor_bin` (`imx415_greg_fpvXIX_colortrans.bin`) flattens the
 picture on purpose (a 3x3 "ColorTrans" matrix plus a luma offset in the ISP)
-so the encoder spends bits evenly. `maburplay` undoes it in three places, all from
+so the encoder spends bits evenly. `maburplay` undoes it in three places (the
+live picture by one of two mechanisms, whichever the display hardware has), all from
 one evaluator, `gs/player/src/colortrans.{h,cpp}` (`kColorTrans3`, a
 transcription of the operator's `colortrans3.glsl`); the web GS carries a
 pinned JS/GLSL copy for its video:
 
 | Where | Mechanism | Cost |
 |---|---|---|
-| Live picture | VOP2 CRTC `CUBIC_LUT`, 9x9x9, 12-bit entries, built by `build_cubic_lut()` and attached on every modeset commit (`drm_presenter.cpp`) | none (scanout hardware) |
-| OSD (both overlays) | pre-inverted at the source: `OsdFont::set_inverse()` on the MSP atlas, `set_colour_inverse()` in `gs_draw` for the GS tokens and shadow | once at startup |
+| Live picture (RK3566) | VOP2 CRTC `CUBIC_LUT`, 9x9x9, 12-bit entries, built by `build_cubic_lut()` and attached on every modeset commit (`drm_presenter.cpp`) | none (scanout hardware) |
+| Live picture (H618) | the video plane's CSC: `affine_3x4()` folds `forward()` into one 3×4, attached as the DE33 VI plane's `CTM` property (Orange Pi image kernel patch `0002`), which the kernel combines with its YUV→RGB table. The OSD plane never passes through it, so the OSD is not pre-inverted. Used only when the CRTC has no CUBIC_LUT; a kernel that refuses the matrix (out of register range) costs one log line and a flat picture (`DrmPresenter: kernel refused the video-plane CTM`) | none (scanout hardware) |
+| OSD (both overlays) | RK3566 only (the LUT covers the OSD planes too): pre-inverted at the source: `OsdFont::set_inverse()` on the MSP atlas, `set_colour_inverse()` in `gs_draw` for the GS tokens and shadow | once at startup |
 | Burned DVR | `FrameColorTrans` (`frame_colortrans.cpp`): NV12 dmabuf -> GLES2 shader (colortrans3 verbatim) -> ARGB GBM target -> RGA -> NV12, on the recorder's ct thread, pipelined with `encode()` (see "Keeping the burned stage off the display path" below) | ct thread only; `burn_ctfb=` on the fps-log counts frames that fell back to flat, `burn_ct_ms=`/`burn_enc_ms=` are the per-window mean stage times |
 | Web GS video (`web/`) | `web/ui/src/lib/colortrans.js`: each decoded `VideoFrame` -> `texImage2D` -> the same shader on a WebGL canvas stacked over the flat 2D one; the MSP OSD is its own canvas above, so nothing is pre-inverted. Page toggle, see `docs/web-gs.md` ("Colour correction") | one GPU pass per frame; off = the plain 2D `drawImage` path |
 
@@ -20,6 +22,9 @@ AND the constants in `kFrag` in `frame_colortrans.cpp`, rebuild, redeploy — AN
 `tests/test_colortrans.cpp` pins the C++ side to the glsl reference values,
 `web/tests/colortrans.test.mjs` pins the web copy to the same values and to
 `colortrans.h`'s defaults (a retune that misses the page fails it).
+The H618's 3×4 is derived from `kColorTrans3` at startup, so a retune needs
+no extra edit there; a retune to `gamma != 1` is not affine and leaves the
+H618 flat (logged).
 
 The ct thread also SCALES: the burned DVR's picture is the OSD surface's
 size, not the decoded size, because the encoder lays the OSD 1:1 from the
@@ -30,7 +35,7 @@ LINEAR sampler); without it, one RGA NV12 resize. So the ct thread runs
 whenever there is an OSD region, colortrans or not, and a 720p drone
 records a 1080p file.
 
-## Kernel facts (GS kernel 6.1.84, `rockchip_drm_vop2.c`)
+## Kernel facts — RK3566 (GS kernel 6.1.84, `rockchip_drm_vop2.c`)
 
 - Entries are 12-bit (`& 0xfff`), 729 per table; the blob is 729
   `struct drm_color_lut` (16-bit fields, only the low 12 bits used).
@@ -58,6 +63,36 @@ records a 1080p file.
   feature off. The permanent fix is to change the
   default in `main.cpp` (`lut_axis = LutAxis::kBlueFastest`), update the
   `axis=` string in the same log line, rebuild, and redeploy.
+
+## Kernel facts — H618 (Orange Pi image kernel 6.18.35, `sun8i_csc.c`)
+
+- No `CUBIC_LUT`. Each VI channel has a 15-word CCSC: three pre-offsets
+  (10-bit units, subtracted), a 3×3 in S2.17, and a post-constant per
+  row. The image kernel's patch `0002` adds a `CTM` blob property to the
+  VI planes: 12 × u64, row-major `[A | b]`, S31.32 sign-magnitude, on RGB
+  in [0,1], folded in as `C' = A·C`. The post-constants cannot carry a
+  negative offset (set to −0.345 of full scale the picture saturates to
+  white), so the offset `b` goes into the **luma pre-offset** instead:
+  raising `d_Y` by Δ shifts every output row by `−C'[r][Y]·Δ`. That holds
+  `b` exactly when it is a grey shift, which colortrans's lift is
+  (`kColorTrans3`: `d_Y` 64 → 190, U/V stay 512, post-constants stay 0).
+  Unset = the stock table, bit for bit. The plane's default encoding is
+  BT.709 limited.
+- Coefficients are signed 20-bit: |coefficient| < 4.0, and a larger one
+  wraps rather than saturates (black picture, or a colour cast that
+  flips). `kColorTrans3` combined with BT.709 limited peaks at 3.41
+  (Cb→B). The output clamps at full scale. A CTM that does not fit — a
+  coefficient of 4.0 or more, an offset that is not a grey shift, a `d_Y`
+  outside 0..1023 — fails the commit with `-ERANGE`.
+- Plane state outlives the process that set it: a `CTM` left on the plane
+  by one run stays applied under the next. So `maburplay` states the
+  property on every modeset and splash-handoff commit — the matrix, or 0
+  when colortrans is off or the kernel refused it — the same reason a LUT
+  CRTC always gets a table.
+- The 3×4 skips `forward()`'s clamp after the camera matrix: same mean
+  error as the RK3566's 9×9×9 LUT (4.0 vs 3.7 LSB), worse on strongly
+  saturated colours (max 36 vs 20 LSB). Record:
+  `docs/findings/2026-10-12-opi-colortrans-probe.md`.
 
 ## Build
 

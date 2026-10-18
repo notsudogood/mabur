@@ -16,6 +16,7 @@
  * each other.
  */
 #include "venc_record.h"
+#include "sensor_cal.h"
 #include "venc_core.h"
 #include "star6e_pipeline.h"   /* STAR6E_VENC_INPUT_FPS_MAX */
 #include "rec_frame.h"
@@ -258,7 +259,8 @@ void venc_record_size(uint32_t *width, uint32_t *height)
 }
 
 int venc_record_attach(const MI_SYS_ChnPort_t *vpe_port, uint32_t link_w,
-	uint32_t link_h, uint32_t cap_w, uint32_t cap_h, uint32_t src_fps)
+	uint32_t link_h, uint32_t cap_w, uint32_t cap_h, uint32_t src_fps,
+	uint32_t full_fps)
 {
 	MI_VENC_ChnAttr_t attr;
 	MI_U32 dev = 0;
@@ -336,7 +338,9 @@ int venc_record_attach(const MI_SYS_ChnPort_t *vpe_port, uint32_t link_w,
 	}
 	g_port = (MI_SYS_ChnPort_t){ .module = I6_SYS_MOD_VENC, .device = dev,
 		.channel = STAR6E_RECORD_CHANNEL, .port = 0 };
-	ret = MI_SYS_BindChnPort2(&g_src, &g_port, src_fps ? src_fps : fps, fps,
+	/* Same rule as the link bind: full rate is src:src, no limiter. */
+	ret = MI_SYS_BindChnPort2(&g_src, &g_port, src_fps ? src_fps : fps,
+		sensor_cal_bind_dst_fps(fps, full_fps, src_fps),
 		I6_SYS_LINK_FRAMEBASE, 0);
 	if (ret != 0) {
 		fprintf(stderr, "[record] Bind VPE->ch%d failed %d -- recorder disabled\n",

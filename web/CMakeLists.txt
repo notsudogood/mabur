@@ -67,7 +67,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     ${MABUR_DIR}/gs/src/hop_ranker.cpp ${MABUR_DIR}/gs/src/hop_verdict.cpp
     ${MABUR_DIR}/gs/src/inflight_scout.cpp ${MABUR_DIR}/gs/src/pair_pick.cpp
     ${MABUR_DIR}/gs/src/radio_frontend.cpp ${MABUR_DIR}/gs/src/card_scan_usb.cpp
-    ${MABUR_DIR}/gs/src/remote_card.cpp)
+    ${MABUR_DIR}/gs/src/remote_card.cpp ${MABUR_DIR}/gs/src/window_sampler.cpp)
   target_include_directories(webgs_core PUBLIC src ${MABUR_DIR}/common/include
     ${MABUR_DIR}/gs/src ${MABUR_DIR}/third_party ${DEVOURER_DIR}/src)
   target_compile_options(webgs_core PRIVATE -O3)

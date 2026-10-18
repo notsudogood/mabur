@@ -148,6 +148,58 @@ uint32_t invert_premul_argb(const ColorTrans& t, uint32_t argb) {
   return map_premul(argb, invert_rgb8, t);
 }
 
+bool affine_3x4(const ColorTrans& t, float out[12]) {
+  const ColorTransParams& p = t.params();
+  if (p.gamma != 1.0f) return false;
+  // forward(), step by step, with the same parameter clamps.
+  const float k = std::min(10.f, std::max(0.f, p.gain));
+  const float l = std::min(1.f, std::max(-1.f, p.lift));
+  const float sat = std::min(3.f, std::max(0.f, 1.f + p.saturation / 100.f));
+  // Camera reverse: y = P*c + q.
+  float P[9] = {1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f};
+  float q[3] = {0.f, 0.f, 0.f};
+  if (p.reverse) {
+    const float yoff = (p.y_offset_10b / 1023.f) * p.y_offset_strength;
+    for (int r = 0; r < 3; ++r) {
+      for (int c = 0; c < 3; ++c) P[3 * r + c] = p.matrix[3 * r + c];
+      q[r] = p.black_lift - yoff * (p.matrix[3 * r] + p.matrix[3 * r + 1] + p.matrix[3 * r + 2]);
+    }
+  }
+  // Grade: G = D*P, h = D*(q + lift), D = diag(gain * rgb_mult).
+  float G[9], h[3];
+  for (int r = 0; r < 3; ++r) {
+    const float d = k * std::min(4.f, std::max(0.f, p.rgb_mult[r]));
+    for (int c = 0; c < 3; ++c) G[3 * r + c] = d * P[3 * r + c];
+    h[r] = d * (q[r] + l);
+  }
+  // Saturation mix S = (1-sat)*[L;L;L] + sat*I, then [A | b] = [S*G | S*h].
+  const float L[3] = {kLumaR, kLumaG, kLumaB};
+  for (int r = 0; r < 3; ++r) {
+    float S[3];
+    for (int j = 0; j < 3; ++j) S[j] = (1.f - sat) * L[j] + (r == j ? sat : 0.f);
+    for (int c = 0; c < 3; ++c)
+      out[4 * r + c] = S[0] * G[c] + S[1] * G[3 + c] + S[2] * G[6 + c];
+    out[4 * r + 3] = S[0] * h[0] + S[1] * h[1] + S[2] * h[2];
+  }
+  return true;
+}
+
+void pack_ctm_3x4(const float m[12], uint64_t out[12]) {
+  for (int i = 0; i < 12; ++i) {
+    const double v = m[i];
+    const uint64_t mag = static_cast<uint64_t>(std::llround(std::fabs(v) * 4294967296.0));
+    out[i] = (v < 0 && mag != 0) ? (mag | (1ull << 63)) : mag;
+  }
+}
+
+DisplayCtChoice pick_display_colortrans(bool enable, bool lut_avail, bool ctm_avail,
+                                        bool affine_ok) {
+  if (!enable) return {DisplayCt::kFlat, false};
+  if (lut_avail) return {DisplayCt::kLut, true};
+  if (ctm_avail && affine_ok) return {DisplayCt::kPlaneCtm, false};
+  return {DisplayCt::kFlat, false};
+}
+
 int cubic_lut_index(int ri, int gi, int bi, LutAxis axis) {
   const int e = kCubicLutEdge;
   return axis == LutAxis::kRedFastest ? ri + e * gi + e * e * bi : bi + e * gi + e * e * ri;

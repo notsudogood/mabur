@@ -39,7 +39,12 @@ recorder (CPU, memory, power cut, restarts, error states, `record.size`):
   (`maburgs::kRecControlPort`), with the text `vtx_rec on` or
   `vtx_rec off`. The player sends on every toggle and repeats its current
   wish every 1 s. `RecControl` in maburgs keeps the last command it
-  received and never lets it decay.
+  received and never lets it decay. The same socket (`CoreControlClient`,
+  `gs/player/src/core_control_client.h`) also carries one-shot
+  `refresh <reason>` reports -- `start` on ring open, `resync` when the
+  ring reader skips AUs, `decoder` from the decode watchdog's reset path,
+  and `dvr` when the raw DVR starts -- asking maburgs for a fresh key
+  frame; `docs/fec-nack.md` covers the demand-refresh mechanism itself.
 - **Sideport:** `drone.rec = {state, err}` (`docs/observability.md`). The
   maburtop drone line shows `VREC` while recording, or `VREC!<why>` on an
   error.
@@ -59,7 +64,11 @@ size         = "1920x1080"      # default venc.size; see "Recording size" below
 The following values are compiled in: fragment 1000 ms, GOP 1 s, a new
 file at 3.9 GB (FAT32 limits a file to 4 GiB), and a writer queue of
 64 AUs (about 1.07 s at 60 fps). Files are named `record-NNNN.mp4` in
-`dir`, using the GS DVR's namer. `maburd` never deletes a file.
+`dir`, using the GS DVR's namer. `maburd` never deletes a file. This
+channel's GOP is its own compiled-in 1 s, independent of `venc.gop_s` on
+the link channel: the onboard recording keeps a periodic keyframe even
+with the link's demand refresh running no periodic refresh of its own
+(`docs/fec-nack.md` "Demand refresh").
 
 ## Recording size — `record.size`
 
@@ -69,7 +78,10 @@ size. The SigmaStar encoder cannot scale, so the sizes decide the port:
 - **`record.size` = `venc.size`** (the bundle's 1920x1080 for both): ch1
   shares the link's VPE port 0.
 - **Any other size** enables the same VPE channel's second scaler, port 1,
-  at `record.size` and binds ch1 there (`venc_record_attach`). Both ports
+  at `record.size` and binds ch1 there (`venc_record_attach`; at the
+  link's full rate the bind is src:src like the link's own, so the SDK's
+  frame-rate limiter never drops a recorder frame — `docs/airtime-model.md`
+  §3). Both ports
   scale the one capture window, so the loader requires `venc.size`'s aspect
   ratio, even dimensions, 320x180..3840x2160. `SetPortMode` + `EnablePort`
   succeed for sizes the scaler never drives, so the drain logs

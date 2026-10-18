@@ -93,6 +93,13 @@ bool au_is_irap(const uint8_t* au, size_t n) {
   return false;
 }
 
+bool au_is_entry_point(const uint8_t* au, size_t n) {
+  for (const NalView& nal : split_nals(au, n)) {
+    if ((nal.type >= 16 && nal.type <= 23) || nal.type == 33) return true;
+  }
+  return false;
+}
+
 bool HevcParams::feed(const uint8_t* au, size_t n) {
   for (const NalView& nal : split_nals(au, n)) {
     switch (nal.type) {

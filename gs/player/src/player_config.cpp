@@ -5,6 +5,7 @@
 #include <stdexcept>
 
 #include "mabur/toml.h"
+#include "mode_pick.h"
 
 namespace maburplay {
 namespace {
@@ -108,11 +109,13 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
   c.socket = get_str(j, "socket", "/run/mabur-au.sock", "");
   c.backend = get_str(j, "backend", "mpp", "");
 
-  if (c.backend != "mpp" && c.backend != "null") {
-    fail("backend", "must be \"mpp\" or \"null\"");
+  if (c.backend != "mpp" && c.backend != "v4l2req" && c.backend != "null") {
+    fail("backend", "must be \"mpp\", \"v4l2req\" or \"null\"");
   }
 
   c.screen_mode = get_str(j, "screen_mode", "1920x1080@60", "");
+  if (!parse_screen_want(c.screen_mode).ok)
+    fail("screen_mode", "must be WIDTHxHEIGHT@RATE, e.g. 1920x1080@60 or 1920x1080@59.94");
 
   if (j.contains("dvr")) {
     const Value& r = j["dvr"];
@@ -212,7 +215,8 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
   if (j.contains("display")) {
     const Value& d = j["display"];
     check_keys(d, "display",
-               {"regulate_ms", "vsync_lock", "vsync_lead_ms", "chain_budget", "genlock",
+               {"regulate_ms", "vsync_lock", "vsync_lead_ms", "chain_budget",
+                "sched_cap_ms", "phase_lock", "phase_margin_ms", "genlock",
                 "genlock_miss_pct"});
     c.display.regulate_ms =
         static_cast<int>(get_int(d, "regulate_ms", 12, 0, 100, "display"));
@@ -220,11 +224,21 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
     c.display.vsync_lead_ms =
         static_cast<int>(get_int(d, "vsync_lead_ms", 6, 1, 10, "display"));
     c.display.chain_budget =
-        static_cast<int>(get_int(d, "chain_budget", 3, 0, 60, "display"));
+        static_cast<int>(get_int(d, "chain_budget", 0, 0, 60, "display"));
+    c.display.sched_cap_ms =
+        static_cast<int>(get_int(d, "sched_cap_ms", 0, 0, 50, "display"));
+    c.display.phase_lock = get_bool(d, "phase_lock", c.display.phase_lock, "display");
+    c.display.phase_margin_ms =
+        static_cast<int>(get_int(d, "phase_margin_ms", 4, 1, 10, "display"));
     c.display.genlock = get_bool(d, "genlock", c.display.genlock, "display");
     c.display.genlock_miss_pct =
         static_cast<int>(get_int(d, "genlock_miss_pct", 10, 1, 50, "display"));
   }
+
+  if (c.display.phase_lock &&
+      (!c.display.vsync_lock || c.display.sched_cap_ms <= 0 || c.display.regulate_ms <= 0))
+    fail("display.phase_lock",
+         "needs display.vsync_lock = true, sched_cap_ms > 0 and regulate_ms > 0");
 
   if (j.contains("colortrans")) {
     const Value& ct = j["colortrans"];
@@ -239,6 +253,41 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
   }
 
   return c;
+}
+
+namespace {
+
+// "null" is always built in; name the hardware decoder(s) alongside it so
+// the operator knows what to put in the config instead of guessing from
+// the board.
+std::string available_backends(const BuildCaps& caps) {
+  std::string s = "null";
+  if (caps.mpp) s += ", mpp";
+  if (caps.v4l2req) s += ", v4l2req";
+  return s;
+}
+
+}  // namespace
+
+std::string unsupported_on_build(const Config& c, const BuildCaps& caps) {
+  std::vector<std::string> problems;
+  if (c.backend == "mpp" && !caps.mpp)
+    problems.push_back("backend \"mpp\" is not in this build (Rockchip MPP decoder); "
+                       "this build has: " + available_backends(caps));
+  if (c.backend == "v4l2req" && !caps.v4l2req)
+    problems.push_back("backend \"v4l2req\" is not in this build (V4L2-request decoder); "
+                       "this build has: " + available_backends(caps));
+  // Burned recording re-encodes on the MPP encoder. The null backend
+  // never produces a frame, so there it is inert rather than wrong.
+  if (c.dvr.mode == "burned" && c.backend != "null" && !caps.mpp)
+    problems.push_back("dvr.mode \"burned\" needs the MPP encoder; this build has none -- "
+                       "set dvr.mode = \"raw\"");
+  std::string out;
+  for (size_t i = 0; i < problems.size(); ++i) {
+    if (i) out += "; ";
+    out += problems[i];
+  }
+  return out;
 }
 
 }  // namespace maburplay

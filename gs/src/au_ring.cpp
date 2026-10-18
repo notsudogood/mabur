@@ -256,7 +256,11 @@ uint64_t AuRingWriter::finish(bool complete, const AuLatMeta& lat) {
   last_.drone_q_ms = l.drone_q_ms;
   last_.enc_us = l.enc_us;
   last_.drone_air_ms = l.drone_air_ms;
+  last_.t_last_arr_us = l.t_last_arr_us;
+  last_.t_drain_us = l.t_drain_us;
+  last_.t_push_us = l.t_push_us;
   last_.slice = lat.slice;
+  last_.vcl_nal = lat.vcl_nal;
   return n;
 }
 

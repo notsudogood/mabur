@@ -185,11 +185,22 @@ protection without a resilience regression).
 The encoder decides payload sizes; the transport faithfully converts
 their variance into jitter. Knobs, in order of proven usefulness:
 
-- **Preset choice is the big lever.** `rally` (refPred) equalizes
-  base/enhance payloads and spreads intra cost (2 s GOP + 150 ms
-  stripes → IDRs only ~1.7× a P frame). `ltr:1` is structurally 1.8:1
-  (TRAIL_R references 2-back; windowed CBR won't equalize) and measures
-  ~11–12 ms EMA even on flat refs — don't run it if jitter matters.
+- **Reference structure is the big lever.** `venc.ref_base` /
+  `ref_enhance` / `ref_pred` program the SVC-T hierarchy
+  (`MI_VENC_ParamRef_t`); bundle 1 / 1 / true = every other frame
+  droppable with enhance→base prediction, which keeps base and enhance
+  payloads equal. A 2-back reference structure is structurally 1.8:1
+  (windowed CBR won't equalize it) — don't run it if jitter matters.
+  The rolling refresh (`venc.intra_refresh_frames` / `intra_refresh_qp`,
+  `MI_VENC_IntraRefresh_t`) would spread intra cost across P frames, but
+  it only runs at a GOP start and the bundle has no periodic refresh
+  (`venc.gop_s` 0), so the sweep ships off too (`intra_refresh_frames`
+  0). The QP field is a no-op on star6e CBR regardless — the stripe is
+  coded at the RC's P QP and the I-frame knobs below do not catch it;
+  only the `superframe_p_pct` re-encode cap does, at +4 ms encode:
+  `docs/findings/2026-10-15-gdr-slices.md`. The picture now heals on
+  demand instead (`docs/fec-nack.md` "Demand refresh");
+  `drone/venc/venc_cfg.h` documents each field.
 - **`venc.max_ipprop`** (config, 0=off; also volatile via
   `:8301 /venc/set?max_ipprop=N`) programs `u32MaxIPProp` — the ONE RC
   size cap star6e actually enforces (dose-response measured). It bounds
@@ -252,18 +263,54 @@ their variance into jitter. Knobs, in order of proven usefulness:
   star6e.h comment promising hard ceilings describes maruko, not this
   chip. Do not rebuild that feature.
 - **`I6_SYS_LINK_LOWLATENCY` on the VPE→VENC bind is REJECTED** —
-  hardware-tried 2026-08-31: `MI_SYS_BindChnPort2` fails with
-  `-1610014712` (0xa00a8008) and venc init dies (respawn loop, no
-  video). It would have overlapped encode with sensor readout (~4-6 ms
-  of the `enc` segment); on this SDK encode start stays gated on the
-  last readout line. FRAMEBASE is the only accepted mode for this hop
-  (comment at the bind site, `drone/venc/star6e_pipeline.c`).
-- **GOP is not a free knob**: SigmaStar CBR converges over the GOP
-  window, so every bitrate step (= every ladder rung transition) becomes
-  an overshoot/undershoot sawtooth as long as the GOP. gop_s 10 made
-  every promote fail probation (TxQueue pinned, fabricated 13–41%
-  "loss" on a clean channel). Keep GOP ≤ ~2 s while the ladder
-  re-commands bitrate per rung.
+  `MI_SYS_BindChnPort2` fails with `-1610014712` (0xa00a8008) and venc
+  init dies (respawn loop, no video). It would have overlapped encode with
+  sensor readout (~4-6 ms of the `enc` segment); on this SDK encode start
+  stays gated on the last readout line. FRAMEBASE is the only accepted
+  mode for this hop (comment at the bind site,
+  `drone/venc/star6e_pipeline.c`).
+- **GOP length is not a rate-control window.** A bitrate step emits its
+  own keyframe and the rate control settles within a second whatever the
+  GOP (`statTime` 1 s); the bundle ships `venc.gop_s = 0`, no periodic
+  refresh, and heals on demand (`docs/fec-nack.md`). Measured:
+  `docs/findings/2026-10-17-long-gop-spike.md`,
+  `docs/findings/2026-10-17-sdk-gop-ceiling.md`.
+- **The sensor does not run at `venc.fps`, and the VPE→VENC bind must not
+  try to make it.** The IMX415's frame period is a whole number of sensor
+  lines: the driver answers `SetFps(60)` with VMAX 3375 at HMAX 365, which
+  is 60.27 Hz, and in dim light the auto-exposure pins the shutter at the
+  frame period and stretches VMAX to 3386 (60.08 Hz). A bind whose dst is
+  60 engages the SDK's frame-rate control, which passes "at most dst per
+  second" by its own clock (effective ceiling ~59.95) and drops one frame
+  per beat period — every 3.6 s at 60.27 Hz, every 10 s at 60.08 — booked
+  as VPE chn `DropCnt` / out-port `FailCnt`. The wire closes seamlessly
+  over the hole (no `frame_id` gap, no FEC counter); only the pts step
+  shows it, and the player repeats a frame. Two things fix it, both in
+  `drone/venc/sensor_cal.[ch]`:
+  1. **Full rate binds src:src** (`sensor_cal_bind_dst_fps`): a request at
+     or above the sensor's set rate binds VPE→VENC (and VPE→recorder) at
+     the mode's rate on both sides, so no limiter sits in the path. Only a
+     request below it — the low-power 30 fps — keeps dst = request and
+     decimates. RC `fpsNum` and GOP stay at the requested fps.
+  2. **The boot-time trim** (`SensorCal`, armed on the encoder thread
+     right after the cold-boot fps re-kick): measures the real rate from
+     the encoded frames' pts over 1 s windows (median step), and
+     re-requests the sensor in milli-fps (the driver accepts
+     `[min*1000, max*1000]`) until the real rate sits in
+     `[fps − 0.030, fps − 0.004]` Hz, just under the configured rate; one
+     VMAX line is 0.018 Hz at 60. Locks in 2–3 rounds (`[sensor] cal:`
+     lines, `snr_mhz=` on the stats line, `sensor_mhz` on `GET /venc`);
+     after 8 rounds without convergence, or a driver that refuses
+     milli-fps, it restores the integer boot request and stops. It only
+     measures a full-rate stream: while the bind decimates (a drone that
+     boots disarmed into low-power 30 fps) it holds, and resumes with a
+     fresh window once the fps verb returns to full rate, so that drone
+     locks in the first ~13 s after arming. Measured
+     on the bench: 60000 → 59720 mfps = VMAX 3391 = 59.990 Hz, zero pts
+     holes in 120 s. What remains is the beat between the sensor and the
+     GS panel (60.000 Hz nominal): one panel repeat per ~100 s, the floor
+     without genlock. Bench record:
+     `docs/findings/2026-10-14-sensor-rate-trim.md`.
 
 ## 4. Measuring it — rigs and gotchas
 

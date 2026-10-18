@@ -1141,7 +1141,8 @@ def load_feclog(path):
     everything else is a row. feclog 2 (40 MHz rungs) inserts `bw` after
     mcs; feclog 1 rows carry no bw and are 20 MHz. feclog 3 (software NACK)
     inserts `rtx` (symbols the episode received via retransmit) after
-    `rec`; feclog 1/2 rows read rtx=0."""
+    `rec`; feclog 1/2 rows read rtx=0. feclog 4 adds `I`/`H` request rows,
+    read by load_refresh_rows."""
     rows = []
     version = 1
     with open(path) as f:
@@ -1152,6 +1153,8 @@ def load_feclog(path):
                     version = int(tok[1])
                 continue
             if line.startswith("#"):
+                continue
+            if line[:2] in ("I ", "H "):
                 continue
             tok = line.split()
             if version < 2:
@@ -1165,6 +1168,139 @@ def load_feclog(path):
                 r[k] = float(v) if k in ("t_ms", "ov") else int(v)
             rows.append(r)
     return rows
+
+
+def load_refresh_rows(path):
+    """feclog 4 request rows (gs/src/fec_log.h): `I <t_ms> <reason> <epoch>`
+    per IDR request the GS sent (a retry repeats the arming reason) and
+    `H <t_ms> <heal_ms> <retries>` per complete base IRAP that cleared it.
+    Older feclog versions have none; both lists come back empty. Each row
+    keeps its line number as `seq`: maburgs writes the rows in event order,
+    which is the order a request/retry walk needs (several rows can share a
+    millisecond)."""
+    I, H = [], []
+    with open(path) as f:
+        for seq, line in enumerate(f):
+            tok = line.split()
+            if len(tok) != 4:
+                continue
+            if tok[0] == "I":
+                I.append({"t_ms": float(tok[1]), "reason": tok[2], "epoch": int(tok[3]),
+                          "seq": seq})
+            elif tok[0] == "H":
+                H.append({"t_ms": float(tok[1]), "heal_ms": int(tok[2]), "retries": int(tok[3]),
+                          "seq": seq})
+    return {"I": I, "H": H}
+
+
+def refresh_span_ms(rr, ctl=None, fec_rows=None):
+    """The recording's extent for the REFRESH rate: from the first to the
+    last timestamp across the ctl.log S/E rows, the fec.log episode rows and
+    the I/H rows. None when neither ctl.log nor an episode row is there --
+    the I/H rows alone only span the requests themselves, so one request
+    healed in 150 ms would read as 400/min."""
+    ts = []
+    if ctl:
+        ts += [r["t_ms"] for r in ctl.get("S", [])] + [r["t_ms"] for r in ctl.get("E", [])]
+    if fec_rows:
+        ts += [r["t_ms"] for r in fec_rows]
+    if not ts:
+        return None
+    ts += [r["t_ms"] for r in rr["I"]] + [r["t_ms"] for r in rr["H"]]
+    span = max(ts) - min(ts)
+    return span if span > 0 else None
+
+
+def load_reglog_lock(path):
+    """reg.log phase-lock fields per 1 Hz regulator line (`# reglog 2`):
+    `lock=<off|wait|acq|lock|oor> lerr=<ms>ms loff=<mfps> lctr=<mfps>`.
+    Rows without them (reglog 1, before the phase lock) are skipped, so an
+    empty list means the recording has no lock data."""
+    rows = []
+    with open(path) as f:
+        for line in f:
+            tok = line.split()
+            if len(tok) < 3 or tok[1] != "regulator:":
+                continue
+            kv = dict(t.split("=", 1) for t in tok[2:] if "=" in t)
+            if "lock" not in kv:
+                continue
+            rows.append({"t_us": int(tok[0]), "lock": kv["lock"],
+                         "lerr": float(kv["lerr"].rstrip("ms")),
+                         "loff": int(kv["loff"]), "lctr": float(kv["lctr"])})
+    return rows
+
+
+def print_lock_report(rows):
+    """PHASE LOCK section from load_reglog_lock rows. Silent when the
+    recording has no lock fields or the lock was off throughout."""
+    rows = [r for r in rows if r["lock"] != "off"]
+    if not rows:
+        return
+    n = len(rows)
+    locked = sum(1 for r in rows if r["lock"] == "lock")
+    first_run = next((r["t_us"] for r in rows if r["lock"] in ("acq", "lock")), None)
+    first_lock = next((r["t_us"] for r in rows if r["lock"] == "lock"), None)
+    acq = (f"{(first_lock - first_run) / 1e6:.0f} s"
+           if first_lock is not None and first_run is not None else "never")
+    oor = sum(1 for r in rows if r["lock"] == "oor")
+    print("PHASE LOCK (reg.log)")
+    print(f"  rows={n} locked={100.0 * locked / n:.0f}% acquire={acq} oor_rows={oor}")
+    span_min = (rows[-1]["t_us"] - rows[0]["t_us"]) / 60e6
+    changes = sum(1 for a, b in zip(rows, rows[1:]) if a["loff"] != b["loff"])
+    offs = [r["loff"] for r in rows]
+    rate = f" ({changes / span_min:.1f}/min)" if span_min > 0 else ""
+    print(f"  offset changes={changes}{rate} offset range={min(offs)}..{max(offs)} mfps"
+          f" centre last={rows[-1]['lctr']:.1f}")
+    errs = [abs(r["lerr"]) for r in rows if r["lock"] == "lock"]
+    if errs:
+        print(f"  |lerr| while locked p50/p90/max={_pct(errs, 0.5):.2f}/"
+              f"{_pct(errs, 0.9):.2f}/{max(errs):.2f} ms")
+
+
+def print_refresh_report(rr, ctl_E=None, fec_rows=None, span_ms=None):
+    """REFRESH (demand refresh): IDR requests the GS raised because its base
+    picture was damaged and nothing periodic would heal it. A request is one
+    arming (the first I row of a run); the I rows after it before the next H
+    are retries. Each request is lined up against the ladder's demotes and
+    the FEC episodes so the NACK -> IDR -> demote stack reads per episode.
+    The per-minute rate needs the recording's span (refresh_span_ms) and at
+    least two requests; otherwise it is left out."""
+    I, H = rr["I"], rr["H"]
+    if not I and not H:
+        return
+    # Walk I and H rows in the order maburgs wrote them (time order for rows
+    # without a line number); a run starts at an I row while idle and ends
+    # at the next H row.
+    events = sorted([("I", r) for r in I] + [("H", r) for r in H],
+                    key=lambda e: (e[1].get("seq", -1), e[1]["t_ms"]))
+    requests, by_reason, retries, armed = [], {}, 0, False
+    for kind, r in events:
+        if kind == "H":
+            armed = False
+        elif armed:
+            retries += 1
+        else:
+            armed = True
+            requests.append(r)
+            by_reason[r["reason"]] = by_reason.get(r["reason"], 0) + 1
+    rate = ""
+    if span_ms and len(requests) >= 2:
+        rate = f" ({len(requests) / (span_ms / 60000.0):.1f}/min)"
+    print("REFRESH (demand refresh, fec.log I/H rows)")
+    print(f"  requests={len(requests)}{rate} "
+          + " ".join(f"{k}={v}" for k, v in sorted(by_reason.items()))
+          + f" retries={retries}")
+    hm = sorted(h["heal_ms"] for h in H)
+    if hm:
+        print(f"  heals={len(hm)} heal_ms p50/p90/max={_pct(hm, 0.5)}/{_pct(hm, 0.9)}/{hm[-1]}")
+    def near(rows, t, win=2000.0):
+        return any(abs(x["t_ms"] - t) <= win for x in rows)
+    if ctl_E is not None:
+        demotes = [e for e in ctl_E if e["to"] < e["from"]]
+        print(f"  with demote within 2 s: {sum(1 for r in requests if near(demotes, r['t_ms']))}")
+    if fec_rows is not None:
+        print(f"  with fec episode within 2 s: {sum(1 for r in requests if near(fec_rows, r['t_ms']))}")
 
 
 def fec_ov_req(m, r, ov):
@@ -2666,6 +2802,10 @@ def print_hop_report(scanlog, ctllog):
 def main(path, aulog=None, probelog_path=None, scanlog_path=None):
     if sniff_feclog(path):
         print_fec_report(load_feclog(path))
+        fec_rows = load_feclog(path)
+        rr = load_refresh_rows(path)
+        print_refresh_report(rr, fec_rows=fec_rows,
+                             span_ms=refresh_span_ms(rr, fec_rows=fec_rows))
         return
     if sniff_arqlog(path):
         print_arq_report(*load_arqlog(path))
@@ -2930,12 +3070,19 @@ if __name__ == "__main__":
             print_listen_report(flight_rows, s.lat)
         # CAMERA vs SCREEN rides on au.log and lat.log, whatever the primary.
         print_display_clock_report(s.au, s.lat)
-        print_display_smoothness_report(s.au, s.lat)
+        # Regulator lines moved from lat.log to reg.log on 2026-10-17 (Gilang's
+        # reg.log); older sessions still carry them in lat.log.
+        print_display_smoothness_report(s.au, s.reg or s.lat)
         print_recording_report(s.lat)
         # fec.log is a sibling too: the FEC EPISODES section
         # rides along whichever primary the session offered.
         if s.fec:
-            print_fec_report(load_feclog(s.fec))
+            fec_rows = load_feclog(s.fec)
+            print_fec_report(fec_rows)
+            ctl = load_ctllog(s.ctl) if s.ctl else None
+            rr = load_refresh_rows(s.fec)
+            print_refresh_report(rr, ctl_E=ctl["E"] if ctl else None, fec_rows=fec_rows,
+                                 span_ms=refresh_span_ms(rr, ctl=ctl, fec_rows=fec_rows))
         # arq.log (2026-09-28, feedback-repair shadow mode) likewise.
         if s.arq:
             print_arq_report(*load_arqlog(s.arq))
@@ -2946,5 +3093,9 @@ if __name__ == "__main__":
             segs = load_talog(s.ta)
             print_ta_report(ta_pings(segs), rung_at, ladder,
                             unparsed=sum(seg["X"] for seg in segs))
+        # reg.log is a sibling too: the PHASE LOCK section, silent when the
+        # recording predates the lock or ran with it off.
+        if s.reg:
+            print_lock_report(load_reglog_lock(s.reg))
     else:
         main(arg, sys.argv[2] if len(sys.argv) > 2 else None)

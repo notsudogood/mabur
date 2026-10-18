@@ -115,6 +115,11 @@ class Actuator {
   // about once a second, so a refused value is simply tried again.
   // Default: no sensor to steer (tests, replay harnesses).
   virtual bool set_sensor_mfps(uint32_t mfps) { (void)mfps; return false; }
+  // Phase lock: the GS's sensor-rate offset (milli-fps on top of the boot
+  // trim; 0 = the trim's own rate). No return: venc stores it and applies it
+  // from the encoder thread once the trim has locked, clamped to its range.
+  // Default no-op: dry-run and builds without venc have no sensor.
+  virtual void set_sensor_offset(int mfps) { (void)mfps; }
   // A move the GS has confirmed (the first accepted RCF on the new channel):
   // persist it to the state file so the next boot parks there. Default
   // no-op: tests and dry-run have nowhere to write.
@@ -188,6 +193,11 @@ class RcAgent {
   // GS-requested IDRs actually issued, lifetime. Left the wire with
   // Telem.idr_gs; kept as the observable the request/pacer tests pin.
   uint64_t idr_gs_total() const { return idr_gs_total_; }
+
+  // Chain-break IDRs actually issued, lifetime (served, not merely
+  // requested -- a request deferred by the pacer is not counted until it
+  // fires).
+  uint64_t idr_chain_total() const { return idr_chain_total_; }
 
   // Telemetry accessors: read-only
   // snapshots of RcAgent-internal state the T_TELEM collector needs but
@@ -421,6 +431,19 @@ class RcAgent {
   // venc thread's handoff (see note_chain_break); the two timestamps are
   // agent-thread-only.
   std::atomic<bool> chain_break_pending_{false};
+  // A chain break the pacer refused (floor or chain holdoff) waits here
+  // for the next due tick instead of being dropped: without a periodic
+  // refresh there is no GOP to self-clear an unhealed break. Agent-thread
+  // only; cleared at every session edge. A failsafe or rendezvous edge
+  // ends in the link-up IDR, which heals whatever broke while unlinked. A
+  // session promotion while LINKED (a fast GS restart) has no link-up IDR:
+  // there only the new GS session's own request covers it -- its first RCF
+  // reads as one whenever its epoch is non-zero (the drone's seen epoch
+  // restarts at 0), and otherwise it asks once one of its own arming
+  // sources fires (a damaged or lost base AU, a player report). A break
+  // dropped before the frame ring leaves no frame-id gap for the GS to see.
+  bool chain_idr_pending_ = false;
+  uint64_t idr_chain_total_ = 0;
   // have_* companions rather than a 0 sentinel (the file's own idiom, cf.
   // have_last_fb_/have_last_bitrate_eval_): now_ms is a caller-supplied
   // clock that legitimately starts at 0, and a first IDR at t=0 must still
@@ -451,6 +474,7 @@ class RcAgent {
   // Last recorder wish the actuator TOOK (-1 = none yet). Only a KNOWN wish
   // (rc::kRecKnown) is applied; link loss never touches it.
   int rec_applied_ = -1;
+  int16_t snr_off_sent_ = 0;  // last offset handed to the actuator
   void intake_arm_state_(uint64_t now_ms);
 
   // GS-requested IDR. The last RCF

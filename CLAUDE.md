@@ -90,10 +90,12 @@ Two kinds of doc, two rules:
 | the efficient-link plan (current line of work): 20 MHz bottom / 40 MHz top ladder, per-rung FEC (thick floor, thin top after slice concealment), genlock (camera rate steered onto the screen's refresh: `genlock.h`, `T_GENLOCK`/`CAP_GENLOCK`, `[genlock]` / `display.genlock`, the `genlock:` lat.log line, CAMERA vs SCREEN report section), source-first FEC ordering | `docs/efficient-link-plan.md` |
 | feedback-repair (software ACK / coded repair, parked 2026-10-09): the phased rollout, arq.log shadow mode, `SwDecoder::deficit()` (the turnaround bench and listen window were removed at the 2026-10-10 merge of upstream's slice-salvage; their results stay in the doc) | `docs/feedback-repair-rollout.md` |
 | the browser GS / spotter (web/), WebUSB+WASM build, LinkHealthAssembler sharing, channel set form, CHANNEL line, spotter follower | docs/web-gs.md |
+| the Orange Pi Zero 2W GS (H618): the v4l2req decoder (V4l2ReqBackend, libav v4l2request → Cedrus), MABUR_PLAYER_DECODER, build stage 7, what the board cannot do | docs/opi-zero2w.md |
 | the CPE510 relay card (mabur-relay protocol v4, maburgs RemoteCard + radio.relays, web GS relay mode, relay TX, interference sweep/hop on a relay) | docs/cpe510-relay.md |
 | pairing / the link key file, SipHash tag, session nonces, KEY MISMATCH, auth_reject | docs/link-pairing.md |
 | the software NACK (base-layer selective repeat): T_NACK, the retx ring, the air bucket, the retx accounting class, feclog 3 | docs/fec-nack.md (as built) + docs/findings/2026-10-05-fec-nack-spike.md (spike) |
 | H.265 row slices: slice salvage (SliceAssembler, skip-slice fills, `[venc] slices`, FrameHdr `slice_rows`, `kRecFlagSliceSalvaged`, aulog 5) and streamed decode (AU ring v4 open slots, StreamFeeder, the decoder-input thread (FeedLoop), `[decoder] stream`, the MPP patches in `gs/player/mpp-patches/`, the stream-mode GS image and its p1 flash) | docs/slices.md (as built) + docs/findings/2026-10-09-venc-slice.md; flashing: docs/deploy.md |
+| the phase lock (sensor-rate servo against the GS vblank: PhaseLock, the regulator's margin and placement switch, RCF `snr_off`, `display.phase_lock`/`phase_margin_ms`, `screen_mode` exact-rate pick, reg.log `lock=` fields, drone `[sensor] steer`) | docs/phase-lock.md + docs/findings/2026-10-17-phase-lock-spike-2.md |
 | radio/PHY below mabur | `third_party/devourer/CLAUDE.md` |
 
 Design specs and plans live in `docs/superpowers/` — **gitignored**, so

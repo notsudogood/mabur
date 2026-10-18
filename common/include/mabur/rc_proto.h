@@ -60,7 +60,9 @@ constexpr uint16_t RC_MAGIC = 0x5243;  // "RC"
 // Bumped 14 -> 15: T_NACK's final layout (GS->drone selective-repeat
 // request, counter + sid + repeat flag + up to kMaxNackEntries runs)
 // replaces the spike's wire; Telem gains nack_rx/retx_syms/retx_refused.
-constexpr uint8_t RC_VERSION = 15;
+// Bumped 15 -> 16: RCF gains snr_off (phase lock: the GS's sensor-rate
+// steering offset, level-triggered in every RCF).
+constexpr uint8_t RC_VERSION = 16;
 
 // RCF probe_profile sentinel: the drone runs no probe stream.
 constexpr uint8_t kNoProbeProfile = 0xFF;
@@ -68,6 +70,11 @@ constexpr uint8_t kNoProbeProfile = 0xFF;
 // Rcf::rec bits (VTX onboard recorder).
 constexpr uint8_t kRecOn = 0x01;     // the operator wants the VTX recording
 constexpr uint8_t kRecKnown = 0x02;  // the GS knows the wish; 0 = unknown, drone keeps its state
+
+// Phase lock: the steering range either end accepts, in milli-fps around
+// the drone's boot trim (about 11 sensor lines at 60 fps: a 59.94 Hz panel
+// needs ~3, the rest is headroom for auto-exposure stretching the frame).
+constexpr int16_t kSnrOffRangeMfps = 200;
 
 constexpr uint8_t T_RCF = 1;
 constexpr uint8_t T_DISC = 2;
@@ -156,6 +163,12 @@ struct Rcf {
   // request; the drone serves one paced IDR per CHANGE. In EVERY RCF, so a
   // lost RCF loses nothing. 0 from a GS that never requests (maburgs).
   uint8_t idr_epoch = 0;
+
+  // Phase lock: the sensor-rate offset the GS wants on top of the drone's
+  // boot trim, in milli-fps (signed; 0 = no steering, the drone runs on its
+  // trim). Level-triggered in EVERY RCF; the drone clamps it to
+  // kSnrOffRangeMfps and keeps the last value through link loss.
+  int16_t snr_off = 0;
 };
 
 // VRX -> VTX discovery beacon (rendezvous), addressed to a VTX_ID.

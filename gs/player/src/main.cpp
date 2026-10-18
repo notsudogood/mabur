@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -31,6 +32,7 @@
 #include "gs_source.h"
 #include "mabur/hevc_params.h"
 #include "mabur/frame_wire.h"
+#include "mode_pick.h"  // parse_screen_want, used by parse_screen_mode below
 #include "osd_font.h"
 #include "osd_raster.h"
 #include "osd_source.h"
@@ -44,18 +46,25 @@
 #include "async_raw_dvr.h"    // raw recording on a writer thread (SD writes off this loop)
 #include "osd_recorder.h"     // dvr.osd_file: .osd/.srt next to a raw recording
 #include "genlock_control.h"  // maburgs::kGenlockControlPort
-#include "vtx_rec_client.h"  // sends the button's VTX wish to maburgs
+#include "core_control_client.h"  // sends the button's VTX wish + refresh reports to maburgs
 #include "splash_image.h"  // startup splash asset + cover-fit painter
 
 #ifdef MABUR_PLAYER_HW
 #include "burn_recorder.h"  // dvr.mode "burned": re-encode with the OSD burnt in
 #include "drm_presenter.h"  // KMS atomic NV12 presenter, the default display path
 #include "frame_regulator.h"  // phase-aware pts+D display release
+#include "phase_lock.h"  // PhaseLock, the sensor-rate controller for the phase lock
+#include "release_wait.h"  // the pre-release wait that keeps collecting decoded frames
 #include "gs_draw.h"         // set_colour_inverse() for the GS overlay pre-invert
 #include "lat_tracker.h"    // tail latency segments + 1 Hz lat line
-#include "lat_log.h"        // persist 1 Hz lat line to <dvr>/log/lat-NNNN.log
-#include "mpp_backend.h"    // MppBackend::info_changes()/errors() for --decode-only
+#include "lat_log.h"        // lat.log (1 Hz lat: line) and frame.log (per frame) in the session dir
 #include "osd_palette.h"    // build_palette() for the encoder-side OSD
+#endif
+#ifdef MABUR_PLAYER_MPP
+#include "mpp_backend.h"    // MppBackend::info_changes()/errors() for --decode-only
+#endif
+#ifdef MABUR_PLAYER_V4L2REQ
+#include "v4l2req_backend.h"  // V4l2ReqBackend counters for --decode-only / the 5 s line
 #endif
 
 namespace {
@@ -90,7 +99,7 @@ uint64_t mono_us() {
 void usage() {
   std::fprintf(stderr,
                "usage: maburplay [-c <config.toml>] [--oneshot] "
-               "[--backend null|mpp]\n"
+               "[--backend null|mpp|v4l2req]\n"
                "                 [--decode-only --seconds N] [--fps-log]\n"
                "       maburplay --mux-annexb <in.265> <out.mp4>\n"
                "           (test support: mux a raw Annex-B HEVC elementary\n"
@@ -334,15 +343,16 @@ std::string dvr_filename(const std::string& dir) {
   return namer.next(dir);
 }
 
-// Parses player_config's "WIDTHxHEIGHT@FPS" screen_mode convention; falls
-// back to BackendCfg's default (1920x1080@60) if malformed.
+// Parses player_config's "WIDTHxHEIGHT@RATE" screen_mode (mode_pick.h);
+// the burn encoder gets the rate rounded to whole fps. Falls back to
+// BackendCfg's default (1920x1080@60) if malformed.
 maburplay::BackendCfg parse_screen_mode(const std::string& s) {
   maburplay::BackendCfg cfg;
-  int w = 0, h = 0, fps = 0;
-  if (std::sscanf(s.c_str(), "%dx%d@%d", &w, &h, &fps) == 3 && w > 0 && h > 0 && fps > 0) {
-    cfg.width = w;
-    cfg.height = h;
-    cfg.fps = fps;
+  const maburplay::ScreenWant w = maburplay::parse_screen_want(s);
+  if (w.ok) {
+    cfg.width = w.w;
+    cfg.height = w.h;
+    cfg.fps = static_cast<int>(std::lround(w.hz));
   }
   return cfg;
 }
@@ -497,13 +507,29 @@ int main(int argc, char** argv) {
   }
   if (!backend_override.empty()) cfg.backend = backend_override;
 
+  {
+    maburplay::BuildCaps caps;
+#ifdef MABUR_PLAYER_MPP
+    caps.mpp = true;
+#endif
+#ifdef MABUR_PLAYER_V4L2REQ
+    caps.v4l2req = true;
+#endif
+    const std::string why = maburplay::unsupported_on_build(cfg, caps);
+    if (!why.empty()) {
+      std::fprintf(stderr, "maburplay: %s\n", why.c_str());
+      return 2;
+    }
+  }
+
   // colortrans (docs/colortrans.md). The evaluator is always constructed
   // (cheap); whether it is USED is decided per consumer below: the display
-  // stage needs the CRTC's CUBIC_LUT, the OSD inverse follows the display
-  // stage (an inverted OSD over an un-LUT'd picture is worse than nothing),
-  // and the burned DVR follows the config alone.
+  // stage needs the CRTC's CUBIC_LUT or the video plane's CTM
+  // (pick_display_colortrans), the OSD inverse follows the LUT only (an
+  // inverted OSD over an un-LUT'd picture is worse than nothing; the CTM
+  // never touches the OSD plane), and the burned DVR follows the config
+  // alone.
   const maburplay::ColorTrans ct;
-  bool ct_display_on = false;  // set once a presenter with a usable LUT exists
   maburplay::LutAxis lut_axis = maburplay::LutAxis::kRedFastest;
   if (const char* ax = std::getenv("MABUR_COLORTRANS_AXIS")) {
     // Bench-only override for the axis probe (docs/colortrans.md).
@@ -511,12 +537,8 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "maburplay: colortrans: MABUR_COLORTRANS_AXIS=%s\n", ax);
   }
 #ifndef MABUR_PLAYER_HW
-  // ct_display_on and lut_axis are consumed only under MABUR_PLAYER_HW
-  // (install_colortrans, the burn-palette forward map) below, so a host
-  // build would otherwise warn that they are unused. Silence that rather
-  // than restructuring the declarations -- ct itself must stay at this
-  // scope, and these two are declared alongside it.
-  (void)ct_display_on;
+  // lut_axis is consumed only under MABUR_PLAYER_HW (install_colortrans)
+  // below, so a host build would otherwise warn that it is unused.
   (void)lut_axis;
 #endif
 
@@ -543,8 +565,7 @@ int main(int argc, char** argv) {
   std::unique_ptr<maburplay::VideoBackend> backend = maburplay::make_backend(cfg.backend);
   if (!backend) {
     std::fprintf(stderr,
-                 "maburplay: backend \"%s\" not available (cross build without "
-                 "MABUR_PLAYER_HW?)\n",
+                 "maburplay: backend \"%s\" not available (not in this build?)\n",
                  cfg.backend.c_str());
     return 2;
   }
@@ -631,7 +652,8 @@ int main(int argc, char** argv) {
   maburplay::FrameRegulator regulator(cfg.display.regulate_ms,
                                       cfg.display.vsync_lock,
                                       cfg.display.vsync_lead_ms,
-                                      cfg.display.chain_budget);
+                                      cfg.display.chain_budget,
+                                      cfg.display.sched_cap_ms);
   // Genlock (genlock.h): measures the camera's phase against the screen's
   // refresh on every servo frame whenever vsync_lock is on -- the 1 Hz
   // `genlock:` line -- and, with display.genlock, steers the drone camera's
@@ -646,28 +668,71 @@ int main(int argc, char** argv) {
   maburplay::GenlockClient genlock_cli;
   if (cfg.display.genlock && !genlock_cli.open(maburgs::kGenlockControlPort))
     std::fprintf(stderr, "maburplay: genlock: setpoint socket failed -- the camera will not be steered\n");
+  // Phase lock (display.phase_lock; phase_lock.h): steers the drone's
+  // sensor rate through maburgs and the RCF, and owns capture-time placement
+  // while it holds.
+  std::unique_ptr<maburplay::PhaseLock> phase_lock;
+  if (cfg.display.phase_lock) {
+    phase_lock = std::make_unique<maburplay::PhaseLock>(cfg.display.phase_margin_ms);
+    regulator.set_phase_lock_mode(true);
+  }
+  uint64_t phase_disconts_seen = 0;
   maburplay::LatLog lat_log;
-  // Installs the 3D LUT (identity when off) and, when the display stage is
-  // live, pre-inverts both overlays. Runs once per presenter acquire, BEFORE
+  // Per-frame rows of the same window as the lat: line (docs/observability.md
+  // "frame.log"), written in the same idle-gated 1 Hz burst so a stalled
+  // DVR write can never sit on the flip or decode path. Batched: the
+  // burst's rows leave in one write at flush(), not one syscall per row.
+  maburplay::LatLog frame_log(maburplay::kSessionMarker, "frame.log",
+                              maburplay::kFrameLogHeader, /*batched=*/true);
+  // The 1 Hz regulator: line, into the session too (docs/observability.md
+  // "reg.log"): its pend/pdrop/heals counters are the presenter's side of
+  // a missed latch, and /tmp/maburplay.log does not outlive a power-off.
+  maburplay::LatLog reg_log(maburplay::kSessionMarker, "reg.log", "# reglog 2");
+  // Installs the display stage: the CUBIC_LUT (always a table on a LUT
+  // CRTC, identity when off) or the video-plane CTM, and pre-inverts both
+  // overlays only for the LUT. Runs once per presenter acquire, BEFORE
   // splash_show() and before any OSD composition. Idempotent for the OSD
   // half (set_inverse and set_colour_inverse both replace).
   auto install_colortrans = [&](maburplay::DrmPresenter* p) {
-    const bool avail = p->color_lut_available();
-    const bool on = cfg.colortrans.enable && avail;
-    const bool installed =
-        p->set_color_lut(maburplay::build_cubic_lut(on ? &ct : nullptr, lut_axis));
-    if (!installed && avail)
-      std::fprintf(stderr, "maburplay: colortrans: CUBIC_LUT install failed -- display stays flat\n");
-    if (cfg.colortrans.enable && !avail)
+    const bool lut_avail = p->color_lut_available();
+    const bool ctm_avail = p->plane_ctm_available();
+    float m[12] = {};
+    const bool affine_ok = maburplay::affine_3x4(ct, m);
+    const maburplay::DisplayCtChoice pick =
+        maburplay::pick_display_colortrans(cfg.colortrans.enable, lut_avail, ctm_avail, affine_ok);
+    bool installed = false;
+    if (lut_avail) {
+      installed = p->set_color_lut(maburplay::build_cubic_lut(
+          pick.how == maburplay::DisplayCt::kLut ? &ct : nullptr, lut_axis));
+      if (!installed)
+        std::fprintf(stderr,
+                     "maburplay: colortrans: CUBIC_LUT install failed -- display stays flat\n");
+    } else if (pick.how == maburplay::DisplayCt::kPlaneCtm) {
+      uint64_t words[12];
+      maburplay::pack_ctm_3x4(m, words);
+      installed = p->set_plane_ctm(words);
+      if (!installed)
+        std::fprintf(stderr,
+                     "maburplay: colortrans: video-plane CTM install failed -- display stays "
+                     "flat\n");
+    }
+    if (cfg.colortrans.enable && pick.how == maburplay::DisplayCt::kFlat)
       std::fprintf(stderr,
-                   "maburplay: colortrans: CRTC has no 729-entry CUBIC_LUT -- display stays "
-                   "flat, OSD not inverted (burned DVR still corrected)\n");
-    ct_display_on = on && installed;
-    if (ct_display_on) {
+                   "maburplay: colortrans: %s -- display stays flat, OSD not inverted"
+#ifdef MABUR_PLAYER_MPP
+                   " (burned DVR still corrected)"
+#endif
+                   "\n",
+                   !ctm_avail ? "CRTC has no 729-entry CUBIC_LUT and the video plane has no CTM"
+                              : "gamma != 1 is not affine, the video-plane CTM cannot carry it");
+    if (!installed) return;
+    if (pick.invert_osd) {
       osd_font.set_inverse(ct);
       maburplay::set_colour_inverse(&ct);
       std::fprintf(stderr, "maburplay: colortrans: display LUT on (axis=%s), OSD pre-inverted\n",
                    lut_axis == maburplay::LutAxis::kRedFastest ? "rgb" : "bgr");
+    } else if (pick.how == maburplay::DisplayCt::kPlaneCtm) {
+      std::fprintf(stderr, "maburplay: colortrans: video-plane CTM on, OSD untouched\n");
     }
   };
   std::unique_ptr<maburplay::DrmPresenter> presenter;
@@ -752,19 +817,17 @@ int main(int argc, char** argv) {
   // the DrmPresenter's mailbox engagement count (frame parked, or displacing
   // one already parked because a flip was in flight) -- 0 when there is no
   // presenter (decode-only, or init failed).
-  // Since 2026-10-09 the same line also goes into the session's lat.log
-  // (flightreport's DISPLAY SMOOTHNESS section differences its cumulative
-  // counters), so a flight keeps what the screen dropped instead of losing
-  // it with /tmp at power-off.
-  auto log_regulator_line = [&regulator, &presenter, &present_jitter_ema_ms, &lat_log]() {
-    char buf[512];
+  auto log_regulator_line = [&regulator, &presenter, &present_jitter_ema_ms, &reg_log,
+                             &phase_lock]() {
+    char line[512];
     if (regulator.enabled()) {
       const uint64_t pend = presenter ? presenter->mailbox_engagements() : 0;
-      std::snprintf(buf, sizeof(buf),
+      std::snprintf(line, sizeof(line),
                    "regulator: held=%llu late=%llu replaced=%llu disconts=%llu "
                    "hold_ema=%.2fms present_jitter=%.2fms vsync=%s skips=%llu "
                    "fallback=%llu pend=%llu heals=%llu pdrop=%llu "
-                   "chained=%llu chain=%llu chain_max=%llu chains=%llu cuts=%llu",
+                   "chained=%llu chain=%llu chain_max=%llu chains=%llu cuts=%llu "
+                   "alw=%.1fms lslot=%llu",
                    static_cast<unsigned long long>(regulator.held_count()),
                    static_cast<unsigned long long>(regulator.late_count()),
                    static_cast<unsigned long long>(regulator.replaced_count()),
@@ -781,13 +844,41 @@ int main(int argc, char** argv) {
                    static_cast<unsigned long long>(regulator.chain_run()),
                    static_cast<unsigned long long>(regulator.chain_max()),
                    static_cast<unsigned long long>(regulator.chains_count()),
-                   static_cast<unsigned long long>(regulator.chain_cuts()));
+                   static_cast<unsigned long long>(regulator.chain_cuts()),
+                   regulator.allowance_ms(),
+                   static_cast<unsigned long long>(regulator.late_slot_count()));
+      {
+        const size_t used = std::strlen(line);
+        if (phase_lock) {
+          std::snprintf(line + used, sizeof(line) - used,
+                        " lock=%s lerr=%.2fms loff=%d lctr=%.1f",
+                        maburplay::phase_lock_state_name(phase_lock->state()),
+                        phase_lock->error_ms(), static_cast<int>(phase_lock->offset_mfps()),
+                        phase_lock->centre_mfps());
+        } else {
+          std::snprintf(line + used, sizeof(line) - used,
+                        " lock=off lerr=0.00ms loff=0 lctr=0.0");
+        }
+      }
+      if (presenter) {
+        // present() stage cost over the last window (µs p50/max):
+        // framebuffer acquire (cached dma-buf import + AddFB2), request
+        // build, atomic commit ioctl. The lead (display.vsync_lead_ms) has
+        // to cover their sum; a frame whose sum exceeds it misses its latch
+        // and the next one is pdropped.
+        const auto pt = presenter->present_timing();
+        const size_t used = std::strlen(line);
+        std::snprintf(line + used, sizeof(line) - used,
+                      " present=%u acq=%u/%u req=%u/%u ioctl=%u/%u",
+                      pt.n, pt.p50[0], pt.max[0], pt.p50[1], pt.max[1],
+                      pt.p50[2], pt.max[2]);
+      }
     } else {
-      std::snprintf(buf, sizeof(buf), "regulator: off present_jitter=%.2fms",
+      std::snprintf(line, sizeof(line), "regulator: off present_jitter=%.2fms",
                     present_jitter_ema_ms);
     }
-    std::fprintf(stderr, "%s\n", buf);
-    lat_log.write(mono_us(), buf);
+    std::fprintf(stderr, "%s\n", line);
+    reg_log.write(mono_us(), line);
   };
 #endif
 
@@ -873,10 +964,11 @@ int main(int argc, char** argv) {
   // dvr.target: which recorders the button drives.
   const bool rec_gs = cfg.dvr.target != "vtx";
   const bool rec_vtx = cfg.dvr.target != "gs";
-  maburplay::VtxRecClient vtx_rec;
-  bool rec_idr_logged = false;   // one "waiting for a keyframe" line per recording
-  if (!vtx_rec.open(maburgs::kRecControlPort))
-    std::fprintf(stderr, "maburplay: rec: VTX wish socket failed -- the drone recorder will not follow the button\n");
+  maburplay::CoreControlClient core_ctl;
+  if (!core_ctl.open(maburgs::kRecControlPort))
+    std::fprintf(stderr,
+                 "maburplay: rec: core control socket failed -- the drone recorder will not "
+                 "follow the button and refresh reports will not reach maburgs\n");
   // dvr.mode "burned": the recording is produced by re-encoding decoded
   // frames with the OSD composited in by the hardware encoder, so the
   // BurnRecorder owns the file and the raw remux in the ring sink below is
@@ -926,8 +1018,9 @@ int main(int argc, char** argv) {
       const maburplay::GlyphAtlas empty{};
       // Forward map follows the surface's actual inversion state (the
       // process-wide colour_inverse() pointer set_colour_inverse installed
-      // for the OSD plane), not ct_display_on -- the two agree today but
-      // the palette's invariant is with the former.
+      // for the OSD plane), not whether the display is corrected: on the
+      // video-plane CTM path the picture is corrected while the OSD is not
+      // inverted, and the palette's invariant is with the inversion.
       m.pal = maburplay::build_palette(raster ? osd_font.native() : empty, seeds, n_seeds, fwd);
       m.valid = true;
       m.raster = raster;
@@ -1043,6 +1136,8 @@ int main(int argc, char** argv) {
     last_present_us = t;
     lat.on_present(f.pts_us, t);  // t_release
     presenter->present(f);
+    const auto ci = presenter->last_commit();
+    lat.on_commit(f.pts_us, ci.t_commit_us, ci.bits);
   };
 #endif
   std::function<void()> drain_notes_fn;  // set once a FeedLoop exists; run before lat.on_decoded
@@ -1079,6 +1174,9 @@ int main(int argc, char** argv) {
       maburplay::FrameRegulator::Displaced disp;
       if (regulator.offer(f, mono_us(), &disp))
         present_now(f);
+      double margin_us = 0.0;
+      if (phase_lock && regulator.take_margin(&margin_us))
+        phase_lock->on_margin(margin_us, regulator.panel_period_us(), mono_us());
       for (int i = 0; i < disp.n; ++i) {
         lat.on_drop(disp.f[i].pts_us);
         backend->release_frame(disp.f[i]);
@@ -1088,7 +1186,7 @@ int main(int argc, char** argv) {
 #endif
     backend->release_frame(f);
   };
-#ifdef MABUR_PLAYER_HW
+#ifdef MABUR_PLAYER_MPP
   // [decoder] stream: MppBackend sets its parser up for streaming at init.
   if (auto* mpp = dynamic_cast<maburplay::MppBackend*>(backend.get()))
     mpp->set_stream(cfg.decoder.stream);
@@ -1101,7 +1199,8 @@ int main(int argc, char** argv) {
   // Streamed decode: split AUs go to the
   // decoder slice by slice as ring v4 publishes them. The VideoBackend seam
   // stays frozen; a backend that can stream also implements StreamDecoder
-  // (MppBackend), reached by dynamic_cast like its other extensions.
+  // (MppBackend, V4l2ReqBackend), reached by dynamic_cast like its other
+  // extensions.
   maburplay::StreamFeeder feeder(cfg.decoder.stream);
   feeder.set_decoder(dynamic_cast<maburplay::StreamDecoder*>(backend.get()));
   std::fprintf(stderr, "maburplay: decoder stream: %s\n",
@@ -1126,7 +1225,10 @@ int main(int argc, char** argv) {
   // Autostart: dvr.autostart armed rec_on before this point (see rec_on's
   // declaration above), but the actual start() call has to wait until here,
   // where bcfg is in scope.
-  if (rec_on && rec_gs && !burned_mode) start_raw();
+  if (rec_on && rec_gs && !burned_mode) {
+    start_raw();
+    core_ctl.send_line("refresh dvr");
+  }
 
   // The button's two actions. Both modes are handled here so the press
   // handler stays one line; the raw path is a flag plus a close, the
@@ -1162,7 +1264,10 @@ int main(int argc, char** argv) {
       }
     }
 #endif
-    if (!burned_mode) start_raw();
+    if (!burned_mode) {
+      start_raw();
+      core_ctl.send_line("refresh dvr");
+    }
     std::fprintf(stderr, "maburplay: rec: START (%s)\n", cfg.dvr.mode.c_str());
   };
 
@@ -1219,6 +1324,10 @@ int main(int argc, char** argv) {
     if (n.kind == maburplay::FeedNote::Kind::kSubmit) {
 #ifdef MABUR_PLAYER_HW
       lat.on_submit(n.meta, n.t_us);
+      // A salvaged (incomplete) AU is a loss event: keep its delivery time
+      // out of the capture-time scheduler's lateness window.
+      if (!(n.meta.flags & maburgs::kRecFlagComplete))
+        regulator.note_incomplete(n.meta.pts_us);
 #endif
       return;
     }
@@ -1277,6 +1386,9 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "maburplay: cannot open ring %s\n", cfg.ring_path.c_str());
     return 2;
   }
+  // A fresh decoder has no key frame to arm on and nothing periodic will
+  // bring one: ask through maburgs. The core retries until an IRAP lands.
+  if (!oneshot) core_ctl.send_line("refresh start");
 
   if (oneshot) {
     ring.oneshot_drain();
@@ -1334,9 +1446,14 @@ int main(int argc, char** argv) {
       if (!sampled_3s && router.synced() &&
           mono_us() >= router.t_sync_us() + 3'000'000) {
         sampled_3s = true;
-#ifdef MABUR_PLAYER_HW
+#ifdef MABUR_PLAYER_MPP
         if (auto* mpp = dynamic_cast<maburplay::MppBackend*>(backend.get())) {
           errors_at_3s = mpp->errors();
+        }
+#endif
+#ifdef MABUR_PLAYER_V4L2REQ
+        if (auto* v4 = dynamic_cast<maburplay::V4l2ReqBackend*>(backend.get())) {
+          errors_at_3s = v4->errors();
         }
 #endif
       }
@@ -1363,7 +1480,7 @@ int main(int argc, char** argv) {
     uint64_t info_change_count = 0;
     uint64_t error_count = 0;
     uint64_t concealed_count = 0;
-#ifdef MABUR_PLAYER_HW
+#ifdef MABUR_PLAYER_MPP
     if (auto* mpp = dynamic_cast<maburplay::MppBackend*>(backend.get())) {
       info_change_count = mpp->info_changes();
       // Counter semantics under the shipped decoder config (review
@@ -1375,6 +1492,17 @@ int main(int argc, char** argv) {
       // pipeline integrity, not bitstream cleanliness.
       error_count = mpp->errors();
       concealed_count = mpp->concealed();
+    }
+#endif
+#ifdef MABUR_PLAYER_V4L2REQ
+    if (auto* v4 = dynamic_cast<maburplay::V4l2ReqBackend*>(backend.get())) {
+      error_count = v4->errors();
+      std::fprintf(stderr,
+                   "maburplay: v4l2req frames=%llu bitstream=%llu shape_drops=%llu gated=%llu\n",
+                   static_cast<unsigned long long>(v4->frames()),
+                   static_cast<unsigned long long>(v4->bitstream()),
+                   static_cast<unsigned long long>(v4->dropped_shape()),
+                   static_cast<unsigned long long>(v4->gated()));
     }
 #endif
     // If the 3s-post-sync mark was never reached (run ended too soon, or
@@ -1418,7 +1546,7 @@ int main(int argc, char** argv) {
   router.set_hooks({[&feed](maburplay::FeedNote&& n) { feed.push_note(std::move(n)); },
                     [&feed]() { return feed.park_for_flush(); }, [] { return mono_us(); }});
   feed_ptr = &feed;
-#ifdef MABUR_PLAYER_HW
+#ifdef MABUR_PLAYER_MPP
   if (auto* mpp = dynamic_cast<maburplay::MppBackend*>(backend.get()))
     mpp->set_input_cancel(&feed.cancel_flag());
 #endif
@@ -1427,7 +1555,7 @@ int main(int argc, char** argv) {
   feed.set_periodic([&]() {
     const auto wk = ring.take_wake();
     uint64_t stream_refused = 0;
-#ifdef MABUR_PLAYER_HW
+#ifdef MABUR_PLAYER_MPP
     // backend read on the feed thread: safe only because the watchdog re-creates it while the feed is parked.
     if (auto* mpp = dynamic_cast<maburplay::MppBackend*>(backend.get()))
       stream_refused = mpp->stream_errors();
@@ -1444,6 +1572,16 @@ int main(int argc, char** argv) {
                  static_cast<unsigned long long>(ring.open_aborted()), wk.p50, wk.p99, wk.n,
                  static_cast<unsigned long long>(stream_refused),
                  static_cast<unsigned long long>(feed.parks()));
+#ifdef MABUR_PLAYER_V4L2REQ
+    // backend read on the feed thread: safe only because the watchdog re-creates it while the feed is parked.
+    if (auto* v4 = dynamic_cast<maburplay::V4l2ReqBackend*>(backend.get()))
+      std::fprintf(stderr, "v4l2req: frames=%llu errors=%llu bitstream=%llu shape_drops=%llu gated=%llu\n",
+                   static_cast<unsigned long long>(v4->frames()),
+                   static_cast<unsigned long long>(v4->errors()),
+                   static_cast<unsigned long long>(v4->bitstream()),
+                   static_cast<unsigned long long>(v4->dropped_shape()),
+                   static_cast<unsigned long long>(v4->gated()));
+#endif
   }, 5000);
   feed.start();
   std::fprintf(stderr, "maburplay: feed thread on (ring reader + decoder input off the render loop)\n");
@@ -1503,6 +1641,8 @@ int main(int argc, char** argv) {
   uint64_t display_retry_next_ms = 0;
   bool display_retry_announced = false;
 #endif
+  // The ring reader fell behind and skipped AUs that held references.
+  uint64_t resyncs_seen = ring.resyncs();
   while (!g_stop.load()) {
     // 2 ms pump: flip events must be reaped at sub-vsync latency or the
     // mailbox frame waits for the NEXT AU burst before anyone submits it
@@ -1536,8 +1676,17 @@ int main(int argc, char** argv) {
       const uint64_t nr1 = regulator.next_release_us();
       if (nr1 != 0) {
         const uint64_t now1 = mono_us();
+        // Not a plain sleep: the decoder's output is collected only by
+        // backend->poll(), so the wait keeps polling (release_wait.h) --
+        // a picture finishing here is offered to the regulator within one
+        // step instead of after the release and the commit.
         if (nr1 > now1 && nr1 - now1 <= 2'500)
-          std::this_thread::sleep_for(std::chrono::microseconds(nr1 - now1));
+          maburplay::wait_until_polling(
+              nr1, 500, mono_us,
+              [](uint64_t us) {
+                std::this_thread::sleep_for(std::chrono::microseconds(us));
+              },
+              [&] { backend->poll(); });
         presenter->poll_events();
         maburplay::DmaFrame due;
         while (regulator.release_due(mono_us(), &due)) present_now(due);
@@ -1554,18 +1703,30 @@ int main(int argc, char** argv) {
         rec_start();
       }
     }
-    // Every iteration: sends on change, re-sends each second (VtxRecClient).
-    vtx_rec.tick(rec_on && rec_vtx, mono_ms());
-    // Raw recording armed but no file yet: the recorder waits for a real
-    // IRAP, which the drone's GDR encoder sends almost never on its own --
-    // ask for one (vtx_rec_client.h), paced, for as long as the wait lasts.
-    if (rec_on && rec_gs && !burned_mode && dvr.state() == mabur::RawDvr::State::WaitSync) {
-      if (vtx_rec.request_idr(mono_ms()) && !rec_idr_logged) {
-        std::fprintf(stderr, "maburplay: rec: waiting for a keyframe -- asked the drone for one\n");
-        rec_idr_logged = true;
+    // Every iteration: sends on change, re-sends each second (CoreControlClient).
+    core_ctl.tick(rec_on && rec_vtx, mono_ms());
+#ifdef MABUR_PLAYER_HW
+    if (phase_lock) {
+      const uint64_t now = mono_us();
+      const auto before = phase_lock->state();
+      if (regulator.discont_count() != phase_disconts_seen) {
+        phase_disconts_seen = regulator.discont_count();
+        phase_lock->on_discontinuity(now);
       }
-    } else {
-      rec_idr_logged = false;
+      phase_lock->tick(now);
+      if (phase_lock->state() != before) {
+        std::fprintf(stderr, "phase-lock: %s err=%.2fms off=%d centre=%.1f\n",
+                     maburplay::phase_lock_state_name(phase_lock->state()),
+                     phase_lock->error_ms(), static_cast<int>(phase_lock->offset_mfps()),
+                     phase_lock->centre_mfps());
+      }
+      regulator.set_capture_placement(phase_lock->locked());
+      core_ctl.tick_phase(phase_lock->offset_mfps(), now / 1000);
+    }
+#endif
+    if (ring.resyncs() != resyncs_seen) {
+      resyncs_seen = ring.resyncs();
+      core_ctl.send_line("refresh resync");
     }
     // Idle window: true when no release is due within the next 8 ms, so
     // the heavy 1 Hz blocks below (stats/statvfs, lat flush, OSD compose)
@@ -1648,6 +1809,11 @@ int main(int argc, char** argv) {
           // Same pre-first-flip reseed as the startup path: a hotplugged
           // panel may run a different mode/refresh than the one configured.
           regulator.set_panel_period(presenter->mode_period_us());
+          // Unlike the startup path, the lock may already be locked or
+          // acquiring against the OLD panel's grid here: restart it so the
+          // new mode gets a fresh window instead of up to 2 s of capture
+          // placement judged against a stale vblank period.
+          if (phase_lock) phase_lock->on_discontinuity(mono_us());
           presenter->set_flip_sink(
               [&lat, &regulator](uint32_t pts, uint64_t t, bool ex) {
                 lat.on_flip(pts, t, ex);
@@ -1932,6 +2098,13 @@ int main(int argc, char** argv) {
             !(rec_on && rec_gs) ? "off" : burned_mode ? "burned" : "raw");
         std::fprintf(stderr, "%s\n", lat_buf);
         lat_log.write(mono_us(), lat_buf);
+        // t_flip is the row's own time column; the rest is the chain.
+        for (const auto& r : L.rows) {
+          char row[256];
+          maburplay::format_frame_row(r, row, sizeof(row));
+          frame_log.write(r.t_flip_us, row);
+        }
+        frame_log.flush();
       }
       // Same 1 Hz tick as the lat: line above, so the bench fallback-drill
       // gate ("fallback= climbs then stops after re-warm") has a periodic
@@ -2094,7 +2267,7 @@ int main(int argc, char** argv) {
                        "decoder context\n");
           backend.reset();  // destroy the wedged context BEFORE creating anew
           backend = maburplay::make_backend(cfg.backend);
-#ifdef MABUR_PLAYER_HW
+#ifdef MABUR_PLAYER_MPP
           if (auto* mpp = dynamic_cast<maburplay::MppBackend*>(backend.get()))
             mpp->set_stream(cfg.decoder.stream);
 #endif
@@ -2104,7 +2277,7 @@ int main(int argc, char** argv) {
             return 1;
           }
           feeder.set_decoder(dynamic_cast<maburplay::StreamDecoder*>(backend.get()));
-#ifdef MABUR_PLAYER_HW
+#ifdef MABUR_PLAYER_MPP
           if (auto* mpp = dynamic_cast<maburplay::MppBackend*>(backend.get()))
             mpp->set_input_cancel(&feed.cancel_flag());
 #endif
@@ -2117,6 +2290,7 @@ int main(int argc, char** argv) {
                        "respawn\n");
           return 1;
         }
+        core_ctl.send_line("refresh decoder");
         router.disarm();  // resync at the next sid0 AU
         feed.resume();
         wd_submits = router.submits();

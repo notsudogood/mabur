@@ -1,9 +1,11 @@
 # aarch64 glibc cross toolchain file: the Buildroot SDK that builds the GS
-# image (../sbc-groundstations-gilankpam, radxa_zero3_defconfig). Used for
-# maburplay ONLY (tools/build-arm64.sh stage 6): its burned-DVR colortrans
-# stage links Mesa EGL/GLESv2/GBM + librga, which exist only as glibc shared
-# objects, so maburplay is glibc-dynamic. maburgs stays on
-# cmake/aarch64-musl.cmake (static). See docs/colortrans.md.
+# image (../sbc-groundstations-gilankpam, radxa_zero3_defconfig, or
+# orangepi_zero2w_defconfig for stage 7). Used for maburplay ONLY
+# (tools/build-arm64.sh stages 6 and 7): on the Radxa its burned-DVR
+# colortrans stage links Mesa EGL/GLESv2/GBM + librga, on the Orange Pi its
+# decoder links libav, all of which exist only as glibc shared objects, so
+# maburplay is glibc-dynamic. maburgs stays on cmake/aarch64-musl.cmake
+# (static). See docs/colortrans.md and docs/opi-zero2w.md.
 #
 # MABUR_BR_HOST = <buildroot output>/host, exported by build-arm64.sh.
 set(CMAKE_SYSTEM_NAME Linux)

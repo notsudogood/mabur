@@ -99,23 +99,47 @@ struct DisplayCfg {
   // hold. lead covers
   // the present-path submission cost incl. the ~2 ms main-loop tick.
   bool vsync_lock = true;
-  // Default 6 (bench-measured): with release-deadline wakeups
-  // the submit lands ~0.2 ms after schedule, but decode work can still
-  // block the drain for a few ms -- 6 keeps misses at ~0.2/s where 4
-  // measured ~12/s and 9 wastes 3 ms of glass latency per frame.
-  int vsync_lead_ms = 6;
+  // Default 5 (bench-measured, docs/findings/2026-10-17-vsync-lead-sweep.md):
+  // the lead covers the main loop's release lateness (p99.9 ~2.1 ms in
+  // flight), the present path (p99 0.8 ms with the framebuffer cache) and
+  // the kernel's ~1 ms latch deadline. 5 keeps the flight tail clear; 4
+  // costs about one missed latch a minute in flight; every ms is a ms of
+  // glass latency on every frame.
+  int vsync_lead_ms = 5;
   // Frames a sequential-slot chain may run before the regulator cuts it
   // with one dropped frame (frame_regulator.h chain_cuts). 0 = unbounded,
-  // no chain cut at all. Default 3 (operator choice after the bench A/B in
-  // docs/findings/2026-09-02-regulator-chain-budget.md: e2e p50 -3.9 ms for
-  // 1.44 drops/s; 6 was -2.4 ms for 0.56/s; p99 unchanged at any value).
-  int chain_budget = 3;
+  // no chain cut at all: the default, and the bundle's. On a clean link the
+  // refresh-start frame misses its release in about half of each
+  // sensor/panel beat cycle, and a budget then turns every miss into a
+  // repeat plus a drop; with no cut the stream runs one refresh late
+  // through that phase and nothing is dropped (+12.5 ms e2e p50, judder
+  // seconds 73 % -> 14 %; docs/findings/2026-10-15-regulator-chain-cuts.md).
+  int chain_budget = 0;
+  // Capture-time scheduling (frame_regulator.h place_by_capture), servo
+  // mode only: a frame's vblank follows its capture time plus an adaptive
+  // allowance (p99 - p1 of recent frame lateness + 1 ms), capped at this
+  // many ms, instead of following its arrival. Late-tail frames within the
+  // allowance keep their slot, so the clean-link repeat/skip judder in the
+  // phases where frames arrive near the latch goes away, at up to one extra
+  // refresh of latency in those phases. 0 = off (arrival-based servo) in
+  // code; the bundle ships 16, used while the phase lock holds.
+  int sched_cap_ms = 0;
+
+  // Phase lock (phase_lock.h): steer the drone's sensor rate so every
+  // frame's capture-time slot sits phase_margin_ms before its release, and
+  // place frames by capture time only while that holds. Needs vsync_lock,
+  // sched_cap_ms > 0 and regulate_ms > 0. Code default off; the bundle
+  // ships it on.
+  bool phase_lock = false;
+  // Target gap between a frame's capture-time slot and its release, ms.
+  // Smaller is lower latency but lets allowance changes push frames across
+  // the edge into the next refresh.
+  int phase_margin_ms = 4;
   // Genlock (docs/efficient-link-plan.md step 2, genlock.h): steer the
   // drone camera's frame rate onto this screen's refresh grid. The phase is
   // measured (and logged as the 1 Hz `genlock:` line) whenever vsync_lock
   // is on; this switch only decides whether a setpoint is sent. Needs the
-  // drone's [genlock] enable too. Off until a bench shows the camera
-  // follows.
+  // drone's [genlock] enable too. Replaced by phase_lock: leave it off.
   bool genlock = false;
   // Share of frames, in percent, allowed to miss the refresh the lock aims
   // them at (they show one refresh later). Lower = a later, safer phase.
@@ -142,7 +166,7 @@ struct DecoderCfg {
 struct Config {
   std::string ring_path = "/dev/shm/mabur-au";
   std::string socket = "/run/mabur-au.sock";
-  std::string backend = "mpp";            // "mpp" | "null"
+  std::string backend = "mpp";            // "mpp" | "v4l2req" | "null"
   std::string screen_mode = "1920x1080@60";
   DvrCfg dvr;
   OsdCfg osd;
@@ -154,6 +178,17 @@ struct Config {
 
 Config load_config(const std::string& path,
                    std::vector<std::string>* defaulted = nullptr);  // strict; throws like maburgs
+
+// Which decoders this binary carries (main.cpp fills it from the build's
+// MABUR_PLAYER_MPP / MABUR_PLAYER_V4L2REQ). A host build has neither.
+struct BuildCaps {
+  bool mpp = false;
+  bool v4l2req = false;
+};
+
+// "" when `c` can run on a build with `caps`; otherwise a one-line reason
+// for the operator. A config error, like an unknown key: main exits 2.
+std::string unsupported_on_build(const Config& c, const BuildCaps& caps);
 
 }  // namespace maburplay
 

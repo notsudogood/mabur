@@ -65,7 +65,7 @@ void put_tag(std::vector<uint8_t>& body, const LinkKey& key, const TagCtx& ctx) 
   put64(body, siphash24(key, m.data(), m.size()));
 }
 
-constexpr size_t RCF_HEAD_LEN = 15;  // RC_VERSION 14: vtx_id deleted (19)
+constexpr size_t RCF_HEAD_LEN = 17;  // RC_VERSION 16: +snr_off (15)
 constexpr size_t DISC_LEN = 17;
 constexpr size_t DISC_ACK_LEN = 20;  // RC_VERSION 14: vtx_nonce(4) + flags(1) added (15)
 constexpr size_t TELEM_LEN = 54;  // RC_VERSION 15: +nack_rx/retx_syms/retx_refused (48)
@@ -106,6 +106,7 @@ std::vector<uint8_t> pack_rcf(const Rcf& r, const LinkKey& key, const TagCtx& ct
   body.push_back(r.hop_epoch);
   body.push_back(r.rec);
   body.push_back(r.idr_epoch);
+  put16(body, static_cast<uint16_t>(r.snr_off));
   put_tag(body, key, ctx);
   put_crc(body);
   return body;
@@ -127,6 +128,7 @@ std::optional<Rcf> parse_rcf(const uint8_t* buf, size_t len) {
   r.hop_epoch = buf[12];
   r.rec = buf[13];
   r.idr_epoch = buf[14];
+  r.snr_off = static_cast<int16_t>(get16(buf, 15));
   return r;
 }
 

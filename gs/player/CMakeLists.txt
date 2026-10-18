@@ -22,10 +22,12 @@ add_library(mabur_player_core STATIC
   src/osd_palette.cpp
   src/in_formats.cpp
   src/frame_regulator.cpp
+  src/phase_lock.cpp
   src/lat_tracker.cpp
   src/lat_log.cpp
   src/splash_image.cpp
-  src/colortrans.cpp)
+  src/colortrans.cpp
+  src/prime_frame.cpp)
 target_include_directories(mabur_player_core
   PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src
   PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
@@ -43,35 +45,61 @@ target_link_libraries(mabur_player_core PUBLIC mabur_gs_core pthread)
 #     (xf86drm.h, xf86drmMode.h, plus the libdrm/ subdir for driver headers).
 option(MABUR_PLAYER_HW "rockchip mpp + drm hardware backends (aarch64 cross build only); needs -DMABUR_MPP_ROOT= and -DMABUR_DRM_ROOT=, see tools/build-arm64.sh" OFF)
 
+# Which hardware decoder the HW build carries. "mpp": Rockchip MPP (RK3566),
+# with the MPP encoder behind the burned DVR. "v4l2req": the V4L2 stateless
+# (request API) decoder through libav's v4l2request hwaccel (Allwinner H618
+# Cedrus); no encoder, so the burned DVR is a startup config error there.
+set(MABUR_PLAYER_DECODER "mpp" CACHE STRING "maburplay HW decoder: mpp | v4l2req")
+set_property(CACHE MABUR_PLAYER_DECODER PROPERTY STRINGS mpp v4l2req)
+
 # maburplay: main.cpp + the null backend are always built (host and cross).
-# Hardware backends (mpp_backend.cpp, drm_presenter.cpp) are appended here
-# behind MABUR_PLAYER_HW starting Task 7.
+# Hardware backends are appended below behind MABUR_PLAYER_HW.
 add_executable(maburplay
   src/main.cpp
   src/null_backend.cpp)
 target_link_libraries(maburplay PRIVATE mabur_player_core)
 
 if(MABUR_PLAYER_HW)
-  if(NOT MABUR_MPP_ROOT OR NOT MABUR_DRM_ROOT)
-    message(FATAL_ERROR
-      "MABUR_PLAYER_HW=ON requires -DMABUR_MPP_ROOT=<mpp install prefix> "
-      "and -DMABUR_DRM_ROOT=<libdrm install prefix>; see tools/build-arm64.sh")
-  endif()
   target_sources(maburplay PRIVATE
-    src/mpp_backend.cpp
-    src/mpp_encoder.cpp
-    src/burn_recorder.cpp
     src/drm_presenter.cpp
     src/osd_surface.cpp)
   target_compile_definitions(maburplay PRIVATE MABUR_PLAYER_HW=1)
-  target_include_directories(maburplay PRIVATE
-    "${MABUR_MPP_ROOT}/include"
-    "${MABUR_DRM_ROOT}/include"
-    "${MABUR_DRM_ROOT}/include/libdrm")
-  target_link_libraries(maburplay PRIVATE
-    "${MABUR_MPP_ROOT}/lib/librockchip_mpp.a"
-    "${MABUR_DRM_ROOT}/lib/libdrm.a"
-    pthread)
+
+  if(MABUR_PLAYER_DECODER STREQUAL "mpp")
+    if(NOT MABUR_MPP_ROOT OR NOT MABUR_DRM_ROOT)
+      message(FATAL_ERROR
+        "MABUR_PLAYER_DECODER=mpp requires -DMABUR_MPP_ROOT=<mpp install prefix> "
+        "and -DMABUR_DRM_ROOT=<libdrm install prefix>; see tools/build-arm64.sh")
+    endif()
+    target_sources(maburplay PRIVATE
+      src/mpp_backend.cpp
+      src/mpp_encoder.cpp
+      src/burn_recorder.cpp)
+    target_compile_definitions(maburplay PRIVATE MABUR_PLAYER_MPP=1)
+    target_include_directories(maburplay PRIVATE
+      "${MABUR_MPP_ROOT}/include"
+      "${MABUR_DRM_ROOT}/include"
+      "${MABUR_DRM_ROOT}/include/libdrm")
+    target_link_libraries(maburplay PRIVATE
+      "${MABUR_MPP_ROOT}/lib/librockchip_mpp.a"
+      "${MABUR_DRM_ROOT}/lib/libdrm.a"
+      pthread)
+  elseif(MABUR_PLAYER_DECODER STREQUAL "v4l2req")
+    if(NOT CMAKE_SYSROOT)
+      message(FATAL_ERROR
+        "MABUR_PLAYER_DECODER=v4l2req links libav/libdrm from a Buildroot sysroot; "
+        "use cmake/aarch64-buildroot.cmake (tools/build-arm64.sh stage 7)")
+    endif()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(MABUR_LIBAV REQUIRED IMPORTED_TARGET libavcodec libavutil libdrm)
+    target_sources(maburplay PRIVATE
+      src/v4l2req_backend.cpp
+      src/burn_recorder_none.cpp)
+    target_compile_definitions(maburplay PRIVATE MABUR_PLAYER_V4L2REQ=1)
+    target_link_libraries(maburplay PRIVATE PkgConfig::MABUR_LIBAV pthread)
+  else()
+    message(FATAL_ERROR "MABUR_PLAYER_DECODER must be mpp or v4l2req (got '${MABUR_PLAYER_DECODER}')")
+  endif()
 endif()
 
 # Burned-DVR colortrans on the GPU (docs/colortrans.md): Mesa EGL/GLESv2/GBM
@@ -82,6 +110,9 @@ option(MABUR_PLAYER_GPU "GPU colortrans stage for the burned DVR (needs MABUR_PL
 if(MABUR_PLAYER_GPU)
   if(NOT MABUR_PLAYER_HW)
     message(FATAL_ERROR "MABUR_PLAYER_GPU=ON requires MABUR_PLAYER_HW=ON")
+  endif()
+  if(NOT MABUR_PLAYER_DECODER STREQUAL "mpp")
+    message(FATAL_ERROR "MABUR_PLAYER_GPU=ON is the burned-DVR colortrans stage; it needs MABUR_PLAYER_DECODER=mpp")
   endif()
   if(NOT CMAKE_SYSROOT)
     message(FATAL_ERROR

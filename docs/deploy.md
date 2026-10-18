@@ -49,7 +49,13 @@ script, then check the target's config before touching it:
 Then they start the service. Neither migrates an existing config: a key
 change still has to be made by hand. `gs/bundle/install.sh` also keeps
 `/usr/local/bin/maburgs.prev` and installs `tools/maburtop.py` and
-`gs/bundle/maburcal` to `/usr/bin`. There is no installer for `maburplay`
+`gs/bundle/maburcal` to `/usr/bin`. Without a binary argument it reads the
+board's `/proc/device-tree/model` and ships that board's glibc build
+(`out/arm64/maburgs` on a Radxa, `out/arm64/maburgs-opi` on an Orange Pi),
+and it waits for maburgs to exit after `S96maburgs stop`: stop returns
+before the daemon is gone, and copying over a running binary fails with
+"Text file busy". A hand swap needs the same wait
+(`while pidof maburgs; do sleep 1; done`). There is no installer for `maburplay`
 (see "Device facts").
 
 **Restarting the drone daemon over ssh: use `setsid`.** `S00mabur`'s
@@ -97,7 +103,7 @@ The shipped `usb_pid = 0` scan tries `a81a`, then `c812`/`c82c`, then the
 boots either board; the `opened device 0bda:XXXX` line in `/tmp/mabur.log`
 says which card was found. GS cards stay 8812EU.
 
-The one behavioural difference is **TX power**. Mechanism is identical
+The first behavioural difference is **TX power**. Mechanism is identical
 (same TXAGC block, same per-rate diffs, same offset), so maburcal and
 `power_mode = "offset"` work unchanged (`docs/calibration.md`) — but the
 anchor the relative walls ride on is not:
@@ -113,6 +119,22 @@ anchor the relative walls ride on is not:
   in-flight hop. Calibrate on the channel flown most. Reading the CU's
   efuse per channel is a devourer change, worth it only if a mismatch is
   actually seen.
+
+The second is devourer's **wide-TX IGI floor**
+(`DeviceConfig::Tuning::wide_tx_igi_floor`), a DIG lower bound that is
+switched on by the session's first 40 MHz frame and stays on while the card
+is tuned to 40 MHz. It exists because on a silent channel the receiver can
+settle where the secondary 20 MHz never reads idle, and the MAC then holds
+the first 40 MHz frame forever. The shipped ladder sends every rung at
+40 MHz, so on the drone the floor is on for the whole flight, and it costs
+the RCF uplink idle-channel sensitivity. `maburd` picks the value per image,
+from the one Jaguar3 chip that image compiles in:
+
+- **8812EU**: `0` (no floor). The EU has flown the 40 MHz rungs without a
+  floor and never stalled. An EU unit that does stall loses the downlink
+  at its first 40 MHz frame, with the TX FIFO full; give that unit a floor.
+- **8812CU**: devourer's default, `0x35`. The stall was found on the 8822C,
+  and the default is the lowest value that has cleared every CU unit tested.
 
 The 8812CU is 2T2R, so STBC airs on two real chains; none of the 8822E
 constraints in devourer's 8822E quirks page
@@ -306,6 +328,14 @@ prints it, only the fingerprint).
   channel is `/etc/maburgs.channel`.
 - Never load the 8812eu kernel module on the GS cards; `S96maburgs`
   unloads it on start.
+- `maburgs` is glibc-DYNAMIC, built per board against that image's
+  Buildroot sysroot (`tools/build-arm64.sh` stage 6 → `out/arm64/maburgs`,
+  stage 7 → `out/arm64/maburgs-opi`). NEEDED: `libusb-1.0.so.0` plus
+  libstdc++/libm/libgcc_s/libc and the loader, all on both images. The
+  image repo's own package builds it the same way. `out/arm64/maburgs-static`
+  is the musl-static build of the same daemon, a rollback that runs on any
+  board but costs ~2 ms of GS latency per frame
+  (`docs/findings/2026-10-15-gs-musl-latency.md`).
 - **`/etc/maburplay.toml` is a symlink to `/config/maburplay.toml`** (the
   vfat partition). Back up and edit the **target**, not the link: BusyBox
   `sed -i` on the symlink replaces it with a regular overlay file, after
@@ -324,6 +354,32 @@ prints it, only the fingerprint).
   — miss it and the binary will not exec at all.
   `out/arm64/maburplay-static` is the musl-static build of the same player
   without the GPU stage, for an image that lacks Mesa.
+
+**Orange Pi Zero 2W GS** (`docs/opi-zero2w.md`). Same layout and init
+scripts as above; the daemon is `out/arm64/maburgs-opi` (installed as
+`/usr/local/bin/maburgs`, `gs/bundle/install.sh` picks it by model) and
+the player binary is `out/arm64/maburplay-opi`
+(installed as `/usr/local/bin/maburplay`), glibc-dynamic against the OPi
+image's libav: NEEDED `libavcodec.so.61`, `libavutil`, `libdrm.so.2`,
+libstdc++. Its config must say `backend = "v4l2req"`, `dvr.mode = "raw"`
+— a Radxa `maburplay.toml` exits 2. Check the target first:
+`ssh $GS cat /proc/device-tree/model` must read `OrangePi Zero 2W`.
+
+    ssh $GS '/etc/init.d/S97maburplay stop'
+    scp -O out/arm64/maburplay-opi $GS:/usr/local/bin/maburplay
+    ssh $GS '/etc/init.d/S97maburplay start'
+
+maburplay needs mabur's FFmpeg patch in the board's libavcodec, so put the
+patched libavcodec on before (or together with) a new maburplay: a new
+maburplay against an unpatched libavcodec fails `init()` and the wrapper
+respawns it forever at 2 s. An image built from the image repo carries the
+patch already; to put a rebuilt libavcodec on a board by hand, copy it
+onto the overlay, where it shadows the image's:
+
+    scp -O ../sbc-groundstations-gilankpam/output/orangepi_zero2w_defconfig/target/usr/lib/libavcodec.so.61.19.100 $GS:/usr/lib/
+
+and check `find /overlay/root/usr/lib -name 'libavcodec*'` after a later
+image flash (a stale copy there shadows the new image's).
 
 **CPE510 relay** (`radio.relays`, `docs/cpe510-relay.md`). The Radxa ZERO 3
 has no Ethernet: the CPE needs a USB-Ethernet adapter on the GS. The CPE

@@ -148,4 +148,113 @@ TEST(blue_fastest_is_the_index_transpose_of_red_fastest) {
                 b.rgb[cubic_lut_index(r, g, bl, LutAxis::kBlueFastest)][c]);
 }
 
+static Vec3 apply34(const float m[12], Vec3 c) {
+  return {m[0] * c.r + m[1] * c.g + m[2] * c.b + m[3],
+          m[4] * c.r + m[5] * c.g + m[6] * c.b + m[7],
+          m[8] * c.r + m[9] * c.g + m[10] * c.b + m[11]};
+}
+
+// Where forward() clamps nothing, it IS the affine map: compare on a grid,
+// skipping colours whose matrix stage or output leaves (0,1).
+// (Revert check: drop the saturation mix from affine_3x4 -> fails.)
+TEST(affine_3x4_matches_forward_where_nothing_clamps) {
+  ColorTrans t;
+  float m[12];
+  REQUIRE(affine_3x4(t, m));
+  const ColorTransParams& p = t.params();
+  const float yoff = (p.y_offset_10b / 1023.f) * p.y_offset_strength;
+  int checked = 0;
+  for (int r = 0; r <= 10; ++r)
+    for (int g = 0; g <= 10; ++g)
+      for (int b = 0; b <= 10; ++b) {
+        const Vec3 c{r / 10.f, g / 10.f, b / 10.f};
+        bool inside = true;
+        for (int i = 0; i < 3; ++i) {
+          const float mid = p.matrix[3 * i] * (c.r - yoff) + p.matrix[3 * i + 1] * (c.g - yoff) +
+                            p.matrix[3 * i + 2] * (c.b - yoff) + p.black_lift;
+          if (mid <= 0.f || mid >= 1.f) inside = false;
+        }
+        const Vec3 a = apply34(m, c);
+        if (a.r <= 0.f || a.r >= 1.f || a.g <= 0.f || a.g >= 1.f || a.b <= 0.f || a.b >= 1.f)
+          inside = false;
+        if (!inside) continue;
+        const Vec3 f = t.forward(c);
+        CHECK(near3(a, f.r, f.g, f.b, 1e-5f));
+        ++checked;
+      }
+  CHECK(checked > 50);
+}
+
+// The bench-relevant numbers: every row's offset is about -0.345 and the
+// green row carries the 2.56 gain (Revert check: drop gain -> fails).
+TEST(affine_3x4_pins_kColorTrans3) {
+  float m[12];
+  REQUIRE(affine_3x4(ColorTrans{}, m));
+  CHECK(std::fabs(m[3] + 0.3446f) < 1e-3f);
+  CHECK(std::fabs(m[7] + 0.3446f) < 1e-3f);
+  CHECK(std::fabs(m[11] + 0.3446f) < 1e-3f);
+  CHECK(std::fabs(m[5] - 2.5632f) < 1e-3f);
+}
+
+// reverse = false skips the camera matrix and offset: still affine.
+TEST(affine_3x4_without_reverse_matches_forward) {
+  ColorTransParams p = kColorTrans3;
+  p.reverse = false;
+  ColorTrans t(p);
+  float m[12];
+  REQUIRE(affine_3x4(t, m));
+  const Vec3 c{0.5f, 0.45f, 0.4f};
+  const Vec3 f = t.forward(c);
+  CHECK(near3(apply34(m, c), f.r, f.g, f.b, 1e-5f));
+}
+
+// gamma != 1 is not affine: refuse rather than install something wrong.
+TEST(affine_3x4_refuses_a_nonlinear_gamma) {
+  ColorTransParams p = kColorTrans3;
+  p.gamma = 1.2f;
+  float m[12];
+  CHECK(!affine_3x4(ColorTrans(p), m));
+  CHECK(affine_3x4(ColorTrans{}, m));
+}
+
+// S31.32 sign-magnitude, the kernel CTM blob's word format.
+// (Revert check: two's complement for negatives -> the -0.345 CHECK fails.)
+TEST(pack_ctm_3x4_is_s31_32_sign_magnitude) {
+  float m[12] = {1.0f, -0.345f, 0.0f, -0.0f, 2.5f, 0, 0, 0, 0, 0, 0, 0};
+  uint64_t w[12];
+  pack_ctm_3x4(m, w);
+  CHECK(w[0] == (1ull << 32));
+  CHECK((w[1] >> 63) == 1u);
+  const uint64_t mag = w[1] & ~(1ull << 63);
+  CHECK(mag == static_cast<uint64_t>(std::llround(std::fabs((double)-0.345f) * 4294967296.0)));
+  CHECK(w[2] == 0u);
+  CHECK(w[3] == 0u);  // negative zero carries no sign bit
+  CHECK(w[4] == (5ull << 31));
+}
+
+// Which display mechanism, and whether the OSD is pre-inverted.
+// (Revert check: let kPlaneCtm set invert_osd -> the CTM CHECKs fail; let
+// the CTM be tried before the LUT -> the "LUT wins" CHECK fails.)
+TEST(pick_display_colortrans_prefers_the_lut_and_inverts_only_for_it) {
+  const auto pick = pick_display_colortrans;
+  // Off: never a mechanism, never an inverted OSD.
+  for (int lut = 0; lut < 2; ++lut)
+    for (int ctm = 0; ctm < 2; ++ctm) {
+      const DisplayCtChoice c = pick(false, lut, ctm, true);
+      CHECK(c.how == DisplayCt::kFlat && !c.invert_osd);
+    }
+  // Radxa: the LUT, OSD inverted -- and it wins over a CTM.
+  CHECK(pick(true, true, false, true).how == DisplayCt::kLut);
+  CHECK(pick(true, true, false, true).invert_osd);
+  CHECK(pick(true, true, true, true).how == DisplayCt::kLut);
+  CHECK(pick(true, true, false, false).how == DisplayCt::kLut);  // LUT needs no affine
+  // Orange Pi: the CTM, OSD untouched.
+  CHECK(pick(true, false, true, true).how == DisplayCt::kPlaneCtm);
+  CHECK(!pick(true, false, true, true).invert_osd);
+  // CTM but gamma != 1, or neither mechanism: flat.
+  CHECK(pick(true, false, true, false).how == DisplayCt::kFlat);
+  CHECK(pick(true, false, false, true).how == DisplayCt::kFlat);
+  CHECK(!pick(true, false, false, true).invert_osd);
+}
+
 MTEST_MAIN

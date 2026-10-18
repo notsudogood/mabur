@@ -739,6 +739,16 @@ struct RealActuator : mabur::Actuator {
 #endif
   }
 
+  void set_sensor_offset(int mfps) override {
+    if (dry_run) {
+      std::fprintf(stderr, "[dry-run] set_sensor_offset(%d)\n", mfps);
+      return;
+    }
+#ifdef MABUR_HAVE_VENC
+    (void)venc_set_sensor_offset(mfps);
+#endif
+  }
+
   // Auto channel set: RcAgent calls this once per confirmed move, from the
   // agent thread. A failed write is one stderr line, never fatal -- the drone
   // still parks on the right channel this session, it just won't remember it
@@ -1332,6 +1342,26 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   // burst edge where a blind drone restarts
   // (docs/findings/2026-08-14-rcf-uplink-loss.md §6).
   dev_cfg.tuning.disable_cca = false;
+  // devourer's wide-TX IGI floor: off on an 8812EU image, devourer's default
+  // on an 8812CU one. The floor raises the DIG lower bound for the rest of
+  // the session once the first >= 40 MHz frame goes out, because on a silent
+  // channel the receiver can park where the secondary 20 MHz never reads
+  // idle and the MAC holds that frame forever. The shipped ladder airs every
+  // rung at 40 MHz, so a floor is on from the first video frame and costs
+  // the RCF uplink idle-channel sensitivity for the whole flight (devourer
+  // estimates ~1 dB per IGI step; its default 0x35 is ~20 steps over the
+  // 0x1e-0x22 window). The 8812EU flew the 40 MHz rungs with no floor and
+  // never stalled; the 8822C is the die the stall was found on (one CU unit
+  // only clears at 0x35), so it keeps the default. The choice is per image,
+  // not per card: each drone build compiles exactly one Jaguar3 die
+  // (tools/build-arm.sh and the openipc-builder mabur package), and a binary
+  // refuses the other die at CreateRadio. An 8812EU that does stall loses the
+  // downlink at its first 40 MHz frame with the chip's TX FIFO full; give it
+  // a floor then (devourer measured one EU unit that clears at 0x2c, not
+  // 0x20).
+#if defined(DEVOURER_HAVE_JAGUAR3_8822E) && !defined(DEVOURER_HAVE_JAGUAR3_8822C)
+  dev_cfg.tuning.wide_tx_igi_floor = 0;
+#endif
   // Pinned here now that devourer defaults both the other way. A multi-packet
   // bulk-OUT that times out mid-transfer wedges the 8822EU's TX endpoint for
   // the rest of the session, so data sends never cancel one (the cost -- a
@@ -2994,11 +3024,21 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
         bool want_stats = g_sigusr1_flag.exchange(false);
         if (want_stats || now - last_stats_ms >= 1000) {
           last_stats_ms = now;
+          unsigned snr_mhz = 0;
+          int snr_off = 0;
+#ifdef MABUR_HAVE_VENC
+          {
+            VencStats vs{};
+            venc_get_stats(&vs);
+            snr_mhz = vs.sensor_mhz;
+            snr_off = vs.sensor_off_mfps;
+          }
+#endif
           std::fprintf(stderr,
                        "stats: state=%d hot_beat=%llu rx_beat=%llu seq=%u sent=%llu drops=%llu "
                        "txq=%zu txq_drop=%llu "
                        "thermal_delta=%d tx_failed=%llu venc_verb_fail=%llu "
-                       "enc_pk100=%uk lp=%d armed=%d ch=%u rfc=%d rf_bad=%llu\n",
+                       "enc_pk100=%uk lp=%d armed=%d snr_mhz=%u snr_off=%d ch=%u rfc=%d rf_bad=%llu\n",
                        static_cast<int>(agent.state()), static_cast<unsigned long long>(hb),
                        static_cast<unsigned long long>(rb), tx.seq(),
                        static_cast<unsigned long long>(tx.sent()),
@@ -3009,6 +3049,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
                        static_cast<unsigned long long>(actuator.venc_verb_failures),
                        enc_peak.take_peak_kbps(),
                        static_cast<int>(agent.low_power()), static_cast<int>(agent.armed_latched()),
+                       snr_mhz, snr_off,
                        static_cast<unsigned>(actuator.cur), actuator.last_rf_central,
                        static_cast<unsigned long long>(actuator.rf_mismatches));
         }

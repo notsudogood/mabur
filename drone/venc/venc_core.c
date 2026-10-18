@@ -348,6 +348,14 @@ int venc_set_bitrate_kbps(int kbps)
 	return rc == 0 ? 0 : -1;
 }
 
+int venc_set_sensor_offset(int mfps)
+{
+	/* Stored even before the core runs: RcAgent hands each value over once,
+	 * on change, and the encoder thread picks it up when it is ready. */
+	star6e_runtime_request_sensor_offset((int32_t)mfps);
+	return 0;
+}
+
 int venc_set_fps(int fps)
 {
 	int rc;
@@ -501,6 +509,8 @@ void venc_get_stats(VencStats *out)
 
 	if (!venc_core_running())
 		return;
+	out->sensor_mhz = star6e_runtime_sensor_mhz();
+	out->sensor_off_mfps = star6e_runtime_sensor_offset();
 
 	/* Producer-side counter, bumped on the encoder thread
 	 * (star6e_video_send_frame). It counts encoded AUs INCLUDING ones

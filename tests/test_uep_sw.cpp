@@ -28,6 +28,7 @@ namespace {
 struct SimResult {
   uint64_t sent = 0, delivered = 0;
   uint64_t bodies = 0, bodies_dropped = 0;
+  uint64_t backlog_drops = 0;  // stream-1 repairs forfeited at kMaxBacklogJobs
 };
 
 // One frame unit for `stream`: FrameHdr + one Annex-B NAL whose type matches
@@ -107,6 +108,12 @@ SimResult run_sim(int symbol_size, int bpb_base, int window, int n_pkts,
     ++r.sent;
     auto bodies = enc.add_frame(1, unit.data(), unit.size(), now);
     consume(bodies);
+    // Simulated time has no wall-clock gaps between frames, so a starved
+    // worker (a loaded CI runner) falls kMaxBacklogJobs behind and the
+    // encoder forfeits repairs by design. Let it catch up each frame: the
+    // async checks compare recovery, not how a slow core degrades.
+    if (worker)
+      while (worker->depth() != 0) std::this_thread::yield();
     if (paced && worker) {
       while (enc.repairs_outstanding()) std::this_thread::yield();
       std::vector<UepBody> late;
@@ -123,6 +130,7 @@ SimResult run_sim(int symbol_size, int bpb_base, int window, int n_pkts,
   auto tail = enc.flush_all();
   consume(tail);
   r.delivered = got.completed().size();
+  r.backlog_drops = enc.take_fec_gauge(1).backlog_drops;
   return r;
 }
 
@@ -350,6 +358,7 @@ TEST(uep_async_recovers_under_loss_like_sync) {
   SimResult sync_r = run_sim(164, 8, 64, 4000, 5.0, 3);
   FecWorker worker;
   SimResult async_r = run_sim(164, 8, 64, 4000, 5.0, 3, &worker, /*paced=*/true);
+  CHECK(async_r.backlog_drops == 0);
   CHECK(pct(async_r) >= pct(sync_r) - 1.0);
 }
 

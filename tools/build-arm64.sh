@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
-# Cross-build maburgs for ARM (aarch64) / musl, fully static. maburplay is
-# built twice: once here (stage 5, musl-static, kept as the maburplay-static
-# rollback) and again in stage 6 against the Buildroot glibc toolchain that
-# builds the GS image itself, since its burned-DVR colortrans stage links
-# Mesa EGL/GLESv2/GBM + librga, which exist only as glibc shared objects.
+# Cross-build the GS binaries for ARM (aarch64). maburgs and maburplay are
+# each built more than once: stage 5 builds both musl-static (kept as the
+# maburgs-static / maburplay-static rollbacks); stage 6 builds both again
+# against the Buildroot glibc toolchain that builds the Radxa GS image
+# itself (out/arm64/maburgs, out/arm64/maburplay); stage 7 builds both a
+# third time against the Orange Pi Zero 2W Buildroot sysroot
+# (out/arm64/maburgs-opi, out/arm64/maburplay-opi, docs/opi-zero2w.md).
+# maburplay needs glibc for its burned-DVR colortrans stage (Mesa
+# EGL/GLESv2/GBM + librga exist only as glibc shared objects); maburgs
+# needs it for speed: its per-packet path allocates and copies, and under
+# musl that cost ~2 ms more GS latency on every frame
+# (docs/findings/2026-10-15-gs-musl-latency.md).
 #
 # RUN THIS SCRIPT BARE. Do NOT wrap it in the `nix-shell -p pkg-config
 # libusb1` that CLAUDE.md's Build & Test section prescribes for HOST
@@ -282,7 +289,7 @@ cmake -S . -B build-arm64 -DCMAKE_TOOLCHAIN_FILE=cmake/aarch64-musl.cmake \
 
 cmake --build build-arm64 -j"$(nproc)" --target maburgs linkbench-rx maburplay encosd nhm-reset-probe
 
-"${TARGET_TRIPLE}-strip" build-arm64/gs/maburgs -o out/arm64/maburgs
+"${TARGET_TRIPLE}-strip" build-arm64/gs/maburgs -o out/arm64/maburgs-static
 "${TARGET_TRIPLE}-strip" build-arm64/bench/linkbench/linkbench-rx -o out/arm64/linkbench-rx
 "${TARGET_TRIPLE}-strip" build-arm64/bench/nhmreset/nhm-reset-probe -o out/arm64/nhm-reset-probe
 "${TARGET_TRIPLE}-strip" build-arm64/gs/player/maburplay -o out/arm64/maburplay-static
@@ -327,12 +334,14 @@ cp gs/player/bundle/maburplay.default.toml out/arm64/maburplay.default.toml
 #        built a second time here with the SAME toolchain the image itself
 #        is built with (package/mabur/mabur.mk), and the musl-static binary
 #        from stage 5 is kept as out/arm64/maburplay-static (the rollback
-#        build, no GPU stage). maburgs stays static: it needs nothing here.
+#        build, no GPU stage). maburgs is built here too: the glibc build
+#        is the deployed one, the musl one (out/arm64/maburgs-static) the
+#        rollback.
 # Remove any prior out/arm64/maburplay before attempting this stage: it is
 # the only writer of that path, and a failure below (missing MABUR_BR_HOST,
 # no EGL/rga headers, a colortrans compile error) must not leave a stale
 # binary from a previous run sitting where the deploy step will find it.
-rm -f out/arm64/maburplay
+rm -f out/arm64/maburplay out/arm64/maburgs
 MABUR_BR_HOST="${MABUR_BR_HOST:-$PWD/../sbc-groundstations-gilankpam/output/radxa_zero3_defconfig/host}"
 BR_SYSROOT="$MABUR_BR_HOST/aarch64-buildroot-linux-gnu/sysroot"
 [ -x "$MABUR_BR_HOST/bin/aarch64-none-linux-gnu-gcc" ] || {
@@ -399,10 +408,79 @@ ln -sfn "$BR_SYSROOT/usr/lib/libdrm.so" toolchain/br-libs/lib/libdrm.a
     -DDEVOURER_LOG_MAX_LEVEL=WARN \
     -DMABUR_PLAYER_HW=ON -DMABUR_PLAYER_GPU=ON \
     -DMABUR_MPP_ROOT="$PWD/toolchain/br-libs" -DMABUR_DRM_ROOT="$PWD/toolchain/br-libs"
-  cmake --build build-arm64-br -j"$(nproc)" --target maburplay
+  cmake --build build-arm64-br -j"$(nproc)" --target maburplay maburgs
 )
 "$MABUR_BR_HOST/bin/aarch64-none-linux-gnu-strip" build-arm64-br/gs/player/maburplay -o out/arm64/maburplay
 echo "maburplay NEEDED:"; "$MABUR_BR_HOST/bin/aarch64-none-linux-gnu-readelf" -d out/arm64/maburplay | grep NEEDED
+"$MABUR_BR_HOST/bin/aarch64-none-linux-gnu-strip" build-arm64-br/gs/maburgs -o out/arm64/maburgs
+echo "maburgs NEEDED:"
+_needed=$("$MABUR_BR_HOST/bin/aarch64-none-linux-gnu-readelf" -d out/arm64/maburgs | grep NEEDED)
+echo "$_needed"
+echo "$_needed" | grep -q "\[libusb-1.0.so.0\]" || {
+  echo "error: maburgs does not link libusb-1.0.so.0 dynamically" >&2; rm -f out/arm64/maburgs; exit 1; }
+
+# --- 7. maburplay for the Orange Pi Zero 2W (Allwinner H618) --------------
+#        Same glibc toolchain file as stage 6, pointed at the OPi Buildroot
+#        output. The decoder is Cedrus through libav's v4l2request hwaccel
+#        (the image repo's ffmpeg-v4l2request package), so the binary links
+#        libavcodec/libavutil from that sysroot; no MPP, no GPU stage, no
+#        burned DVR. Skipped (with a note) when that output does not exist,
+#        so a Radxa-only checkout still builds stages 1-6.
+rm -f out/arm64/maburplay-opi out/arm64/maburgs-opi out/arm64/v4l2req_streamcheck
+MABUR_BR_HOST_OPI="${MABUR_BR_HOST_OPI:-$PWD/../sbc-groundstations-gilankpam/output/orangepi_zero2w_defconfig/host}"
+OPI_SYSROOT="$MABUR_BR_HOST_OPI/aarch64-buildroot-linux-gnu/sysroot"
+if [ ! -x "$MABUR_BR_HOST_OPI/bin/aarch64-none-linux-gnu-gcc" ]; then
+  echo "note: no Orange Pi Buildroot output at $MABUR_BR_HOST_OPI -- skipping maburplay-opi" >&2
+else
+  _pc_av=""
+  _pc_av=$(
+    PKG_CONFIG_LIBDIR="$OPI_SYSROOT/usr/lib/pkgconfig:$OPI_SYSROOT/usr/share/pkgconfig" \
+    PKG_CONFIG_SYSROOT_DIR="$OPI_SYSROOT" \
+    pkg-config --cflags libavcodec 2>/dev/null
+  ) || true
+  case "$_pc_av" in
+    */nix/store/*)
+      echo "error: pkg-config resolved libavcodec outside the OPi sysroot: $_pc_av" >&2
+      echo "       run tools/build-arm64.sh bare, not inside nix-shell -p pkg-config libusb1" >&2
+      exit 1 ;;
+  esac
+  [ -e "$OPI_SYSROOT/usr/lib/pkgconfig/libavcodec.pc" ] || {
+    echo "error: $OPI_SYSROOT has no libavcodec.pc -- build ffmpeg-v4l2request in the OPi" >&2
+    echo "       Buildroot output first" >&2; exit 1; }
+  grep -q "AV_PKT_FLAG_PARTIAL" "$OPI_SYSROOT/usr/include/libavcodec/packet.h" || {
+    echo "error: the OPi sysroot's libavcodec lacks mabur's stream patch -- rebuild" >&2
+    echo "       ffmpeg-v4l2request with gs/player/ffmpeg-patches (image repo" >&2
+    echo "       package/ffmpeg-v4l2request/0002-*)" >&2; exit 1; }
+  (
+    unset CPATH
+    export MABUR_BR_HOST="$MABUR_BR_HOST_OPI"
+    export PKG_CONFIG_LIBDIR="$OPI_SYSROOT/usr/lib/pkgconfig:$OPI_SYSROOT/usr/share/pkgconfig"
+    export PKG_CONFIG_SYSROOT_DIR="$OPI_SYSROOT"
+    cmake -S . -B build-arm64-opi -DCMAKE_TOOLCHAIN_FILE=cmake/aarch64-buildroot.cmake \
+      -DCMAKE_BUILD_TYPE=Release -DMABUR_BUILD_TESTS=OFF -DMABUR_BUILD_DRONE=OFF \
+      -DMABUR_BUILD_GS=ON -DMABUR_BUILD_LINKBENCH=OFF -DBUILD_SHARED_LIBS=OFF \
+      -DDEVOURER_JAGUAR1=OFF -DDEVOURER_8814=OFF \
+      -DDEVOURER_JAGUAR2_8822B=OFF -DDEVOURER_JAGUAR2_8821C=OFF \
+      -DDEVOURER_JAGUAR3_8822C=OFF -DDEVOURER_JAGUAR3_8822E=ON \
+      -DDEVOURER_8733B=OFF \
+      -DDEVOURER_KESTREL_8852B=OFF -DDEVOURER_KESTREL_8852C=OFF \
+      -DDEVOURER_LOG_MAX_LEVEL=WARN \
+      -DMABUR_PLAYER_HW=ON -DMABUR_PLAYER_DECODER=v4l2req
+    cmake --build build-arm64-opi -j"$(nproc)" --target maburplay maburgs v4l2req_streamcheck
+  )
+  "$MABUR_BR_HOST_OPI/bin/aarch64-none-linux-gnu-strip" build-arm64-opi/gs/player/maburplay -o out/arm64/maburplay-opi
+  "$MABUR_BR_HOST_OPI/bin/aarch64-none-linux-gnu-strip" build-arm64-opi/bench/v4l2req_streamcheck/v4l2req_streamcheck -o out/arm64/v4l2req_streamcheck
+  "$MABUR_BR_HOST_OPI/bin/aarch64-none-linux-gnu-strip" build-arm64-opi/gs/maburgs -o out/arm64/maburgs-opi
+  "$MABUR_BR_HOST_OPI/bin/aarch64-none-linux-gnu-readelf" -d out/arm64/maburgs-opi | grep -q "\[libusb-1.0.so.0\]" || {
+    echo "error: maburgs-opi does not link libusb-1.0.so.0 dynamically" >&2; rm -f out/arm64/maburgs-opi; exit 1; }
+  echo "maburplay-opi NEEDED:"
+  _needed=$("$MABUR_BR_HOST_OPI/bin/aarch64-none-linux-gnu-readelf" -d out/arm64/maburplay-opi | grep NEEDED)
+  echo "$_needed"
+  for lib in libavcodec.so.61 libavutil.so.59 libdrm.so.2; do
+    echo "$_needed" | grep -q "\[$lib\]" || {
+      echo "error: maburplay-opi does not link $lib" >&2; rm -f out/arm64/maburplay-opi; exit 1; }
+  done
+fi
 
 # `file` itself isn't on a bare NixOS PATH either; stage it like pkg-config.
 if [ ! -e toolchain/file ]; then
@@ -410,4 +488,5 @@ if [ ! -e toolchain/file ]; then
     'with import <nixpkgs> {}; file' \
     -o toolchain/file
 fi
-"$(readlink -f toolchain/file)/bin/file" out/arm64/maburgs out/arm64/linkbench-rx out/arm64/maburplay out/arm64/encosd
+"$(readlink -f toolchain/file)/bin/file" out/arm64/maburgs out/arm64/maburgs-static out/arm64/linkbench-rx out/arm64/maburplay out/arm64/encosd \
+  $( [ -e out/arm64/maburplay-opi ] && echo out/arm64/maburplay-opi out/arm64/maburgs-opi )

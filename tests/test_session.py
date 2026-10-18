@@ -20,9 +20,10 @@ class TestResolve(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             d = make_session(root, 42, ["ctl.log", "probe.log", "au.log",
                                         "flight.jsonl", "lat.log", "fec.log",
-                                        "arq.log", "ta.log"])
+                                        "arq.log", "ta.log", "frame.log"])
             s = session.resolve(d)
             self.assertEqual(s.dir, d)
+            self.assertEqual(s.frame, os.path.join(d, "frame.log"))
             self.assertEqual(s.fec, os.path.join(d, "fec.log"))
             self.assertEqual(s.arq, os.path.join(d, "arq.log"))
             self.assertEqual(s.ta, os.path.join(d, "ta.log"))
@@ -38,6 +39,15 @@ class TestResolve(unittest.TestCase):
             self.assertIsNotNone(s.ctl)
             self.assertIsNone(s.probe)
             self.assertIsNone(s.lat)
+            self.assertIsNone(s.frame)
+
+    def test_legacy_frame_log_classified_by_marker(self):
+        with tempfile.TemporaryDirectory() as root:
+            p = os.path.join(root, "whatever.log")
+            with open(p, "w") as f:
+                f.write("# framelog 1\n")
+            self.assertEqual(session.resolve(p).frame, p)
+            self.assertIsNone(session.resolve(p).lat)
 
     def test_legacy_file_path_passes_through(self):
         with tempfile.TemporaryDirectory() as root:

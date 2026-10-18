@@ -13,6 +13,7 @@
 #include "mabur/nack_tracker.h"
 #include "mabur/rc_proto.h"
 #include "op_point.h"
+#include "refresh_requester.h"
 #include "relay_stats.h"
 
 namespace maburgs {
@@ -207,6 +208,14 @@ struct StatsNackIn {
   mabur::NackWindow enh_win;
 };
 
+// Demand refresh: the core's RefreshRequester, exported as link.refresh
+// whenever the core has one (always in maburgs; never in the web GS).
+struct StatsRefreshIn {
+  bool present = false;
+  bool armed = false;
+  RefreshRequester::Counters c;
+};
+
 // Continuous probe gate snapshot (probe-stream), straight from
 // LadderController::probe_gate() -- plain values only, same no-controller-
 // reference pattern as StatsCtlIn. Unlike StatsCtlIn::ctl this is NOT
@@ -262,6 +271,10 @@ struct StatsHopIn {
   // Relay sweeps (SCANs) that got no SCAN_RESULT before their timeout,
   // cumulative this process (ChannelCore::sweep_timeouts()).
   uint64_t sweep_timeouts = 0;
+  // Window records the sampler published that the core never took
+  // (replaced by the next one): a core loop that fell a whole
+  // hop.window_ms behind. Cumulative this process.
+  uint64_t sampler_dropped = 0;
 };
 
 struct StatsInput {
@@ -277,6 +290,7 @@ struct StatsInput {
   std::optional<int> scan_pick;
   StatsRcfSlotIn rcf_slot;
   StatsNackIn nack;
+  StatsRefreshIn refresh;
   bool in_session = false;  // VrxState::SESSION
   bool key_mismatch = false;   // VrxState::KEY_MISMATCH
   std::string key_fp;          // mabur::key_fingerprint(cfg.link.key)
@@ -332,11 +346,10 @@ struct StatsInput {
   std::optional<mabur::rc::Telem> telem;
   uint64_t telem_rx_ms = 0;   // GS monotonic arrival stamp
 
-  // Head-segment latency aggregates (latency accounting): nullopt while the pts anchor isn't usable() yet, or while
-  // it's usable but due() said this poll() won't actually emit -- the core
-  // loop only pays LatWindow::flush()'s destructive read+clear on a poll
-  // that is about to emit (see main.cpp), so this is deliberately absent
-  // far more often than video_lat's would-be n==0 case suggests.
+  // Head-segment latency aggregates (latency accounting): nullopt while the
+  // pts anchor isn't usable() yet. The core loop builds a StatsInput only on
+  // a poll that due() says will emit, so LatWindow::flush()'s destructive
+  // read+clear always spans the whole interval.
   std::optional<LatWindow::Out> video_lat;
 };
 

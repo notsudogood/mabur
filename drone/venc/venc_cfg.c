@@ -106,3 +106,14 @@ uint32_t venc_superframe_p_bytes(unsigned pct, unsigned kbps, unsigned fps)
 		return (uint32_t)bytes;
 	}
 }
+
+uint32_t venc_cfg_gop_frames(double gop_s, uint32_t fps)
+{
+	uint32_t gop_fps = fps ? fps : 30;
+	uint32_t frames;
+
+	if (gop_s <= 0.0)
+		return VENC_GOP_NONE;
+	frames = (uint32_t)(gop_s * gop_fps + 0.5);
+	return frames < 1 ? 1 : frames;
+}

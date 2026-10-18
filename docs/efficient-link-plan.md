@@ -5,8 +5,8 @@ skip-slice fills, the software NACK, link pairing, the channel set) is
 merged, with three NACK fixes on top — section "Merged 2026-10-10" below.
 Step 4 (slices) is therefore built and on (`[venc] slices = 4`); NACK is
 built, off by default, with an in-flight on/off A/B. Step 1 (the ladder) is
-a config change ready to fly; step 2 (genlock) is built, off by default,
-waiting on a bench probe of the camera; step 5 is FEC shaped per rung, its
+a config change ready to fly; step 2 (genlock) is built, flown twice, and
+on in the bundles from 2026-10-18 (both ends' code defaults stay off); step 5 is FEC shaped per rung, its
 first half a config change.** This replaces the feedback-repair rollout
 (`docs/feedback-repair-rollout.md`, parked the same day — its results and why
 are recorded there) as the line of work on the link.

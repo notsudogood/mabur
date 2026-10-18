@@ -56,7 +56,7 @@ chain_budget  = 3          # after this many frames shown back-to-back, drop one
 # screen refreshes, instead of drifting in and out of step with it (that
 # drift is a latency swing of up to one frame every 10-15 s). Needs the
 # drone's genlock enabled too.
-genlock          = false
+genlock          = true
 genlock_miss_pct = 10      # share of frames allowed to just miss their refresh (shown one refresh later)
 
 # Undo the drone camera's colour tuning (the "colortrans" sensor file in the

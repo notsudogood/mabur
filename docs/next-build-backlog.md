@@ -3,6 +3,41 @@
 What the operator has agreed goes into the next GS (and drone) build, in
 order. Each item names its evidence. Remove an item when it ships.
 
+## 0. BLOCKER for Hop on at 80 MHz: drone stops hearing the GS after hops (found 2026-10-18, gs8 + d8)
+
+Evidence (bench, d8 + gs8, defaults: width 80, channels [36, 132], Hop on):
+the drone took two GS hop orders (`retune 36 -> 132 (hop)`, then
+`132 -> 36 (hop)`), so it decoded RCFs at both ends of a FastRetune. Then
+the GS ordered epoch 4 to 132, logged `verify_pass` there, and stayed in
+session (state=0) while the drone sat in RENDEZVOUS for minutes: its
+telemetry read `radio.rx own=0 foreign=64..174 crcfail=0`, `rcf age 65535`
+-- its receiver works, but not one GS frame. GS kept receiving video and
+telemetry. Pinned (GS `channel = 36`, drone `channels = [36]`, no hops):
+`state=2` steady, lp=0, encoder ~8 Mb/s. So the 80 MHz link itself works;
+the hop path breaks it.
+
+Prime suspect: devourer FastRetune at 80 MHz on the 8822E, never exercised
+before (the 2026-10-17 bench and linkbench stayed on one channel;
+tests/run_hop_validation.sh is 20 MHz). The fit: after a fast hop back to
+36 the drone believes it is on 36, but if its radio is left partly tuned
+to the 132 block (or the RX side is), the GS hears the drone on 132
+(hence verify_pass) while the drone hears nothing (own=0), and the epoch-4
+order never lands, so no `retune 36 -> 132` is logged. Not proven.
+
+Test before fixing (bench, 5 min): GS `channel = 132` (pinned), drone
+`channels = [36, 132]`: the drone parks on 36, the GS finds it there and
+orders ONE hop to 132. Check drone `state` / GS `drone.radio.rx.own` after
+it. Then devourer `ReadTunedCentral()` on the drone after each hop (expect
+42 / 138) -- needs a debug verb or a log line in retune_now_.
+
+Likely fix if confirmed (small, both ends): at 80 MHz use the full
+`SetMonitorChannel` for a channel move instead of `FastRetune` (drone
+`retune_now_`; GS `RadioFrontend::retune` while a card is wide). Costs
+~90 ms per hop instead of ~2-5 ms; hops are rare. The devourer fix (fast
+path at 80) can follow.
+
+Until fixed: fly 80 MHz with Hop off (pinned channel).
+
 ## 1. GS: spread the per-packet work off the core thread
 
 Evidence (bench 2026-10-12, d4 drone + gs4 GS, GS pinned at MCS5/40 with

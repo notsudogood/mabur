@@ -54,4 +54,22 @@ constexpr bool vht80_block_lowest(uint8_t ch) {
 static_assert(vht80_block_lowest(36) && vht80_block_lowest(132) && vht80_block_lowest(149), "blocks");
 static_assert(!vht80_block_lowest(40) && !vht80_block_lowest(144) && !vht80_block_lowest(165), "not lowest");
 
+// The central channel devourer tunes for ch at width_mhz -- what
+// IRtlRadio::ReadTunedCentral() reads back when the radio is where the host
+// thinks it is: the block centre at 80, the pair centre at 40, ch itself at
+// 20 and below. 0 = ch cannot be tuned at that width.
+constexpr uint8_t tuned_central(uint8_t ch, uint8_t width_mhz) {
+  if (width_mhz == 80) return vht80_block_lowest(ch) ? static_cast<uint8_t>(ch + 6) : 0;
+  if (width_mhz == 40) {
+    const uint8_t off = ht40_offset(ch);
+    return off == 1 ? static_cast<uint8_t>(ch + 2) : off == 2 ? static_cast<uint8_t>(ch - 2) : 0;
+  }
+  return ch;
+}
+
+static_assert(tuned_central(36, 80) == 42 && tuned_central(132, 80) == 138 && tuned_central(149, 80) == 155, "80");
+static_assert(tuned_central(40, 80) == 0, "80, not a block's lowest");
+static_assert(tuned_central(36, 40) == 38 && tuned_central(40, 40) == 38 && tuned_central(165, 40) == 0, "40");
+static_assert(tuned_central(36, 20) == 36 && tuned_central(165, 20) == 165, "20");
+
 }  // namespace mabur

@@ -525,6 +525,17 @@ struct RealActuator : mabur::Actuator {
   // writer: it runs on the agent thread.
   std::atomic<bool>* retune_waiting = nullptr;
   uint8_t cur = 0;  // set to start_ch where the actuator is configured
+  uint8_t width_mhz = 20;  // cfg.radio.width: the RF width the radio is tuned at
+  // Where the radio REALLY is (IRtlRadio::ReadTunedCentral), against what
+  // `cur` at width_mhz should give (mabur::tuned_central). Bench 2026-10-18:
+  // after hops at 80 MHz the drone went deaf to the GS while its own state
+  // said 36 (docs/next-build-backlog.md item 0); these readings tell a radio
+  // that did not move apart from a GS that moved wrongly. -1 = not read /
+  // unsupported, -2 = the read failed. Agent thread only.
+  int last_rf_central = -1;
+  int last_bad_central = -1;  // the mismatch last logged, -1 = none
+  uint64_t rf_mismatches = 0;
+  uint64_t last_rf_check_ms = 0;
   // A retune that arrived during a calibration sweep and has not been
   // performed yet (see retune() below). Agent-thread-only, like every other
   // member here.
@@ -589,6 +600,8 @@ struct RealActuator : mabur::Actuator {
     // a bulk-OUT (devourer threading contract). ~2.4 ms on the 8812EU.
     const uint8_t from = cur;
     bool tx_power_ok = false;
+    int rfc = -1;
+    long long retune_us = 0;
     if (retune_waiting) retune_waiting->store(true, std::memory_order_release);
     {
       std::unique_lock<std::shared_mutex> g(*tx_gate);
@@ -608,7 +621,11 @@ struct RealActuator : mabur::Actuator {
       // old channel before FastRetune reprograms it. Once-per-move 5 ms
       // TX stall.
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      const auto t_retune = std::chrono::steady_clock::now();
       dev->FastRetune(ch, /*cache_rf=*/true);
+      retune_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                      std::chrono::steady_clock::now() - t_retune)
+                      .count();
       // Critical: FastRetune does NOT re-fold TX power for us at mabur's
       // settings. devourer re-derives it inside FastRetune only on a BAND
       // change and only when a global offset or an index override is live
@@ -636,6 +653,9 @@ struct RealActuator : mabur::Actuator {
       // tone is active, i.e. the diffs are NOT sitting on this channel's
       // anchor and the log line below is the only trace of it.
       tx_power_ok = dev->ReApplyTxPower();
+      // Still inside the gate: one RF register read, the radio's own answer
+      // to where FastRetune left it.
+      rfc = read_rf_central_();
     }
     if (retune_waiting) retune_waiting->store(false, std::memory_order_release);
     cur = ch;
@@ -645,6 +665,54 @@ struct RealActuator : mabur::Actuator {
                  "maburd: retune %u -> %u: tx power re-applied (%s)\n",
                  static_cast<unsigned>(from), static_cast<unsigned>(ch),
                  tx_power_ok ? "ok" : "failed");
+    const int want = mabur::tuned_central(ch, width_mhz);
+    std::fprintf(stderr,
+                 "maburd: retune %u -> %u: radio at central %d, want %d (%s), FastRetune %.1f ms\n",
+                 static_cast<unsigned>(from), static_cast<unsigned>(ch), rfc, want,
+                 rfc < 0 ? "unread" : rfc == want ? "ok" : "MISMATCH",
+                 static_cast<double>(retune_us) / 1000.0);
+    note_rf_central_(rfc);
+  }
+
+  // The 5 s look at where the radio really is, from the agent loop. A
+  // retune logs its own reading above; this catches the radio being moved
+  // later, or a hop that read back right and drifted. One RF register read
+  // under tx_gate exclusive, like a retune (devourer's control-plane
+  // contract): sends pause for the read, well under a millisecond, once per
+  // 5 s. Skipped while a calibration sweep owns the radio. Logs a mismatch
+  // once per new wrong value, not every 5 s.
+  void check_rf_central(uint64_t now_ms) {
+    if (!dev || !tx_gate || now_ms - last_rf_check_ms < 5000) return;
+    last_rf_check_ms = now_ms;
+    if (cal_active && cal_active->load(std::memory_order_relaxed)) return;
+    int rfc = -1;
+    if (retune_waiting) retune_waiting->store(true, std::memory_order_release);
+    {
+      std::unique_lock<std::shared_mutex> g(*tx_gate);
+      rfc = read_rf_central_();
+    }
+    if (retune_waiting) retune_waiting->store(false, std::memory_order_release);
+    const int want = mabur::tuned_central(cur, width_mhz);
+    if (rfc >= 0 && rfc != want && rfc != last_bad_central)
+      std::fprintf(stderr, "maburd: rf check: radio at central %d but channel %u wants %d (MISMATCH)\n",
+                   rfc, static_cast<unsigned>(cur), want);
+    note_rf_central_(rfc);
+  }
+
+  int read_rf_central_() {
+    try {
+      return dev->ReadTunedCentral();
+    } catch (const std::exception& e) {
+      std::fprintf(stderr, "maburd: rf central read failed: %s\n", e.what());
+      return -2;
+    }
+  }
+
+  void note_rf_central_(int rfc) {
+    last_rf_central = rfc;
+    const bool bad = rfc >= 0 && rfc != mabur::tuned_central(cur, width_mhz);
+    if (bad) ++rf_mismatches;
+    last_bad_central = bad ? rfc : -1;
   }
 
   mabur::VtxRecorder* recorder = nullptr;  // null until the recorder exists
@@ -1415,6 +1483,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   actuator.tx_gate = &tx_gate;
   actuator.retune_waiting = &retune_waiting;
   actuator.cur = start_ch;
+  actuator.width_mhz = cfg.radio.width;
   actuator.ldpc = cfg.radio.ldpc;
   // Encoder starts at the "normal" ROI QP (RcAgent only calls set_roi_qp on
   // a low<->normal transition — see run_bitrate_policy's roi_low_ default),
@@ -2920,6 +2989,8 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
           }
         }
 
+        actuator.check_rf_central(now);
+
         bool want_stats = g_sigusr1_flag.exchange(false);
         if (want_stats || now - last_stats_ms >= 1000) {
           last_stats_ms = now;
@@ -2927,7 +2998,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
                        "stats: state=%d hot_beat=%llu rx_beat=%llu seq=%u sent=%llu drops=%llu "
                        "txq=%zu txq_drop=%llu "
                        "thermal_delta=%d tx_failed=%llu venc_verb_fail=%llu "
-                       "enc_pk100=%uk lp=%d armed=%d\n",
+                       "enc_pk100=%uk lp=%d armed=%d ch=%u rfc=%d rf_bad=%llu\n",
                        static_cast<int>(agent.state()), static_cast<unsigned long long>(hb),
                        static_cast<unsigned long long>(rb), tx.seq(),
                        static_cast<unsigned long long>(tx.sent()),
@@ -2937,7 +3008,9 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
                        static_cast<unsigned long long>(txstats.failed),
                        static_cast<unsigned long long>(actuator.venc_verb_failures),
                        enc_peak.take_peak_kbps(),
-                       static_cast<int>(agent.low_power()), static_cast<int>(agent.armed_latched()));
+                       static_cast<int>(agent.low_power()), static_cast<int>(agent.armed_latched()),
+                       static_cast<unsigned>(actuator.cur), actuator.last_rf_central,
+                       static_cast<unsigned long long>(actuator.rf_mismatches));
         }
 
         // Telemetry suppression: non-sweep PPDUs in the airtime a calibration

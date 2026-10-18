@@ -38,6 +38,25 @@ path at 80) can follow.
 
 Until fixed: fly 80 MHz with Hop off (pinned channel).
 
+Diagnosis build (d9): maburd logs `radio at central N, want M` and the
+FastRetune time after every retune, re-reads it every 5 s (`rfc=` /
+`rf_bad=` on the stats line, a `rf check: ... MISMATCH` line on a new wrong
+value), and the GS logs each card's real centre with `MABUR_HOP_DEBUG=1`.
+The test steps are in the gs8 + d8 test doc's "Hop and channel checks".
+Hops into or out of an 8822E spur block (149/100/116/52 at 80 MHz) always
+take devourer's full path, so a 132 <-> 149 hop is the control: if that
+works while 36 <-> 132 fails, the fast path is the fault.
+
+Ruled out by the operator (2026-10-18): switching the DRONE's RF width
+around a hop (hop at 40, widen after). Each 40 <-> 80 switch is a full
+retune, a pause on every ladder step in and out of 80. The drone stays at
+its configured width; the fix has to make the 80 MHz hop itself sound.
+Candidates in order: (a) the missing piece of the lean hop at 80, once the
+readout names it; (b) the chip firmware's own channel switch (H2C 0x1D)
+at 80 -- devourer gates it to 20/40 today, the vendor driver's 80 MHz
+support is unchecked; (c) the full path at 80 MHz hops only (never on
+ladder steps), costing what the 132 <-> 149 test measures, once per hop.
+
 ## 1. GS: spread the per-packet work off the core thread
 
 Evidence (bench 2026-10-12, d4 drone + gs4 GS, GS pinned at MCS5/40 with

@@ -477,6 +477,61 @@ Counterpart: half the airtime capacity of MCS0/20 (about 3 Mb/s nominal),
 so the 500 kb/s floor still fits but re-sends get tighter; and 10 MHz is
 more sensitive to frequency offset between the two radios.
 
+## 11. GS: channel-health reads off the core thread (Gilang's stall fix, agreed 2026-10-18)
+
+Evidence (bench 2026-10-18, gs8 + d8 pinned at MCS4/80, test doc step 5):
+the `au_tail` gauge (last body's RX stamp to the AU's close on the core
+thread, 5 s windows) read a wait of 8 ms or more in 20 of 24 windows, worst
+28.3 ms. With `hop.window_ms` 150 -> 2000 the operator reported the stall
+gone (run B's numbers not recorded). Same signature as Gilang's
+(gilankpam/mabur `demand-refresh`,
+`docs/findings/2026-10-17-maburgs-core-stall.md`): every channel-health
+window, `ChannelCore::step_hop_edge_and_window_` reads each card's NHM
+busy, energy and re-arms NHM on the core thread, taking devourer's
+`_reg_mu`, which the card's `coex_runtime_loop` holds 10-26 ms every 2 s.
+
+Fix: his `WindowSampler` -- a per-card sampler thread publishing a
+snapshot the core thread reads without blocking, plus a per-card
+device-use lock ordering it against teardown, bursts and dwells
+(`demand-refresh` e352ce81..b6493915, 2026-10-17). Port by merge once it is
+on his master (he is still on the branch); our `channel_core.{h,cpp}` and
+`radio_frontend` have diverged (80 MHz width jobs), so expect conflicts
+there. His numbers: 0.131 -> 0.019 stalls/s and queue-wait p99.9 11.7 ->
+6.0 ms with the window at 2000 ms. *Against it:* the residual 0.02/s is
+the USB I/O itself, which the sampler moves but does not remove; his
+result is his build on a Radxa. Gate: step 5's run A on the new image,
+same pin and scene, shows at most ~3 of 24 windows at 8 ms or more.
+
+## 12. Gilang's phase lock in place of our genlock (agreed 2026-10-18)
+
+Evidence: his bench (Radxa, session 0148) unlocked e2e p50/p90/p99
+40.6/48.1/51.0 ms -> locked steady 35.4/36.3/37.0; Orange Pi 33.2/35.7/37.4;
+one flight (0150) 41.3/42.7/44.2 against 46-47 p50 unlocked, judder
+seconds 9 % against 14-32 %. Ours, flown twice: phase error p50 1.6 ms,
+within 2 ms 60-77 % of steered seconds, and never measured as e2e, so the
+two are not compared like for like. *Against his:* never-shown frames did
+not improve (0.34/s against 0.33), one flight, and his bench 35.4 ms is
+his latency allowance, not the lock.
+
+What it brings: capture-time placement once locked (frames released by
+capture time, so arrival jitter stops moving the display), slope-fit
+acquisition (locked in 7-16 s), wait/acq/lock/oor states, and the drone's
+boot sensor trim (`sensor_cal`, already on his master da0bc70 since
+2026-10-14). Cost: `RC_VERSION` 16 (`Rcf::snr_off`) is a flag day for the
+drone, the GS and the hosted web GS together; conflicts with our genlock in
+`frame_regulator`, maburplay `main.cpp` and the drone's sensor writer (our
+`star6e_controls_apply_sensor_mfps` / `genlock_trim.h` against his boot trim
+plus offset). Merging his master also brings his Orange Pi GS work
+(v4l2req decode, colortrans CTM). Plan: wait for it on his master
+(`demand-refresh` 1164a9e9 today), merge, retire our genlock -- it is on in
+the bundles since 96959bcf, so the bundle default moves with it.
+
+## 13. Player OSD shows 80 MHz rungs as "/80" (done in code, ships with the next GS image)
+
+Bench 2026-10-18: the bar's MCS cell read "4/40" while MCS4 flew at 80 MHz
+(the width was clamped to 20..40). Fixed in 0c27b8d5 with a test; display
+only, the link itself was at 80.
+
 ## Proposed, not yet agreed
 
 Gaps found while building gs8 / d8. Ask before scheduling.

@@ -142,10 +142,11 @@ std::string GsCompactBar::worst_case(GsBarField id, int n_cards,
     // exactly as wide, so no separate worst case is needed for it. "KEY?"
     // (link key mismatch) replaces the whole item and is narrower still.
     case GsBarField::kCh:      return tag(gs_icon::kCh) + "999(a)";
-    // 40 MHz rungs: the width suffix makes the live form the WIDER one
-    // ("9/40" beats the dash form "--") -- an explicit worst case rather
-    // than whatever the live value happens to be.
-    case GsBarField::kMcs:     return tag(gs_icon::kMcs) + "9/40";
+    // 40/80 MHz rungs: the width suffix makes the live form the WIDER one
+    // ("9/80" beats the dash form "--") -- an explicit worst case rather
+    // than whatever the live value happens to be. The width is clamped to
+    // two digits below (5..80), and a test pins that every live width fits.
+    case GsBarField::kMcs:     return tag(gs_icon::kMcs) + "9/80";
     case GsBarField::kAir:     return tag(gs_icon::kAir) + "100%";
     case GsBarField::kRssi:    return repeat_joined(gs_icon::kRssi, "-999", n);
     case GsBarField::kSnr:     return repeat_joined(gs_icon::kSnr, "-99", n);
@@ -377,7 +378,7 @@ GsCompactBar::FieldState GsCompactBar::state_of_(const GsSnapshot& snap,
       st.rgb = link;
       if (snap.mcs) {
         st.text = tag(gs_icon::kMcs) + ascii_int(std::clamp(*snap.mcs, 0, 9)) + "/" +
-                  (snap.bw ? ascii_int(std::clamp(*snap.bw, 20, 40)) : std::string("--"));
+                  (snap.bw ? ascii_int(std::clamp(*snap.bw, 5, 80)) : std::string("--"));
       } else {
         st.text = tag(gs_icon::kMcs) + "--";
       }

@@ -222,7 +222,29 @@ TEST(compact_mcs_cell_shows_width_and_dashes_without_it) {
   CHECK(row_of(bar, s, false, player_nominal(), 0).find(ic("mcs:3/40")) != std::string::npos);
   s.bw.reset();
   CHECK(row_of(bar, s, false, player_nominal(), 0).find(ic("mcs:3/--")) != std::string::npos);
-  CHECK(GsCompactBar::worst_case(GsBarField::kMcs, 2) == ic("mcs:9/40"));
+  CHECK(GsCompactBar::worst_case(GsBarField::kMcs, 2) == ic("mcs:9/80"));
+}
+
+// 80 MHz rungs (bench 2026-10-18): the cell read "4/40" while MCS4 flew at
+// 80 MHz -- the width was clamped to 20..40. Every width the ladder can fly
+// (and the planned 5/10 MHz rungs) prints as itself and fits the reserved
+// worst case.
+TEST(compact_mcs_cell_shows_80_mhz_and_every_width_fits) {
+  GsFont f;
+  std::string err;
+  REQUIRE(f.load(GSFONT_SCALED, &err));
+  GsCompactBar bar(f);
+  REQUIRE(bar.layout(1920, 1080, &err));
+  GsSnapshot s = nominal();
+  s.mcs = 4; s.bw = 80;
+  CHECK(row_of(bar, s, false, player_nominal(), 0).find(ic("mcs:4/80")) != std::string::npos);
+  const MaskAtlas* a = f.atlas(bar.debug_atlas_px());
+  REQUIRE(a != nullptr);
+  const int reserved = text_width(*a, GsCompactBar::worst_case(GsBarField::kMcs, 2).c_str());
+  for (const char* w : {"5", "10", "20", "40", "80"}) {
+    const std::string live = ic("mcs:9/") + w;
+    CHECK(text_width(*a, live.c_str()) <= reserved);
+  }
 }
 
 // radio.scan enabled on the GS: the channel carries an "(a)" suffix so the

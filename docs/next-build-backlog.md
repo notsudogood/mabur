@@ -493,8 +493,9 @@ busy, energy and re-arms NHM on the core thread, taking devourer's
 Fix: his `WindowSampler` -- a per-card sampler thread publishing a
 snapshot the core thread reads without blocking, plus a per-card
 device-use lock ordering it against teardown, bursts and dwells
-(`demand-refresh` e352ce81..b6493915, 2026-10-17). Port by merge once it is
-on his master (he is still on the branch); our `channel_core.{h,cpp}` and
+(`demand-refresh` e352ce81..b6493915, 2026-10-17), on his master since
+2026-10-18 (PR #85, master 5d642c0d). Port by merging his master; our
+`channel_core.{h,cpp}` and
 `radio_frontend` have diverged (80 MHz width jobs), so expect conflicts
 there. His numbers: 0.131 -> 0.019 stalls/s and queue-wait p99.9 11.7 ->
 6.0 ms with the window at 2000 ms. *Against it:* the residual 0.02/s is
@@ -522,9 +523,10 @@ drone, the GS and the hosted web GS together; conflicts with our genlock in
 `frame_regulator`, maburplay `main.cpp` and the drone's sensor writer (our
 `star6e_controls_apply_sensor_mfps` / `genlock_trim.h` against his boot trim
 plus offset). Merging his master also brings his Orange Pi GS work
-(v4l2req decode, colortrans CTM). Plan: wait for it on his master
-(`demand-refresh` 1164a9e9 today), merge, retire our genlock -- it is on in
-the bundles since 96959bcf, so the bundle default moves with it.
+(v4l2req decode, colortrans CTM). On his master since 2026-10-18 (PR #85,
+master 5d642c0d; 116 commits not in ours, ~30 files conflict in a trial
+merge). Plan: merge his master, retire our genlock -- it is on in the
+bundles since 96959bcf, so the bundle default moves with it.
 
 ## 13. Player OSD shows 80 MHz rungs as "/80" (done in code, ships with the next GS image)
 

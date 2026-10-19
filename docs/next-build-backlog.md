@@ -51,7 +51,9 @@ Ruled out by the operator (2026-10-18): switching the DRONE's RF width
 around a hop (hop at 40, widen after). Each 40 <-> 80 switch is a full
 retune, a pause on every ladder step in and out of 80. The drone stays at
 its configured width; the fix has to make the 80 MHz hop itself sound.
-Candidates in order: (a) the missing piece of the lean hop at 80, once the
+Revisited 2026-10-19: acceptable once the width switch is fast (item 14,
+which hops only at 40 and so makes this item moot); still ruled out with
+the full-path switch. Until item 14 lands, candidates in order: (a) the missing piece of the lean hop at 80, once the
 readout names it; (b) the chip firmware's own channel switch (H2C 0x1D)
 at 80 -- devourer gates it to 20/40 today, the vendor driver's 80 MHz
 support is unchecked; (c) the full path at 80 MHz hops only (never on
@@ -548,6 +550,61 @@ those keys, and `gop_s` 0.5) would run without them.
 Bench 2026-10-18: the bar's MCS cell read "4/40" while MCS4 flew at 80 MHz
 (the width was clamped to 20..40). Fixed in 0c27b8d5 with a test; display
 only, the link itself was at 80.
+
+## 14. Drone steps its own width 80 <-> 40 with a fast switch; hops only at 40 (agreed 2026-10-19)
+
+Why: the drone radio sits at 80 for the whole session, so its receiver
+hears the GS's 20 MHz control frames worse than it would at 40: ~1-1.5 dB
+on the GS cards (bench 2026-10-17, up to ~3 dB on one card; the drone
+itself not measured). That is the link whose 3 s silence drops the drone
+into failsafe at MCS0/20. Video on the 20/40 rungs gains ~0: the GS cards
+already sit at 40 there, and devourer's 8822E TX power has no tuned-width
+term (TX quality from an 80-tuned radio is unmeasured). Operator garage
+walk, 2026-10-19: the link fell to MCS0/20 where
+Gilang's all-40 build holds MCS0/40. That is a 4-6 dB gap; 80 MHz explains
+at most ~1.5 dB of it, so gate on the A/B first.
+
+Gate: the gs8 + d8 test doc's "Drone width checks" W3/W4 (drone at 80 vs
+40, same garage spot, failsafe seconds + time per rung). Build only if the
+drone at 40 holds a higher low rung or spends less time in failsafe.
+
+Parts:
+
+a. **devourer: a fast 40 <-> 80 width switch on the 8822E** (same block),
+   lean like `FastRetune`: RF18 centre + BW bits, RF 0x1a RXBB, BB
+   BW/primary, TX DFIR, AGC table, BB reset, no recalibration. Or the chip
+   firmware's channel switch (H2C 0x1D) with bw = 80, which devourer gates
+   to 20/40 today. Validate: register parity against the full path (like
+   `tests/hop_parity_check.sh` / `tests/fast_bw_parity.sh`), on-air dead
+   air, and delivery at 80 after a fast widen vs a full tune (the skipped
+   IQK is the risk). Estimate 2-5 ms typical: `FastRetune` dead air
+   measured 2.75 ms median / 7.1 ms max (8822B), ~2.3 ms (8822C); mabur's
+   GS cards timed `FastRetune` calls at 1.9-12 ms with one 44.7 ms. None
+   of that is a width change, none is on the drone's host (SSC338Q, 76-80
+   us per USB control transfer).
+b. **Drone: home width 40**, widen to 80 only for the 80 rungs and 80
+   probes, back to 40 after a hold (as the GS's 3 s). Switch right after a
+   frame's burst ends, so the dead air lands in idle air: one frame delayed
+   by up to the switch time, only when the ladder crosses 40/80.
+   Coordination stays loose (a wide receiver hears narrow frames): going
+   up, one GS card widens first (already does for probes), then the drone;
+   going down, the drone first, the GS cards after their hold.
+c. **Hops only at 40.** A hop ordered on an 80 rung steps to 40 first,
+   hops, then the ladder climbs back. Item 0's 80 MHz hop path is then
+   never used. 80 MHz exists only on 36 and 132 (devourer puts the 80 MHz
+   primary on a block's lowest channel; 52/100/116/149 blocks carry an
+   8822E spur and take the 65-91 ms full path), so on an escape pair
+   (140+144, 44+48, 124+128, ...) the ladder tops out at MCS4/40.
+d. **GS only, independent, no pause: cards narrow to 20 on the 20 rungs.**
+   ~0.5-1 dB on video there (SNR readout -0.8 / -1.1 dB tuned 40 vs 20,
+   near its ceiling; an earlier read 0.2-0.5 dB). The 20 -> 40 probe then
+   widens one card first, as the 80 probe does.
+
+Counterpart: none of it is built. Skipping recalibration may cost EVM at
+80. The drone's switch may be slower than the GS's. Hops at 40 were benched
+once (2026-09-15, before the 40/80 rungs) and never flown. With today's
+full-path switch (65-91 ms on the GS cards) the plan is a 4-5 frame pause
+per 40/80 crossing at 60 fps, which the operator ruled out.
 
 ## Proposed, not yet agreed
 

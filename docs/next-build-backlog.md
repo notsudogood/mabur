@@ -626,6 +626,8 @@ Gaps found while building gs8 / d8. Ask before scheduling.
   mask (`spur_eliminate_8822e`). Fix: cache that per-channel spur state and
   replay it in the lean path like the rest of the compose cache; validate
   with full-vs-fast register parity into and out of each spur channel.
+  It is ~25-40 BB register writes: est. +1-2 ms per switch batched like
+  the rest of the fast path (~5 ms one by one on the drone), unmeasured.
   Counterpart: whether the 8822E firmware adds its own notch there is
   uncharacterized, and the notch itself may cost capacity (the 149+153
   bench deficit, cause unconfirmed). Makes the DFS blocks 52/100/116 and

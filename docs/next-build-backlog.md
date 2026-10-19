@@ -618,6 +618,37 @@ Gaps found while building gs8 / d8. Ask before scheduling.
 - **Channel 149 at 80 MHz.** The 149-161 block is non-DFS but carries an
   8812EU spur at 155 (notched). A 5-minute bench run on 149 before adding
   it to the default set `[36, 132]`.
+- **devourer: fast hops and width switches on the 8822E spur channels**
+  (operator asked 2026-10-19). Today devourer refuses every fast path into
+  or out of a spur channel (80 MHz blocks 52, 100, 116, 149, 165; 40 MHz
+  pairs 52+56, 100+104, 116+120, 149+153, 157+161, 165+169; 20 MHz 153,
+  161, 169), because only the full path (65-91 ms) programs the notch + CSI
+  mask (`spur_eliminate_8822e`). Fix: cache that per-channel spur state and
+  replay it in the lean path like the rest of the compose cache; validate
+  with full-vs-fast register parity into and out of each spur channel.
+  Counterpart: whether the 8822E firmware adds its own notch there is
+  uncharacterized, and the notch itself may cost capacity (the 149+153
+  bench deficit, cause unconfirmed). Makes the DFS blocks 52/100/116 and
+  149 usable for hops and item 14's width switch.
+- **devourer: 80 MHz primary anywhere in the block** (operator asked
+  2026-10-19). `central_and_pri()` hardcodes the 80 MHz primary to the
+  block's lowest 20, so the 80 MHz rungs exist only on 36, 52, 100, 116,
+  132, 149. Fix: the right primary code per slot (the vendor's
+  `get_pri_ch_id`), plus mabur's `vht80_block_lowest` / `tuned_central`
+  and the 40-in-80 DATA_SC. Then an escape pair inside a clean block
+  (44+48, 140+144) keeps the 80 MHz rungs. Validate against the vendor
+  kernel's register state and with on-air decode by a third card.
+- **Channels above 165** (operator 2026-10-19: DFS and any channel are
+  their call). devourer's 8822E path tunes up to ch 253 (5000 + 5 x ch
+  MHz); TX+RX smoke-tested at ch 180 (5900 MHz), near-field, with the 8822E
+  receiving only. Above 177 TX power and per-channel constants are copied
+  from ch 177 (uncalibrated), the vendor spur table stops at 177
+  (uncharacterized, not clean), and the front end is built for <= 5.925
+  GHz. From ~ch 191 (5955 MHz) Wi-Fi 6E devices may share the air. 169 /
+  165+169 / the 165-177 block carry a spur; 173, 177 and 173+177 do not.
+  mabur's grid (`ht40_offset`, `vht80_block_lowest`) stops at 161/149, so
+  40/80 above 165 is a mabur change too. Bench first: TX power vs ch 132,
+  delivery at the same spot, and a scout of each candidate.
 - **A better-looking bottom rung.** MCS0/20 flies 1080p60 at 500 kb/s:
   robust but very blocky. A lower resolution or frame rate there would
   look better; costs a keyframe on every switch into or out of it.

@@ -28,6 +28,8 @@
 #include <shared_mutex>
 #include <string>
 #include <thread>
+#include <type_traits>
+#include <utility>
 #include <exception>
 #include <vector>
 
@@ -1203,6 +1205,21 @@ uint16_t open_usb_and_get_pid(uint16_t vid, uint16_t configured_pid,
   return 0;
 }
 
+// Gilang's devourer has DeviceConfig::Tuning::wide_tx_igi_floor (a DIG floor
+// it applies after the first >= 40 MHz frame); the devourer this tree pins
+// has no such floor at all, which is what setting it to 0 asks for. Set it
+// only where the field exists, so the 8812EU image builds against either.
+template <typename Tuning, typename = void>
+struct has_wide_tx_igi_floor : std::false_type {};
+template <typename Tuning>
+struct has_wide_tx_igi_floor<Tuning, std::void_t<decltype(std::declval<Tuning&>().wide_tx_igi_floor)>>
+    : std::true_type {};
+template <typename Tuning>
+[[maybe_unused]] void set_no_wide_tx_igi_floor(Tuning& t) {
+  if constexpr (has_wide_tx_igi_floor<Tuning>::value) t.wide_tx_igi_floor = 0;
+  else (void)t;
+}
+
 int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_path) {
   // Before libusb_init and the venc bring-up, so every thread either
   // library spawns inherits core 0; the hot thread claims core 1 itself.
@@ -1346,7 +1363,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   // a floor then (devourer measured one EU unit that clears at 0x2c, not
   // 0x20).
 #if defined(DEVOURER_HAVE_JAGUAR3_8822E) && !defined(DEVOURER_HAVE_JAGUAR3_8822C)
-  dev_cfg.tuning.wide_tx_igi_floor = 0;
+  set_no_wide_tx_igi_floor(dev_cfg.tuning);
 #endif
   // Pinned here now that devourer defaults both the other way. A multi-packet
   // bulk-OUT that times out mid-transfer wedges the 8822EU's TX endpoint for

@@ -40,6 +40,7 @@
 #include <pthread.h>
 #include <sched.h>  // cpu_set_t — see the core-placement policy below
 #include <sys/syscall.h>  // SYS_gettid
+#include <sys/resource.h>  // setpriority: the recorder threads' nice level
 #endif
 
 #include "air_clock.h"
@@ -823,6 +824,42 @@ int repin_inherited_threads(const char* comm, int cpu) {
   return 0;
 #endif
 }
+// Places every thread of this process named `comm` on `cpu` at nice
+// `nice_level` (0 = leave the priority). Idempotent, so it is safe to call
+// every second: the recorder's drain thread is re-created when the camera
+// pipeline restarts, and a fresh one would otherwise keep its creator's
+// placement. Returns the number of threads found.
+int place_threads_named(const char* comm, int cpu, int nice_level) {
+#if defined(__linux__)
+  int found = 0;
+  DIR* d = opendir("/proc/self/task");
+  if (!d) return 0;
+  while (dirent* e = readdir(d)) {
+    if (e->d_name[0] == '.') continue;
+    const long tid = std::atol(e->d_name);
+    char path[64], name[32] = {0};
+    std::snprintf(path, sizeof path, "/proc/self/task/%ld/comm", tid);
+    FILE* f = std::fopen(path, "r");
+    if (!f) continue;
+    if (!std::fgets(name, sizeof name, f)) name[0] = '\0';
+    std::fclose(f);
+    name[strcspn(name, "\n")] = '\0';
+    if (std::strcmp(name, comm) != 0) continue;
+    ++found;
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    CPU_SET(cpu, &set);
+    (void)sched_setaffinity(static_cast<pid_t>(tid), sizeof set, &set);
+    if (nice_level != 0) (void)setpriority(PRIO_PROCESS, static_cast<id_t>(tid), nice_level);
+  }
+  closedir(d);
+  return found;
+#else
+  (void)comm; (void)cpu; (void)nice_level;
+  return 0;
+#endif
+}
+
 bool two_core_target() {
 #if defined(__linux__)
   return sysconf(_SC_NPROCESSORS_ONLN) == 2;
@@ -2828,6 +2865,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     uint64_t last_hot_beat = 0, last_rx_beat = 0;
     uint64_t last_hot_change_ms = start, last_rx_change_ms = start;
     uint64_t last_stats_ms = start;
+    int rec_threads_placed = -1;  // recorder threads placed last tick (log on change)
 
     // T_TELEM: sent at ~1 Hz on this same periodic path, on the mutex-guarded
     // dev_sink.send() the MSP thread also uses. Radiotap and the
@@ -3027,6 +3065,21 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
         bool want_stats = g_sigusr1_flag.exchange(false);
         if (want_stats || now - last_stats_ms >= 1000) {
           last_stats_ms = now;
+          // Recorder threads: record.core + record.low_priority, re-applied
+          // each second (cheap: one /proc/self/task scan) so a drain thread
+          // re-created by a pipeline restart is caught too. Logged when the
+          // count of placed threads changes.
+          if (cfg.record.enable) {
+            const int rec_cpu = cfg.record.core == "hot" ? kHotCore : kRestCore;
+            const int rec_nice = cfg.record.low_priority ? 19 : 0;
+            const int placed = place_threads_named("mbr-rec", rec_cpu, rec_nice) +
+                               place_threads_named("mbr-recdrain", rec_cpu, rec_nice);
+            if (placed != rec_threads_placed) {
+              rec_threads_placed = placed;
+              std::fprintf(stderr, "maburd: recorder threads: %d on cpu%d, nice %d\n", placed,
+                           rec_cpu, rec_nice);
+            }
+          }
           unsigned snr_mhz = 0;
           int snr_off = 0;
 #ifdef MABUR_HAVE_VENC

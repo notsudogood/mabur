@@ -628,7 +628,8 @@ void parse_low_power(const Value& j, LowPowerCfg& lp) {
 }
 
 void parse_record(const Value& j, RecordCfg& r) {
-  check_known_keys(j, {"enable", "dir", "bitrate_kbps", "fps", "min_free_mb", "size"}, "record");
+  check_known_keys(j, {"enable", "dir", "bitrate_kbps", "fps", "min_free_mb", "size", "core",
+                       "low_priority"}, "record");
   if (j.contains("size"))
     parse_wxh(j, "record", r.width, r.height);
   else
@@ -638,6 +639,9 @@ void parse_record(const Value& j, RecordCfg& r) {
   assign_if_present(j, "bitrate_kbps", r.bitrate_kbps, "record");
   assign_if_present(j, "fps", r.fps, "record");
   assign_if_present(j, "min_free_mb", r.min_free_mb, "record");
+  assign_if_present(j, "core", r.core, "record");
+  assign_if_present(j, "low_priority", r.low_priority, "record");
+  if (r.core != "rest" && r.core != "hot") fail("record.core", "must be \"rest\" or \"hot\"");
   if (r.bitrate_kbps < 2000 || r.bitrate_kbps > 80000)
     fail("record.bitrate_kbps", "must be in [2000,80000]");
   if (r.dir.empty() || r.dir[0] != '/') fail("record.dir", "must be an absolute path");

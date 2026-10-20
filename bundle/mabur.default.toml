@@ -165,6 +165,8 @@ size         = "1920x1080"        # recording resolution, same aspect ratio as v
                                   # from venc.size (e.g. fly 1280x720, record 1920x1080). Above
                                   # 1920x1080 the whole camera drops to 30 fps (set venc.fps = 30)
                                   # and the live video lags badly, so 1920x1080 is the practical max
+core         = "rest"             # CPU of the two recorder threads: "rest" = CPU 0 (the old layout), "hot" = CPU 1 beside the video packer
+low_priority = true               # run them at the lowest priority: a busy CPU then drops recorded frames, never live video
 
 # Software NACK answers (base layer): how much sent video the drone keeps for
 # re-sending, and the air it may spend on re-sends.

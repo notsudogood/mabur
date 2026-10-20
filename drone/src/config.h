@@ -277,6 +277,13 @@ struct RecordCfg {
   // from the second VPE scaler (port 1) instead of the link's port 0; above
   // 1920x1080 the sensor switches to its 3840x2160@30 mode.
   int width = 0, height = 0;
+  // Placement of the two recorder threads (mbr-rec, mbr-recdrain): "rest"
+  // = CPU 0 beside the USB senders and FEC worker (the old layout), "hot" =
+  // CPU 1 beside the video packer. low_priority runs both at nice 19 so the
+  // live link's threads always preempt them: a busy core then costs
+  // recorded frames (the recorder's own drop counter), not the link.
+  std::string core = "rest";
+  bool low_priority = true;
 };
 
 // Software NACK (fec-nack): how long the drone keeps recently sent base-layer

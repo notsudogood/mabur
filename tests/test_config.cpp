@@ -1628,6 +1628,15 @@ TEST(record_defaults_are_disabled_and_parse) {
     CHECK(cfg.record.fps == 60);
     CHECK(cfg.record.min_free_mb == 512);
     CHECK(cfg.record.width == 0 && cfg.record.height == 0);  // follows venc.size
+    CHECK(cfg.record.core == "rest");     // the old placement
+    CHECK(cfg.record.low_priority);       // nice 19: the live link always preempts it
+    std::filesystem::remove(path);
+  }
+  {
+    auto path = write_temp_toml("[record]\ncore = \"hot\"\nlow_priority = false\n");
+    auto cfg = load_config(path.string());
+    CHECK(cfg.record.core == "hot");
+    CHECK(!cfg.record.low_priority);
     std::filesystem::remove(path);
   }
   {
@@ -1686,6 +1695,7 @@ TEST(record_ranges_are_checked) {
   CHECK(bad("[record]\nbitrate_kbps = 90000\n", "record.bitrate_kbps"));
   CHECK(bad("[record]\ndir = \"relative\"\n", "record.dir"));
   CHECK(bad("[record]\nmin_free_mb = -1\n", "record.min_free_mb"));
+  CHECK(bad("[record]\ncore = \"cpu2\"\n", "record.core"));
   // fps is checked against venc.fps only when the recorder is enabled.
   CHECK(bad("[venc]\nsensor_bin = \"/etc/sensors/x.bin\"\nfps = 60\n[record]\nenable = true\nfps = 90\n", "record.fps"));
   CHECK(bad("[venc]\nsensor_bin = \"/etc/sensors/x.bin\"\nfps = 60\n[record]\nenable = true\nfps = 0\n", "record.fps"));

@@ -409,6 +409,9 @@ struct RealActuator : mabur::Actuator {
     // edge of cal_active, so the ladder is correct again the instant video
     // resumes rather than waiting for the next RCF.
     if (!(cal_active && cal_active->load(std::memory_order_relaxed))) {
+      // Width first: a frame published at a width the radio is not tuned
+      // to would air garbled. Narrowing waits for width_tick's hold.
+      widen_for_op_(op);
       tx->set_ladder(op.ladder, op.probe_profile != rc::kNoProbeProfile
                                     ? std::optional<rc::LayerTxSpec>(op.probe)
                                     : std::nullopt);
@@ -528,7 +531,22 @@ struct RealActuator : mabur::Actuator {
   // writer: it runs on the agent thread.
   std::atomic<bool>* retune_waiting = nullptr;
   uint8_t cur = 0;  // set to start_ch where the actuator is configured
-  uint8_t width_mhz = 20;  // cfg.radio.width: the RF width the radio is tuned at
+  uint8_t width_mhz = 20;  // the RF width the radio is tuned at NOW (see width stepping below)
+  // Width stepping (radio.width_step, docs/next-build-backlog.md item 14):
+  // the radio sits at home_width and widens to what the flown or probed rung
+  // needs, up to max_width, BEFORE that rung's frames are published to the
+  // TX path; it narrows only once no rung has needed the width for
+  // width_hold_ms. A wide receiver hears narrow frames, so the drone is
+  // never narrower than a frame it sends. Agent thread only.
+  bool width_step = false;
+  uint8_t max_width = 20;        // cfg.radio.width
+  uint8_t home_width = 20;       // cfg.radio.home_width (stepping) or max_width
+  uint32_t width_hold_ms = 3000;
+  bool fast_hop_at_80 = false;   // cfg.radio.fast_hop_at_80
+  uint8_t op_need_w = 0;         // width the current op needs (0 = none applied yet)
+  uint64_t last_need_ms[3] = {0, 0, 0};  // last time 20 / 40 / 80 was needed
+  uint64_t width_switches = 0;
+  uint64_t width_switch_failed = 0;
   // Where the radio REALLY is (IRtlRadio::ReadTunedCentral), against what
   // `cur` at width_mhz should give (mabur::tuned_central). Bench 2026-10-18:
   // after hops at 80 MHz the drone went deaf to the GS while its own state
@@ -603,6 +621,7 @@ struct RealActuator : mabur::Actuator {
     // a bulk-OUT (devourer threading contract). ~2.4 ms on the 8812EU.
     const uint8_t from = cur;
     bool tx_power_ok = false;
+    bool hop_full = false;
     int rfc = -1;
     long long retune_us = 0;
     if (retune_waiting) retune_waiting->store(true, std::memory_order_release);
@@ -624,8 +643,32 @@ struct RealActuator : mabur::Actuator {
       // old channel before FastRetune reprograms it. Once-per-move 5 ms
       // TX stall.
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      // At 80 MHz the lean hop is the prime suspect for the after-hop
+      // deafness of backlog item 0, and at 40 it keeps the old pair side,
+      // off-grid for a channel on the other side: both take the full channel
+      // set (FastSetChannel, batched) unless radio.fast_hop_at_80. A channel
+      // with no 80 MHz block (outside the set; RcAgent only moves to
+      // members) drops to the home width rather than tuning off-grid.
+      if (width_mhz == 80 && !mabur::vht80_ok(ch)) {
+        std::fprintf(stderr, "maburd: retune %u -> %u: no 80 MHz block there, stepping to %u MHz\n",
+                     static_cast<unsigned>(from), static_cast<unsigned>(ch),
+                     static_cast<unsigned>(home_width < 80 ? home_width : 40));
+        width_mhz = home_width < 80 ? home_width : 40;
+        hop_full = true;
+      }
+      if (width_mhz == 40 && mabur::ht40_offset(ch) == 0) {
+        width_mhz = 20;
+        hop_full = true;
+      }
+      if (!fast_hop_at_80 &&
+          (width_mhz == 80 ||
+           (width_mhz == 40 && mabur::ht40_offset(ch) != mabur::ht40_offset(from))))
+        hop_full = true;
       const auto t_retune = std::chrono::steady_clock::now();
-      dev->FastRetune(ch, /*cache_rf=*/true);
+      if (hop_full)
+        dev->FastSetChannel(tune_for_(ch, width_mhz));
+      else
+        dev->FastRetune(ch, /*cache_rf=*/true);
       retune_us = std::chrono::duration_cast<std::chrono::microseconds>(
                       std::chrono::steady_clock::now() - t_retune)
                       .count();
@@ -670,9 +713,10 @@ struct RealActuator : mabur::Actuator {
                  tx_power_ok ? "ok" : "failed");
     const int want = mabur::tuned_central(ch, width_mhz);
     std::fprintf(stderr,
-                 "maburd: retune %u -> %u: radio at central %d, want %d (%s), FastRetune %.1f ms\n",
+                 "maburd: retune %u -> %u: radio at central %d, want %d (%s), %s at %u MHz %.1f ms\n",
                  static_cast<unsigned>(from), static_cast<unsigned>(ch), rfc, want,
                  rfc < 0 ? "unread" : rfc == want ? "ok" : "MISMATCH",
+                 hop_full ? "FastSetChannel" : "FastRetune", static_cast<unsigned>(width_mhz),
                  static_cast<double>(retune_us) / 1000.0);
     note_rf_central_(rfc);
   }
@@ -716,6 +760,114 @@ struct RealActuator : mabur::Actuator {
     const bool bad = rfc >= 0 && rfc != mabur::tuned_central(cur, width_mhz);
     if (bad) ++rf_mismatches;
     last_bad_central = bad ? rfc : -1;
+  }
+
+  static SelectedChannel tune_for_(uint8_t ch, uint8_t w) {
+    if (w == 80) return SelectedChannel{ch, 0, CHANNEL_WIDTH_80};
+    if (w == 40) return SelectedChannel{ch, mabur::ht40_offset(ch), CHANNEL_WIDTH_40};
+    return SelectedChannel{ch, 0, CHANNEL_WIDTH_20};
+  }
+  static int width_slot_(uint8_t w) { return w >= 80 ? 2 : w >= 40 ? 1 : 0; }
+
+  // The width an op needs: its widest layer, and its probe's when one runs,
+  // within [home_width, max_width].
+  uint8_t op_width_need_(const AppliedOp& op) const {
+    int w = std::max<int>(op.ladder[0].bw, op.ladder[1].bw);
+    if (op.probe_profile != rc::kNoProbeProfile) w = std::max<int>(w, op.probe.bw);
+    w = std::max<int>(w, home_width);
+    return static_cast<uint8_t>(std::min<int>(w, max_width));
+  }
+
+  void widen_for_op_(const AppliedOp& op) {
+    if (!width_step) return;
+    op_need_w = op_width_need_(op);
+    last_need_ms[width_slot_(op_need_w)] = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+    if (op_need_w > width_mhz) set_width_now_(op_need_w, "rung");
+  }
+
+  // From the agent loop: refresh the current op's need and narrow once the
+  // wider width has gone unneeded for width_hold_ms. Nothing during a
+  // calibration sweep (it owns the radio; its frames are HT20).
+  void width_tick(uint64_t now_ms) {
+    if (!width_step || !dev || op_need_w == 0) return;
+    if (cal_active && cal_active->load(std::memory_order_relaxed)) return;
+    last_need_ms[width_slot_(op_need_w)] = now_ms;
+    uint8_t held = home_width;
+    for (int i = 2; i >= 0; --i)
+      if (last_need_ms[i] != 0 && now_ms - last_need_ms[i] < width_hold_ms) {
+        held = static_cast<uint8_t>(std::max<int>(held, i == 2 ? 80 : i == 1 ? 40 : 20));
+        break;
+      }
+    held = static_cast<uint8_t>(std::min<int>(std::max<int>(held, op_need_w), max_width));
+    if (held < width_mhz) set_width_now_(held, "hold over");
+  }
+
+  // One width switch on the current primary, under tx_gate exclusive like
+  // a retune (devourer's control-plane contract). A switch that throws
+  // turns stepping off for the session and parks the radio at max_width,
+  // the d8-d10 behaviour, so a failure costs the ~1-1.5 dB the stepping
+  // was meant to win back, not the link.
+  void set_width_now_(uint8_t w, const char* why) {
+    if (!dev) {
+      std::fprintf(stderr, "[dry-run] width %u -> %u (%s)\n", static_cast<unsigned>(width_mhz),
+                   static_cast<unsigned>(w), why);
+      width_mhz = w;
+      return;
+    }
+    if ((w == 80 && !mabur::vht80_ok(cur)) || (w == 40 && mabur::ht40_offset(cur) == 0)) {
+      std::fprintf(stderr, "maburd: width %u -> %u MHz on ch %u refused: no such channel at that width\n",
+                   static_cast<unsigned>(width_mhz), static_cast<unsigned>(w),
+                   static_cast<unsigned>(cur));
+      return;
+    }
+    const uint8_t was = width_mhz;
+    bool ok = true;
+    int rfc = -1;
+    long long us = 0;
+    if (retune_waiting) retune_waiting->store(true, std::memory_order_release);
+    {
+      std::unique_lock<std::shared_mutex> g(*tx_gate);
+      // Give a frame the chip already accepted ~1 ms to leave the antenna
+      // at the old width (the retune's 5 ms is for the DISC Telem, which a
+      // width switch does not race).
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      const auto t0 = std::chrono::steady_clock::now();
+      try {
+        dev->FastSetChannel(tune_for_(cur, w));
+      } catch (const std::exception& e) {
+        ok = false;
+        std::fprintf(stderr, "maburd: width %u -> %u MHz FAILED: %s\n", static_cast<unsigned>(was),
+                     static_cast<unsigned>(w), e.what());
+      }
+      us = std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now() - t0)
+               .count();
+      if (ok) rfc = read_rf_central_();
+    }
+    if (retune_waiting) retune_waiting->store(false, std::memory_order_release);
+    if (!ok) {
+      ++width_switch_failed;
+      width_step = false;
+      if (was != max_width || w != max_width) {
+        std::fprintf(stderr, "maburd: width stepping off for this session; parking at %u MHz\n",
+                     static_cast<unsigned>(max_width));
+        width_mhz = was;
+        set_width_now_(max_width, "fallback");
+      }
+      return;
+    }
+    width_mhz = w;
+    ++width_switches;
+    const int want = mabur::tuned_central(cur, w);
+    std::fprintf(stderr,
+                 "maburd: width %u -> %u MHz on ch %u (%s) in %.1f ms: radio at central %d, want %d (%s)\n",
+                 static_cast<unsigned>(was), static_cast<unsigned>(w), static_cast<unsigned>(cur), why,
+                 static_cast<double>(us) / 1000.0, rfc, want,
+                 rfc < 0 ? "unread" : rfc == want ? "ok" : "MISMATCH");
+    note_rf_central_(rfc);
   }
 
   mabur::VtxRecorder* recorder = nullptr;  // null until the recorder exists
@@ -1410,6 +1562,9 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   // not.
   dev_cfg.tx.no_cancel_multipkt = true;
   dev_cfg.usb.rx_zerocopy = false;
+  // radio.batched_tune: width steps and full-set hops (FastSetChannel)
+  // batch their register writes; false = devourer's plain path.
+  dev_cfg.tuning.batched_chset = cfg.radio.batched_tune;
 
   WiFiDriver wifi_driver{logger};
   // mabur drives Realtek-only controls (TX-power tables, FastRetune, the
@@ -1444,6 +1599,10 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   // join keeps exactly that behaviour instead of turning it into a
   // std::terminate inside a thread.
   std::exception_ptr radio_init_error;
+  // radio.width_step: bring up at the home width and widen per rung
+  // (RealActuator::set_width_now_); otherwise at radio.width for the session.
+  const uint8_t boot_width =
+      cfg.radio.width_step ? std::min<uint8_t>(cfg.radio.home_width, cfg.radio.width) : cfg.radio.width;
   std::thread radio_init_thread([&]() {
     name_thread("mbr-radio-init");
     // Off core 0 for the duration of the bring-up. This thread inherits the
@@ -1457,13 +1616,13 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     if (two_core_target()) pin_self_to(kHotCore);
     try {
       const uint8_t ch = start_ch;
-      // 80: ch is the block's lowest 20 (channel_set_issue), which devourer
-      // makes the primary; 20 and 40 MHz rungs ride that primary and the
-      // block's lower 40 inside the 80 tune (bench 2026-10-17: all three
-      // widths arrived in equal counts at an 80-tuned GS card).
-      rtl_device->InitWrite(cfg.radio.width == 80   ? SelectedChannel{ch, 0, CHANNEL_WIDTH_80}
-                            : cfg.radio.width == 40 ? SelectedChannel{ch, mabur::ht40_offset(ch), CHANNEL_WIDTH_40}
-                                                    : SelectedChannel{ch, 0, CHANNEL_WIDTH_20});
+      // 80: ch is the primary, any 20 of its block (channel_set_issue);
+      // 20 and 40 MHz rungs ride that primary and its own 40 inside the 80
+      // tune (bench 2026-10-17, primary on the lowest 20: all three widths
+      // arrived in equal counts at an 80-tuned GS card).
+      rtl_device->InitWrite(boot_width == 80   ? SelectedChannel{ch, 0, CHANNEL_WIDTH_80}
+                            : boot_width == 40 ? SelectedChannel{ch, mabur::ht40_offset(ch), CHANNEL_WIDTH_40}
+                                               : SelectedChannel{ch, 0, CHANNEL_WIDTH_20});
     } catch (...) {
       radio_init_error = std::current_exception();
     }
@@ -1553,7 +1712,12 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   actuator.tx_gate = &tx_gate;
   actuator.retune_waiting = &retune_waiting;
   actuator.cur = start_ch;
-  actuator.width_mhz = cfg.radio.width;
+  actuator.width_mhz = boot_width;
+  actuator.max_width = cfg.radio.width;
+  actuator.width_step = cfg.radio.width_step && boot_width < cfg.radio.width;
+  actuator.home_width = actuator.width_step ? cfg.radio.home_width : cfg.radio.width;
+  actuator.width_hold_ms = static_cast<uint32_t>(cfg.radio.width_hold_ms);
+  actuator.fast_hop_at_80 = cfg.radio.fast_hop_at_80;
   actuator.ldpc = cfg.radio.ldpc;
   // Encoder starts at the "normal" ROI QP (RcAgent only calls set_roi_qp on
   // a low<->normal transition — see run_bitrate_policy's roi_low_ default),
@@ -3061,6 +3225,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
         }
 
         actuator.check_rf_central(now);
+        actuator.width_tick(now);
 
         bool want_stats = g_sigusr1_flag.exchange(false);
         if (want_stats || now - last_stats_ms >= 1000) {
@@ -3094,7 +3259,8 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
                        "stats: state=%d hot_beat=%llu rx_beat=%llu seq=%u sent=%llu drops=%llu "
                        "txq=%zu txq_drop=%llu "
                        "thermal_delta=%d tx_failed=%llu venc_verb_fail=%llu "
-                       "enc_pk100=%uk lp=%d armed=%d snr_mhz=%u snr_off=%d ch=%u rfc=%d rf_bad=%llu\n",
+                       "enc_pk100=%uk lp=%d armed=%d snr_mhz=%u snr_off=%d ch=%u rfc=%d rf_bad=%llu "
+                       "w=%u wsw=%llu wsw_fail=%llu\n",
                        static_cast<int>(agent.state()), static_cast<unsigned long long>(hb),
                        static_cast<unsigned long long>(rb), tx.seq(),
                        static_cast<unsigned long long>(tx.sent()),
@@ -3107,7 +3273,10 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
                        static_cast<int>(agent.low_power()), static_cast<int>(agent.armed_latched()),
                        snr_mhz, snr_off,
                        static_cast<unsigned>(actuator.cur), actuator.last_rf_central,
-                       static_cast<unsigned long long>(actuator.rf_mismatches));
+                       static_cast<unsigned long long>(actuator.rf_mismatches),
+                       static_cast<unsigned>(actuator.width_mhz),
+                       static_cast<unsigned long long>(actuator.width_switches),
+                       static_cast<unsigned long long>(actuator.width_switch_failed));
         }
 
         // Telemetry suppression: non-sweep PPDUs in the airtime a calibration
@@ -3131,9 +3300,9 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   });
 
 
-  // radio.width is honoured by the InitWrite above: 40 tunes the standard
-  // pair via ht40_offset; FastRetune keeps width and offset across every
-  // later hop.
+  // radio.width (or radio.home_width with radio.width_step) is honoured by
+  // the InitWrite above: 40 tunes the standard pair via ht40_offset. Later
+  // hops keep the width; RealActuator::retune_now_ picks the hop path.
 
   // TX bring-up must be complete before anything transmits. InitWrite (on
   // radio_init_thread, started right after CreateRadio above) runs the
@@ -3216,15 +3385,10 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
                    "warning: SetTxPowerRateDiffs failed; power_mode=offset "
                    "falls back to the chip's default TX power\n");
     }
-    // The custom table covers HT MCS0-7 only; devourer leaves every VHT
-    // rate at the anchor, MCS7's stock level (src/TxPower.h). The 80 MHz
-    // rungs are VHT, so they fly 3-4 dB under stock (VHT MCS3 +4 dB, MCS4
-    // +3 dB over MCS7 in the 8822E table) until the table covers VHT.
-    if (cfg.radio.width == 80)
-      std::fprintf(stderr,
-                   "warning: power_mode = \"offset\" with radio.width = 80: the 80 MHz (VHT) "
-                   "rungs fly at MCS7's power, 3-4 dB under stock; use power_mode = \"none\" "
-                   "for 80 MHz\n");
+    // The custom table covers HT MCS0-7; devourer gives VHT 1SS MCS0-7 the
+    // same diffs and MCS8/9 MCS7's (src/TxPower.h), so the 80 MHz (VHT)
+    // rungs are shaped like the 20/40 ones. The walls were measured on HT
+    // frames: a VHT frame's own wall is unmeasured.
   }
 
   // A-MPDU TX aggregation is NOT programmed here: the mode follows the ladder

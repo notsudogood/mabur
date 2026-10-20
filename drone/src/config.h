@@ -16,6 +16,22 @@ struct RadioCfg {
   uint16_t usb_vid = 0x0bda;
   uint16_t usb_pid = 0;  // 0 = scan
   uint8_t width = 20;
+  // Width stepping (docs/next-build-backlog.md item 14): the radio sits at
+  // home_width and widens to the flown/probed rung's width (up to `width`)
+  // only while one needs it, back after width_hold_ms. Each step is
+  // devourer's FastSetChannel on the same primary (batched, est. a few ms on
+  // this host, unmeasured). false = the radio stays at `width` for the
+  // session, as d8-d10 did.
+  bool width_step = false;
+  uint8_t home_width = 40;
+  int width_hold_ms = 3000;
+  // Hops: false = at 80 MHz, or when the 40 MHz pair side changes, a hop is
+  // the full channel set (FastSetChannel) -- the 80 MHz lean hop is the
+  // prime suspect for backlog item 0. true = every hop is FastRetune.
+  bool fast_hop_at_80 = false;
+  // devourer's batched channel set (tuning.batched_chset) for the width
+  // steps and full-set hops; false = one USB round trip per register.
+  bool batched_tune = true;
   // The channel set: the drone parks on the remembered member (else the
   // first) and follows the GS to any member. Must be a superset of the GS's
   // list.

@@ -127,13 +127,14 @@ std::array<mabur::UepLayerCfg, 2> Config::uep_layers() const {
 std::optional<ConfigIssue> radio_width_issue(uint8_t channel, int width) {
   if (width != 20 && width != 40 && width != 80)
     return ConfigIssue{"radio.width", "must be 20, 40 or 80"};
-  // 80 = the cards sit at 40 on the block's lower 40 and widen to 80 only
+  // 80 = the cards sit at 40 on the primary's own pair and widen to 80 only
   // while an 80 MHz rung is flown or probed (width_policy.h); the channel
-  // must be the block's lowest 20 (channel_set_issue checks the set).
-  if (width == 80 && !mabur::vht80_block_lowest(channel))
-    return ConfigIssue{"radio.width", "80 MHz needs the lowest channel of an 80 MHz block "
-                                      "(36 52 100 116 132 149) and channel " +
-                                          std::to_string(static_cast<int>(channel)) + " is not one"};
+  // must be in an 80 MHz block, any of its four 20s (channel_set_issue
+  // checks the set).
+  if (width == 80 && !mabur::vht80_ok(channel))
+    return ConfigIssue{"radio.width", "80 MHz needs a channel in an 80 MHz block "
+                                      "(36-64, 100-144, 149 up, every 4th) and channel " +
+                                          std::to_string(static_cast<int>(channel)) + " is in none"};
   if (width == 40 && mabur::ht40_offset(channel) == 0)
     return ConfigIssue{"radio.width", "40 MHz needs a standard 5 GHz pair and channel " +
                                           std::to_string(static_cast<int>(channel)) +
@@ -185,8 +186,12 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
   bool radio_cards_absent = false;
   if (j.contains("radio")) {
     const Value& r = j["radio"];
-    check_keys(r, "radio", {"channel", "channels", "width", "cards", "tx_card", "scan", "relays"});
+    check_keys(r, "radio", {"channel", "channels", "width", "cards", "tx_card", "scan", "relays",
+                            "narrow_20", "fast_hop_at_80", "batched_tune"});
     c.radio.width = static_cast<uint8_t>(get_int(r, "width", 20, 20, 80, "radio"));
+    c.radio.narrow_20 = get_bool(r, "narrow_20", c.radio.narrow_20, "radio");
+    c.radio.fast_hop_at_80 = get_bool(r, "fast_hop_at_80", c.radio.fast_hop_at_80, "radio");
+    c.radio.batched_tune = get_bool(r, "batched_tune", c.radio.batched_tune, "radio");
     if (r.contains("channels")) {
       g_line = r["channels"].line();
       if (!r["channels"].is_array()) fail("radio.channels", "not an array");
@@ -194,7 +199,8 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
       for (const Value& v : r["channels"]) {
         if (!v.is_number_integer()) fail("radio.channels", "not an integer");
         const long ch = v.get<int64_t>();
-        if (ch < 1 || ch > 177) fail("radio.channels", "must be in [1,177]");
+        if (ch < 1 || ch > mabur::kMaxChannel)
+          fail("radio.channels", "must be in [1," + std::to_string(mabur::kMaxChannel) + "]");
         c.radio.channels.push_back(static_cast<uint8_t>(ch));
       }
     } else {
@@ -213,7 +219,9 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
       } else if (cv.is_number_integer()) {
         const int64_t ch = cv.get<int64_t>();
         // Range first: the uint8_t cast wraps (296 -> 40, a member).
-        if (ch < 1 || ch > 177) fail("radio.channel", std::to_string(ch) + " is not a channel in [1,177]");
+        if (ch < 1 || ch > mabur::kMaxChannel)
+          fail("radio.channel", std::to_string(ch) + " is not a channel in [1," +
+                                    std::to_string(mabur::kMaxChannel) + "]");
         if (!mabur::channel_set_member(c.radio.channels, static_cast<uint8_t>(ch)))
           fail("radio.channel", std::to_string(ch) + " is not a member of radio.channels");
         c.radio.pin = static_cast<uint8_t>(ch);

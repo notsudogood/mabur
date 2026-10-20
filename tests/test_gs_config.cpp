@@ -691,10 +691,10 @@ TEST(radio_width_is_20_40_or_80_and_each_needs_its_channels) {
   try { maburgs::load_config(write_tmp("[radio]\nwidth = 60\n")); }
   catch (const std::exception& e) { threw = std::string(e.what()).find("radio.width") != std::string::npos; }
   CHECK(threw);
-  // 80 needs every channel to be an 80 MHz block's lowest 20 (the VHT80
-  // primary devourer tunes): 40 sits inside the 36-48 block.
+  // 80 needs every channel inside an 80 MHz block (any 20 may be the
+  // primary devourer tunes); 68 is in none.
   threw = false;
-  try { maburgs::load_config(write_tmp("[radio]\nchannels = [36, 40]\nwidth = 80\n")); }
+  try { maburgs::load_config(write_tmp("[radio]\nchannels = [36, 68]\nwidth = 80\n")); }
   catch (const std::exception& e) {
     threw = std::string(e.what()).find("radio.channels") != std::string::npos &&
             std::string(e.what()).find("80 MHz block") != std::string::npos;
@@ -703,10 +703,10 @@ TEST(radio_width_is_20_40_or_80_and_each_needs_its_channels) {
   threw = false;
   // A channel-set member with no 40 MHz pair is caught by channel_set_issue
   // on radio.channels now, not a bare radio.channel pin check.
-  try { maburgs::load_config(write_tmp("[radio]\nchannels = [165]\nwidth = 40\n")); }
+  try { maburgs::load_config(write_tmp("[radio]\nchannels = [38]\nwidth = 40\n")); }
   catch (const std::exception& e) {
     threw = std::string(e.what()).find("radio.channels") != std::string::npos &&
-            std::string(e.what()).find("165") != std::string::npos;
+            std::string(e.what()).find("38") != std::string::npos;
   }
   CHECK(threw);
 }
@@ -716,10 +716,12 @@ TEST(width_issue_helpers_match_the_loader) {
   // helpers; load_config's radio.width / ladder checks go through them.
   CHECK(!maburgs::radio_width_issue(136, 40));
   CHECK(!maburgs::radio_width_issue(165, 20));
-  auto e = maburgs::radio_width_issue(165, 40);
+  CHECK(!maburgs::radio_width_issue(165, 40));   // 165+169 (UNII-4)
+  auto e = maburgs::radio_width_issue(38, 40);
   REQUIRE(e.has_value());
-  CHECK(e->field == "radio.width" && e->why.find("165") != std::string::npos);
-  CHECK(maburgs::radio_width_issue(136, 80).has_value());
+  CHECK(e->field == "radio.width" && e->why.find("38") != std::string::npos);
+  CHECK(!maburgs::radio_width_issue(136, 80));   // any 20 of the 132-144 block
+  CHECK(maburgs::radio_width_issue(68, 80).has_value());
   maburgs::LinkCfg link;
   CHECK(!maburgs::link_width_issue(link, 20));   // default ladder is all 20
   link.ladder_cfg.ladder.back().bw = 40;

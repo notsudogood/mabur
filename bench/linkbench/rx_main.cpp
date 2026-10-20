@@ -34,7 +34,7 @@ using namespace linkbench;
 struct Args {
   int channel = 149;
   // 20, 40 (channel = primary; secondary per mabur::ht40_offset), or 80
-  // (channel = the block-lowest 20, mabur::vht80_block_lowest).
+  // (channel = any 20 of an 80 MHz block, the primary; mabur::vht80_ok).
   int bw = 20;
   int card = 0;
   uint16_t usb_vid = 0x0bda, usb_pid = 0;
@@ -130,9 +130,9 @@ bool parse_args(int argc, char** argv, Args* a) {
     else if (k == "--usb-pid") { int v; if (!next(&v)) return false; a->usb_pid = static_cast<uint16_t>(v); }
     else { return false; }
   }
-  if (a->bw == 80 && !mabur::vht80_block_lowest(static_cast<uint8_t>(a->channel))) {
-    std::fprintf(stderr, "error: --bw 80 needs the lowest channel of an 80 MHz block "
-                         "(36 52 100 116 132 149)\n");
+  if (a->bw == 80 && !mabur::vht80_ok(static_cast<uint8_t>(a->channel))) {
+    std::fprintf(stderr, "error: --bw 80 needs a channel in an 80 MHz block "
+                         "(36-64, 100-144, 149 up, every 4th)\n");
     return false;
   }
   return true;

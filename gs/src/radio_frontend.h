@@ -68,6 +68,9 @@ class RadioFrontend : public LinkCard {
     // (UepDecoder::block_payload), so the core loop does not do it for
     // every card's copy in series. 0 = leave it to the decoder.
     std::array<int, 2> sbi_block_payload{0, 0};
+    // radio.fast_hop_at_80 / radio.batched_tune (config.h).
+    bool fast_hop_at_80 = false;
+    bool batched_tune = true;
   };
 
   RadioFrontend(Cfg cfg, BodyQueue& out);
@@ -89,11 +92,16 @@ class RadioFrontend : public LinkCard {
   bool can_scout() const override { return true; }
 
   // ScoutRadio interface: the scout thread's control plane on this card.
-  bool retune(uint8_t ch) override;                 // FastRetune; false pre-ready
-  // Full SetMonitorChannel to `ch` at `width_mhz` (20|40; 80 is bench-only,
-  // ch the block-lowest 20, for linkbench-rx --bw 80): the boot scout
-  // card joining the 40 MHz link once the pick freezes (docs/bw40.md "Boot scan scores every half").
-  // Tens of ms, once per process. False when 40 has no pair (nothing
+  // FastRetune, or at 80 MHz (or a 40 MHz pair-side change) the full
+  // channel set via FastSetChannel unless cfg.fast_hop_at_80; false
+  // pre-ready.
+  bool retune(uint8_t ch) override;
+  // Full channel set (FastSetChannel: batched with cfg.batched_tune, else
+  // devourer's plain SetMonitorChannel path) to `ch` at `width_mhz`
+  // (20|40|80; at 80 ch is the primary, any 20 of its block): the boot
+  // scout card joining the 40 MHz link once the pick freezes (docs/bw40.md
+  // "Boot scan scores every half"), and the per-rung width switches
+  // (width_policy.h). False when the width has no channel there (nothing
   // recorded) or pre-ready -- the width is then still recorded as desired,
   // so the next open_and_start() comes up at it (width_resync.h).
   bool set_width(uint8_t ch, uint8_t width_mhz) override;

@@ -157,7 +157,7 @@ struct Stats {
 std::string stats_json(const Stats& s);
 
 // Validates the page's channel set/start/width with the shared rules: width
-// 20|40; the set 1-8 unique members in [1,177], at width 40 every member an
+// 20|40; the set 1-8 unique members in [1,kMaxChannel], at width 40 every member an
 // HT40 pair primary on one offset (mabur::channel_set_issue); start_ch a
 // member; in pinned mode start_ch == the pin; GS mode additionally no 40 MHz
 // rung while tuned 20 (maburgs::link_width_issue). Spotter only listens, so

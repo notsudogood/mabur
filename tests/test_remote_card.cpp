@@ -183,11 +183,11 @@ TEST(frames_dropped_while_not_owned_and_tuned) {
 }
 
 TEST(own_air_width_follows_tuned_sec_not_commanded_width) {
-  Rig r(165, 40);                              // 165 has no HT40 pair: sec 0, the relay tunes 20 MHz
+  Rig r(38, 40);                               // 38 is off the pair grid: sec 0, the relay tunes 20 MHz
   REQUIRE(r.card->open_and_start());
-  r.t().push(status(0, 165, 0, 1));
+  r.t().push(status(0, 38, 0, 1));
   REQUIRE(r.soon([&] { return r.card->ready(); }));
-  r.t().push(frame(1, 165, kFlagPhyValid, 4));
+  r.t().push(frame(1, 38, kFlagPhyValid, 4));
   REQUIRE(r.soon([&] { return r.card->frames().own == 1; }));
   OwnAirAcc at20;
   at20.on_frame(29, 4, true, 20, false, false);

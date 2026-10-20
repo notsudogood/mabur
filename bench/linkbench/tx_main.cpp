@@ -46,7 +46,7 @@ using namespace linkbench;
 struct Args {
   int channel = 149;
   // 20, 40 (channel = primary; secondary per mabur::ht40_offset), or 80
-  // (channel = the block-lowest 20, mabur::vht80_block_lowest).
+  // (channel = any 20 of an 80 MHz block, the primary; mabur::vht80_ok).
   int bw = 20;
   int mcs = 5;  // HT 0..7; 0..9 when every frame is VHT (80 MHz or --vht)
   // --vht: VHT 1SS radiotap for 20/40 MHz frames too. 80 MHz frames are
@@ -248,9 +248,9 @@ bool parse_args(int argc, char** argv, Args* a) {
     std::fprintf(stderr, "error: --frame-bw wider than the --bw tuning\n");
     return false;
   }
-  if (a->bw == 80 && !mabur::vht80_block_lowest(static_cast<uint8_t>(a->channel))) {
-    std::fprintf(stderr, "error: --bw 80 needs the lowest channel of an 80 MHz block "
-                         "(36 52 100 116 132 149)\n");
+  if (a->bw == 80 && !mabur::vht80_ok(static_cast<uint8_t>(a->channel))) {
+    std::fprintf(stderr, "error: --bw 80 needs a channel in an 80 MHz block "
+                         "(36-64, 100-144, 149 up, every 4th)\n");
     return false;
   }
   if (a->bw == 40 && mabur::ht40_offset(static_cast<uint8_t>(a->channel)) == 0) {

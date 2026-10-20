@@ -40,7 +40,9 @@ ChannelCore::ChannelCore(ChannelCoreCfg cfg, std::vector<LinkCard*> cards, VrxCo
       hopc_(cfg_.hop),
       cur_ch_(static_cast<size_t>(n_cards_), cfg_.start_ch),
       home_w_(home_width(cfg_.radio.width)),
-      width_dynamic_(cfg_.radio.width == 80),
+      floor_w_(cfg_.radio.narrow_20 ? 20 : home_width(cfg_.radio.width)),
+      max_w_(cfg_.radio.width),
+      width_dynamic_(cfg_.radio.width == 80 || (cfg_.radio.narrow_20 && cfg_.radio.width >= 40)),
       can_widen_(static_cast<size_t>(n_cards_), false),
       width_fail_want_(static_cast<size_t>(n_cards_), 0),
       energy_last_(static_cast<size_t>(n_cards_)),
@@ -813,15 +815,17 @@ void ChannelCore::step_width_resync_() {
   if (!width_resync_open(!scout_owns_(), scout_ != nullptr, /*scout_frozen=*/!boot_pick_.open())) return;
   if (width_job_) return;   // one switch in flight at a time
   if (width_thread_.joinable()) width_thread_.join();
-  // What the cards should be: the home width, plus (radio.width 80) one or
-  // all cards at 80 while an 80 MHz rung is probed or flown.
-  const WideNeed raw = width_dynamic_ ? wide_need(in_session_, op_bw_, probe_bw_) : WideNeed::None;
-  wide_need_ = held_need(wide_hold_, raw, now_ms_cur_, kWideHoldMs);
-  probe_card_ = wide_need_ == WideNeed::None
-                    ? -1
-                    : pick_probe_card(can_widen_, tx_card_now_.load(), probe_card_);
-  probe_wide_.store(wide_need_ == WideNeed::Probe, std::memory_order_relaxed);
-  const std::vector<uint8_t> want = width_targets(wide_need_, can_widen_, probe_card_, home_w_, 80);
+  // What the cards should be: every card at the flown rung's width, one at
+  // the probed rung's when that is wider, within [floor_w_, max_w_]; the
+  // home width outside a session.
+  const WidthNeed raw = width_dynamic_
+                            ? width_need(in_session_, op_bw_, probe_bw_, home_w_, floor_w_, max_w_)
+                            : WidthNeed{home_w_, home_w_};
+  width_need_ = held_width_need(width_hold_, raw, now_ms_cur_, kWideHoldMs);
+  const bool probe_wider = width_need_.probe > width_need_.all;
+  probe_card_ = probe_wider ? pick_probe_card(can_widen_, tx_card_now_.load(), probe_card_) : -1;
+  probe_wide_.store(probe_wider, std::memory_order_relaxed);
+  const std::vector<uint8_t> want = width_targets(width_need_, can_widen_, probe_card_, home_w_);
   std::vector<uint8_t> cur(static_cast<size_t>(n_cards_));
   std::vector<bool> eligible(static_cast<size_t>(n_cards_));
   for (int i = 0; i < n_cards_; ++i) {
@@ -906,7 +910,9 @@ void ChannelCore::drain_width_done_() {
     } else {
       width_fail_want_[k] = d.want;
     }
-    const char* why = d.want == home_w_ ? "home" : wide_need_ == WideNeed::All ? "80 MHz rung" : "80 MHz probe";
+    const char* why = !in_session_ ? "home"
+                      : d.card == probe_card_ && width_need_.probe > width_need_.all ? "probe"
+                                                                                     : "rung";
     sink_.log(logf_("maburgs radio: card %d width -> %u MHz on ch %u %s in %llu ms (%s)", d.card,
                     static_cast<unsigned>(d.want), static_cast<unsigned>(d.ch),
                     d.ok ? "done" : "FAILED", static_cast<unsigned long long>(d.us / 1000), why));
@@ -962,8 +968,8 @@ void ChannelCore::inflight_body_() {
   if (!in_session_atomic_.load() || cal_running_atomic_.load() || hopping_atomic_.load() ||
       scout_working_atomic_.load() || n_cards_ < 2)
     return;
-  // One card is wide for an 80 MHz probe and is the only one that can hear
-  // it: a dwell would punch holes in the probe and fail it.
+  // One card is wider for a probe and is the only one that can hear it: a
+  // dwell would punch holes in the probe and fail it.
   if (probe_wide_.load()) return;
   // hop.scout_fast_rungs / scout_better_margin_db (set per verdict window).
   if (scout_pause_.load(std::memory_order_relaxed) != 0) return;

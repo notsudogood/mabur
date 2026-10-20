@@ -9,12 +9,13 @@ using namespace maburgs;
 
 static_assert(mabur::ht40_pair_other(136) == 132 && mabur::ht40_pair_other(132) == 136, "132+136");
 static_assert(mabur::ht40_pair_other(144) == 140 && mabur::ht40_pair_other(40) == 36, "");
-static_assert(mabur::ht40_pair_other(128) == 124 && mabur::ht40_pair_other(165) == 0, "");
+static_assert(mabur::ht40_pair_other(128) == 124 && mabur::ht40_pair_other(165) == 169, "");
+static_assert(mabur::ht40_pair_other(146) == 0, "off grid");
 
 TEST(half_set_is_both_halves_of_home_and_candidates_in_config_order) {
   const std::vector<uint8_t> want = {132, 136, 140, 144, 36, 40, 124, 128};
   CHECK(scan_half_set({136, 144, 40, 128}) == want);
-  CHECK(scan_half_set({136, 165}).size() == 2);   // no pair: skipped (config rejects it anyway)
+  CHECK(scan_half_set({136, 38}).size() == 2);    // no pair: skipped (config rejects it anyway)
   CHECK(scan_half_set({136, 132}).size() == 2);   // same pair as home: deduplicated
 }
 

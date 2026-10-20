@@ -85,13 +85,25 @@ void assign_if_present(const Value& j, const char* key, T& out,
 void parse_radio(const Value& j, RadioCfg& r) {
   check_known_keys(j, {"usb_vid", "usb_pid", "channels", "width",
                         "power_mode", "tx_threads", "tx_threads_hot", "rate_walls_rel",
-                        "legacy_wall_rel", "wall_margin_db", "ldpc"},
+                        "legacy_wall_rel", "wall_margin_db", "ldpc", "width_step",
+                        "home_width", "width_hold_ms", "fast_hop_at_80", "batched_tune"},
                    "radio");
   assign_if_present(j, "usb_vid", r.usb_vid, "radio");
   assign_if_present(j, "usb_pid", r.usb_pid, "radio");
   assign_if_present(j, "width", r.width, "radio");
   if (r.width != 20 && r.width != 40 && r.width != 80)
-    fail("radio.width", "must be 20, 40 or 80 (80 = tuned VHT80 on the block's lowest 20)");
+    fail("radio.width", "must be 20, 40 or 80 (80 = tuned VHT80, any 20 of the block the primary)");
+  assign_if_present(j, "width_step", r.width_step, "radio");
+  assign_if_present(j, "home_width", r.home_width, "radio");
+  assign_if_present(j, "width_hold_ms", r.width_hold_ms, "radio");
+  assign_if_present(j, "fast_hop_at_80", r.fast_hop_at_80, "radio");
+  assign_if_present(j, "batched_tune", r.batched_tune, "radio");
+  if (r.home_width != 20 && r.home_width != 40)
+    fail("radio.home_width", "must be 20 or 40");
+  if (r.width_step && r.home_width > r.width)
+    fail("radio.home_width", "must not be wider than radio.width");
+  if (r.width_hold_ms < 0 || r.width_hold_ms > 60000)
+    fail("radio.width_hold_ms", "must be in [0,60000]");
   if (j.contains("channels")) {
     const Value& a = j["channels"];
     if (!a.is_array()) fail("radio.channels", "not an array");
@@ -99,7 +111,8 @@ void parse_radio(const Value& j, RadioCfg& r) {
     for (const Value& v : a) {
       if (!v.is_number_integer()) fail("radio.channels", "not an integer");
       const long ch = v.get<int64_t>();
-      if (ch < 1 || ch > 177) fail("radio.channels", "must be in [1,177]");
+      if (ch < 1 || ch > mabur::kMaxChannel)
+        fail("radio.channels", "must be in [1," + std::to_string(mabur::kMaxChannel) + "]");
       r.channels.push_back(static_cast<uint8_t>(ch));
     }
   } else {

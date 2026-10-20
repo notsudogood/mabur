@@ -219,15 +219,19 @@ class ChannelCore {
 
   // ---- per-card bookkeeping (core thread) ----
   std::vector<uint8_t> cur_ch_;
-  // Card widths (width_policy.h): home width, the 80 MHz option, and which
-  // cards can take it. width_fail_want_[i] = a target that failed on card i
-  // (not retried until the target changes or the card reopens; 0 = none).
+  // Card widths (width_policy.h): home width, the range a card may switch
+  // over (floor 20 with radio.narrow_20, else home; max radio.width), and
+  // which cards can switch. width_fail_want_[i] = a target that failed on
+  // card i (not retried until the target changes or the card reopens; 0 =
+  // none).
   uint8_t home_w_ = 20;
+  uint8_t floor_w_ = 20;
+  uint8_t max_w_ = 20;
   bool width_dynamic_ = false;
   std::vector<bool> can_widen_;
   std::vector<uint8_t> width_fail_want_;
-  WideHold wide_hold_;
-  WideNeed wide_need_ = WideNeed::None;
+  WidthHold width_hold_;
+  WidthNeed width_need_;
   int probe_card_ = -1;
   int op_bw_ = 0, probe_bw_ = 0;
   bool in_session_ = false;
@@ -239,7 +243,7 @@ class ChannelCore {
   std::thread width_thread_;
   std::mutex width_mu_;
   std::vector<WidthDone> width_done_;
-  std::atomic<bool> probe_wide_{false};           // one card wide for a probe: no in-flight dwells
+  std::atomic<bool> probe_wide_{false};           // one card wider for a probe: no in-flight dwells
   std::atomic<bool> width_pending_{false};        // a switch thread owns dwell_busy_/dwell_card_
   void run_width_switch_(int card, uint8_t want);
   void drain_width_done_();

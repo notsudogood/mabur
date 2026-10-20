@@ -574,19 +574,19 @@ TEST(channel_width_override_validation) {
   CHECK(channel_width_error(c, Mode::Gs, 0, 20).has_value());
   CHECK(channel_width_error(c, Mode::Gs, 201, 20).has_value());
   CHECK(channel_width_error(c, Mode::Spotter, 136, 80).has_value());
-  c.radio.channels = {165};
-  auto e = channel_width_error(c, Mode::Spotter, 165, 40);   // no HT40 pair: the set check says so
+  c.radio.channels = {38};
+  auto e = channel_width_error(c, Mode::Spotter, 38, 40);   // no HT40 pair: the set check says so
   REQUIRE(e.has_value());
-  CHECK(e->find("radio.channels") != std::string::npos && e->find("165") != std::string::npos);
+  CHECK(e->find("radio.channels") != std::string::npos && e->find("38") != std::string::npos);
   // GS commands the ladder: a 40 MHz rung while tuned 20 is refused...
   bool has40 = false;
   for (const auto& r : c.link.ladder_cfg.ladder) has40 |= r.bw == 40;
   REQUIRE(has40);
-  auto g = channel_width_error(c, Mode::Gs, 165, 20);
+  auto g = channel_width_error(c, Mode::Gs, 38, 20);
   REQUIRE(g.has_value());
   CHECK(g->find("link.ladder[") != std::string::npos);
   // ...a spotter only listens, so 20 is fine.
-  CHECK(!channel_width_error(c, Mode::Spotter, 165, 20));
+  CHECK(!channel_width_error(c, Mode::Spotter, 38, 20));
 }
 
 TEST(relay_stats_fields_keeps_the_page_keys) {

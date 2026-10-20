@@ -306,6 +306,8 @@ static int run_radio(const maburgs::Config& cfg) {
     fc.width_mhz = (boot_scout_card >= 0 && i == boot_scout_card) ? 20
                                                                   : maburgs::home_width(cfg.radio.width);
     fc.card_id = static_cast<uint8_t>(i);
+    fc.fast_hop_at_80 = cfg.radio.fast_hop_at_80;
+    fc.batched_tune = cfg.radio.batched_tune;
     for (size_t s = 0; s < 2; ++s)
       fc.sbi_block_payload[s] = mabur::UepDecoder::block_payload(cfg.uep_layers()[s]);
     fronts.push_back(std::make_unique<maburgs::RadioFrontend>(fc, queue));

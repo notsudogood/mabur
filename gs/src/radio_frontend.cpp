@@ -34,9 +34,9 @@ uint64_t mono_us_now() {
 // --- device management (mirrors drone/src/main.cpp bring-up) ----------------
 
 namespace {
-// 20 | 40 (HT40 pair per mabur::ht40_offset) | 80 (bench only: ch must be
-// the block-lowest 20, mabur::vht80_block_lowest -- devourer puts the 80 MHz
-// primary there).
+// 20 | 40 (HT40 pair per mabur::ht40_offset) | 80 (ch is the primary, any
+// 20 of its block, mabur::vht80_ok -- devourer tunes the block centre and
+// carries the primary's slot in the baseband).
 SelectedChannel tune_for(uint8_t ch, uint8_t width_mhz) {
   if (width_mhz == 80) return SelectedChannel{ch, 0, CHANNEL_WIDTH_80};
   if (width_mhz == 40) return SelectedChannel{ch, mabur::ht40_offset(ch), CHANNEL_WIDTH_40};
@@ -129,6 +129,9 @@ bool RadioFrontend::open_and_start() {
   // and RX stays on the heap path, not zerocopy.
   dev_cfg.tx.no_cancel_multipkt = true;
   dev_cfg.usb.rx_zerocopy = false;
+  // radio.batched_tune: width switches and full-set hops (FastSetChannel)
+  // batch their register writes; false = devourer's plain path.
+  dev_cfg.tuning.batched_chset = cfg_.batched_tune;
   // (The 0x41e8 protect_pathb_agc knob was chased here too — exonerated:
   // the real path-B killer was the DPDT pin-mux, fixed by devourer's eFEM
   // pinmux port; see DEVOURER_DPDT_MODE in RtlJaguar3Device.)
@@ -314,23 +317,36 @@ bool RadioFrontend::retune(uint8_t ch) {
   static const bool hopdbg = std::getenv("MABUR_HOP_DEBUG") != nullptr;
   const uint64_t dbg_t0 = hopdbg ? mono_us_now() : 0;
   const uint8_t dbg_from = channel_.load(std::memory_order_acquire);
+  // At 80 MHz the lean hop (FastRetune) is the prime suspect for the
+  // after-hop deafness of docs/next-build-backlog.md item 0, and at 40 it
+  // keeps the old pair side, which is off-grid for a channel on the other
+  // side: both take the full channel set instead (batched, a few ms),
+  // unless radio.fast_hop_at_80.
+  const uint8_t w = width();
+  const bool full = !cfg_.fast_hop_at_80 &&
+                    (w == 80 || (w == 40 && mabur::ht40_offset(ch) != mabur::ht40_offset(dbg_from)));
+  if (w == 80 && !mabur::vht80_ok(ch)) return false;
   rx_channel_.store(0, std::memory_order_release);
-  device_->FastRetune(ch, /*cache_rf=*/true);
+  if (full)
+    device_->FastSetChannel(tune_for(ch, w));
+  else
+    device_->FastRetune(ch, /*cache_rf=*/true);
   channel_.store(ch, std::memory_order_release);
   if (hopdbg)
-    std::fprintf(stderr, "retunedbg card=%u tid=%lu %u->%u t0=%llu dur_us=%llu rf_central=%d\n",
+    std::fprintf(stderr, "retunedbg card=%u tid=%lu %u->%u t0=%llu dur_us=%llu rf_central=%d path=%s\n",
                  static_cast<unsigned>(cfg_.card_id),
                  static_cast<unsigned long>(std::hash<std::thread::id>{}(std::this_thread::get_id()) % 100000),
                  static_cast<unsigned>(dbg_from), static_cast<unsigned>(ch),
                  static_cast<unsigned long long>(dbg_t0 / 1000),
-                 static_cast<unsigned long long>(mono_us_now() - dbg_t0), device_->ReadTunedCentral());
+                 static_cast<unsigned long long>(mono_us_now() - dbg_t0), device_->ReadTunedCentral(),
+                 full ? "full" : "fast");
   rx_channel_.store(ch, std::memory_order_release);
   return true;
 }
 
 bool RadioFrontend::set_width(uint8_t ch, uint8_t width_mhz) {
   if (width_mhz == 40 && mabur::ht40_offset(ch) == 0) return false;
-  if (width_mhz == 80 && !mabur::vht80_block_lowest(ch)) return false;
+  if (width_mhz == 80 && !mabur::vht80_ok(ch)) return false;
   const uint8_t was = width();
   // Desired state, like the channel: recorded even when the card is down so
   // the next open_and_start() (a revive) InitWrites at it. The caller still
@@ -338,7 +354,7 @@ bool RadioFrontend::set_width(uint8_t ch, uint8_t width_mhz) {
   width_.store(width_mhz, std::memory_order_release);
   if (!ready_.load(std::memory_order_acquire) || !device_) return false;
   rx_channel_.store(0, std::memory_order_release);   // same blinding as retune()
-  device_->SetMonitorChannel(tune_for(ch, width_mhz));
+  device_->FastSetChannel(tune_for(ch, width_mhz));
   channel_.store(ch, std::memory_order_release);
   rx_channel_.store(ch, std::memory_order_release);
   std::fprintf(stderr, "maburgs radio: card %u width %u -> %u MHz on ch %u\n",

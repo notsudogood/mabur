@@ -149,6 +149,21 @@ struct RadioCfg {
   // 5 GHz pair (mabur::ht40_offset) -- a 20-tuned receiver cannot hear a 40
   // MHz transmission at all (docs/bw40.md).
   uint8_t width = 20;
+  // Cards drop to 20 MHz while a 20 MHz rung is flown (width_policy.h),
+  // ~0.5-1 dB on video there; the 20 -> 40 probe widens one card first.
+  // Off = the cards stay at the home width (40) on every rung below 80.
+  bool narrow_20 = false;
+  // Card hops: false = a card tuned 80 MHz, or one whose 40 MHz pair side
+  // changes, takes devourer's FastSetChannel (the full channel set, batched)
+  // -- the 80 MHz lean hop (FastRetune) is the prime suspect for the
+  // after-hop deafness in docs/next-build-backlog.md item 0. true = every
+  // hop is FastRetune, as gs8/gs9 did.
+  bool fast_hop_at_80 = false;
+  // devourer's batched channel set (DeviceConfig tuning.batched_chset): a
+  // card width switch or a FastSetChannel hop sends its register writes in
+  // batches -- ~60 USB round trips instead of ~190, est. a few ms instead of
+  // 65-91 ms. false = the plain path, one round trip per register access.
+  bool batched_tune = true;
   // Empty + auto_scan: probe the bus and use every supported card found
   // (card_scan.h). A non-empty list pins exactly those devices and skips
   // the probe entirely -- that is the config-only way to fly one card.

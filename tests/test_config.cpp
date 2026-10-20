@@ -1426,7 +1426,8 @@ TEST(radio_channels_default_and_parse) {
 TEST(radio_channels_validated_and_removed_keys_fail) {
   for (const char* body : {"[radio]\nchannel = 136\n", "[radio]\nfollow_gs = true\n",
                            "[radio]\nchannels = [40, 36]\nwidth = 40\n", "[radio]\nchannels = []\n",
-                           "[radio]\nchannels = [165]\nwidth = 40\n"}) {
+                           "[radio]\nchannels = [38]\nwidth = 40\n",
+                           "[radio]\nchannels = [234]\n"}) {
     bool threw = false;
     try { load_config(write_temp_toml(body).string()); } catch (const std::exception&) { threw = true; }
     CHECK(threw);
@@ -1596,12 +1597,21 @@ TEST(radio_width_accepts_20_40_and_80) {
   auto p80 = write_temp_toml("[radio]\nchannels = [36, 132]\nwidth = 80\n");
   CHECK(load_config(p80.string()).radio.width == 80);
   std::filesystem::remove(p80);
-  // 80 holds every channel to an 80 MHz block's lowest 20; 136 is inside 132-144.
-  auto p80bad = write_temp_toml("[radio]\nchannels = [136]\nwidth = 80\n");
+  // 80: any 20 of a block may be the primary, all on one side of their
+  // 40 MHz pair (the home width rides it); 68 is in no block.
+  auto p80any = write_temp_toml("[radio]\nchannels = [44, 140, 173]\nwidth = 80\n");
+  CHECK(load_config(p80any.string()).radio.channels.size() == 3);
+  std::filesystem::remove(p80any);
+  auto p80bad = write_temp_toml("[radio]\nchannels = [36, 68]\nwidth = 80\n");
   std::string msg = what_of([&] { (void)load_config(p80bad.string()); });
   CHECK(msg.find("radio.channels") != std::string::npos);
   CHECK(msg.find("80 MHz block") != std::string::npos);
   std::filesystem::remove(p80bad);
+  auto p80side = write_temp_toml("[radio]\nchannels = [36, 136]\nwidth = 80\n");
+  msg = what_of([&] { (void)load_config(p80side.string()); });
+  CHECK(msg.find("radio.channels") != std::string::npos);
+  CHECK(msg.find("136") != std::string::npos);
+  std::filesystem::remove(p80side);
   auto p60 = write_temp_toml("[radio]\nchannels = [136]\nwidth = 60\n");
   msg = what_of([&] { (void)load_config(p60.string()); });
   CHECK(msg.find("radio.width") != std::string::npos);
@@ -1609,13 +1619,16 @@ TEST(radio_width_accepts_20_40_and_80) {
 }
 
 TEST(radio_width_40_needs_a_standard_pair) {
-  // 165 is the top of UNII-3 with nothing above it on the 40 MHz grid
-  // (common/include/mabur/ht40.h): a 40 MHz tune there has no secondary.
-  auto path = write_temp_toml("[radio]\nchannels = [165]\nwidth = 40\n");
+  // 38 is off the 20 MHz grid (common/include/mabur/ht40.h): a 40 MHz tune
+  // there has no standard secondary. 165 pairs with 169 (UNII-4).
+  auto path = write_temp_toml("[radio]\nchannels = [38]\nwidth = 40\n");
   std::string msg = what_of([&] { (void)load_config(path.string()); });
   CHECK(msg.find("radio.channels") != std::string::npos);
-  CHECK(msg.find("165") != std::string::npos);
+  CHECK(msg.find("38") != std::string::npos);
   std::filesystem::remove(path);
+  auto p165 = write_temp_toml("[radio]\nchannels = [165, 173]\nwidth = 40\n");
+  CHECK(load_config(p165.string()).radio.width == 40);
+  std::filesystem::remove(p165);
 }
 
 TEST(record_defaults_are_disabled_and_parse) {

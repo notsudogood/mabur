@@ -7,9 +7,11 @@
 [radio]
 channels = [36, 132]   # the channel set: the drone parks on a member, the GS picks among them.
                        # Both ends must list the same set (the drone's may be a superset).
-                       # 80 MHz: each member is an 80 MHz block's lowest channel (36 52 100 116 132
-                       # 149); 36 and 132 are the blocks with no 8812EU spur, 149 works but carries
-                       # one. 52-144 are DFS channels: your call where you fly.
+                       # 80 MHz: each member is any channel of an 80 MHz block (36-48 52-64 100-112
+                       # 116-128 132-144 149-161 165-177 ...), all on the same side of their 40 MHz
+                       # pair (36 44 ... 132 140 149 157 165 173 = lower side). 36-48 and 132-144 are
+                       # the blocks with no 8812EU spur. 52-144 are DFS channels; 165 up are past
+                       # UNII-3 and 181 up are past the 8812EU's characterized range: your call.
                        # For 40 MHz only, the old set was [40, 64, 112, 144] with width = 40
                        # (spur pairs and 124+128 left out; a CPE510 relay cannot tune 144).
 channel  = "auto"               # "auto" = measure the set at start and move the link to the cleanest
@@ -20,6 +22,11 @@ channel  = "auto"               # "auto" = measure the set at start and move the
 width   = 80               # 20, 40 or 80 MHz: the widest rung in [[link.ladder]] below. At 80 the cards
                            # sit at 40 and widen to 80 only while an 80 MHz rung flies or is probed
                            # (docs/bw80.md "GS card widths"); relays stay at 40
+narrow_20 = true           # cards drop to 20 MHz on the 20 MHz rungs (~0.5-1 dB there); false = stay at 40
+fast_hop_at_80 = false     # false = a card at 80 MHz (or changing its 40 MHz pair side) hops with the full
+                           # channel set, batched; true = the lean FastRetune hop gs8/gs9 used (item 0)
+batched_tune = true        # batched channel set for width switches and full-set hops; false = one USB
+                           # round trip per register (65-91 ms per switch)
 tx_card = -1               # card that transmits to the drone; -1 = pick the one with the best signal
 relays  = []               # CPE510 mabur-relay units, "ipv4:port" each (UDP 8310, numeric -- no hostnames); each is a card after the USB cards
 

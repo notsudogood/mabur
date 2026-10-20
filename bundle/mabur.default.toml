@@ -8,14 +8,24 @@ usb_vid    = 3034        # Realtek USB vendor ID (0x0bda) in decimal
 usb_pid    = 0           # 0 = find the card automatically (8812EU or 8812CU)
 channels   = [36, 132]  # the channel set, same as the ground station's (a superset is fine);
                          # the drone parks on the remembered member and follows the GS to any member.
-                         # At width 80 every member must be an 80 MHz block's lowest channel
-                         # (36 52 100 116 132 149); 36 and 132 are the two blocks with no 8812EU spur
-                         # (149 works but carries one). 52-144 are DFS channels: your call where you fly.
+                         # At width 80 every member is any channel of an 80 MHz block (36-48 52-64
+                         # 100-112 116-128 132-144 149-161 165-177 ...), all on the same side of their
+                         # 40 MHz pair (36 44 ... 132 140 149 157 165 173 = lower side). 36-48 and
+                         # 132-144 are the blocks with no 8812EU spur. 52-144 are DFS channels; 165 up
+                         # are past UNII-3, 181 up past the 8812EU's characterized range: your call.
                          # For 40 MHz only, the old set was [40, 64, 112, 144] with width = 40.
-width      = 80        # 20, 40 or 80. 80 = the 80 MHz rungs can fly; the 20/40 rungs ride the block's lower
-                       # 20/40. Per-rung width comes from the GS ladder (docs/bw40.md, docs/bw80.md)
+width      = 80        # 20, 40 or 80: the widest rung. Per-rung width comes from the GS ladder
+                       # (docs/bw40.md, docs/bw80.md)
+width_step = true      # true = the radio sits at home_width and widens only while a wider rung flies or
+                       # is probed (a few ms per switch); false = it stays at `width` all session (d8-d10)
+home_width = 40        # 40 or 20
+width_hold_ms = 3000   # stay wide this long after the last wide rung, so a bounce does not switch each time
+fast_hop_at_80 = false # false = a hop at 80 MHz (or one changing the 40 MHz pair side) is the full channel
+                       # set, batched; true = the lean FastRetune hop d8-d10 used (backlog item 0)
+batched_tune = true    # batched channel set for width switches and full-set hops; false = one USB round
+                       # trip per register (65-91 ms per switch)
 power_mode = "none"      # "none" = card's default TX power; "offset" = use the calibrated walls below.
-                         # Keep "none" for the 80 MHz rungs: "offset" leaves them (VHT) at MCS7's power
+                         # "offset" now shapes the 80 MHz (VHT) rungs like the 20/40 ones
 tx_threads = 4           # parallel USB senders; 4 is needed to reach full link speed
 tx_threads_hot = 0       # how many of those senders run on CPU 1 (beside the video packer) instead of CPU 0.
                          # 0 = all on CPU 0. A bench setting for high bitrates: see docs/next-build-backlog.md item 3

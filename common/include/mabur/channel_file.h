@@ -12,19 +12,21 @@
 
 #include <unistd.h>
 
+#include "mabur/ht40.h"
+
 namespace mabur {
 
 constexpr const char* kDroneChannelFile = "/etc/mabur.channel";
 constexpr const char* kGsChannelFile = "/etc/maburgs.channel";
 
 // nullopt on a missing/unreadable file or anything that is not a channel
-// number in [1,177]. Membership in the set is the CALLER's check.
+// number in [1,kMaxChannel]. Membership in the set is the CALLER's check.
 inline std::optional<uint8_t> read_channel_file(const std::string& path) {
   std::ifstream f(path);
   if (!f) return std::nullopt;
   long v = 0;
   if (!(f >> v)) return std::nullopt;
-  if (v < 1 || v > 177) return std::nullopt;
+  if (v < 1 || v > kMaxChannel) return std::nullopt;
   return static_cast<uint8_t>(v);
 }
 

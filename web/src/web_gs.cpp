@@ -29,7 +29,7 @@ std::optional<std::string> channel_width_error(const maburgs::Config& cfg, Mode 
   if (auto e = mabur::channel_set_issue(cfg.radio.channels, static_cast<uint8_t>(width),
                                         "radio.channels"))
     return e->field + ": " + e->why;
-  if (start_ch < 1 || start_ch > 177 ||
+  if (start_ch < 1 || start_ch > mabur::kMaxChannel ||
       !mabur::channel_set_member(cfg.radio.channels, static_cast<uint8_t>(start_ch)))
     return "channel " + std::to_string(start_ch) + " is not a member of radio.channels";
   if (cfg.radio.pin && *cfg.radio.pin != start_ch)

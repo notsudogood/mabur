@@ -286,6 +286,8 @@ cooldown_ms          = 2000   # minimum time between hops
 max_hops_per_min     = 4      # hop limit
 backoff_ms           = 30000  # a channel that proved bad is avoided this long (doubles on repeats)
 one_card_repeats     = 5      # single card: send the hop order this many times before retuning
+scout_fast_rungs     = false  # false = no spare-card channel visits on the 40/80 MHz rungs while the link is healthy
+scout_better_margin_db = 3.0  # also none while the spare card hears this many dB SNR better than the other (0 = off)
 
 # What counts as a bad channel.
 [hop.verdict]
@@ -301,3 +303,4 @@ starved_frac         = 0.25   # video rate below this fraction of normal = starv
 sustained_ms         = 10000  # loss with no visible cause, averaged over this long...
 sustained_loss_pct   = 0.5    # ...at or above this % = interfered (hop), unless the signal is weak or fading; 0 = off
 sustained_min_snr_db = 20     # ...and only while the signal-to-noise ratio is at least this (low SNR = range, the ladder's job)
+sustained_post_fec   = true   # count only loss error correction could not repair (true), or all loss before it (false)

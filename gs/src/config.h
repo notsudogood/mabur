@@ -86,6 +86,13 @@ struct HopVerdictCfg {
   // a slow fade is absorbed into the 5 s RSSI reference and never reads
   // `fading`. A card without a real SNR (relay) never satisfies it.
   int sustained_min_snr_db = 20;
+  // What the sustained-loss mean is taken over (backlog item 7, 2026-10-20):
+  // true = post-FEC loss only (source symbols the decoder abandoned: video
+  // the viewer lost), false = pre-FEC loss (the 2026-10-11 rule). Pre-FEC
+  // fired on the link's own repaired loss at 35 Mb/s -- flight 2026-10-12
+  // hopped 112 -> 64 with zero foreign traffic at 0.34 % pre-FEC that FEC
+  // repaired in full -- and each hop costs ~130 ms of video.
+  bool sustained_post_fec = true;
 };
 
 /// In-flight channel hop (docs/inflight-channel-hop.md). Runs in
@@ -114,6 +121,17 @@ struct HopCfg {
   // it for ~280 ms, so 333 ms (dwell_period_ms) in Hold would leave it ~85
   // % deaf.
   int relay_burst_period_ms = 1000;
+  // In-flight scouting takes a card off the link channel for ~8 ms dwells
+  // (backlog item 7). scout_fast_rungs = false pauses them while the op
+  // rung is 40 or 80 MHz and the last verdict is healthy -- the fast rungs
+  // have the least FEC margin and the most to lose -- and lets them run at
+  // the 20 MHz rungs and whenever the link is impaired (when a better
+  // channel is worth finding). scout_better_margin_db > 0 also pauses them
+  // while the card that would dwell is the better receiver by at least that
+  // much SNR (unless impaired): the dwell would leave the link on the worse
+  // card (flight 2026-10-12: card 1 lost ~3x what card 0 did).
+  bool scout_fast_rungs = false;
+  double scout_better_margin_db = 3.0;
   HopVerdictCfg verdict;
 };
 

@@ -57,6 +57,12 @@ struct VerdictLinkIn {
   // `valid`, false while a hop blanks it). Only valid windows feed the
   // sustained-loss history.
   bool loss_valid = true;
+  // Post-FEC loss over the window: source symbols the decoder abandoned
+  // (never delivered, never rebuilt) over those expected, both layers,
+  // transition-stale ones excluded. post_valid = false when nothing was
+  // expected (no traffic) or the pre-FEC reading is blanked by a hop.
+  double post_fec_loss = 0;
+  bool post_valid = false;
 };
 
 struct VerdictOut {

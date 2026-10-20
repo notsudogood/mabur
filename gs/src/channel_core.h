@@ -268,6 +268,14 @@ class ChannelCore {
   // ---- hop state ----
   int hop_lead_latched_ = -1;
   uint64_t recovered_prev_window_ = 0;
+  // Post-FEC loss baselines (both layers, transition-stale excluded).
+  uint64_t abandoned_prev_window_ = 0, expected_prev_window_ = 0;
+  bool post_prev_ok_ = false;
+  // In-flight scout gate (hop.scout_fast_rungs / scout_better_margin_db),
+  // set per verdict window, read by the scout thread. 0 = scouting allowed,
+  // 1 = fast rung while healthy, 2 = the spare card is the better receiver.
+  std::atomic<int> scout_pause_{0};
+  int scout_pause_logged_ = 0;
   uint64_t au_seq_prev_ = 0;
   bool hop_was_active_ = false;
   CalMoveEdgeHold cal_move_hold_;

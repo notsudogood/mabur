@@ -561,12 +561,60 @@ void ChannelCore::step_hop_edge_and_window_(const ChannelTickIn& in) {
                                         : 0;
   vl.recovered = static_cast<uint32_t>(recovered_now - recovered_prev_window_);
   recovered_prev_window_ = recovered_now;
+  // Post-FEC loss: abandoned / expected source symbols this window, both
+  // layers, symbols stale across a rung transition excluded. Valid only
+  // when something was expected, the pre-FEC reading is valid (not blanked
+  // by a hop) and the counters did not go backwards (a decoder reset).
+  if (in.agg) {
+    uint64_t ab = 0, ex = 0;
+    for (int l = 0; l < 2; ++l) {
+      const auto& st = in.agg->decoder().stats(l);
+      ab += st.syms_abandoned - std::min(st.syms_abandoned, st.syms_abandoned_stale);
+      ex += st.arr_expected - std::min(st.arr_expected, st.arr_expected_stale);
+    }
+    if (post_prev_ok_ && ab >= abandoned_prev_window_ && ex > expected_prev_window_) {
+      const double dab = static_cast<double>(ab - abandoned_prev_window_);
+      const double dex = static_cast<double>(ex - expected_prev_window_);
+      vl.post_fec_loss = std::min(1.0, dab / dex);
+      vl.post_valid = s1.valid;
+    }
+    abandoned_prev_window_ = ab;
+    expected_prev_window_ = ex;
+    post_prev_ok_ = true;
+  }
   vl.starved = starved_valid > 0 && starved_all_zero;
   const uint64_t au_now = au_seq_.load(std::memory_order_relaxed);
   vl.au_count = static_cast<uint32_t>(au_now - au_seq_prev_);
   au_seq_prev_ = au_now;
   const auto vo = verdict_.window(now_ms, vc, vl, vrx_.ctl().rung());
   if (vo.v != Verdict::Healthy || vo.v != last_verdict_) sink_.verdict(now_ms, vo, vc, vl);
+  // In-flight scout gate (backlog item 7). Impaired links always scout:
+  // that is when a better channel is worth knowing.
+  {
+    int pause = 0;
+    const bool healthy = vo.v == Verdict::Healthy;
+    if (healthy && !cfg_.hop.scout_fast_rungs && op_bw_ >= 40) {
+      pause = 1;
+    } else if (healthy && cfg_.hop.scout_better_margin_db > 0) {
+      const int cand = pick_inflight_scout(can_scout_, tx_card_now_.load());
+      if (cand >= 0 && vc[static_cast<size_t>(cand)].valid && vc[static_cast<size_t>(cand)].snr_valid) {
+        double other = -1e9;
+        for (int i = 0; i < n_cards_; ++i) {
+          const auto& c = vc[static_cast<size_t>(i)];
+          if (i != cand && c.valid && c.snr_valid) other = std::max(other, c.snr_db);
+        }
+        if (other > -1e9 && vc[static_cast<size_t>(cand)].snr_db - other >= cfg_.hop.scout_better_margin_db)
+          pause = 2;
+      }
+    }
+    scout_pause_.store(pause, std::memory_order_relaxed);
+    if (pause != scout_pause_logged_) {
+      scout_pause_logged_ = pause;
+      sink_.log(logf_("maburgs hop: in-flight scouting %s", pause == 0 ? "on"
+                      : pause == 1 ? "paused (40/80 MHz rung, link healthy)"
+                                   : "paused (the spare card is the better receiver)"));
+    }
+  }
   last_verdict_ = vo.v;
   last_verdict_out_ = vo;
   if (const auto blank = hop_store_blank_until(vo, reactive_, cfg_.hop.confirm_ms))
@@ -917,6 +965,8 @@ void ChannelCore::inflight_body_() {
   // One card is wide for an 80 MHz probe and is the only one that can hear
   // it: a dwell would punch holes in the probe and fail it.
   if (probe_wide_.load()) return;
+  // hop.scout_fast_rungs / scout_better_margin_db (set per verdict window).
+  if (scout_pause_.load(std::memory_order_relaxed) != 0) return;
   const int card = pick_inflight_scout(can_scout_, tx_card_now_.load());
   if (card < 0) return;
   auto& fe = *cards_[static_cast<size_t>(card)];

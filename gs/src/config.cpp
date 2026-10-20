@@ -316,7 +316,8 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
     const Value& h = j["hop"];
     check_keys(h, "hop", {"window_ms", "persist", "dwell_observe_ms",
                           "dwell_period_ms", "rank_visits", "rank_max_age_ms", "confirm_ms", "confirm_extend_ms", "verify_ms",
-                          "cooldown_ms", "max_hops_per_min", "backoff_ms", "one_card_repeats", "relay_burst_period_ms", "verdict"});
+                          "cooldown_ms", "max_hops_per_min", "backoff_ms", "one_card_repeats", "relay_burst_period_ms",
+                          "scout_fast_rungs", "scout_better_margin_db", "verdict"});
     HopCfg& hc = c.hop;
     hc.window_ms = (int)get_int(h, "window_ms", 150, 50, 2000, "hop");
     hc.persist = (int)get_int(h, "persist", 2, 1, 3, "hop");
@@ -332,12 +333,15 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
     hc.backoff_ms = (int)get_int(h, "backoff_ms", 30000, 1000, 600000, "hop");
     hc.one_card_repeats = (int)get_int(h, "one_card_repeats", 5, 1, 50, "hop");
     hc.relay_burst_period_ms = (int)get_int(h, "relay_burst_period_ms", 1000, 500, 60000, "hop");
+    hc.scout_fast_rungs = get_bool(h, "scout_fast_rungs", hc.scout_fast_rungs, "hop");
+    hc.scout_better_margin_db = get_num(h, "scout_better_margin_db", 3.0, 0.0, 30.0, "hop");
     if (h.contains("verdict")) {
       const Value& v = h["verdict"];
       check_keys(v, "hop.verdict", {"loss_pct", "recovered_x", "weak_rssi_dbm", "weak_snr_db",
                                     "fading_drop_db", "foreign_pps", "fa_pps",
                                     "recovered_min", "starved_frac", "sustained_ms",
-                                    "sustained_loss_pct", "sustained_min_snr_db"});
+                                    "sustained_loss_pct", "sustained_min_snr_db",
+                                    "sustained_post_fec"});
       HopVerdictCfg& vc = hc.verdict;
       vc.loss_pct = get_num(v, "loss_pct", 3.0, 0.1, 100.0, "hop.verdict");
       vc.recovered_x = get_num(v, "recovered_x", 3.0, 1.0, 100.0, "hop.verdict");
@@ -351,6 +355,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
       vc.sustained_ms = (int)get_int(v, "sustained_ms", 10000, 1000, 120000, "hop.verdict");
       vc.sustained_loss_pct = get_num(v, "sustained_loss_pct", 0.5, 0.0, 100.0, "hop.verdict");
       vc.sustained_min_snr_db = (int)get_int(v, "sustained_min_snr_db", 20, 0, 60, "hop.verdict");
+      vc.sustained_post_fec = get_bool(v, "sustained_post_fec", vc.sustained_post_fec, "hop.verdict");
     } else {
       note_default("hop", "verdict", "(section absent)");
     }

@@ -8,8 +8,10 @@ static VerdictCardIn card(double rssi, double snr, double foreign_ps, double fa_
   c.cca = c.fa; c.crc_fail = (uint32_t)(crc_ps * 0.15 + 0.5); return c;
 }
 // 5 s of clean windows at rung 5 to build the references
+// (clean on both readings: 0 pre- and post-FEC loss, both valid).
 static double warm(HopVerdict& v, double t = 0) {
-  for (int i = 0; i < 40; ++i, t += 150) v.window(t, {card(-61, 30, 0, 4), card(-61, 29, 0, 4)}, {0.0, 20}, 5);
+  VerdictLinkIn clean; clean.pre_fec_loss = 0.0; clean.recovered = 20; clean.post_valid = true;
+  for (int i = 0; i < 40; ++i, t += 150) v.window(t, {card(-61, 30, 0, 4), card(-61, 29, 0, 4)}, clean, 5);
   return t;
 }
 TEST(baseline_is_healthy) {
@@ -209,8 +211,11 @@ TEST(converted_edge_of_range_reading_is_fade) {
 }
 // ---- sustained unexplained loss (flight 2026-10-11, channel 64)
 // Default window 150 ms, sustained_ms 10000 -> 66 windows of history.
+// Loss FEC could not repair: pre- and post-FEC alike, so these tests hold
+// under either sustained_post_fec setting.
 static VerdictLinkIn lossy(double loss, bool valid = true) {
-  VerdictLinkIn l; l.pre_fec_loss = loss; l.recovered = 20; l.loss_valid = valid; return l;
+  VerdictLinkIn l; l.pre_fec_loss = loss; l.recovered = 20; l.loss_valid = valid;
+  l.post_fec_loss = loss; l.post_valid = valid; return l;
 }
 // Feeds `n` windows; returns the first window index that triggered, or -1.
 static int feed(HopVerdict& v, double& t, int n, double loss, double rssi = -45, double snr = 38,
@@ -319,6 +324,36 @@ TEST(invalid_loss_windows_do_not_feed_the_history) {
   for (int i = 0; i < 100; ++i, t += 150)
     v.window(t, {card(-45, 38, 0, 4), card(-45, 37, 0, 4)}, lossy(0.0, false), 3);
   CHECK(v.sustained_loss() > 0.0099);
+}
+// Backlog item 7 (flight 2026-10-12: 112 -> 64 with zero foreign traffic
+// at 0.34 % pre-FEC loss, all repaired). Loss the repair data covered costs
+// no video: with the default sustained_post_fec it never builds a sustained
+// verdict, however long it lasts; the pre-FEC rule (false) still fires on it.
+TEST(repaired_loss_never_sustains_by_default_but_does_on_the_pre_fec_rule) {
+  auto repaired = [](double pre) {
+    VerdictLinkIn l; l.pre_fec_loss = pre; l.recovered = 20; l.loss_valid = true;
+    l.post_fec_loss = 0.0; l.post_valid = true; return l;
+  };
+  for (bool post : {true, false}) {
+    HopCfg c = cfg(); c.verdict.sustained_post_fec = post;
+    HopVerdict v(c, BusyCfg{}, 2); double t = warm(v, 0);
+    int fired = -1; VerdictOut o;
+    for (int i = 0; i < 200; ++i, t += 150) {
+      o = v.window(t, {card(-45, 38, 0, 4), card(-45, 37, 0, 4)}, repaired(0.01), 3);
+      if (o.trigger && fired < 0) fired = i;
+    }
+    if (post) { CHECK(fired < 0); CHECK(!(o.evidence & kEvSustained)); CHECK(v.sustained_loss() == 0.0); }
+    else      { CHECK(fired >= 0); CHECK(o.evidence & kEvSustained); }
+  }
+}
+// A window with no post-FEC reading (nothing expected) neither dilutes nor
+// fills the post-FEC history.
+TEST(post_fec_history_skips_windows_without_a_reading) {
+  HopVerdict v(cfg(), BusyCfg{}, 2); double t = 0;
+  VerdictLinkIn none; none.pre_fec_loss = 0.02; none.loss_valid = true; none.post_valid = false;
+  for (int i = 0; i < 200; ++i, t += 150)
+    v.window(t, {card(-45, 38, 0, 4), card(-45, 37, 0, 4)}, none, 3);
+  CHECK(v.sustained_loss() < 0);
 }
 TEST(sustained_loss_pct_zero_disables) {
   HopCfg c = cfg(); c.verdict.sustained_loss_pct = 0;

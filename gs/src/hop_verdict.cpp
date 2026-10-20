@@ -104,9 +104,13 @@ VerdictOut HopVerdict::window(double now_ms, const std::vector<VerdictCardIn>& c
   // job). Sustained loss is itself an impairment: a channel
   // that loses steadily below loss_pct per window (and whose recovered
   // reference has risen to match) never trips the per-window terms.
-  if (link.loss_valid) {
+  // hv.sustained_post_fec (default) feeds post-FEC loss instead: loss the
+  // repair data covered cost no video and is the ladder's concern, not a
+  // reason to leave the channel.
+  const bool hist_valid = hv.sustained_post_fec ? (link.loss_valid && link.post_valid) : link.loss_valid;
+  if (hist_valid) {
     const size_t loss_n = static_cast<size_t>(std::max(1, hv.sustained_ms / cfg_.window_ms));
-    loss_hist_.push_back(link.pre_fec_loss);
+    loss_hist_.push_back(hv.sustained_post_fec ? link.post_fec_loss : link.pre_fec_loss);
     while (loss_hist_.size() > loss_n) loss_hist_.pop_front();
   }
   const double mean_loss = sustained_loss();

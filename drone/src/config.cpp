@@ -278,7 +278,7 @@ void parse_encoder(const Value& j, EncoderCfg& e) {
       const std::string where = "encoder.rung[" + std::to_string(i++) + "]";
       g_line = rj.line();
       if (!rj.is_object()) fail(where, "must be a table");
-      check_known_keys(rj, {"mcs", "bw", "airtime_budget", "max_kbps"}, where);
+      check_known_keys(rj, {"mcs", "bw", "airtime_budget", "max_kbps", "fps"}, where);
       if (!rj.contains("mcs") || !rj.contains("bw")) fail(where, "needs both mcs and bw");
       EncoderRungCfg r;
       assign_if_present(rj, "mcs", r.mcs, where);
@@ -288,6 +288,8 @@ void parse_encoder(const Value& j, EncoderCfg& e) {
       if (rj.contains("airtime_budget"))
         assign_if_present(rj, "airtime_budget", r.airtime_budget, where);
       if (rj.contains("max_kbps")) assign_if_present(rj, "max_kbps", r.max_kbps, where);
+      if (rj.contains("fps")) assign_if_present(rj, "fps", r.fps, where);
+      if (r.fps != 0 && (r.fps < 5 || r.fps > 120)) fail(where + ".fps", "must be 0 or in [5,120]");
       if (r.mcs < 0 || r.mcs > 7) fail(where + ".mcs", "must be in [0,7]");
       if (r.bw != 10 && r.bw != 20 && r.bw != 40 && r.bw != 80)
         fail(where + ".bw", "must be 10, 20, 40 or 80");
@@ -298,8 +300,8 @@ void parse_encoder(const Value& j, EncoderCfg& e) {
         fail(where + ".max_kbps",
              "must be above encoder.bitrate_min_kbps and at most " +
                  std::to_string(VENC_BITRATE_MAX_KBPS));
-      if (!rj.contains("airtime_budget") && !rj.contains("max_kbps"))
-        fail(where, "sets neither airtime_budget nor max_kbps");
+      if (!rj.contains("airtime_budget") && !rj.contains("max_kbps") && !rj.contains("fps"))
+        fail(where, "sets none of airtime_budget, max_kbps, fps");
       if (e.rung_for(r.mcs, r.bw))
         fail(where, "duplicate entry for mcs " + std::to_string(r.mcs) + " / " +
                         std::to_string(r.bw) + " MHz");

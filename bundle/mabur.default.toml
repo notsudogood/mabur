@@ -90,6 +90,8 @@ max_kbps       = 25000
 mcs      = 0
 bw       = 20
 max_kbps = 500             # slowest rung: just enough picture to fly home on
+fps      = 0               # frame rate on this rung; 0 = the camera's own (60). Try 30: half the frames,
+                           # each with twice the bits (less blocky). Each switch in or out costs a keyframe
 
 [venc]
 sensor_bin = "/etc/sensors/imx415_greg_fpvXIX_colortrans.bin"  # camera sensor tuning file

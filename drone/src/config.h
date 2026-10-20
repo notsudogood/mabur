@@ -125,6 +125,12 @@ struct EncoderRungCfg {
   int bw = 20;
   double airtime_budget = -1.0;
   int max_kbps = -1;
+  // Encoder frame rate on this rung (0 = venc's own, the boot rate). A
+  // lower rate on the slowest rung spends its few bits on fewer, better
+  // frames; each change costs a keyframe (the bitrate write that follows
+  // it re-seeds the stream). With low_power active the lower of the two
+  // wins.
+  int fps = 0;
 };
 
 // RcAgent's bitrate/ROI policy knobs (ex-WaybeamCfg; the HTTP fields

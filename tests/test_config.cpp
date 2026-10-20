@@ -202,7 +202,9 @@ TEST(encoder_rung_table_rejects_bad_entries_naming_them) {
       // bad width / mcs / unknown key
       "[[encoder.rung]]\nmcs = 5\nbw = 60\nmax_kbps = 30000\n",
       "[[encoder.rung]]\nmcs = 9\nbw = 40\nmax_kbps = 30000\n",
-      "[[encoder.rung]]\nmcs = 5\nbw = 40\nmax_kbps = 30000\nfps = 30\n",
+      "[[encoder.rung]]\nmcs = 5\nbw = 40\nmax_kbps = 30000\nframes = 30\n",
+      // fps outside [5,120] (0 = the encoder's own)
+      "[[encoder.rung]]\nmcs = 0\nbw = 20\nfps = 3\n",
       // above the encoder's ceiling
       "[[encoder.rung]]\nmcs = 5\nbw = 40\nmax_kbps = 300000\n",
   };
@@ -212,6 +214,18 @@ TEST(encoder_rung_table_rejects_bad_entries_naming_them) {
     CHECK(msg.find("encoder.rung[") != std::string::npos);
     std::filesystem::remove(path);
   }
+}
+
+// Per-rung frame rate: fps alone is enough for an entry; bw 10 is the
+// 10 MHz rung (backlog item 10).
+TEST(encoder_rung_fps_and_bw_10_parse) {
+  auto path = write_temp_toml("[[encoder.rung]]\nmcs = 0\nbw = 20\nfps = 30\n"
+                              "[[encoder.rung]]\nmcs = 0\nbw = 10\nmax_kbps = 2500\nfps = 20\n");
+  Config c = load_config(path.string());
+  REQUIRE(c.encoder.rungs.size() == 2);
+  CHECK(c.encoder.rung_for(0, 20) && c.encoder.rung_for(0, 20)->fps == 30);
+  CHECK(c.encoder.rung_for(0, 10) && c.encoder.rung_for(0, 10)->fps == 20);
+  std::filesystem::remove(path);
 }
 
 // The 2026-10-11 floor: bitrate_min_kbps 300 is now a real setting (the

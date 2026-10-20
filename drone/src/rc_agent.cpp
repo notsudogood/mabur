@@ -436,10 +436,12 @@ void RcAgent::run_bitrate_policy(uint64_t now_ms, bool force) {
   // no entry) uses the [encoder] globals.
   double budget = cfg_.encoder.airtime_budget;
   int max_kbps = cfg_.encoder.bitrate_max_kbps;
+  int rung_fps = 0;
   if (const EncoderRungCfg* r =
           cfg_.encoder.rung_for(applied_.ladder[0].mcs, applied_.ladder[0].bw)) {
     if (r->airtime_budget > 0) budget = r->airtime_budget;
     if (r->max_kbps > 0) max_kbps = r->max_kbps;
+    rung_fps = r->fps;
   }
   double kbps = 1000.0 * budget / denom;
   // NOTE the encoder has its own floor below this one: venc's apply_bitrate
@@ -474,9 +476,17 @@ void RcAgent::run_bitrate_policy(uint64_t now_ms, bool force) {
   // disabled mode never touches the encoder's boot fps. Latched on
   // success only, like every other verb; no 1 Hz throttle (that exists
   // for the bitrate hysteresis case).
-  if (cfg_.low_power.enable) {
-    const int target_fps = low_power_active_ ? cfg_.low_power.fps
-                                             : static_cast<int>(cfg_.venc.core.fps);
+  // Managed when low_power is on or any [[encoder.rung]] names an fps;
+  // otherwise the encoder's boot rate is never touched.
+  bool fps_managed = cfg_.low_power.enable;
+  for (const EncoderRungCfg& r : cfg_.encoder.rungs) fps_managed = fps_managed || r.fps > 0;
+  if (fps_managed) {
+    int target_fps = rung_fps > 0 ? rung_fps : static_cast<int>(cfg_.venc.core.fps);
+    if (low_power_active_) target_fps = std::min(target_fps, cfg_.low_power.fps);
+    if (target_fps != commanded_fps_ && commanded_fps_ != 0)
+      std::fprintf(stderr, "rc: encoder fps %d -> %d (mcs%d/%d%s)\n", commanded_fps_, target_fps,
+                   applied_.ladder[0].mcs, applied_.ladder[0].bw,
+                   low_power_active_ ? ", low power" : "");
     if (force || commanded_fps_ != target_fps) {
       if (act_.set_fps(target_fps)) commanded_fps_ = target_fps;
       else failed = true;

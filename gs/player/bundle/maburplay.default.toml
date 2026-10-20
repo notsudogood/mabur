@@ -45,6 +45,19 @@ pin        = 32            # pin number on the 40-pin header
 active_low = true          # button connects the pin to GND
 bias       = "pull-up"     # "pull-up" | "pull-down" | "none"
 
+# On-screen menu on the 5-way stick: press the centre to open it. Channel hop on/off, the
+# channel to stay on, Bandwidth Normal/Wide; Apply restarts the link (~5 s). Pins are the
+# RunCam WiFiLink's (as PixelPilot uses them). Delete this section for no menu.
+[input.menu]
+up         = 16
+down       = 18
+left       = 13
+right      = 38
+center     = 11
+active_low = false         # the stick pulls the pin high when pressed
+bias       = "none"
+gs_config  = "/etc/maburgs.toml"   # where the menu reads the channel set from
+
 # Frame timing: shows each frame in step with the screen's refresh for
 # steady, low-latency video.
 [display]

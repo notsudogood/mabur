@@ -21,6 +21,7 @@
 #include <thread>
 #include <vector>
 
+#include "gs_menu.h"
 #include "aggregator.h"
 #include "au_doorbell.h"
 #include "au_log.h"
@@ -2066,6 +2067,17 @@ int main(int argc, char** argv) {
     std::vector<std::string> defaulted;
     try { cfg = maburgs::load_config(config_path, &defaulted); }
     catch (const std::exception& e) { std::fprintf(stderr, "error: %s\n", e.what()); return 2; }
+    // The on-screen menu's choices (gs_menu.h), over the TOML. Absent file
+    // = run as configured; an invalid choice is logged and ignored.
+    if (const auto menu = maburgs::read_gs_menu_file(maburgs::kGsMenuFile)) {
+      std::string merr;
+      const auto changes = maburgs::apply_gs_menu(cfg, *menu, &merr);
+      if (!merr.empty())
+        std::fprintf(stderr, "maburgs: menu: %s -- ignored, running %s as configured\n",
+                     merr.c_str(), maburgs::kGsMenuFile);
+      for (const std::string& c : changes)
+        std::fprintf(stderr, "maburgs: menu (%s): %s\n", maburgs::kGsMenuFile, c.c_str());
+    }
     if (!defaulted.empty()) {
       std::fprintf(stderr, "config: %zu key(s) defaulted:\n", defaulted.size());
       for (const std::string& d : defaulted)

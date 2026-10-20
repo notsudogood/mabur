@@ -11,6 +11,7 @@ add_library(mabur_gs_core STATIC
   src/channel_core.cpp
   src/window_sampler.cpp
   src/config.cpp
+  src/gs_menu.cpp
   src/card_scan.cpp
   src/aggregator.cpp
   src/udp_sink.cpp

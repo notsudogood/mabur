@@ -195,6 +195,7 @@ if(MABUR_BUILD_GS)
   add_mtest(test_release_wait test_release_wait.cpp LIBS mabur_player_core)
   add_mtest(test_fb_cache test_fb_cache.cpp LIBS mabur_player_core)
   add_mtest(test_rec_button test_rec_button.cpp LIBS mabur_player_core)
+  add_mtest(test_gs_menu test_gs_menu.cpp LIBS mabur_player_core)
   add_mtest(test_ring_client test_ring_client.cpp LIBS mabur_player_core pthread)
   add_mtest(test_stream_feeder test_stream_feeder.cpp LIBS mabur_player_core)
   add_mtest(test_au_split test_au_split.cpp)
@@ -229,6 +230,10 @@ if(MABUR_BUILD_GS)
   add_mtest(test_gs_compact test_gs_compact.cpp LIBS mabur_player_core)
   add_dependencies(test_gs_compact gsfont_fixtures)
   target_compile_definitions(test_gs_compact PRIVATE
+    GSFONT_SCALED="${GSFONT_SCALED}")
+  add_mtest(test_menu_layer test_menu_layer.cpp LIBS mabur_player_core)
+  add_dependencies(test_menu_layer gsfont_fixtures)
+  target_compile_definitions(test_menu_layer PRIVATE
     GSFONT_SCALED="${GSFONT_SCALED}")
   add_mtest(test_gs_asset test_gs_asset.cpp LIBS mabur_player_core)
   target_compile_definitions(test_gs_asset PRIVATE

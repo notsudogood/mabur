@@ -86,6 +86,17 @@ struct InputCfg {
     bool active_low = true;
     std::string bias = "pull-up";  // "pull-up" | "pull-down" | "none"
   } rec;
+  // The 5-way stick for the GS menu (backlog item 9, gs_menu_model.h).
+  // False when the config has no input.menu block: no menu. Header pin
+  // numbers like rec.pin; the RunCam WiFiLink's stick (PixelPilot_rk's
+  // map) is up 16, down 18, left 13, right 38, centre 11, active high.
+  struct MenuCfg {
+    bool configured = false;
+    int up = 0, down = 0, left = 0, right = 0, center = 0;
+    bool active_low = false;
+    std::string bias = "none";
+    std::string gs_config = "/etc/maburgs.toml";   // where the channel set is read from
+  } menu;
 };
 
 struct DisplayCfg {

@@ -187,7 +187,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
 
   if (j.contains("input")) {
     const Value& in = j["input"];
-    check_keys(in, "input", {"rec"});
+    check_keys(in, "input", {"rec", "menu"});
     if (in.contains("rec")) {
       const Value& rc = in["rec"];
       check_keys(rc, "input.rec", {"pin", "active_low", "bias"});
@@ -209,6 +209,27 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
       // section, rather than three separate per-key lines the operator would
       // have to mentally group back together.
       note_default("input", "rec", "(section absent)");
+    }
+    if (in.contains("menu")) {
+      const Value& mc = in["menu"];
+      check_keys(mc, "input.menu",
+                 {"up", "down", "left", "right", "center", "active_low", "bias", "gs_config"});
+      auto& m = c.input.menu;
+      for (const char* k : {"up", "down", "left", "right", "center"})
+        if (!mc.contains(k)) fail(std::string("input.menu.") + k, "required");
+      m.up = static_cast<int>(get_int(mc, "up", 0, 1, 512, "input.menu"));
+      m.down = static_cast<int>(get_int(mc, "down", 0, 1, 512, "input.menu"));
+      m.left = static_cast<int>(get_int(mc, "left", 0, 1, 512, "input.menu"));
+      m.right = static_cast<int>(get_int(mc, "right", 0, 1, 512, "input.menu"));
+      m.center = static_cast<int>(get_int(mc, "center", 0, 1, 512, "input.menu"));
+      m.active_low = get_bool(mc, "active_low", m.active_low, "input.menu");
+      m.bias = get_str(mc, "bias", "none", "input.menu");
+      if (m.bias != "pull-up" && m.bias != "pull-down" && m.bias != "none")
+        fail("input.menu.bias", "must be \"pull-up\", \"pull-down\" or \"none\"");
+      m.gs_config = get_str(mc, "gs_config", m.gs_config, "input.menu");
+      m.configured = true;
+    } else {
+      note_default("input", "menu", "(section absent)");
     }
   }
 

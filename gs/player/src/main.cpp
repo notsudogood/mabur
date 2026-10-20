@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <dirent.h>
 #include <functional>
 #include <memory>
 #include <string>
@@ -39,6 +40,9 @@
 #include "osd_source.h"
 #include "player_config.h"
 #include "rec_button.h"
+#include "gs_menu.h"         // /etc/maburgs.menu, the menu's hand-off to maburgs
+#include "gs_menu_model.h"
+#include "menu_layer.h"
 #include "rec_control.h"  // maburgs::kRecControlPort
 #include "ring_client.h"
 #include "stream_feeder.h"
@@ -358,6 +362,42 @@ maburplay::BackendCfg parse_screen_mode(const std::string& s) {
 
 }  // namespace
 
+namespace {
+// The GS menu's Apply: maburgs reads /etc/maburgs.menu at start, so it is
+// stopped here and its respawn loop (S96maburgs, or systemd Restart=always)
+// brings it back in ~2 s with the new settings. By name, from /proc: the
+// player has no pidfile for it. Returns how many were signalled.
+int restart_maburgs() {
+  int n = 0;
+  DIR* d = ::opendir("/proc");
+  if (!d) return 0;
+  while (const dirent* e = ::readdir(d)) {
+    const char* p = e->d_name;
+    if (*p < '1' || *p > '9') continue;
+    char path[64];
+    std::snprintf(path, sizeof path, "/proc/%s/comm", p);
+    std::FILE* f = std::fopen(path, "r");
+    if (!f) continue;
+    char comm[32] = {0};
+    const bool got = std::fgets(comm, sizeof comm, f) != nullptr;
+    std::fclose(f);
+    if (got && std::strncmp(comm, "maburgs\n", 8) == 0 &&
+        ::kill(static_cast<pid_t>(std::atoi(p)), SIGTERM) == 0)
+      ++n;
+  }
+  ::closedir(d);
+  return n;
+}
+
+// The 5-way stick: one debounced GPIO line per direction.
+struct MenuStick {
+  maburplay::RecButton up, down, left, right, center;
+  bool any_open() const {
+    return up.is_open() || down.is_open() || left.is_open() || right.is_open() || center.is_open();
+  }
+};
+}  // namespace
+
 int main(int argc, char** argv) {
   if (argc >= 2 && std::string(argv[1]) == "--mux-annexb") {
     if (argc != 4) {
@@ -558,6 +598,49 @@ int main(int argc, char** argv) {
                    rbc.active_low ? "active_low" : "active_high", rbc.bias.c_str());
     } else {
       std::fprintf(stderr, "maburplay: rec button: %s -- running without it\n", rberr.c_str());
+    }
+  }
+
+  // GS menu (backlog item 9). An accessory like the rec button: any failure
+  // is one line and no menu. Needs the GS overlay to draw on (below).
+  MenuStick menu_stick;
+  std::shared_ptr<maburplay::GsMenuModel> menu_model;
+  if (cfg.input.menu.configured) {
+    const auto& mc = cfg.input.menu;
+    struct Line { maburplay::RecButton* b; int pin; const char* name; };
+    for (const Line& l : {Line{&menu_stick.up, mc.up, "up"}, Line{&menu_stick.down, mc.down, "down"},
+                          Line{&menu_stick.left, mc.left, "left"},
+                          Line{&menu_stick.right, mc.right, "right"},
+                          Line{&menu_stick.center, mc.center, "center"}}) {
+      maburplay::RecButtonCfg bc;
+      bc.pin = l.pin;
+      bc.active_low = mc.active_low;
+      bc.bias = mc.bias;
+      std::string berr;
+      if (!l.b->open(bc, &berr))
+        std::fprintf(stderr, "maburplay: menu %s: %s\n", l.name, berr.c_str());
+    }
+    try {
+      const maburgs::Config gc = maburgs::load_config(mc.gs_config);
+      maburplay::GsMenuSettings cur;
+      cur.hop = !gc.radio.pin.has_value();
+      cur.channel = gc.radio.pin.value_or(gc.radio.channels.front());
+      cur.wide = gc.radio.width == 80;
+      if (const auto f = maburgs::read_gs_menu_file(maburgs::kGsMenuFile)) {
+        if (f->hop) cur.hop = *f->hop;
+        if (f->channel) cur.channel = *f->channel;
+        if (f->wide) cur.wide = *f->wide && gc.radio.width == 80;
+      }
+      if (menu_stick.center.is_open())
+        menu_model = std::make_shared<maburplay::GsMenuModel>(gc.radio.channels,
+                                                              gc.radio.width == 80, cur);
+      std::fprintf(stderr, "maburplay: menu %s (hop %s, channel %u, bandwidth %s)\n",
+                   menu_model ? "on the 5-way stick, centre opens" : "off: no centre button",
+                   cur.hop ? "on" : "off", static_cast<unsigned>(cur.channel),
+                   cur.wide ? "wide" : "normal");
+    } catch (const std::exception& e) {
+      std::fprintf(stderr, "maburplay: menu off: cannot read %s: %s\n", mc.gs_config.c_str(),
+                   e.what());
     }
   }
 
@@ -915,9 +998,14 @@ int main(int argc, char** argv) {
       // parse_rec_target would.
       maburplay::RecTarget rec_target = maburplay::RecTarget::kGs;
       maburplay::parse_rec_target(cfg.dvr.target, &rec_target);
-      composer.set_gs(maburplay::make_gs_layer(gs_font, rec_target),
-                      maburplay::make_gs_layer(gs_font, rec_target),
-                      maburplay::make_gs_layer(gs_font, rec_target));
+      // The menu box rides the two display buffers' layers, not the burned
+      // DVR's: a recording keeps the flight picture.
+      auto disp_layer = [&]() -> std::unique_ptr<maburplay::GsLayer> {
+        auto l = maburplay::make_gs_layer(gs_font, rec_target);
+        if (!menu_model) return l;
+        return std::make_unique<maburplay::MenuLayer>(std::move(l), gs_font, menu_model);
+      };
+      composer.set_gs(disp_layer(), disp_layer(), maburplay::make_gs_layer(gs_font, rec_target));
       std::fprintf(stderr,
                    "maburplay: gs osd on udp 127.0.0.1:%d font=%s stale_ms=%d\n",
                    gs_src->port(), cfg.osd.gs.font.c_str(), cfg.osd.gs.stale_ms);
@@ -1691,6 +1779,37 @@ int main(int argc, char** argv) {
     backend->poll();
     // One ioctl per iteration (~500/s, microseconds each) -- far under the
     // ~1.5 ms budget tools/bench/gs_osd_bench.cpp polices for this loop.
+    if (menu_model) {
+      const uint64_t mnow = mono_ms();
+      const uint64_t v0 = menu_model->version();
+      using K = maburplay::GsMenuModel::Key;
+      struct P { maburplay::RecButton* b; K k; };
+      for (const P& p : {P{&menu_stick.up, K::Up}, P{&menu_stick.down, K::Down},
+                         P{&menu_stick.left, K::Left}, P{&menu_stick.right, K::Right},
+                         P{&menu_stick.center, K::Center}}) {
+        if (!p.b->is_open() || !p.b->poll(mnow)) continue;
+        if (menu_model->key(p.k, mnow) != maburplay::GsMenuModel::Action::Apply) continue;
+        const maburplay::GsMenuSettings& s = menu_model->current();
+        maburgs::GsMenuChoice choice;
+        choice.hop = s.hop;
+        choice.channel = s.channel;
+        choice.wide = s.wide;
+        if (!maburgs::write_gs_menu_file(maburgs::kGsMenuFile, choice)) {
+          std::fprintf(stderr, "maburplay: menu: cannot write %s\n", maburgs::kGsMenuFile);
+          menu_model->set_status("Could not save the settings", mnow);
+          continue;
+        }
+        const int k = restart_maburgs();
+        std::fprintf(stderr, "maburplay: menu applied (hop %s, channel %u, bandwidth %s), "
+                             "restarting maburgs (%d signalled)\n",
+                     s.hop ? "on" : "off", static_cast<unsigned>(s.channel),
+                     s.wide ? "wide" : "normal", k);
+        menu_model->set_status(k > 0 ? "Applied: link restarting" : "Saved: restart the GS to apply",
+                               mnow);
+      }
+      menu_model->tick(mnow);
+      if (menu_model->version() != v0) gs_needs_render = true;
+    }
     if ((rec_button.is_open() && rec_button.poll(mono_ms())) || g_rec_toggle.exchange(false)) {
       if (rec_on) {
         rec_stop();

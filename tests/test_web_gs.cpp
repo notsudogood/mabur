@@ -1230,7 +1230,7 @@ TEST(gs_nack_disabled_never_sends_one) {
   io.on_au = [](Au&&) {};
   io.send = [&](const std::vector<uint8_t>& b) { sent.push_back(b); };
   auto c = cfg();
-  REQUIRE(!c.link.nack.enable);   // the bundle default is off
+  c.link.nack.enable = false;   // the bundle turns it on since gs10; this pins off
   WebGs g(c, Mode::Gs, 136, 40, {}, 0, io);
   uint64_t t = 1'000'000;
   g.inject_disc_ack_for_replay(t);
@@ -1353,7 +1353,9 @@ TEST(nack_stats_null_in_spotter_and_with_nack_off) {
   CHECK(!s.stats().nack.has_value());
   CHECK(stats_json(s.stats()).find("\"nack\":null") != std::string::npos);
   io.send = [](const std::vector<uint8_t>&) {};
-  WebGs g(cfg(), Mode::Gs, 136, 40, {}, 0, io);   // bundle default: off
+  auto off = cfg();
+  off.link.nack.enable = false;   // the bundle turns it on since gs10
+  WebGs g(off, Mode::Gs, 136, 40, {}, 0, io);
   CHECK(!g.stats().nack.has_value());
   CHECK(stats_json(g.stats()).find("\"nack\":null") != std::string::npos);
 }

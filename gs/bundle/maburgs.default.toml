@@ -108,18 +108,25 @@ static_overhead_enh    = 0.5    # ...and on the enhance layer
 # signal reaches less far (4-6 dB less at MCS0), while 40 MHz MCS3 and MCS4
 # reach as far as 20 MHz MCS5 and MCS6 with more capacity. Putting the slow
 # rungs at 40 MHz buys a faster slowest rung by giving up that range.
+#
+# The two slowest rungs carry more repair data: at the edge of range the
+# loss comes in bursts, and MCS0's video is capped at 500 kb/s ([[encoder.rung]]
+# on the drone), so its extra repairs take spare air, not picture. On the
+# 2026-10-20 garage walk every MCS0 loss episode FEC could still rebuild
+# would have at 1.0 / 0.75; bursts longer than the 32-symbol repair window
+# are past any overhead. MCS1 has no cap: its video is ~15 % lower for it.
 
 [[link.ladder]]
 mcs = 0
 bw  = 20
-overhead_base = 0.5
-overhead_enh  = 0.25
+overhead_base = 1.0
+overhead_enh  = 0.75
 
 [[link.ladder]]
 mcs = 1
 bw  = 20
-overhead_base = 0.5
-overhead_enh  = 0.25
+overhead_base = 0.75
+overhead_enh  = 0.5
 
 [[link.ladder]]
 mcs = 2
@@ -194,9 +201,11 @@ trigger_ms = 300           # ...sustained this long
 min_rung   = 2             # never predict-step below this rung
 
 # Software NACK: ask the drone to re-send symbols FEC could not
-# recover. Off by default until flown.
+# recover. On since 2026-10-20 (gs10); needs the uplink, so it helps least
+# at the very edge, where the drone hears few GS frames. Re-sends are capped
+# by the drone's [nack] air_pct.
 [link.nack]
-enable    = false
+enable    = true
 lookback  = 256    # symbols behind the newest heard that are checked; keep below fec.seq_horizon
 repeat_ms = 16     # second request after this if still missing
 max_tries = 2      # requests per symbol; 0 = measure only, never ask

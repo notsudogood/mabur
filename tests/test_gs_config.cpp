@@ -31,6 +31,9 @@ static std::string what_of(const std::function<void()>& fn) {
 TEST(default_bundle_config_loads) {
   auto cfg = maburgs::load_config(std::string(MABUR_GS_BUNDLE_DIR) + "/maburgs.default.toml");
   CHECK(!cfg.link.ladder_cfg.ladder.empty());
+  // Not a value pin, the rule the bundle's comment states: the base layer
+  // never carries less repair data than the enhance layer.
+  for (const auto& r : cfg.link.ladder_cfg.ladder) CHECK(r.overhead_base >= r.overhead_enh);
 }
 
 TEST(missing_keys_fall_back_to_defaults) {
@@ -367,8 +370,9 @@ TEST(nack_disabled_sends_nothing) {
   // test_nack_tracker's disabled_tracker_is_inert for the tracker itself.
   auto off = maburgs::load_config(write_tmp(""));
   CHECK(!off.link.nack.enable);
+  // The shipped bundle turns it on (gs10): only an absent section is off.
   auto bundle = maburgs::load_config(std::string(MABUR_GS_BUNDLE_DIR) + "/maburgs.default.toml");
-  CHECK(!bundle.link.nack.enable);
+  CHECK(bundle.link.nack.enable);
 }
 
 TEST(stale_video_out_key_throws) {

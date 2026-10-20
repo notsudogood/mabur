@@ -606,6 +606,39 @@ once (2026-09-15, before the 40/80 rungs) and never flown. With today's
 full-path switch (65-91 ms on the GS cards) the plan is a 4-5 frame pause
 per 40/80 crossing at 60 fps, which the operator ruled out.
 
+## 15. GS defaults: NACK on, heavier FEC on the two bottom rungs (agreed 2026-10-20)
+
+`gs/bundle/maburgs.default.toml`, config only:
+
+- `[link.nack] enable = true` (today `false`, "off until flown"). The drone
+  needs no change: it answers whenever asked.
+- MCS0/20: `overhead_base = 1.5`, `overhead_enh = 1.0` (today 0.5 / 0.25).
+- MCS1/20: `overhead_base = 0.75`, `overhead_enh = 0.5` (today 0.5 / 0.25).
+
+Evidence (operator garage walk 2026-10-20, gs8 + d8, ch 132, one walk):
+the glitches were loss at the edge of range (median 117 ms / worst 200 ms
+and 22 of 60 frames at the worst second, all of it waiting on FEC).
+At MCS0/20 the FEC report's non-stale episodes would all have survived at
+1.0 / 0.75; at 0.5 / 0.25, 2 of 5 base and 1 of 3 enh failed. NACK was off,
+so no re-sends ran; arq.log shadow estimated it would have saved ~1 episode.
+
+Costs and limits:
+- MCS0/20 video is capped at 500 kb/s, so its overhead takes spare air,
+  not picture: air ~13 % today -> ~22 % (estimate from that log's
+  `air_pct`). MCS1/20 has no cap, so its video drops ~15 % (the drone keeps
+  the rung's airtime fixed; estimate from the bitrate formula).
+- The 32-symbol repair window, not overhead, caps the largest burst FEC can
+  rebuild: about 32o/(1+o) symbols -- 11 at 0.5, 16 at 1.0, 19 at 1.5, 21
+  at 2.0 (an estimate assuming a clean channel around the burst). The
+  garage's biggest holes (45-69 symbols) are past any overhead; those need a
+  stronger link (item 10) or a longer window on the bottom rung (a drone
+  change, more delay there).
+- NACK needs the uplink: at the garage's worst seconds the drone heard 0-2
+  RCF/s, so requests could not reach it. Re-sends are capped at 5 % of the
+  rung's air (`[nack] air_pct`). Never flown with it on.
+
+Operator is trying both by hand on gs8 first (after the W3/W4 runs).
+
 ## Proposed, not yet agreed
 
 Gaps found while building gs8 / d8. Ask before scheduling.

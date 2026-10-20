@@ -51,8 +51,9 @@ hops and spare-card scouting pause, and nothing is probed.
 
 - Half the capacity: re-sends (NACK) and the FEC repair window get tighter
   in airtime.
-- 10 MHz is more sensitive to the frequency offset between the radios
-  (devourer bench: 5 MHz at 5 GHz was CFO-limited; 10 MHz was fine there).
+- 10 MHz is more sensitive to the frequency offset between the radios.
+  devourer records 5 MHz at 5 GHz as CFO-limited on the 8822B; 10 MHz
+  between two 8812EUs at 5 GHz has not been measured here.
 - Each move costs the frames in flight during the switches, plus the
   confirm time when a move fails.
 - The blind promote can bounce: up to 20, fail, back down after `enter_ms`.

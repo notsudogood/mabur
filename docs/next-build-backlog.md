@@ -3,6 +3,26 @@
 What the operator has agreed goes into the next GS (and drone) build, in
 order. Each item names its evidence. Remove an item when it ships.
 
+**gs10 + d11 (built 2026-10-20, none of it flown).** Every new behaviour has
+its own switch and logs what it does; the test doc lists the switches.
+
+| Item | State in gs10 / d11 | Switch (default) |
+|---|---|---|
+| 0 hop at 80 MHz | full channel set (batched) for a hop at 80 or a 40 MHz pair-side change, both ends | `radio.fast_hop_at_80` (false) |
+| 5 walksnail `.srt` | built | player `dvr.osd_file` |
+| 7 auto channel mode | post-FEC loss rule, scout paused on fast rungs / better card | `hop.verdict.sustained_post_fec`, `hop.scout_fast_rungs`, `hop.scout_better_margin_db` |
+| 8 recorder off cpu0 | built | drone `record.core`, `record.low_priority` |
+| 9 GS menu | minimal: hop on/off, pin, Bandwidth Normal/Wide; Apply restarts maburgs | player `[input.menu]` (RunCam pins) |
+| 10 10 MHz rung | built, GS state machine + drone rescue | `[link.narrow10] enable` (false) |
+| 14 drone width steps | drone home 40, widens per rung (FastSetChannel, batched); GS cards to 20 on 20 rungs | drone `radio.width_step` (true), GS `radio.narrow_20` (true) |
+| 15 NACK + bottom-rung FEC | MCS0/20 1.0/0.75, MCS1/20 0.75/0.5, NACK on | `[link.nack] enable`, ladder overheads |
+| proposed: VHT power diffs | devourer: VHT 1SS takes the HT diffs | (always) |
+| proposed: spur fast path | devourer batched set covers spur channels | `radio.batched_tune` (true) |
+| proposed: 80 MHz any primary | devourer + mabur grid | channel set rules |
+| proposed: channels above 165 | grid to 233 (devourer's tune limit) | channel set |
+| proposed: bottom-rung look | per-rung encoder fps | `[[encoder.rung]] fps` (0 = off) |
+| proposed: channel 149 at 80 | not done (a bench run, not code) | -- |
+
 ## 0. BLOCKER for Hop on at 80 MHz: drone stops hearing the GS after hops (found 2026-10-18, gs8 + d8)
 
 Evidence (bench, d8 + gs8, defaults: width 80, channels [36, 132], Hop on):
@@ -612,7 +632,8 @@ per 40/80 crossing at 60 fps, which the operator ruled out.
 
 - `[link.nack] enable = true` (today `false`, "off until flown"). The drone
   needs no change: it answers whenever asked.
-- MCS0/20: `overhead_base = 1.5`, `overhead_enh = 1.0` (today 0.5 / 0.25).
+- MCS0/20: `overhead_base = 1.0`, `overhead_enh = 0.75` (today 0.5 / 0.25;
+  the operator picked 1.0 / 0.75 over 1.5 / 1.0 on 2026-10-20).
 - MCS1/20: `overhead_base = 0.75`, `overhead_enh = 0.5` (today 0.5 / 0.25).
 
 Evidence (operator garage walk 2026-10-20, gs8 + d8, ch 132, one walk):
@@ -624,8 +645,8 @@ so no re-sends ran; arq.log shadow estimated it would have saved ~1 episode.
 
 Costs and limits:
 - MCS0/20 video is capped at 500 kb/s, so its overhead takes spare air,
-  not picture: air ~13 % today -> ~22 % (estimate from that log's
-  `air_pct`). MCS1/20 has no cap, so its video drops ~15 % (the drone keeps
+  not picture: air ~13 % today -> ~18 % at 1.0 / 0.75 (~22 % had it been
+  1.5 / 1.0; estimates from that log's `air_pct`). MCS1/20 has no cap, so its video drops ~15 % (the drone keeps
   the rung's airtime fixed; estimate from the bitrate formula).
 - The 32-symbol repair window, not overhead, caps the largest burst FEC can
   rebuild: about 32o/(1+o) symbols -- 11 at 0.5, 16 at 1.0, 19 at 1.5, 21
@@ -638,6 +659,7 @@ Costs and limits:
   rung's air (`[nack] air_pct`). Never flown with it on.
 
 Operator is trying both by hand on gs8 first (after the W3/W4 runs).
+Built into gs10 as the bundle default (2026-10-20).
 
 ## Proposed, not yet agreed
 

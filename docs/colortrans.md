@@ -168,6 +168,36 @@ A recording must not cost the live picture a vsync. What makes that hold:
   `test_fps_cap`): a frame is admitted when its slot is due and slots
   advance one interval per admit, so a source at or under the cap passes
   whole even though decoded frames arrive in pairs.
+- **File I/O off the encode thread.** The mux writes through
+  `mabur::ThreadedSink` (`common/include/mabur/threaded_sink.h`,
+  `test_threaded_sink`). A closing fragment is ~2.5 MB at 20 Mbit/s and
+  takes ~22 ms to write to the GS's vfat card. The encode thread's budget at
+  60 fps is 16.7 ms with ~14 ms of encode, so written in line it would
+  displace the next frame at the `ct_out` handoff, once per fragment. The
+  writer thread (`mbr-dvrw`) trickles: each queued write reaches the file
+  in 64 KB slices with an 8 ms sleep between them (`ThreadedSinkPacing`),
+  so a fragment's kernel work (the page-cache copy and a FAT buffer head per
+  512-byte sector) is spread over ~320 ms instead of landing in one ~22 ms
+  burst. The burst was the live picture's cost: with the encoder, the GPU
+  stage, the decoder and the writer all busy at once, the main loop woke a
+  few ms late, or its commit ioctl or the decode ran long, and the frame
+  missed its vblank about once per 45-90 s of recording. Lowering the
+  writer's priority does not prevent that (a thread that just woke from a
+  long sleep keeps the CPU against the loop's wake-up until the tick), so
+  the writer runs 10 nice steps below the player only as a tie-breaker.
+  The gaps stop while the queue holds 4 MB or more (the card is slower than
+  the trickle: catch up) and during the sink's destructor (record stop
+  drains it on the main loop). Record of the search and the gate:
+  `docs/findings/2026-10-19-burned-dvr-live-repeat.md`.
+
+- **A longer vsync lead while recording.** The trickle halves the live
+  cost but does not remove it: the main loop still wakes 3-6 ms late a few
+  times a minute while the recorder runs, and the 5 ms lead
+  (`display.vsync_lead_ms`) leaves ~3 ms to the latch. At record start the
+  regulator switches to `display.rec_vsync_lead_ms` (bundle 8) and back at
+  stop (`maburplay: rec: vsync lead 5 -> 8 ms for the recording`); the phase
+  lock re-steers the sensor to the moved release. +3 ms of glass latency
+  while recording, 0 repeats on the bench.
 
 `BurnRecorder: stopped` reports `ct_ms=mean/max enc_ms=mean/max`; the ct
 thread logs `colortrans stage mean per frame ...: import, draw+finish, rga`
@@ -180,6 +210,10 @@ Bench record of the three fixes and their numbers:
 
 ## Not done / follow-ups
 
+- A record start or stop blocks the main loop for 70-180 ms:
+  `BurnRecorder::start()` (encoder init, palette upload) and `stop()`
+  (thread joins, encoder teardown, mux close) run synchronously from
+  `rec_start`/`rec_stop`.
 - Live retune (config + restart is the loop).
 - EGL YUV colour-space / range hints on the dmabuf import (none are passed;
   a mismatch is a slight tint between the display and the DVR).

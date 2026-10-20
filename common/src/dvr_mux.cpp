@@ -79,10 +79,15 @@ void put_unity_matrix(BoxWriter& b) {
 
 }  // namespace
 
+std::unique_ptr<DvrSink> open_file_sink(const std::string& path) {
+  FILE* f = std::fopen(path.c_str(), "wb");
+  if (!f) return nullptr;
+  return std::make_unique<FileSink>(f);
+}
+
 bool DvrMux::open(const std::string& path, const std::vector<uint8_t>& hvcc, int width,
                    int height, int fragment_ms) {
-  FILE* f = std::fopen(path.c_str(), "wb");
-  return open(f ? std::make_unique<FileSink>(f) : nullptr, hvcc, width, height, fragment_ms);
+  return open(open_file_sink(path), hvcc, width, height, fragment_ms);
 }
 
 bool DvrMux::open(std::unique_ptr<DvrSink> sink, const std::vector<uint8_t>& hvcc, int width,

@@ -100,6 +100,10 @@ struct BurnCfg {
 //     MppEncoder call except init()/set_palette() (which run inside start(),
 //     before the thread exists) happens there, which is what MppEncoder's
 //     "set_osd() and encode() from ONE thread" contract requires.
+//   The file itself is written by a third thread, mabur::ThreadedSink's
+//     writer: the mux serialises each closing fragment on the recorder
+//     thread and hands the bytes over, so the card's write latency never
+//     counts against the encoder's frame budget.
 //   The handoff is a single-slot mailbox, latest-wins: if the encoder falls
 //     behind, the older frame is dropped and its reference released. Never a
 //     growing queue -- a queue under sustained overload turns into unbounded

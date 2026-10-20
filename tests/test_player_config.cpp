@@ -296,6 +296,24 @@ TEST(display_vsync_defaults) {
   const auto cfg = maburplay::load_config(write_tmp_play(""));
   CHECK(cfg.display.vsync_lock == true);
   CHECK(cfg.display.vsync_lead_ms == 5);
+  CHECK(cfg.display.rec_vsync_lead_ms == 8);
+}
+
+TEST(display_rec_vsync_lead_range_enforced) {
+  bool threw = false;
+  try { maburplay::load_config(write_tmp_play(
+      "[display]\nrec_vsync_lead_ms = 0\n")); }
+  catch (const std::exception&) { threw = true; }
+  CHECK(threw == true);
+  threw = false;
+  try { maburplay::load_config(write_tmp_play(
+      "[display]\nrec_vsync_lead_ms = 11\n")); }
+  catch (const std::exception&) { threw = true; }
+  CHECK(threw == true);
+  const auto cfg = maburplay::load_config(write_tmp_play(
+      "[display]\nvsync_lead_ms = 4\nrec_vsync_lead_ms = 7\n"));
+  CHECK(cfg.display.vsync_lead_ms == 4);
+  CHECK(cfg.display.rec_vsync_lead_ms == 7);
 }
 
 TEST(display_vsync_lead_range_enforced) {

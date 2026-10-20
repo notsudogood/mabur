@@ -61,6 +61,12 @@ class FrameRegulator {
 
   bool enabled() const { return d_us_ > 0; }
 
+  // The lead for frames placed from now on (display.vsync_lead_ms, and
+  // display.rec_vsync_lead_ms while the burned recorder runs: its fragment
+  // writes make the main loop wake a few ms late now and then, and a longer
+  // lead keeps those commits ahead of the latch). Held frames keep theirs.
+  void set_lead_ms(int lead_ms) { lead_us_ = static_cast<uint64_t>(lead_ms) * 1000; }
+
   static constexpr int kMaxHeld = 4;
 
   struct Displaced {
@@ -204,7 +210,7 @@ class FrameRegulator {
 
   const int64_t d_us_;
   const bool vsync_lock_;
-  const uint64_t lead_us_;
+  uint64_t lead_us_;
   const uint64_t chain_budget_;
   const int64_t sched_cap_us_;
 

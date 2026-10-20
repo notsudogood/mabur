@@ -213,6 +213,28 @@ TEST(servo_releases_at_vblank_minus_lead) {
   CHECK(reg.fallback_frames() == 0);
 }
 
+// A recording raises the lead (display.rec_vsync_lead_ms): every frame
+// placed from then on releases that much earlier before its vblank, so a
+// main loop that wakes a few ms late during a fragment write still makes
+// the latch. Frames already held keep the release they were given.
+TEST(set_lead_moves_the_next_release_earlier) {
+  FrameRegulator reg(12, /*vsync_lock=*/true, /*vsync_lead_ms=*/3);
+  warm(reg);
+  const uint64_t phase = kT0 + 7 * kVb;
+  FrameRegulator::Displaced disp;
+  DmaFrame out;
+  reg.set_lead_ms(6);
+  const uint64_t t_dec = phase + kVb - 9'000;
+  CHECK(!reg.offer(frame(0), t_dec, &disp));
+  const uint64_t release = phase + kVb - 6'000;
+  CHECK(!reg.release_due(release - 1, &out));
+  CHECK(reg.release_due(release, &out));
+  reg.set_lead_ms(3);
+  CHECK(!reg.offer(frame(1), t_dec + kVb, &disp));
+  CHECK(!reg.release_due(phase + 2 * kVb - 3'001, &out));
+  CHECK(reg.release_due(phase + 2 * kVb - 3'000, &out));
+}
+
 TEST(servo_inside_lead_window_targets_next_vblank) {
   FrameRegulator reg(12, true, 3);
   warm(reg);

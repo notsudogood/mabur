@@ -18,6 +18,10 @@ class DvrSink {
   virtual bool sync() { return flush(); }              // durable
 };
 
+// The sink open(path) writes through: a buffered FILE* opened "wb". Null
+// when the path cannot be opened.
+std::unique_ptr<DvrSink> open_file_sink(const std::string& path);
+
 // Fragmented MP4 (init segment + moof/mdat fragments). One video track,
 // hvc1, timescale 1'000'000 (pts_us native). No B-frames in this encoder
 // config (SVC-T TRAIL only): decode order == presentation order, no cts.

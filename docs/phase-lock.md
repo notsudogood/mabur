@@ -80,6 +80,13 @@ goes in before its config -- an older binary exits on the new
 `maburplay.toml` `[display]`: `phase_lock` (code false, bundle true),
 `phase_margin_ms` (code and bundle 4, range 1-10), `sched_cap_ms` (bundle
 16; with the lock on, capture placement runs only while locked).
+`vsync_lead_ms` (bundle 5) is the release's lead before the vblank, and
+`rec_vsync_lead_ms` (code and bundle 8, range 1-10) replaces it while a
+burned recording runs: the recorder's fragment writes leave the main loop
+waking 3-6 ms late a few times a minute, which the 5 ms lead cannot absorb.
+The lock re-steers the sensor to the moved release over the following
+seconds, so a recording costs +3 ms of glass latency while it runs and
+nothing after (`docs/findings/2026-10-19-burned-dvr-live-repeat.md`).
 `phase_lock` needs `vsync_lock = true`, `sched_cap_ms > 0` and
 `regulate_ms > 0`, or the player refuses to start.
 

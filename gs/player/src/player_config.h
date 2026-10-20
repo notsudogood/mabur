@@ -106,6 +106,13 @@ struct DisplayCfg {
   // costs about one missed latch a minute in flight; every ms is a ms of
   // glass latency on every frame.
   int vsync_lead_ms = 5;
+  // The lead while the burned recorder runs. Its fragment writes, spread as
+  // they are, still leave the main loop waking 3-6 ms late a few times a
+  // minute, which a 5 ms lead cannot absorb: about one repeated frame per
+  // 45-90 s of recording. 8 absorbed every one on the bench
+  // (docs/findings/2026-10-19-burned-dvr-live-repeat.md) at +3 ms of glass
+  // latency, paid only while recording. Range [1,10].
+  int rec_vsync_lead_ms = 8;
   // Frames a sequential-slot chain may run before the regulator cuts it
   // with one dropped frame (frame_regulator.h chain_cuts). 0 = unbounded,
   // no chain cut at all: the default, and the bundle's. On a clean link the

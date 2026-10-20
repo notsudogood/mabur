@@ -15,6 +15,7 @@
 
 #include "mabur/dvr_mux.h"
 #include "mabur/hevc_params.h"
+#include "mabur/threaded_sink.h"
 #include "fps_cap.h"
 #include "mpp_backend.h"
 #include "mpp_encoder.h"
@@ -435,7 +436,13 @@ struct BurnRecorder::Impl {
         tw = cfg.width;
         th = cfg.height;
       }
-      if (!mux.open(path, params.hvcc(), tw, th, cfg.fragment_ms)) {
+      // The file's I/O runs on ThreadedSink's writer thread: a closing
+      // fragment is ~2.5 MB, and writing it here (~22 ms on the GS card)
+      // would push this thread past a frame period and lose the next frame
+      // to the ct_out handoff.
+      std::unique_ptr<mabur::DvrSink> file = mabur::open_file_sink(path);
+      if (!file || !mux.open(std::make_unique<mabur::ThreadedSink>(std::move(file)),
+                             params.hvcc(), tw, th, cfg.fragment_ms)) {
         mux_failed = true;
         std::fprintf(stderr, "BurnRecorder: cannot open %s; recording disabled\n", path.c_str());
         dead.store(true);

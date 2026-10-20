@@ -86,7 +86,8 @@ base name:
 |---|---|
 | `record-NNNN.mp4` | the video as received (HEVC, fragmented MP4, 1 s fragments) |
 | `record-NNNN.osd` | the flight controller's OSD, Walksnail format |
-| `record-NNNN.srt` | one subtitle a second: channel, MCS/width, RSSI, loss, VTX temp, latency |
+| `record-NNNN.srt` | one subtitle a second in Walksnail's own format, the only one walksnail-osd-tool reads: `Signal:N CH:N FlightTime:N SBat:0.0V GBat:0.0V Delay:Nms Bitrate:N.NMbps Distance:0m` |
+| `record-NNNN.link.srt` | the same cues with our detail: channel, MCS/width, RSSI, loss, VTX temp, latency |
 
 The `.osd` starts when the video file gets its first frame (time zero is
 that frame), and records every complete DisplayPort screen. Format: a
@@ -99,18 +100,25 @@ byte. A smaller canvas (the usual 50 × 18) is padded with blanks.
 Both sidecars are buffered in memory and written once a second from the
 player's idle slot, never between a frame and its refresh: an SD write can
 stall for hundreds of ms. A power cut loses at most the last second of
-`.osd`/`.srt`, matching the video's 1 s fragments.
+`.osd`/`.srt`/`.link.srt`, matching the video's 1 s fragments.
+
+In the `.srt`, Signal is 0-4 bars from the best card's RSSI (4 at -60 dBm
+or better, one bar per 10 dB, 1 at -90), CH is our channel, FlightTime
+the seconds since the recording started, Delay the e2e p50 and Bitrate
+the received video rate. The GS has no battery or GPS feed, so SBat, GBat
+and Distance are 0.
 
 ## Stitching the OSD back on
 
-1. Copy the three files of a recording off the card, keeping them in one
+1. Copy the files of a recording off the card, keeping them in one
    folder.
 2. Open the `.mp4` in walksnail-osd-tool (github.com/avsaase/walksnail-osd-tool).
    It finds the `.osd` with the same name; otherwise, load it by hand.
 3. Pick the font for your flight controller firmware (the `osd_fc` you
    set, Betaflight by default) and render.
 
-The `.srt` opens in any video player as a subtitle track.
+Both subtitle files open in any video player as a subtitle track; the
+`.link.srt` is the one with our link detail.
 
 **Not verified yet:** no file from this recorder has been through
 walksnail-osd-tool. The layout matches what that tool reads (and what

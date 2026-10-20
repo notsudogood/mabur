@@ -42,6 +42,24 @@ std::string OsdRecorder::srt_entry(uint64_t n, uint32_t t0_ms, uint32_t t1_ms,
   return std::to_string(n) + "\n" + ts(t0_ms) + " --> " + ts(t1_ms) + "\n" + line + "\n\n";
 }
 
+std::string OsdRecorder::walksnail_line(int signal, int channel, uint32_t flight_s,
+                                        uint32_t delay_ms, double mbps) {
+  char b[160];
+  std::snprintf(b, sizeof(b),
+                "Signal:%d CH:%d FlightTime:%u SBat:0.0V GBat:0.0V Delay:%ums "
+                "Bitrate:%.1fMbps Distance:0m",
+                signal < 0 ? 0 : signal > 4 ? 4 : signal,
+                channel < 0 ? 0 : channel > 255 ? 255 : channel, flight_s, delay_ms,
+                mbps < 0 ? 0.0 : mbps);
+  return b;
+}
+
+int OsdRecorder::signal_bars(std::optional<double> rssi_dbm) {
+  if (!rssi_dbm) return 0;
+  const double r = *rssi_dbm;
+  return r >= -60 ? 4 : r >= -70 ? 3 : r >= -80 ? 2 : r >= -90 ? 1 : 0;
+}
+
 std::string OsdRecorder::sidecar_path(const std::string& video_path, const char* ext) {
   const size_t slash = video_path.find_last_of('/');
   const size_t dot = video_path.find_last_of('.');
@@ -56,6 +74,7 @@ void OsdRecorder::arm(const std::string& video_path) {
   error_ = false;
   osd_path_ = sidecar_path(video_path, ".osd");
   srt_path_ = sidecar_path(video_path, ".srt");
+  link_srt_path_ = sidecar_path(video_path, ".link.srt");
   records_ = 0;
   sub_n_ = 0;
   last_sub_ms_ = 0;
@@ -74,7 +93,8 @@ void OsdRecorder::begin(uint64_t now_ms) {
   }
   if (cfg_.srt) {
     srt_ = std::fopen(srt_path_.c_str(), "w");
-    if (!srt_) error_ = true;
+    link_srt_ = std::fopen(link_srt_path_.c_str(), "w");
+    if (!srt_ || !link_srt_) error_ = true;
   }
 }
 
@@ -85,12 +105,15 @@ void OsdRecorder::screen(uint64_t now_ms, const mabur::MspScreen& s) {
   ++records_;
 }
 
-void OsdRecorder::subtitle(uint64_t now_ms, const std::string& text) {
-  if (!running_ || !srt_) return;
+void OsdRecorder::subtitle(uint64_t now_ms, const std::string& walksnail,
+                           const std::string& detail) {
+  if (!running_ || (!srt_ && !link_srt_)) return;
   const uint64_t t = now_ms > t0_ms_ ? now_ms - t0_ms_ : 0;
   const uint32_t t1 = static_cast<uint32_t>(t);
   if (t1 <= last_sub_ms_ && sub_n_ > 0) return;
-  srt_buf_ += srt_entry(++sub_n_, last_sub_ms_, t1, text);
+  ++sub_n_;
+  if (srt_) srt_buf_ += srt_entry(sub_n_, last_sub_ms_, t1, walksnail);
+  if (link_srt_) link_srt_buf_ += srt_entry(sub_n_, last_sub_ms_, t1, detail);
   last_sub_ms_ = t1;
 }
 
@@ -105,16 +128,26 @@ void OsdRecorder::flush() {
     std::fflush(srt_);
     srt_buf_.clear();
   }
+  if (link_srt_ && !link_srt_buf_.empty()) {
+    if (std::fwrite(link_srt_buf_.data(), 1, link_srt_buf_.size(), link_srt_) !=
+        link_srt_buf_.size())
+      error_ = true;
+    std::fflush(link_srt_);
+    link_srt_buf_.clear();
+  }
 }
 
 void OsdRecorder::stop() {
   flush();
   if (osd_) std::fclose(osd_);
   if (srt_) std::fclose(srt_);
+  if (link_srt_) std::fclose(link_srt_);
   osd_ = nullptr;
   srt_ = nullptr;
+  link_srt_ = nullptr;
   osd_buf_.clear();
   srt_buf_.clear();
+  link_srt_buf_.clear();
   armed_ = false;
   running_ = false;
 }

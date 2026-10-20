@@ -14,7 +14,7 @@ autostart   = false        # true = record from the start; false = wait for the 
 dir         = "/media/dvr"   # where recordings are saved
 fragment_ms = 1000         # recording is saved in pieces this long, so a power cut loses at most this much
 mode        = "raw"        # "raw" = video exactly as received; "burned" = re-encoded with the OSD drawn in (costs latency spikes)
-osd_file    = true         # raw: also save the OSD (.osd, for walksnail-osd-tool) and a link summary (.srt) next to the video
+osd_file    = true         # raw: also save the OSD (.osd, for walksnail-osd-tool) and link summaries (.srt for walksnail-osd-tool, .link.srt with our detail) next to the video
 osd_fc      = "BTFL"       # flight controller firmware for the .osd file: "BTFL", "INAV" or "ARDU"
 target      = "gs"         # where the record button records: "gs" = here, "vtx" = the drone's SD card, "both"
 

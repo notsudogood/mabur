@@ -1870,8 +1870,15 @@ int main(int argc, char** argv) {
       osd_rec_mark_ms = mono_ms();
       std::string t;
       char b[96];
+      // Walksnail's own line for walksnail-osd-tool (.srt): signal bars from
+      // the best card's RSSI, our channel, recording time, e2e p50, video rate.
+      std::optional<double> best_rssi;
+      int ws_ch = 0;
       if (gs_src && gs_src->have_any()) {
         const maburplay::GsSnapshot& sn = gs_src->snapshot();
+        for (const auto& c : sn.cards)
+          if (c.rssi_dbm && (!best_rssi || *c.rssi_dbm > *best_rssi)) best_rssi = c.rssi_dbm;
+        if (sn.channel) ws_ch = *sn.channel;
         if (sn.channel) { std::snprintf(b, sizeof(b), "CH%d ", *sn.channel); t += b; }
         if (sn.mcs) {
           std::snprintf(b, sizeof(b), "MCS%d/%dMHz ", *sn.mcs, sn.bw ? *sn.bw : 20);
@@ -1892,7 +1899,12 @@ int main(int argc, char** argv) {
         std::snprintf(b, sizeof(b), "lat %d/%dms", gs_ps.lat_p50_e2e_ms, gs_ps.lat_e2e_ms);
         t += b;
       }
-      osd_rec.subtitle(mono_ms(), t.empty() ? std::string("-") : t);
+      const uint32_t rec_s = static_cast<uint32_t>(osd_rec.elapsed_ms(mono_ms()) / 1000);
+      const std::string ws = maburplay::OsdRecorder::walksnail_line(
+          maburplay::OsdRecorder::signal_bars(best_rssi), ws_ch, rec_s,
+          gs_ps.lat_valid ? static_cast<uint32_t>(std::max(0, gs_ps.lat_p50_e2e_ms)) : 0u,
+          gs_ps.mbps);
+      osd_rec.subtitle(mono_ms(), ws, t.empty() ? std::string("-") : t);
       osd_rec.flush();
     }
     // GS link-status overlay. Drained every iteration whether or not

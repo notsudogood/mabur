@@ -86,7 +86,7 @@ TEST(files_appear_next_to_the_video_and_hold_every_screen) {
   REQUIRE(r.running() && !r.error());
   r.screen(5040, s);
   r.screen(5080, s);
-  r.subtitle(6000, "MCS4/40MHz lat 38/54ms");
+  r.subtitle(6000, OsdRecorder::walksnail_line(3, 132, 1, 38, 24.5), "MCS4/40MHz lat 38/54ms");
   r.flush();
   auto osd = slurp(dir + "/record-0007.osd");
   REQUIRE(osd.size() == 40 + 2 * 2124);
@@ -100,10 +100,32 @@ TEST(files_appear_next_to_the_video_and_hold_every_screen) {
   CHECK(slurp(dir + "/record-0007.osd").size() == 40 + 3 * 2124);
   auto srt = slurp(dir + "/record-0007.srt");
   const std::string srt_s(srt.begin(), srt.end());
-  CHECK(srt_s == "1\n00:00:00,000 --> 00:00:01,000\nMCS4/40MHz lat 38/54ms\n\n");
+  CHECK(srt_s ==
+        "1\n00:00:00,000 --> 00:00:01,000\nSignal:3 CH:132 FlightTime:1 SBat:0.0V GBat:0.0V "
+        "Delay:38ms Bitrate:24.5Mbps Distance:0m\n\n");
+  auto link = slurp(dir + "/record-0007.link.srt");
+  const std::string link_s(link.begin(), link.end());
+  CHECK(link_s == "1\n00:00:00,000 --> 00:00:01,000\nMCS4/40MHz lat 38/54ms\n\n");
   std::remove((dir + "/record-0007.osd").c_str());
   std::remove((dir + "/record-0007.srt").c_str());
+  std::remove((dir + "/record-0007.link.srt").c_str());
   rmdir(dir.c_str());
+}
+
+// walksnail-osd-tool parses exactly this shape (backend/src/srt/frame.rs:
+// "Signal:{u8} CH:{u8} FlightTime:{u32} SBat:{f32}V GBat:{f32}V
+// Delay:{u32}ms Bitrate:{f32}Mbps Distance:{u32}m") and skips anything else.
+TEST(walksnail_line_matches_the_tools_format_and_clamps) {
+  CHECK(OsdRecorder::walksnail_line(4, 8, 0, 32, 25.0) ==
+        "Signal:4 CH:8 FlightTime:0 SBat:0.0V GBat:0.0V Delay:32ms Bitrate:25.0Mbps Distance:0m");
+  CHECK(OsdRecorder::walksnail_line(9, 300, 7, 0, -1.0) ==
+        "Signal:4 CH:255 FlightTime:7 SBat:0.0V GBat:0.0V Delay:0ms Bitrate:0.0Mbps Distance:0m");
+  CHECK(OsdRecorder::signal_bars(std::nullopt) == 0);
+  CHECK(OsdRecorder::signal_bars(-55.0) == 4);
+  CHECK(OsdRecorder::signal_bars(-60.0) == 4);
+  CHECK(OsdRecorder::signal_bars(-75.0) == 2);
+  CHECK(OsdRecorder::signal_bars(-90.0) == 1);
+  CHECK(OsdRecorder::signal_bars(-91.0) == 0);
 }
 
 MTEST_MAIN

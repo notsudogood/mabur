@@ -416,7 +416,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
                 "s3_settle_ms", "s3_min_syms",
                 "rung_stats", "fade", "probe",
                 "rcf_slot_hold_ms", "arrival_guard_syms",
-                "nack",
+                "nack", "narrow10",
                 "key_file", "key"});
     c.link.key_file = get_str(r, "key_file", "/etc/mabur.key", "link");
     // Read by presence: link.key is an optional web-overlay key,
@@ -601,6 +601,31 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
     if (c.link.nack.lookback >= c.fec.seq_horizon)
       fail("link.nack.lookback", "must be < fec.seq_horizon (" +
                                      std::to_string(c.fec.seq_horizon) + ")");
+
+    if (r.contains("narrow10")) {
+      const Value& nj = r["narrow10"];
+      check_keys(nj, "link.narrow10",
+                 {"enable", "overhead_base", "overhead_enh", "enter_ms", "enter_post_loss_pct",
+                  "lead_ms", "confirm_ms", "rescue_ms", "clean_ms", "promote_margin_db",
+                  "cooldown_ms"});
+      auto& n = c.link.narrow10;
+      n.enable = get_bool(nj, "enable", n.enable, "link.narrow10");
+      n.overhead_base = get_num(nj, "overhead_base", n.overhead_base, 0.0, 4.0, "link.narrow10");
+      n.overhead_enh = get_num(nj, "overhead_enh", n.overhead_enh, 0.0, 4.0, "link.narrow10");
+      n.enter_ms = static_cast<int>(get_int(nj, "enter_ms", n.enter_ms, 100, 60000, "link.narrow10"));
+      n.enter_post_loss_pct =
+          get_num(nj, "enter_post_loss_pct", n.enter_post_loss_pct, 0.0, 100.0, "link.narrow10");
+      n.lead_ms = static_cast<int>(get_int(nj, "lead_ms", n.lead_ms, 0, 5000, "link.narrow10"));
+      n.confirm_ms =
+          static_cast<int>(get_int(nj, "confirm_ms", n.confirm_ms, 200, 30000, "link.narrow10"));
+      n.rescue_ms =
+          static_cast<int>(get_int(nj, "rescue_ms", n.rescue_ms, 200, 30000, "link.narrow10"));
+      n.clean_ms = static_cast<int>(get_int(nj, "clean_ms", n.clean_ms, 500, 600000, "link.narrow10"));
+      n.promote_margin_db =
+          get_num(nj, "promote_margin_db", n.promote_margin_db, -10.0, 30.0, "link.narrow10");
+      n.cooldown_ms =
+          static_cast<int>(get_int(nj, "cooldown_ms", n.cooldown_ms, 0, 600000, "link.narrow10"));
+    }  // absent = off; not a defaulted key (opt-in)
 
     if (r.contains("rung_stats")) {
       const Value& rs = r["rung_stats"];

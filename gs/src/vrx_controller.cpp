@@ -76,6 +76,8 @@ std::optional<VrxController::Out> VrxController::step(double now_ms,
     // ticked/updated — health is ignored entirely).
     cur_op_ = OpPoint{cfg_.pin_bw == 80, cfg_.pin_mcs, cfg_.pin_bw, false,
                      cfg_.pin_overhead_base, cfg_.pin_overhead_enh, 0.0};
+  } else if (narrow_) {
+    // Below the ladder: the 10 MHz op stands, the ladder is not ticked.
   } else if (ctrl_.on_tick(now_ms)) {
     sync_op_();
   }
@@ -95,7 +97,7 @@ std::optional<VrxController::Out> VrxController::step(double now_ms,
   if (now_ms - last_fb_ms_ < cfg_.feedback_ms) return std::nullopt;
   last_fb_ms_ = now_ms;
 
-  if (cfg_.pin_mcs < 0) {
+  if (cfg_.pin_mcs < 0 && !narrow_) {
     if (ctrl_.update(health, now_ms)) sync_op_();
   }
   mabur::rc::Rcf r = build_rcf();
@@ -141,6 +143,8 @@ mabur::rc::Rcf VrxController::build_rcf() {
     if (cfg_.probe_pin_mcs >= 0)
       r.probe_profile = mabur::rc::encode_profile(mode, static_cast<uint8_t>(cfg_.probe_pin_mcs),
                                                   static_cast<uint8_t>(cur_op_.bw));
+  } else if (narrow_) {
+    // Nothing can be probed: a 10 MHz radio neither sends nor hears 20 MHz.
   } else if (const int pr = ctrl_.probe_rung(); pr >= 0) {
     // The PROBE rung's own width, not the current op's: sitting on 20/4
     // with 40/3 above, the probe must fly 40 MHz.
@@ -151,6 +155,18 @@ mabur::rc::Rcf VrxController::build_rcf() {
         static_cast<uint8_t>(prung.mcs), static_cast<uint8_t>(prung.bw));
   }
   return r;
+}
+
+void VrxController::set_narrow(bool on, double ov_base, double ov_enh, double now_ms) {
+  if (on) {
+    narrow_ = true;
+    cur_op_ = OpPoint{false, 0, 10, false, ov_base, ov_enh, 0.0};
+    return;
+  }
+  if (!narrow_) return;
+  narrow_ = false;
+  ctrl_.restore(0, now_ms);
+  sync_op_();
 }
 
 void VrxController::restore_rung(int rung, double now_ms) {

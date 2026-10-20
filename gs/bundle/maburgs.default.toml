@@ -223,6 +223,24 @@ urgent_slack_ms = 10    # ...unless the frame would give up within min_lead_ms +
 ab_s = 0                # switch re-sending on and off every N seconds to compare both in one flight; 0 = always on
 enh  = true             # also ask for the enhance (in-between frame) layer; needs a drone from 2026-10-10 on
 
+# 10 MHz bottom rung (experimental, off): below MCS0/20 the whole link re-clocks to 10 MHz,
+# ~3 dB more reach for half the air capacity. Needs drone d11 or later. One spare card moves
+# first and must hear the drone at 10 before the rest follow; either end goes back to 20 by
+# itself when it stops hearing the other. Going back up is blind (nothing can test 20 MHz
+# from a 10 MHz radio): only after clean_ms clean and a better SNR than where 20 MHz failed.
+[link.narrow10]
+enable        = false
+overhead_base = 1.0     # error-correction overhead at 10 MHz, base layer
+overhead_enh  = 0.75    # ... and the enhance layer
+enter_ms      = 1500    # MCS0/20 losing picture (after error correction) this long -> go to 10
+enter_post_loss_pct = 1.0  # % of video lost after error correction that counts as losing picture
+lead_ms       = 300     # one-card GS only: orders sent at the old width this long before the card moves
+confirm_ms    = 2000    # the first card must hear the drone at the new width within this, else undo
+rescue_ms     = 1500    # at 10: no drone frame on any card this long -> back to 20
+clean_ms      = 8000    # at 10: this long without loss before trying 20 again
+promote_margin_db = 3.0 # ... and the SNR must be this much above where 20 failed (plus the 3 dB 10 MHz gives)
+cooldown_ms   = 20000   # after leaving 10, wait this long before going back
+
 # Per-rung link history shown in the stats (it does not steer the link).
 [link.rung_stats]
 half_life_samples = 600    # samples for old data to count half (600 = about 30 s)

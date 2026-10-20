@@ -11,6 +11,7 @@ uint8_t bw_to_code(uint8_t bw) {
     case 20: return 0;
     case 40: return 1;
     case 80: return 2;
+    case 10: return 3;
     default: return 0;
   }
 }
@@ -20,6 +21,7 @@ uint8_t code_to_bw(uint8_t code) {
     case 0: return 20;
     case 1: return 40;
     case 2: return 80;
+    case 3: return 10;
     default: return 20;
   }
 }
@@ -110,6 +112,9 @@ double phy_rate_mbps(const LayerTxSpec& s) {
     int mcs = std::clamp(static_cast<int>(s.mcs), 0, 8);
     r = base[mcs];
   }
+  // 10 MHz narrowband is a 20 MHz waveform at half the sample clock: every
+  // symbol takes twice as long.
+  if (s.bw == 10) r *= 0.5;
   return r * (s.sgi ? kSgiFactor : 1.0);
 }
 

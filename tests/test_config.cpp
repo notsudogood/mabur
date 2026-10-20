@@ -1587,6 +1587,23 @@ TEST(nack_section_defaults_and_bounds) {
 
 // ---- radio.width is real (40 MHz rungs) ---------------------------------
 
+TEST(radio_width_step_keys_parse_and_validate) {
+  auto p = write_temp_toml("[radio]\nchannels = [36]\nwidth = 80\nwidth_step = true\nhome_width = 20\n"
+                           "width_hold_ms = 1000\nfast_hop_at_80 = true\nbatched_tune = false\n"
+                           "narrow_rescue_ms = 0\n");
+  Config c = load_config(p.string());
+  CHECK(c.radio.width_step && c.radio.home_width == 20 && c.radio.width_hold_ms == 1000);
+  CHECK(c.radio.fast_hop_at_80 && !c.radio.batched_tune && c.radio.narrow_rescue_ms == 0);
+  std::filesystem::remove(p);
+  for (const char* body : {"[radio]\nchannels = [36]\nwidth = 80\nhome_width = 80\n",
+                           "[radio]\nchannels = [36]\nwidth = 20\nwidth_step = true\nhome_width = 40\n",
+                           "[radio]\nchannels = [36]\nnarrow_rescue_ms = -1\n"}) {
+    bool threw = false;
+    try { load_config(write_temp_toml(body).string()); } catch (const std::exception&) { threw = true; }
+    CHECK(threw);
+  }
+}
+
 TEST(radio_width_accepts_20_40_and_80) {
   auto p20 = write_temp_toml("[radio]\nchannels = [136]\nwidth = 20\n");
   CHECK(load_config(p20.string()).radio.width == 20);

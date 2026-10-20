@@ -25,7 +25,10 @@ struct LayerTxSpec {
 };
 
 // (mode, mcs, bw) -> wire PROFILE byte. bits[3:0]=mcs, bits[5:4]=bw code
-// (20->0, 40->1, 80->2), bit6=VHT.
+// (20->0, 40->1, 80->2, 10->3), bit6=VHT. 10 = the 10 MHz narrowband rung
+// (backlog item 10): a radio mode on both ends, not a per-frame width -- the
+// frames carry 20 MHz radiotap and the radio's halved sample clock narrows
+// them (devourer docs/narrowband.md).
 uint8_t encode_profile(PhyMode mode, uint8_t mcs, uint8_t bw);
 
 // Wire PROFILE byte -> (mode, mcs, bw). mcs is clamped to 7 (HT) / 8 (VHT).

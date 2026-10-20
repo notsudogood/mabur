@@ -63,6 +63,10 @@ ChannelCore::ChannelCore(ChannelCoreCfg cfg, std::vector<LinkCard*> cards, VrxCo
   for (int i = 0; i < n_cards_; ++i)
     can_widen_[static_cast<size_t>(i)] =
         width_dynamic_ && cards_[static_cast<size_t>(i)]->max_width() >= 80;
+  narrow_ = NarrowMode(cfg_.narrow10);
+  can_narrow_.assign(static_cast<size_t>(n_cards_), false);
+  for (int i = 0; i < n_cards_; ++i)
+    can_narrow_[static_cast<size_t>(i)] = cards_[static_cast<size_t>(i)]->max_width() >= 80;
   for (int i = 0; i < n_cards_; ++i) {
     can_scout_[static_cast<size_t>(i)] = cards_[static_cast<size_t>(i)]->can_scout();
     snr_ok_[static_cast<size_t>(i)] = cards_[static_cast<size_t>(i)]->caps().snr_ok;
@@ -193,6 +197,7 @@ ChannelTickOut ChannelCore::tick(const ChannelTickIn& in) {
   step_controller_(in);
   step_move_edge_(in);
   step_drains_();
+  step_narrow_(in);
   step_width_resync_();
   for (const auto& ev : plan_.take_events()) {
     sink_.move(ev);
@@ -421,7 +426,7 @@ void ChannelCore::step_boot_pick_(const ChannelTickIn& in) {
   bi.want = plan_.want();
   bi.relocate_due = plan_.relocate_due();
   bi.plan_hopping = plan_.hopping();
-  bi.hop_active = hop_active(in.in_session, in.cal_running);
+  bi.hop_active = hop_active(in.in_session, in.cal_running || narrow_.active());
   bi.hop_idle_or_hold = hopc_.state() == HopState::Idle || hopc_.state() == HopState::Hold;
   bi.link_edge = link_edge_seen_;
   bi.scout_card_died = scout_card_died_seen_;
@@ -482,7 +487,9 @@ void ChannelCore::step_store_() {
 void ChannelCore::step_hop_edge_and_window_(const ChannelTickIn& in) {
   const double now_ms = in.now_ms;
   const uint64_t now_ms_u = now_ms_u_cur_;
-  const bool active = hop_active(in.in_session, in.cal_running);
+  // A 10 MHz rung holds hops like a calibration does: both ends re-clocked,
+  // a hop would be one more coordinated move on top of it.
+  const bool active = hop_active(in.in_session, in.cal_running || narrow_.active());
   if (active != hop_was_active_) {
     hop_was_active_ = active;
     if (!active) dispatch_hop_action_(hopc_.on_session_lost(now_ms, plan_.op()), false, now_ms);
@@ -625,7 +632,7 @@ void ChannelCore::step_hop_edge_and_window_(const ChannelTickIn& in) {
 
 void ChannelCore::step_controller_(const ChannelTickIn& in) {
   const double now_ms = in.now_ms;
-  if (!hop_active(in.in_session, in.cal_running)) { pending_relocate_.reset(); return; }
+  if (!hop_active(in.in_session, in.cal_running || narrow_.active())) { pending_relocate_.reset(); return; }
   poll_sweep_(now_ms);
   auto fill_hop_targets = [&](HopTick& k) {
     k.best = ranker_.best(now_ms, plan_.op(), hopc_.backed_off(now_ms), /*require_unblocked=*/true);
@@ -808,6 +815,71 @@ void ChannelCore::step_drains_() {
   for (const auto& v : visits) ranker_.add(v);
 }
 
+void ChannelCore::step_narrow_(const ChannelTickIn& in) {
+  if (!cfg_.narrow10.enable) return;
+  // Window stats every 250 ms from the base layer's decoder counters: post-
+  // FEC loss (abandoned / expected source symbols, stale symbols across a
+  // rung change excluded) and pre-FEC arrival loss. Not the ladder's util:
+  // the ladder is frozen while the link is at 10 MHz.
+  if (in.agg && (narrow_win_ms_ < 0 || in.now_ms - narrow_win_ms_ >= 250)) {
+    narrow_win_ms_ = in.now_ms;
+    const auto& st = in.agg->decoder().stats(0);
+    const uint64_t ab = st.syms_abandoned - std::min(st.syms_abandoned, st.syms_abandoned_stale);
+    const uint64_t ex = st.arr_expected - std::min(st.arr_expected, st.arr_expected_stale);
+    const uint64_t arr = st.arr_arrived, exp = st.arr_expected;
+    narrow_distress_ = narrow_clean_ = false;
+    if (narrow_prev_ok_ && ab >= narrow_ab_prev_ && ex > narrow_ex_prev_ && exp > narrow_exp_prev_ &&
+        arr >= narrow_arr_prev_) {
+      narrow_post_pct_ = 100.0 * static_cast<double>(ab - narrow_ab_prev_) /
+                         static_cast<double>(ex - narrow_ex_prev_);
+      const double dexp = static_cast<double>(exp - narrow_exp_prev_);
+      const double darr = static_cast<double>(std::min(arr - narrow_arr_prev_, exp - narrow_exp_prev_));
+      narrow_pre_pct_ = 100.0 * (dexp - darr) / dexp;
+      narrow_distress_ = narrow_post_pct_ >= cfg_.narrow10.enter_post_loss_pct;
+      narrow_clean_ = narrow_post_pct_ == 0.0 && narrow_pre_pct_ < 5.0;
+    }
+    narrow_ab_prev_ = ab;
+    narrow_ex_prev_ = ex;
+    narrow_arr_prev_ = arr;
+    narrow_exp_prev_ = exp;
+    narrow_prev_ok_ = true;
+  }
+  NarrowIn ni;
+  ni.now_ms = in.now_ms;
+  ni.in_session = in.in_session;
+  ni.blocked = in.cal_running || plan_.hopping();
+  ni.rung = vrx_.ctl().rung();
+  ni.distress = narrow_distress_;
+  ni.clean = narrow_clean_;
+  ni.tx_card = in.tx_card;
+  ni.lead_candidate = pick_probe_card(can_narrow_, in.tx_card, narrow_.lead_card());
+  ni.width.resize(static_cast<size_t>(n_cards_));
+  ni.switching.resize(static_cast<size_t>(n_cards_));
+  ni.own.resize(static_cast<size_t>(n_cards_));
+  double best = std::numeric_limits<double>::quiet_NaN();
+  for (int i = 0; i < n_cards_; ++i) {
+    const size_t k = static_cast<size_t>(i);
+    auto& fe = *cards_[k];
+    ni.width[k] = fe.width();
+    ni.switching[k] = width_job_ && width_job_card_ == i;
+    ni.own[k] = fe.frames().own;
+    if (in.agg && snr_ok_[k] && fe.ready()) {
+      const double snr = in.agg->card(i).snr_ema;
+      if (snr != 0.0 && (std::isnan(best) || snr > best)) best = snr;
+    }
+  }
+  ni.best_snr_db = best;
+  narrow_out_ = narrow_.tick(ni);
+  narrow_active_.store(narrow_.active(), std::memory_order_relaxed);
+  vrx_.set_narrow(narrow_out_.op_narrow, cfg_.narrow10.overhead_base, cfg_.narrow10.overhead_enh,
+                  in.now_ms);
+  if (narrow_out_.event)
+    sink_.log(logf_("maburgs narrow10: %s (lead card %d, post-FEC %.2f %%, pre-FEC %.1f %%, "
+                    "best snr %.1f dB, entry snr %.1f dB)",
+                    narrow_out_.event, narrow_.lead_card(), narrow_post_pct_, narrow_pre_pct_, best,
+                    narrow_.entry_snr_db()));
+}
+
 void ChannelCore::step_width_resync_() {
   // Results first: a finished switch updates this card's bookkeeping on the
   // core thread (the worker only tunes).
@@ -825,7 +897,16 @@ void ChannelCore::step_width_resync_() {
   const bool probe_wider = width_need_.probe > width_need_.all;
   probe_card_ = probe_wider ? pick_probe_card(can_widen_, tx_card_now_.load(), probe_card_) : -1;
   probe_wide_.store(probe_wider, std::memory_order_relaxed);
-  const std::vector<uint8_t> want = width_targets(width_need_, can_widen_, probe_card_, home_w_);
+  std::vector<uint8_t> want = width_targets(width_need_, can_widen_, probe_card_, home_w_);
+  // 10 MHz rung: NarrowMode's overrides win (lead card first, then the
+  // rest); 0 leaves a card on its normal target.
+  if (narrow_out_.state != NarrowState::Off)
+    for (int i = 0; i < n_cards_; ++i) {
+      const size_t k = static_cast<size_t>(i);
+      if (!can_narrow_[k]) continue;
+      const uint8_t o = i == narrow_out_.lead_card ? narrow_out_.lead_w : narrow_out_.rest_w;
+      if (o) want[k] = o;
+    }
   std::vector<uint8_t> cur(static_cast<size_t>(n_cards_));
   std::vector<bool> eligible(static_cast<size_t>(n_cards_));
   for (int i = 0; i < n_cards_; ++i) {
@@ -845,6 +926,7 @@ void ChannelCore::step_width_resync_() {
   if (!cfg_.threaded) {
     last_width_switch_ms_ = now_ms_cur_;
     width_job_ = true;
+    width_job_card_ = card;
     run_width_switch_(card, w);
     drain_width_done_();
     return;
@@ -860,6 +942,7 @@ void ChannelCore::step_width_resync_() {
   if (!ilk.owns_lock() || dwell_busy_.load()) return;   // a dwell is running: a later tick
   last_width_switch_ms_ = now_ms_cur_;
   width_job_ = true;
+  width_job_card_ = card;
   width_pending_.store(true);
   dwell_card_.store(card);
   dwell_busy_.store(true);
@@ -903,6 +986,7 @@ void ChannelCore::drain_width_done_() {
   }
   for (const auto& d : done) {
     width_job_ = false;
+    width_job_card_ = -1;
     const size_t k = static_cast<size_t>(d.card);
     if (d.ok) {
       cur_ch_[k] = cards_[k]->channel();   // the NHM arm went stale with tune_gen_
@@ -910,7 +994,8 @@ void ChannelCore::drain_width_done_() {
     } else {
       width_fail_want_[k] = d.want;
     }
-    const char* why = !in_session_ ? "home"
+    const char* why = narrow_out_.state != NarrowState::Off ? "10 MHz rung"
+                      : !in_session_                          ? "home"
                       : d.card == probe_card_ && width_need_.probe > width_need_.all ? "probe"
                                                                                      : "rung";
     sink_.log(logf_("maburgs radio: card %d width -> %u MHz on ch %u %s in %llu ms (%s)", d.card,
@@ -971,6 +1056,8 @@ void ChannelCore::inflight_body_() {
   // One card is wider for a probe and is the only one that can hear it: a
   // dwell would punch holes in the probe and fail it.
   if (probe_wide_.load()) return;
+  // The link is at (or moving to/from) 10 MHz: every card is spoken for.
+  if (narrow_active_.load()) return;
   // hop.scout_fast_rungs / scout_better_margin_db (set per verdict window).
   if (scout_pause_.load(std::memory_order_relaxed) != 0) return;
   const int card = pick_inflight_scout(can_scout_, tx_card_now_.load());

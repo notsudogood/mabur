@@ -56,6 +56,7 @@ inline const char* hop_state_name(HopState s) {
 struct ChannelCoreCfg {
   RadioCfg radio;              // channels, pin, width, scan knobs
   HopCfg hop;                  // [hop] + [hop.verdict]
+  NarrowCfg narrow10;          // [link.narrow10] (narrow_mode.h)
   mabur::LinkKey key;          // disc_for_channel re-tags per channel
   uint8_t start_ch = 0;        // the pin, else the remembered member, else channels[0]
   int n_usb = 0;               // USB cards come first in the roster
@@ -240,6 +241,7 @@ class ChannelCore {
   static constexpr double kWidthGapMs = 250;      // between two card switches
   struct WidthDone { int card; uint8_t want; bool ok; uint8_t ch; uint64_t us; };
   bool width_job_ = false;                        // core thread: a switch is in flight
+  int width_job_card_ = -1;                       // the card that switch is on
   std::thread width_thread_;
   std::mutex width_mu_;
   std::vector<WidthDone> width_done_;
@@ -350,6 +352,19 @@ class ChannelCore {
   void step_move_edge_(const ChannelTickIn& in);
   void step_drains_();
   void step_width_resync_();
+  // 10 MHz bottom rung (narrow_mode.h): feeds NarrowMode its window and
+  // card state, hands the op to vrx_, and leaves the card overrides in
+  // narrow_out_ for step_width_resync_.
+  void step_narrow_(const ChannelTickIn& in);
+  NarrowMode narrow_{NarrowCfg{}};
+  NarrowOut narrow_out_;
+  std::vector<bool> can_narrow_;                  // USB cards (a relay cannot re-clock)
+  std::atomic<bool> narrow_active_{false};        // in-flight dwells pause while set
+  double narrow_win_ms_ = -1;
+  uint64_t narrow_ab_prev_ = 0, narrow_ex_prev_ = 0, narrow_arr_prev_ = 0, narrow_exp_prev_ = 0;
+  bool narrow_prev_ok_ = false;
+  bool narrow_distress_ = false, narrow_clean_ = false;
+  double narrow_post_pct_ = 0, narrow_pre_pct_ = 0;
   void step_mechanical_retune_();
   void poll_sweep_(double now_ms);
   void inflight_body_();

@@ -547,6 +547,13 @@ struct RealActuator : mabur::Actuator {
   uint64_t last_need_ms[3] = {0, 0, 0};  // last time 20 / 40 / 80 was needed
   uint64_t width_switches = 0;
   uint64_t width_switch_failed = 0;
+  // 10 MHz rung (backlog item 10): a whole-radio mode the GS orders with bw
+  // code 10 -- both ends re-clock, so at 10 the drone hears only 10 MHz
+  // frames. narrow_rescue_ms without an RCF there and the radio leaves 10 on
+  // its own (narrow_rescued), staying out until the GS orders any other rung.
+  uint32_t narrow_rescue_ms = 1500;
+  bool narrow_rescued = false;
+  uint64_t narrow_rescues = 0;
   // Where the radio REALLY is (IRtlRadio::ReadTunedCentral), against what
   // `cur` at width_mhz should give (mabur::tuned_central). Bench 2026-10-18:
   // after hops at 80 MHz the drone went deaf to the GS while its own state
@@ -660,6 +667,7 @@ struct RealActuator : mabur::Actuator {
         width_mhz = 20;
         hop_full = true;
       }
+      if (width_mhz == 10) hop_full = true;   // FastRetune's cache is built at 20/40/80
       if (!fast_hop_at_80 &&
           (width_mhz == 80 ||
            (width_mhz == 40 && mabur::ht40_offset(ch) != mabur::ht40_offset(from))))
@@ -765,6 +773,7 @@ struct RealActuator : mabur::Actuator {
   static SelectedChannel tune_for_(uint8_t ch, uint8_t w) {
     if (w == 80) return SelectedChannel{ch, 0, CHANNEL_WIDTH_80};
     if (w == 40) return SelectedChannel{ch, mabur::ht40_offset(ch), CHANNEL_WIDTH_40};
+    if (w == 10) return SelectedChannel{ch, 0, CHANNEL_WIDTH_10};
     return SelectedChannel{ch, 0, CHANNEL_WIDTH_20};
   }
   static int width_slot_(uint8_t w) { return w >= 80 ? 2 : w >= 40 ? 1 : 0; }
@@ -772,6 +781,7 @@ struct RealActuator : mabur::Actuator {
   // The width an op needs: its widest layer, and its probe's when one runs,
   // within [home_width, max_width].
   uint8_t op_width_need_(const AppliedOp& op) const {
+    if (op.ladder[0].bw == 10 || op.ladder[1].bw == 10) return 10;
     int w = std::max<int>(op.ladder[0].bw, op.ladder[1].bw);
     if (op.probe_profile != rc::kNoProbeProfile) w = std::max<int>(w, op.probe.bw);
     w = std::max<int>(w, home_width);
@@ -779,8 +789,26 @@ struct RealActuator : mabur::Actuator {
   }
 
   void widen_for_op_(const AppliedOp& op) {
+    const uint8_t need = op_width_need_(op);
+    // 10 MHz: go at once (the GS has ordered the whole link narrow), and
+    // leave at once for any other rung -- with or without width_step.
+    if (need == 10) {
+      op_need_w = 10;
+      if (!narrow_rescued && width_mhz != 10) set_width_now_(10, "10 MHz rung");
+      return;
+    }
+    narrow_rescued = false;
+    if (width_mhz == 10) {
+      op_need_w = need;
+      last_need_ms[width_slot_(need)] = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now().time_since_epoch())
+              .count());
+      set_width_now_(need, "leave 10 MHz");
+      return;
+    }
     if (!width_step) return;
-    op_need_w = op_width_need_(op);
+    op_need_w = need;
     last_need_ms[width_slot_(op_need_w)] = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch())
@@ -791,8 +819,19 @@ struct RealActuator : mabur::Actuator {
   // From the agent loop: refresh the current op's need and narrow once the
   // wider width has gone unneeded for width_hold_ms. Nothing during a
   // calibration sweep (it owns the radio; its frames are HT20).
-  void width_tick(uint64_t now_ms) {
-    if (!width_step || !dev || op_need_w == 0) return;
+  void width_tick(uint64_t now_ms, uint64_t last_rcf_ms) {
+    if (!dev) return;
+    if (width_mhz == 10) {
+      if (narrow_rescue_ms > 0 && now_ms > last_rcf_ms + narrow_rescue_ms) {
+        ++narrow_rescues;
+        narrow_rescued = true;
+        std::fprintf(stderr, "maburd: 10 MHz rescue: no RCF for %llu ms, leaving 10 MHz\n",
+                     static_cast<unsigned long long>(now_ms - last_rcf_ms));
+        set_width_now_(width_step ? home_width : max_width, "10 MHz rescue");
+      }
+      return;
+    }
+    if (!width_step || op_need_w == 0 || op_need_w == 10) return;
     if (cal_active && cal_active->load(std::memory_order_relaxed)) return;
     last_need_ms[width_slot_(op_need_w)] = now_ms;
     uint8_t held = home_width;
@@ -1718,6 +1757,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   actuator.home_width = actuator.width_step ? cfg.radio.home_width : cfg.radio.width;
   actuator.width_hold_ms = static_cast<uint32_t>(cfg.radio.width_hold_ms);
   actuator.fast_hop_at_80 = cfg.radio.fast_hop_at_80;
+  actuator.narrow_rescue_ms = static_cast<uint32_t>(cfg.radio.narrow_rescue_ms);
   actuator.ldpc = cfg.radio.ldpc;
   // Encoder starts at the "normal" ROI QP (RcAgent only calls set_roi_qp on
   // a low<->normal transition — see run_bitrate_policy's roi_low_ default),
@@ -3225,7 +3265,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
         }
 
         actuator.check_rf_central(now);
-        actuator.width_tick(now);
+        actuator.width_tick(now, agent.last_feedback_ms());
 
         bool want_stats = g_sigusr1_flag.exchange(false);
         if (want_stats || now - last_stats_ms >= 1000) {
@@ -3260,7 +3300,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
                        "txq=%zu txq_drop=%llu "
                        "thermal_delta=%d tx_failed=%llu venc_verb_fail=%llu "
                        "enc_pk100=%uk lp=%d armed=%d snr_mhz=%u snr_off=%d ch=%u rfc=%d rf_bad=%llu "
-                       "w=%u wsw=%llu wsw_fail=%llu\n",
+                       "w=%u wsw=%llu wsw_fail=%llu n10_rescue=%llu\n",
                        static_cast<int>(agent.state()), static_cast<unsigned long long>(hb),
                        static_cast<unsigned long long>(rb), tx.seq(),
                        static_cast<unsigned long long>(tx.sent()),
@@ -3276,7 +3316,8 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
                        static_cast<unsigned long long>(actuator.rf_mismatches),
                        static_cast<unsigned>(actuator.width_mhz),
                        static_cast<unsigned long long>(actuator.width_switches),
-                       static_cast<unsigned long long>(actuator.width_switch_failed));
+                       static_cast<unsigned long long>(actuator.width_switch_failed),
+                       static_cast<unsigned long long>(actuator.narrow_rescues));
         }
 
         // Telemetry suppression: non-sweep PPDUs in the airtime a calibration

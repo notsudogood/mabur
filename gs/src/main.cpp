@@ -629,6 +629,7 @@ static int run_radio(const maburgs::Config& cfg) {
   maburgs::ChannelCoreCfg ccfg;
   ccfg.radio = cfg.radio;
   ccfg.hop = cfg.hop;
+  ccfg.narrow10 = cfg.link.narrow10;
   ccfg.key = cfg.link.key;
   ccfg.start_ch = start_ch;
   ccfg.n_usb = n_usb;

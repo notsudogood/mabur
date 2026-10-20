@@ -32,6 +32,11 @@ struct RadioCfg {
   // devourer's batched channel set (tuning.batched_chset) for the width
   // steps and full-set hops; false = one USB round trip per register.
   bool batched_tune = true;
+  // 10 MHz rung (backlog item 10, ordered by the GS): with no RCF heard for
+  // this long at 10 MHz the radio leaves 10 on its own (the GS does the same
+  // when it stops hearing the drone). 0 = never; the 3 s failsafe still
+  // returns the link to MCS0/20.
+  int narrow_rescue_ms = 1500;
   // The channel set: the drone parks on the remembered member (else the
   // first) and follows the GS to any member. Must be a superset of the GS's
   // list.

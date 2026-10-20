@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "narrow_mode.h"
 #include "ladder_controller.h"
 #include "mabur/channel_set.h"
 #include "mabur/link_key.h"
@@ -216,6 +217,9 @@ struct LinkCfg {
   // Software NACK, base layer (docs/fec-nack.md). Optional
   // [link.nack]: absent = off. lookback < fec.seq_horizon (checked).
   mabur::NackCfg nack;
+  // 10 MHz bottom rung (backlog item 10, narrow_mode.h). Optional
+  // [link.narrow10]: absent = off.
+  NarrowCfg narrow10;
   // Static-link mode: when static_mcs >= 0 the adaptive controller is
   // bypassed entirely and every RCF commands exactly this MCS/FEC overhead
   // (HT, 20 MHz). Rendezvous/keep-alive/failsafe machinery is unaffected.

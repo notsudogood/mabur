@@ -26,7 +26,9 @@ devourer::TxMode to_tx_mode(const rc::LayerTxSpec& s, uint8_t bw) {
     m.mode = devourer::TxMode::Mode::HT;
     m.ht_mcs = s.mcs;
   }
-  m.bw_mhz = bw;
+  // 10 MHz is a radio mode, not a frame width: the frame carries 20 MHz
+  // radiotap and the radio's halved sample clock narrows it.
+  m.bw_mhz = bw == 10 ? 20 : bw;
   m.sgi = s.sgi;
   m.ldpc = s.ldpc;
   m.stbc = s.stbc;

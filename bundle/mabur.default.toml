@@ -24,6 +24,8 @@ fast_hop_at_80 = false # false = a hop at 80 MHz (or one changing the 40 MHz pai
                        # set, batched; true = the lean FastRetune hop d8-d10 used (backlog item 0)
 batched_tune = true    # batched channel set for width switches and full-set hops; false = one USB round
                        # trip per register (65-91 ms per switch)
+narrow_rescue_ms = 1500 # 10 MHz rung (switched on at the GS, [link.narrow10]): leave 10 MHz after this long
+                        # without hearing the GS there; 0 = wait for the 3 s failsafe
 power_mode = "none"      # "none" = card's default TX power; "offset" = use the calibrated walls below.
                          # "offset" now shapes the 80 MHz (VHT) rungs like the 20/40 ones
 tx_threads = 4           # parallel USB senders; 4 is needed to reach full link speed

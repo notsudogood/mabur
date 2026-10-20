@@ -86,7 +86,8 @@ void parse_radio(const Value& j, RadioCfg& r) {
   check_known_keys(j, {"usb_vid", "usb_pid", "channels", "width",
                         "power_mode", "tx_threads", "tx_threads_hot", "rate_walls_rel",
                         "legacy_wall_rel", "wall_margin_db", "ldpc", "width_step",
-                        "home_width", "width_hold_ms", "fast_hop_at_80", "batched_tune"},
+                        "home_width", "width_hold_ms", "fast_hop_at_80", "batched_tune",
+                        "narrow_rescue_ms"},
                    "radio");
   assign_if_present(j, "usb_vid", r.usb_vid, "radio");
   assign_if_present(j, "usb_pid", r.usb_pid, "radio");
@@ -98,6 +99,9 @@ void parse_radio(const Value& j, RadioCfg& r) {
   assign_if_present(j, "width_hold_ms", r.width_hold_ms, "radio");
   assign_if_present(j, "fast_hop_at_80", r.fast_hop_at_80, "radio");
   assign_if_present(j, "batched_tune", r.batched_tune, "radio");
+  assign_if_present(j, "narrow_rescue_ms", r.narrow_rescue_ms, "radio");
+  if (r.narrow_rescue_ms < 0 || r.narrow_rescue_ms > 10000)
+    fail("radio.narrow_rescue_ms", "must be in [0,10000]");
   if (r.home_width != 20 && r.home_width != 40)
     fail("radio.home_width", "must be 20 or 40");
   if (r.width_step && r.home_width > r.width)
@@ -285,7 +289,8 @@ void parse_encoder(const Value& j, EncoderCfg& e) {
         assign_if_present(rj, "airtime_budget", r.airtime_budget, where);
       if (rj.contains("max_kbps")) assign_if_present(rj, "max_kbps", r.max_kbps, where);
       if (r.mcs < 0 || r.mcs > 7) fail(where + ".mcs", "must be in [0,7]");
-      if (r.bw != 20 && r.bw != 40 && r.bw != 80) fail(where + ".bw", "must be 20, 40 or 80");
+      if (r.bw != 10 && r.bw != 20 && r.bw != 40 && r.bw != 80)
+        fail(where + ".bw", "must be 10, 20, 40 or 80");
       if (rj.contains("airtime_budget") && (r.airtime_budget <= 0.0 || r.airtime_budget > 1.0))
         fail(where + ".airtime_budget", "must be in (0,1]");
       if (rj.contains("max_kbps") &&

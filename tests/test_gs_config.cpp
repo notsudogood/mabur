@@ -711,6 +711,22 @@ TEST(radio_width_is_20_40_or_80_and_each_needs_its_channels) {
   CHECK(threw);
 }
 
+TEST(narrow10_section_is_opt_in_and_parses) {
+  maburgs::Config c = maburgs::load_config(write_tmp("[radio]\nchannels = [36]\n"));
+  CHECK(!c.link.narrow10.enable);
+  c = maburgs::load_config(write_tmp(
+      "[link.narrow10]\nenable = true\nenter_ms = 900\nclean_ms = 4000\npromote_margin_db = 1.5\n"));
+  CHECK(c.link.narrow10.enable && c.link.narrow10.enter_ms == 900 && c.link.narrow10.clean_ms == 4000);
+  CHECK(c.link.narrow10.promote_margin_db == 1.5);
+  bool threw = false;
+  try { maburgs::load_config(write_tmp("[link.narrow10]\nbogus = 1\n")); }
+  catch (const std::exception& e) { threw = std::string(e.what()).find("link.narrow10") != std::string::npos; }
+  CHECK(threw);
+  // GS radio switches from this build.
+  c = maburgs::load_config(write_tmp("[radio]\nnarrow_20 = true\nfast_hop_at_80 = true\nbatched_tune = false\n"));
+  CHECK(c.radio.narrow_20 && c.radio.fast_hop_at_80 && !c.radio.batched_tune);
+}
+
 TEST(width_issue_helpers_match_the_loader) {
   // The web GS validates its page channel/width override with these same
   // helpers; load_config's radio.width / ladder checks go through them.

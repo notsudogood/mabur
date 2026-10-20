@@ -102,6 +102,12 @@ class VrxController {
     hop_epoch_ = hop_epoch;
   }
   void restore_rung(int rung, double now_ms);
+  // 10 MHz bottom rung (narrow_mode.h, ChannelCore): while on, every RCF
+  // commands MCS0 at 10 MHz with these overheads and no probe, and the
+  // ladder is frozen below its rung 0; turning it off resumes the ladder at
+  // rung 0 (restore: no probation, no penalty).
+  void set_narrow(bool on, double ov_base, double ov_enh, double now_ms);
+  bool narrow() const { return narrow_; }
   void blank_store(double until_ms) { ctrl_.blank_store(until_ms); }
   uint8_t hop_ch() const { return hop_ch_; }
   uint8_t hop_epoch() const { return hop_epoch_; }
@@ -175,6 +181,7 @@ class VrxController {
   uint8_t rec_wish_ = 0;
   uint8_t idr_epoch_ = 0;
   int16_t snr_off_ = 0;
+  bool narrow_ = false;
 };
 
 }  // namespace maburgs

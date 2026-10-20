@@ -49,6 +49,20 @@ TEST(decode_profile_clamps_mcs) {
   CHECK(bw == 20);
 }
 
+// bw code 3 = the 10 MHz narrowband rung (backlog item 10): half the 20 MHz
+// rate, round-trips through the profile byte.
+TEST(profile_10_mhz_round_trips_at_half_the_20_mhz_rate) {
+  const uint8_t b = encode_profile(PhyMode::HT, 0, 10);
+  CHECK(b == 0x30);
+  PhyMode mode;
+  uint8_t mcs = 9, bw = 0;
+  decode_profile(b, mode, mcs, bw);
+  CHECK(mode == PhyMode::HT && mcs == 0 && bw == 10);
+  LayerTxSpec s;
+  s.bw = 10;
+  CHECK(phy_rate_mbps(s) > 3.25 - 1e-9 && phy_rate_mbps(s) < 3.25 + 1e-9);
+}
+
 TEST(phy_rate_mbps_matches_vectors) {
   auto j = mtest::load_json(std::string(MABUR_VECTOR_DIR) + "/profile.json");
   for (auto& c : j["rates"]) {

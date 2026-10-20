@@ -39,6 +39,7 @@ namespace {
 // carries the primary's slot in the baseband).
 SelectedChannel tune_for(uint8_t ch, uint8_t width_mhz) {
   if (width_mhz == 80) return SelectedChannel{ch, 0, CHANNEL_WIDTH_80};
+  if (width_mhz == 10) return SelectedChannel{ch, 0, CHANNEL_WIDTH_10};   // narrowband re-clock
   if (width_mhz == 40) return SelectedChannel{ch, mabur::ht40_offset(ch), CHANNEL_WIDTH_40};
   return SelectedChannel{ch, 0, CHANNEL_WIDTH_20};
 }
@@ -323,8 +324,9 @@ bool RadioFrontend::retune(uint8_t ch) {
   // side: both take the full channel set instead (batched, a few ms),
   // unless radio.fast_hop_at_80.
   const uint8_t w = width();
-  const bool full = !cfg_.fast_hop_at_80 &&
-                    (w == 80 || (w == 40 && mabur::ht40_offset(ch) != mabur::ht40_offset(dbg_from)));
+  const bool full = w == 10 ||   // FastRetune's cache is built at 20/40/80
+                    (!cfg_.fast_hop_at_80 &&
+                     (w == 80 || (w == 40 && mabur::ht40_offset(ch) != mabur::ht40_offset(dbg_from))));
   if (w == 80 && !mabur::vht80_ok(ch)) return false;
   rx_channel_.store(0, std::memory_order_release);
   if (full)

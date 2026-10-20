@@ -849,7 +849,7 @@ struct RealActuator : mabur::Actuator {
   // turns stepping off for the session and parks the radio at max_width,
   // the d8-d10 behaviour, so a failure costs the ~1-1.5 dB the stepping
   // was meant to win back, not the link.
-  void set_width_now_(uint8_t w, const char* why) {
+  void set_width_now_(uint8_t w, const char* why, bool fallback = false) {
     if (!dev) {
       std::fprintf(stderr, "[dry-run] width %u -> %u (%s)\n", static_cast<unsigned>(width_mhz),
                    static_cast<unsigned>(w), why);
@@ -890,11 +890,13 @@ struct RealActuator : mabur::Actuator {
     if (!ok) {
       ++width_switch_failed;
       width_step = false;
-      if (was != max_width || w != max_width) {
+      width_mhz = was;
+      // One fallback attempt, never from the fallback itself: a radio that
+      // refuses every switch must not recurse here.
+      if (!fallback && w != max_width) {
         std::fprintf(stderr, "maburd: width stepping off for this session; parking at %u MHz\n",
                      static_cast<unsigned>(max_width));
-        width_mhz = was;
-        set_width_now_(max_width, "fallback");
+        set_width_now_(max_width, "fallback", /*fallback=*/true);
       }
       return;
     }

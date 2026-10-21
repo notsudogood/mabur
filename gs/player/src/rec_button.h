@@ -43,8 +43,17 @@ class ButtonDebounce {
 struct RecButtonCfg {
   int pin = 0;
   bool active_low = true;
-  std::string bias = "pull-up";  // "pull-up" | "pull-down" | "none"
+  // "pull-up" | "pull-down" | "none" | "disable". "none" requests no bias,
+  // so the pin keeps whatever the board set (PixelPilot_rk's libgpiod
+  // request does the same); "disable" switches the pin's pull off, which
+  // leaves a switch-to-VCC button floating.
+  std::string bias = "pull-up";
+  std::string consumer = "maburplay_rec";  // the line's holder in gpioinfo
 };
+
+// The GPIO v2 line-request flags for `cfg`: input, ACTIVE_LOW when asked,
+// and the bias -- none at all for "none".
+uint64_t line_request_flags(const RecButtonCfg& cfg);
 
 // One input line on the kernel's GPIO v2 character device, polled for a
 // debounced press.
@@ -71,6 +80,11 @@ class RecButton {
   bool open(const RecButtonCfg& cfg, std::string* err);
 
   bool is_open() const { return line_fd_ >= 0; }
+
+  // The line's current level, polarity-corrected (1 = pressed), or -1 when
+  // closed or the read failed. Does not feed the debouncer: a startup
+  // diagnostic, so a line that idles "pressed" shows in the log.
+  int read_level() const;
 
   // One GPIO_V2_LINE_GET_VALUES_IOCTL fed to the debouncer; true on an
   // accepted press. After kMaxIoErrors CONSECUTIVE ioctl failures the line

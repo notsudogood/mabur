@@ -273,7 +273,9 @@ TEST(input_rec_rejects_a_missing_pin_bad_bias_and_unknown_keys) {
   try { maburplay::load_config(write_tmp_play(
       "[input.rec]\npin = 32\nbias = \"floating\"\n")); }
   catch (const std::exception&) { threw = true; }
-  CHECK(threw);  // bias must be pull-up|pull-down|none
+  CHECK(threw);  // bias must be pull-up|pull-down|none|disable
+  CHECK(maburplay::load_config(write_tmp_play("[input.rec]\npin = 32\nbias = \"disable\"\n"))
+            .input.rec.bias == "disable");
 
   threw = false;
   try { maburplay::load_config(write_tmp_play(

@@ -7,6 +7,8 @@
 #include <cerrno>
 #include <string>
 
+#include <linux/gpio.h>
+
 #include "mtest.h"
 #include "rec_button.h"
 
@@ -48,6 +50,27 @@ TEST(pin_names_reject_prefixes_suffixes_and_junk) {
 // --- debounce ----------------------------------------------------------
 // feed() takes an ALREADY polarity-corrected level: the kernel inverts for
 // us when the line is requested ACTIVE_LOW, so true means pressed.
+
+// gs10's menu stick did not work with bias = "none", which then switched
+// the pin's pull off; PixelPilot_rk requests no bias and the RunCam stick
+// works there. "none" must request no bias bit at all.
+TEST(bias_none_requests_no_bias_and_disable_switches_it_off) {
+  const uint64_t kBias = GPIO_V2_LINE_FLAG_BIAS_PULL_UP | GPIO_V2_LINE_FLAG_BIAS_PULL_DOWN |
+                         GPIO_V2_LINE_FLAG_BIAS_DISABLED;
+  maburplay::RecButtonCfg c;
+  c.active_low = false;
+  c.bias = "none";
+  CHECK(maburplay::line_request_flags(c) == GPIO_V2_LINE_FLAG_INPUT);
+  c.bias = "disable";
+  CHECK((maburplay::line_request_flags(c) & kBias) == GPIO_V2_LINE_FLAG_BIAS_DISABLED);
+  c.bias = "pull-down";
+  CHECK((maburplay::line_request_flags(c) & kBias) == GPIO_V2_LINE_FLAG_BIAS_PULL_DOWN);
+  c.bias = "pull-up";
+  c.active_low = true;
+  const uint64_t f = maburplay::line_request_flags(c);
+  CHECK((f & kBias) == GPIO_V2_LINE_FLAG_BIAS_PULL_UP);
+  CHECK((f & GPIO_V2_LINE_FLAG_ACTIVE_LOW) != 0 && (f & GPIO_V2_LINE_FLAG_INPUT) != 0);
+}
 
 TEST(a_button_held_at_startup_does_not_fire) {
   ButtonDebounce d;

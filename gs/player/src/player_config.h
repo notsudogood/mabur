@@ -84,12 +84,14 @@ struct InputCfg {
     // reads 1. Overridable because goggle builds differ and a silently
     // inverted button is a miserable bug to chase.
     bool active_low = true;
-    std::string bias = "pull-up";  // "pull-up" | "pull-down" | "none"
+    std::string bias = "pull-up";  // "pull-up" | "pull-down" | "none" | "disable" (rec_button.h)
   } rec;
   // The 5-way stick for the GS menu (backlog item 9, gs_menu_model.h).
   // False when the config has no input.menu block: no menu. Header pin
   // numbers like rec.pin; the RunCam WiFiLink's stick (PixelPilot_rk's
-  // map) is up 16, down 18, left 13, right 38, centre 11, active high.
+  // map) is up 16, down 18, left 13, right 38, centre 11, active high,
+  // bias left as the board set it ("none"; gs10 disabled it instead, and
+  // the stick did not work).
   struct MenuCfg {
     bool configured = false;
     int up = 0, down = 0, left = 0, right = 0, center = 0;

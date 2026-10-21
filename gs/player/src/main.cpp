@@ -616,9 +616,14 @@ int main(int argc, char** argv) {
       bc.pin = l.pin;
       bc.active_low = mc.active_low;
       bc.bias = mc.bias;
+      bc.consumer = std::string("maburplay_") + l.name;
       std::string berr;
       if (!l.b->open(bc, &berr))
         std::fprintf(stderr, "maburplay: menu %s: %s\n", l.name, berr.c_str());
+      else  // the level a line idles at: 1 here means it reads "pressed" untouched
+        std::fprintf(stderr, "maburplay: menu %s: PIN_%d -> %s line %u, bias %s, idle level %d\n",
+                     l.name, l.pin, l.b->chip_path().c_str(), l.b->offset(), mc.bias.c_str(),
+                     l.b->read_level());
     }
     try {
       const maburgs::Config gc = maburgs::load_config(mc.gs_config);
@@ -1783,11 +1788,12 @@ int main(int argc, char** argv) {
       const uint64_t mnow = mono_ms();
       const uint64_t v0 = menu_model->version();
       using K = maburplay::GsMenuModel::Key;
-      struct P { maburplay::RecButton* b; K k; };
-      for (const P& p : {P{&menu_stick.up, K::Up}, P{&menu_stick.down, K::Down},
-                         P{&menu_stick.left, K::Left}, P{&menu_stick.right, K::Right},
-                         P{&menu_stick.center, K::Center}}) {
+      struct P { maburplay::RecButton* b; K k; const char* name; };
+      for (const P& p : {P{&menu_stick.up, K::Up, "up"}, P{&menu_stick.down, K::Down, "down"},
+                         P{&menu_stick.left, K::Left, "left"}, P{&menu_stick.right, K::Right, "right"},
+                         P{&menu_stick.center, K::Center, "centre"}}) {
         if (!p.b->is_open() || !p.b->poll(mnow)) continue;
+        std::fprintf(stderr, "maburplay: menu key %s\n", p.name);
         if (menu_model->key(p.k, mnow) != maburplay::GsMenuModel::Action::Apply) continue;
         const maburplay::GsMenuSettings& s = menu_model->current();
         maburgs::GsMenuChoice choice;

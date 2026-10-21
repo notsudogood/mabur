@@ -200,8 +200,8 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
       c.input.rec.active_low = get_bool(rc, "active_low", c.input.rec.active_low, "input.rec");
       c.input.rec.bias = get_str(rc, "bias", "pull-up", "input.rec");
       if (c.input.rec.bias != "pull-up" && c.input.rec.bias != "pull-down" &&
-          c.input.rec.bias != "none") {
-        fail("input.rec.bias", "must be \"pull-up\", \"pull-down\" or \"none\"");
+          c.input.rec.bias != "none" && c.input.rec.bias != "disable") {
+        fail("input.rec.bias", "must be \"pull-up\", \"pull-down\", \"none\" or \"disable\"");
       }
       c.input.rec.configured = true;
     } else {
@@ -224,8 +224,8 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
       m.center = static_cast<int>(get_int(mc, "center", 0, 1, 512, "input.menu"));
       m.active_low = get_bool(mc, "active_low", m.active_low, "input.menu");
       m.bias = get_str(mc, "bias", "none", "input.menu");
-      if (m.bias != "pull-up" && m.bias != "pull-down" && m.bias != "none")
-        fail("input.menu.bias", "must be \"pull-up\", \"pull-down\" or \"none\"");
+      if (m.bias != "pull-up" && m.bias != "pull-down" && m.bias != "none" && m.bias != "disable")
+        fail("input.menu.bias", "must be \"pull-up\", \"pull-down\", \"none\" or \"disable\"");
       m.gs_config = get_str(mc, "gs_config", m.gs_config, "input.menu");
       m.configured = true;
     } else {

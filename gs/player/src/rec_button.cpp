@@ -89,6 +89,19 @@ bool RecButton::resolve_pin(int pin, std::string* chip_path, unsigned* offset,
   return found;
 }
 
+uint64_t line_request_flags(const RecButtonCfg& cfg) {
+  uint64_t f = GPIO_V2_LINE_FLAG_INPUT;
+  if (cfg.active_low) f |= GPIO_V2_LINE_FLAG_ACTIVE_LOW;
+  if (cfg.bias == "pull-up") {
+    f |= GPIO_V2_LINE_FLAG_BIAS_PULL_UP;
+  } else if (cfg.bias == "pull-down") {
+    f |= GPIO_V2_LINE_FLAG_BIAS_PULL_DOWN;
+  } else if (cfg.bias == "disable") {
+    f |= GPIO_V2_LINE_FLAG_BIAS_DISABLED;
+  }  // "none": no bias flag, the board's setting stays
+  return f;
+}
+
 bool RecButton::open(const RecButtonCfg& cfg, std::string* err) {
   // A repeat open() on an already-open object must not leak the previous
   // line fd: close it before re-resolving and re-requesting.
@@ -108,16 +121,8 @@ bool RecButton::open(const RecButtonCfg& cfg, std::string* err) {
   struct gpio_v2_line_request req {};
   req.offsets[0] = offset_;
   req.num_lines = 1;
-  req.config.flags = GPIO_V2_LINE_FLAG_INPUT;
-  if (cfg.active_low) req.config.flags |= GPIO_V2_LINE_FLAG_ACTIVE_LOW;
-  if (cfg.bias == "pull-up") {
-    req.config.flags |= GPIO_V2_LINE_FLAG_BIAS_PULL_UP;
-  } else if (cfg.bias == "pull-down") {
-    req.config.flags |= GPIO_V2_LINE_FLAG_BIAS_PULL_DOWN;
-  } else {
-    req.config.flags |= GPIO_V2_LINE_FLAG_BIAS_DISABLED;
-  }
-  std::snprintf(req.consumer, sizeof(req.consumer), "maburplay_rec");
+  req.config.flags = line_request_flags(cfg);
+  std::snprintf(req.consumer, sizeof(req.consumer), "%s", cfg.consumer.c_str());
 
   if (::ioctl(chip_fd, GPIO_V2_GET_LINE_IOCTL, &req) != 0 || req.fd < 0) {
     const int e = errno;
@@ -139,6 +144,14 @@ bool RecButton::open(const RecButtonCfg& cfg, std::string* err) {
   ::close(chip_fd);  // the line fd is independent of the chip fd
   line_fd_ = req.fd;
   return true;
+}
+
+int RecButton::read_level() const {
+  if (line_fd_ < 0) return -1;
+  struct gpio_v2_line_values v {};
+  v.mask = 1;
+  if (::ioctl(line_fd_, GPIO_V2_LINE_GET_VALUES_IOCTL, &v) != 0) return -1;
+  return (v.bits & 1u) != 0 ? 1 : 0;
 }
 
 bool RecButton::poll(uint64_t now_ms) {

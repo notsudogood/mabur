@@ -68,9 +68,12 @@ class RadioFrontend : public LinkCard {
     // (UepDecoder::block_payload), so the core loop does not do it for
     // every card's copy in series. 0 = leave it to the decoder.
     std::array<int, 2> sbi_block_payload{0, 0};
-    // radio.fast_hop_at_80 / radio.batched_tune (config.h).
+    // radio.fast_hop_at_80 / batched_tune / lean_width / lean_verify
+    // (config.h).
     bool fast_hop_at_80 = false;
     bool batched_tune = true;
+    bool lean_width = false;
+    bool lean_verify = true;
   };
 
   RadioFrontend(Cfg cfg, BodyQueue& out);
@@ -122,6 +125,8 @@ class RadioFrontend : public LinkCard {
   uint8_t channel() const override { return channel_.load(std::memory_order_acquire); }  // last channel handed to InitWrite/retune
 
  private:
+  // The last FastSetChannel's devourer breakdown to stderr (chset_stats.h).
+  void log_set_stats_(const char* what, uint8_t from, uint8_t to);
   void on_packet(const Packet& pkt);
 
   // rx_pace gauge (usb-feed probe, docs/findings/2026-08-31-dq-spike.md

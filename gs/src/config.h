@@ -165,6 +165,12 @@ struct RadioCfg {
   // batches -- ~60 USB round trips instead of ~190, est. a few ms instead of
   // 65-91 ms. false = the plain path, one round trip per register access.
   bool batched_tune = true;
+  // devourer's lean width switch (tuning.lean_width) on every card: a width
+  // switch writes only what the full set would change, and falls back to
+  // the full set when unsure. Off: never run on air. Needs batched_tune.
+  bool lean_width = false;
+  // With lean_width: read back and fall back on any difference.
+  bool lean_verify = true;
   // Empty + auto_scan: probe the bus and use every supported card found
   // (card_scan.h). A non-empty list pins exactly those devices and skips
   // the probe entirely -- that is the config-only way to fly one card.

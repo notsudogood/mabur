@@ -23,6 +23,15 @@ its own switch and logs what it does; the test doc lists the switches.
 | proposed: bottom-rung look | per-rung encoder fps | `[[encoder.rung]] fps` (0 = off) |
 | proposed: channel 149 at 80 | not done (a bench run, not code) | -- |
 
+**d12 + gs11 (data build).** No behaviour change by default: every width
+switch and full-set hop logs devourer's per-set time breakdown
+(docs/bw80.md), and the lean width switch is in, off.
+
+| Item | State | Switch (default) |
+|---|---|---|
+| switch breakdown | `set:` line after each width switch / full-set hop, both ends | (always) |
+| lean width switch | devourer learns each width's full set, then writes only the difference; readback check, full set on any doubt | `radio.lean_width` (false), `radio.lean_verify` (true) |
+
 ## 0. BLOCKER for Hop on at 80 MHz: drone stops hearing the GS after hops (found 2026-10-18, gs8 + d8)
 
 Evidence (bench, d8 + gs8, defaults: width 80, channels [36, 132], Hop on):

@@ -97,6 +97,7 @@
 #include "TxMode.h"
 #include "UsbOpen.h"
 #include "IRtlRadio.h"
+#include "mabur/chset_stats.h"
 #include "WiFiDriver.h"
 #include "logger.h"
 
@@ -631,6 +632,7 @@ struct RealActuator : mabur::Actuator {
     bool hop_full = false;
     int rfc = -1;
     long long retune_us = 0;
+    devourer::ChannelSetStats st;
     if (retune_waiting) retune_waiting->store(true, std::memory_order_release);
     {
       std::unique_lock<std::shared_mutex> g(*tx_gate);
@@ -680,6 +682,7 @@ struct RealActuator : mabur::Actuator {
       retune_us = std::chrono::duration_cast<std::chrono::microseconds>(
                       std::chrono::steady_clock::now() - t_retune)
                       .count();
+      if (hop_full) st = dev->LastChannelSetStats();
       // Critical: FastRetune does NOT re-fold TX power for us at mabur's
       // settings. devourer re-derives it inside FastRetune only on a BAND
       // change and only when a global offset or an index override is live
@@ -726,7 +729,17 @@ struct RealActuator : mabur::Actuator {
                  rfc < 0 ? "unread" : rfc == want ? "ok" : "MISMATCH",
                  hop_full ? "FastSetChannel" : "FastRetune", static_cast<unsigned>(width_mhz),
                  static_cast<double>(retune_us) / 1000.0);
+    if (hop_full) log_set_stats_(st);
     note_rf_central_(rfc);
+  }
+
+  // devourer's breakdown of the channel set that just ran (chset_stats.h),
+  // and any lean-switch readback mismatches, one line each.
+  static void log_set_stats_(const devourer::ChannelSetStats& st) {
+    const std::string line = mabur::chset_stats_line(st);
+    if (!line.empty()) std::fprintf(stderr, "maburd:   set: %s\n", line.c_str());
+    for (const std::string& m : mabur::chset_miss_lines(st))
+      std::fprintf(stderr, "maburd:   %s\n", m.c_str());
   }
 
   // The 5 s look at where the radio really is, from the agent loop. A
@@ -866,6 +879,7 @@ struct RealActuator : mabur::Actuator {
     bool ok = true;
     int rfc = -1;
     long long us = 0;
+    devourer::ChannelSetStats st;
     if (retune_waiting) retune_waiting->store(true, std::memory_order_release);
     {
       std::unique_lock<std::shared_mutex> g(*tx_gate);
@@ -885,6 +899,7 @@ struct RealActuator : mabur::Actuator {
                std::chrono::steady_clock::now() - t0)
                .count();
       if (ok) rfc = read_rf_central_();
+      st = dev->LastChannelSetStats();
     }
     if (retune_waiting) retune_waiting->store(false, std::memory_order_release);
     if (!ok) {
@@ -908,6 +923,7 @@ struct RealActuator : mabur::Actuator {
                  static_cast<unsigned>(was), static_cast<unsigned>(w), static_cast<unsigned>(cur), why,
                  static_cast<double>(us) / 1000.0, rfc, want,
                  rfc < 0 ? "unread" : rfc == want ? "ok" : "MISMATCH");
+    log_set_stats_(st);
     note_rf_central_(rfc);
   }
 
@@ -1606,6 +1622,9 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   // radio.batched_tune: width steps and full-set hops (FastSetChannel)
   // batch their register writes; false = devourer's plain path.
   dev_cfg.tuning.batched_chset = cfg.radio.batched_tune;
+  // radio.lean_width / lean_verify: the lean width step (off by default).
+  dev_cfg.tuning.lean_width = cfg.radio.lean_width;
+  dev_cfg.tuning.lean_verify = cfg.radio.lean_verify;
 
   WiFiDriver wifi_driver{logger};
   // mabur drives Realtek-only controls (TX-power tables, FastRetune, the

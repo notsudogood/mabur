@@ -87,7 +87,7 @@ void parse_radio(const Value& j, RadioCfg& r) {
                         "power_mode", "tx_threads", "tx_threads_hot", "rate_walls_rel",
                         "legacy_wall_rel", "wall_margin_db", "ldpc", "width_step",
                         "home_width", "width_hold_ms", "fast_hop_at_80", "batched_tune",
-                        "narrow_rescue_ms"},
+                        "lean_width", "lean_verify", "narrow_rescue_ms"},
                    "radio");
   assign_if_present(j, "usb_vid", r.usb_vid, "radio");
   assign_if_present(j, "usb_pid", r.usb_pid, "radio");
@@ -99,6 +99,8 @@ void parse_radio(const Value& j, RadioCfg& r) {
   assign_if_present(j, "width_hold_ms", r.width_hold_ms, "radio");
   assign_if_present(j, "fast_hop_at_80", r.fast_hop_at_80, "radio");
   assign_if_present(j, "batched_tune", r.batched_tune, "radio");
+  assign_if_present(j, "lean_width", r.lean_width, "radio");
+  assign_if_present(j, "lean_verify", r.lean_verify, "radio");
   assign_if_present(j, "narrow_rescue_ms", r.narrow_rescue_ms, "radio");
   if (r.narrow_rescue_ms < 0 || r.narrow_rescue_ms > 10000)
     fail("radio.narrow_rescue_ms", "must be in [0,10000]");

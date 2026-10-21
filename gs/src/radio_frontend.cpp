@@ -17,6 +17,7 @@
 #include "IRtlRadio.h"
 #include "WiFiDriver.h"
 #include "logger.h"
+#include "mabur/chset_stats.h"
 #include "mabur/ht40.h"
 #include "mabur/node.h"
 #include "mabur/sbi.h"
@@ -133,6 +134,8 @@ bool RadioFrontend::open_and_start() {
   // radio.batched_tune: width switches and full-set hops (FastSetChannel)
   // batch their register writes; false = devourer's plain path.
   dev_cfg.tuning.batched_chset = cfg_.batched_tune;
+  dev_cfg.tuning.lean_width = cfg_.lean_width;
+  dev_cfg.tuning.lean_verify = cfg_.lean_verify;
   // (The 0x41e8 protect_pathb_agc knob was chased here too — exonerated:
   // the real path-B killer was the DPDT pin-mux, fixed by devourer's eFEM
   // pinmux port; see DEVOURER_DPDT_MODE in RtlJaguar3Device.)
@@ -334,6 +337,7 @@ bool RadioFrontend::retune(uint8_t ch) {
   else
     device_->FastRetune(ch, /*cache_rf=*/true);
   channel_.store(ch, std::memory_order_release);
+  if (full) log_set_stats_("hop", dbg_from, ch);
   if (hopdbg)
     std::fprintf(stderr, "retunedbg card=%u tid=%lu %u->%u t0=%llu dur_us=%llu rf_central=%d path=%s\n",
                  static_cast<unsigned>(cfg_.card_id),
@@ -344,6 +348,18 @@ bool RadioFrontend::retune(uint8_t ch) {
                  full ? "full" : "fast");
   rx_channel_.store(ch, std::memory_order_release);
   return true;
+}
+
+// devourer's breakdown of the channel set that just ran (chset_stats.h),
+// and any lean-switch readback mismatches, one line each.
+void RadioFrontend::log_set_stats_(const char* what, uint8_t from, uint8_t to) {
+  const devourer::ChannelSetStats st = device_->LastChannelSetStats();
+  const std::string line = mabur::chset_stats_line(st);
+  if (!line.empty())
+    std::fprintf(stderr, "maburgs radio: card %u %s %u -> %u set: %s\n", static_cast<unsigned>(cfg_.card_id),
+                 what, static_cast<unsigned>(from), static_cast<unsigned>(to), line.c_str());
+  for (const std::string& m : mabur::chset_miss_lines(st))
+    std::fprintf(stderr, "maburgs radio: card %u %s\n", static_cast<unsigned>(cfg_.card_id), m.c_str());
 }
 
 bool RadioFrontend::set_width(uint8_t ch, uint8_t width_mhz) {
@@ -362,6 +378,7 @@ bool RadioFrontend::set_width(uint8_t ch, uint8_t width_mhz) {
   std::fprintf(stderr, "maburgs radio: card %u width %u -> %u MHz on ch %u\n",
                static_cast<unsigned>(cfg_.card_id), static_cast<unsigned>(was),
                static_cast<unsigned>(width_mhz), static_cast<unsigned>(ch));
+  log_set_stats_("width", ch, ch);
   return true;
 }
 

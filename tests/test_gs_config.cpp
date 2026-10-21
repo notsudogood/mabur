@@ -725,6 +725,9 @@ TEST(narrow10_section_is_opt_in_and_parses) {
   // GS radio switches from this build.
   c = maburgs::load_config(write_tmp("[radio]\nnarrow_20 = true\nfast_hop_at_80 = true\nbatched_tune = false\n"));
   CHECK(c.radio.narrow_20 && c.radio.fast_hop_at_80 && !c.radio.batched_tune);
+  CHECK(!c.radio.lean_width && c.radio.lean_verify);   // lean width switch off, verify on
+  c = maburgs::load_config(write_tmp("[radio]\nlean_width = true\nlean_verify = false\n"));
+  CHECK(c.radio.lean_width && !c.radio.lean_verify);
 }
 
 TEST(width_issue_helpers_match_the_loader) {

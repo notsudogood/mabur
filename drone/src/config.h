@@ -32,6 +32,14 @@ struct RadioCfg {
   // devourer's batched channel set (tuning.batched_chset) for the width
   // steps and full-set hops; false = one USB round trip per register.
   bool batched_tune = true;
+  // devourer's lean width switch (tuning.lean_width): a width step writes
+  // only what the full set would change, learned from this session's full
+  // sets, and falls back to the full set whenever it cannot be sure. Off
+  // by default: never run on air. Needs batched_tune.
+  bool lean_width = false;
+  // With lean_width: read the changed registers back and fall back to the
+  // full set on any difference (tuning.lean_verify). Logs each mismatch.
+  bool lean_verify = true;
   // 10 MHz rung (backlog item 10, ordered by the GS): with no RCF heard for
   // this long at 10 MHz the radio leaves 10 on its own (the GS does the same
   // when it stops hearing the drone). 0 = never; the 3 s failsafe still

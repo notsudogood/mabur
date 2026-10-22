@@ -3,6 +3,23 @@
 What the operator has agreed goes into the next GS (and drone) build, in
 order. Each item names its evidence. Remove an item when it ships.
 
+**Status 2026-10-22 (bench only, nothing flown since gs10/d11).**
+
+| Item | Evidence so far | State |
+|---|---|---|
+| 13 OSD "/80" | shown on the d11-d13 width benches | done |
+| switch breakdown (d12) | found the cause: drone thread scheduling, not USB (docs/bw80.md) | done; the `set:` line stays |
+| 14 drone width steps | every switch on the right centre, `wsw_fail=0`, d11-d13 (~20 switches, ch 132, 40 <-> 80) | drone side passes on the bench; the GS cards' drop to 20 on the 20 rungs not yet seen in a log |
+| switch speed | d13 `switch_rt_prio = 60`: 14-17 ms (was 79-135); + `lean_width`: 7.8-8.5 ms, 0 readback misses (5 switches) | bench pass; open: video around a switch, 20 MHz and spur channels, the GS side (gs12) |
+| 9 GS menu | gs10/gs11: stick read wrong (bias), then a crash on open; both fixed in gs12 | retest on gs12 |
+| 0 hop at 80 | gs10 test doc steps 4-5 not yet run | untested (the original blocker) |
+| 7, 15, 4 | the garage run (gs10 step 7) not yet run | untested |
+| 5, 8, 10, bottom-rung fps | not run | untested |
+| 2 maburcal | built in gs8/d8 | not bench-checked |
+| 80 MHz any primary, channels above 165, spur fast path, VHT power diffs, ch 149 at 80 | only primary 132 (the block's lowest) has run at 80 | untested |
+| 3 drone CPU headroom | operator: cpu0 ~83 % busy | open |
+| 6 8812CU fix | Wyvern drone only | parked |
+
 **gs10 + d11 (built 2026-10-20, none of it flown).** Every new behaviour has
 its own switch and logs what it does; the test doc lists the switches.
 

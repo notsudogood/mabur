@@ -72,4 +72,27 @@ TEST(menu_box_draws_when_open_and_clears_on_close) {
   CHECK(!any_pixel(px, out[0], 1920));
   CHECK(sp->repaints == 1);
 }
+
+// OsdComposer passes no rect list unless the card block moved (gs_layer.h):
+// gs11 opened the menu on the operator's GS by pushing through that null
+// and segfaulting (2026-10-22, exit 139 right after "menu key centre").
+TEST(menu_box_draws_with_no_rect_list) {
+  GsFont font;
+  std::string err;
+  REQUIRE(font.load(GSFONT_SCALED, &err));
+  auto model = std::make_shared<GsMenuModel>(std::vector<uint8_t>{36, 132}, true,
+                                             GsMenuSettings{true, 36, true});
+  MenuLayer ml(std::make_unique<StubLayer>(), font, model);
+  REQUIRE(ml.layout(1920, 1080, &err));
+  std::vector<uint32_t> px(1920 * 1080, 0);
+  const Surface s{px.data(), 1920, 1080, 1920};
+  GsSnapshot snap;
+  GsPlayerState ps;
+  model->key(GsMenuModel::Key::Center, 0);
+  CHECK(ml.update(snap, false, ps, s, nullptr) == 1);
+  CHECK(any_pixel(px, ml.bounds(), 1920));
+  model->key(GsMenuModel::Key::Up, 1);
+  model->key(GsMenuModel::Key::Center, 2);   // Close
+  ml.update(snap, false, ps, s, nullptr);
+}
 MTEST_MAIN

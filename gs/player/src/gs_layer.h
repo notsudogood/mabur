@@ -155,7 +155,9 @@ class GsLayer {
   // Formats every field, redraws the ones whose rendered state changed, and
   // appends one DirtyRect per redrawn field to *out (which is NOT cleared:
   // the caller batches GS and MSP rects into one quantize_rects call).
-  // Returns the number of fields redrawn.
+  // `out` may be null -- OsdComposer passes one only when the card block
+  // moved -- and then nothing is appended. Returns the number of fields
+  // redrawn.
   //
   // `stale` dims every LINK field and holds its last value. Player-measured
   // fields ignore it -- they are current by construction.

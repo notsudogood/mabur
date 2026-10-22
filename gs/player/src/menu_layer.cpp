@@ -34,7 +34,9 @@ int MenuLayer::draw_box_(const Surface& s, std::vector<DirtyRect>* out) {
   drawn_version_ = model_->version();
   if (!vis && !drawn_visible_) return 0;
   clear_region(s, box_);
-  out->push_back(box_);
+  // Null on most composer updates (gs_layer.h): gs11 pushed through it and
+  // crashed maburplay on the first centre press.
+  if (out) out->push_back(box_);
   drawn_visible_ = vis;
   if (!vis) return 1;
   fill_rect(s, box_.x, box_.y, box_.w, box_.h, kBoxRgb, 220);

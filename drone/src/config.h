@@ -40,6 +40,11 @@ struct RadioCfg {
   // With lean_width: read the changed registers back and fall back to the
   // full set on any difference (tuning.lean_verify). Logs each mismatch.
   bool lean_verify = true;
+  // > 0: for each width switch and hop, the switching thread and the RX
+  // thread run at SCHED_FIFO with this priority (above the encoder's 50),
+  // then return to their own (rt_boost.h). An experiment: d12 measured
+  // ~0.5 ms per USB transfer in flight against 27 us at bring-up. 0 = off.
+  int switch_rt_prio = 0;
   // 10 MHz rung (backlog item 10, ordered by the GS): with no RCF heard for
   // this long at 10 MHz the radio leaves 10 on its own (the GS does the same
   // when it stops hearing the drone). 0 = never; the 3 s failsafe still

@@ -119,6 +119,7 @@ add_mtest(test_cal_wire test_cal_wire.cpp)
 add_mtest(test_toml test_toml.cpp)
 if(MABUR_BUILD_DRONE)
   add_mtest(test_config test_config.cpp LIBS mabur_drone_core)
+  add_mtest(test_rt_boost test_rt_boost.cpp LIBS mabur_drone_core)
   target_compile_definitions(test_config PRIVATE
     MABUR_BUNDLE_DIR="${CMAKE_SOURCE_DIR}/bundle")
   add_mtest(test_frame_source test_frame_source.cpp LIBS mabur_drone_core)

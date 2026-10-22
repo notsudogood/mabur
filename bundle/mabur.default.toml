@@ -27,6 +27,8 @@ batched_tune = true    # batched channel set for width switches and full-set hop
 lean_width = false     # width switch writes only what the full set would change, falls back to the full
                        # set when unsure (needs batched_tune; untested on air, so off)
 lean_verify = true     # with lean_width: read the changed registers back, full set on any difference
+switch_rt_prio = 0     # > 0: width switches and hops run at this SCHED_FIFO priority (above the encoder's
+                       # 50), with the RX thread; 0 = off (an experiment, d13)
 narrow_rescue_ms = 1500 # 10 MHz rung (switched on at the GS, [link.narrow10]): leave 10 MHz after this long
                         # without hearing the GS there; 0 = wait for the 3 s failsafe
 power_mode = "none"      # "none" = card's default TX power; "offset" = use the calibrated walls below.

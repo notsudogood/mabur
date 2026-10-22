@@ -98,6 +98,7 @@
 #include "UsbOpen.h"
 #include "IRtlRadio.h"
 #include "mabur/chset_stats.h"
+#include "rt_boost.h"
 #include "WiFiDriver.h"
 #include "logger.h"
 
@@ -544,6 +545,12 @@ struct RealActuator : mabur::Actuator {
   uint8_t home_width = 20;       // cfg.radio.home_width (stepping) or max_width
   uint32_t width_hold_ms = 3000;
   bool fast_hop_at_80 = false;   // cfg.radio.fast_hop_at_80
+  // radio.switch_rt_prio (rt_boost.h): > 0 raises this thread and the RX
+  // thread (rx_thread: the one that runs StartRxLoop and reaps USB
+  // completions) to SCHED_FIFO at that priority for each FastSetChannel /
+  // FastRetune. 0 = off.
+  int switch_rt_prio = 0;
+  pthread_t rx_thread{};
   uint8_t op_need_w = 0;         // width the current op needs (0 = none applied yet)
   uint64_t last_need_ms[3] = {0, 0, 0};  // last time 20 / 40 / 80 was needed
   uint64_t width_switches = 0;
@@ -633,6 +640,7 @@ struct RealActuator : mabur::Actuator {
     int rfc = -1;
     long long retune_us = 0;
     devourer::ChannelSetStats st;
+    std::string rt_note;
     if (retune_waiting) retune_waiting->store(true, std::memory_order_release);
     {
       std::unique_lock<std::shared_mutex> g(*tx_gate);
@@ -675,10 +683,14 @@ struct RealActuator : mabur::Actuator {
            (width_mhz == 40 && mabur::ht40_offset(ch) != mabur::ht40_offset(from))))
         hop_full = true;
       const auto t_retune = std::chrono::steady_clock::now();
-      if (hop_full)
-        dev->FastSetChannel(tune_for_(ch, width_mhz));
-      else
-        dev->FastRetune(ch, /*cache_rf=*/true);
+      {
+        mabur::RtBoost boost({pthread_self(), rx_thread}, switch_rt_prio);
+        rt_note = boost.note();
+        if (hop_full)
+          dev->FastSetChannel(tune_for_(ch, width_mhz));
+        else
+          dev->FastRetune(ch, /*cache_rf=*/true);
+      }
       retune_us = std::chrono::duration_cast<std::chrono::microseconds>(
                       std::chrono::steady_clock::now() - t_retune)
                       .count();
@@ -724,11 +736,11 @@ struct RealActuator : mabur::Actuator {
                  tx_power_ok ? "ok" : "failed");
     const int want = mabur::tuned_central(ch, width_mhz);
     std::fprintf(stderr,
-                 "maburd: retune %u -> %u: radio at central %d, want %d (%s), %s at %u MHz %.1f ms\n",
+                 "maburd: retune %u -> %u: radio at central %d, want %d (%s), %s at %u MHz %.1f ms%s\n",
                  static_cast<unsigned>(from), static_cast<unsigned>(ch), rfc, want,
                  rfc < 0 ? "unread" : rfc == want ? "ok" : "MISMATCH",
                  hop_full ? "FastSetChannel" : "FastRetune", static_cast<unsigned>(width_mhz),
-                 static_cast<double>(retune_us) / 1000.0);
+                 static_cast<double>(retune_us) / 1000.0, rt_note.c_str());
     if (hop_full) log_set_stats_(st);
     note_rf_central_(rfc);
   }
@@ -880,6 +892,7 @@ struct RealActuator : mabur::Actuator {
     int rfc = -1;
     long long us = 0;
     devourer::ChannelSetStats st;
+    std::string rt_note;
     if (retune_waiting) retune_waiting->store(true, std::memory_order_release);
     {
       std::unique_lock<std::shared_mutex> g(*tx_gate);
@@ -888,12 +901,16 @@ struct RealActuator : mabur::Actuator {
       // width switch does not race).
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
       const auto t0 = std::chrono::steady_clock::now();
-      try {
-        dev->FastSetChannel(tune_for_(cur, w));
-      } catch (const std::exception& e) {
-        ok = false;
-        std::fprintf(stderr, "maburd: width %u -> %u MHz FAILED: %s\n", static_cast<unsigned>(was),
-                     static_cast<unsigned>(w), e.what());
+      {
+        mabur::RtBoost boost({pthread_self(), rx_thread}, switch_rt_prio);
+        rt_note = boost.note();
+        try {
+          dev->FastSetChannel(tune_for_(cur, w));
+        } catch (const std::exception& e) {
+          ok = false;
+          std::fprintf(stderr, "maburd: width %u -> %u MHz FAILED: %s\n", static_cast<unsigned>(was),
+                       static_cast<unsigned>(w), e.what());
+        }
       }
       us = std::chrono::duration_cast<std::chrono::microseconds>(
                std::chrono::steady_clock::now() - t0)
@@ -919,10 +936,10 @@ struct RealActuator : mabur::Actuator {
     ++width_switches;
     const int want = mabur::tuned_central(cur, w);
     std::fprintf(stderr,
-                 "maburd: width %u -> %u MHz on ch %u (%s) in %.1f ms: radio at central %d, want %d (%s)\n",
+                 "maburd: width %u -> %u MHz on ch %u (%s) in %.1f ms: radio at central %d, want %d (%s)%s\n",
                  static_cast<unsigned>(was), static_cast<unsigned>(w), static_cast<unsigned>(cur), why,
                  static_cast<double>(us) / 1000.0, rfc, want,
-                 rfc < 0 ? "unread" : rfc == want ? "ok" : "MISMATCH");
+                 rfc < 0 ? "unread" : rfc == want ? "ok" : "MISMATCH", rt_note.c_str());
     log_set_stats_(st);
     note_rf_central_(rfc);
   }
@@ -1778,6 +1795,10 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   actuator.home_width = actuator.width_step ? cfg.radio.home_width : cfg.radio.width;
   actuator.width_hold_ms = static_cast<uint32_t>(cfg.radio.width_hold_ms);
   actuator.fast_hop_at_80 = cfg.radio.fast_hop_at_80;
+  // This thread runs StartRxLoop below, so it is the RX thread the switch
+  // boost raises (rt_boost.h).
+  actuator.switch_rt_prio = cfg.radio.switch_rt_prio;
+  actuator.rx_thread = pthread_self();
   actuator.narrow_rescue_ms = static_cast<uint32_t>(cfg.radio.narrow_rescue_ms);
   actuator.ldpc = cfg.radio.ldpc;
   // Encoder starts at the "normal" ROI QP (RcAgent only calls set_roi_qp on

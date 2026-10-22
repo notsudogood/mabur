@@ -1,6 +1,6 @@
 #pragma once
 // Scoped SCHED_FIFO boost for the threads a radio switch waits on
-// (radio.switch_rt_prio).
+// (radio.switch_rt_prio, drone and GS).
 //
 // d12 bench, 2026-10-21: a width switch took 79-135 ms on the drone and
 // 25-36 ms on the GS for the same 171-173 USB control transfers, and InitWrite
@@ -9,8 +9,8 @@
 // wake-ups on cpu0 -- the RX thread, which holds libusb's event lock and
 // reaps it, then the thread waiting on it -- and cpu0 also runs the encoder
 // at SCHED_FIFO 50 and the FEC worker. Raising both above the encoder for
-// the switch is the experiment; if the switch does not get faster, the time
-// is in the USB host, not the scheduler.
+// the switch was the experiment, and it held: d13, 14-17 ms against
+// 79-135 (one drone, one session).
 //
 // Each thread's own policy and priority are read first and put back in the
 // destructor, whatever they were. A thread that cannot be raised (EPERM, a
@@ -28,10 +28,16 @@ namespace mabur {
 
 class RtBoost {
  public:
-  // prio <= 0: does nothing (the switch is off).
-  RtBoost(std::initializer_list<pthread_t> threads, int prio) : prio_(prio) {
+  // prio <= 0: does nothing (the switch is off). A thread listed twice is
+  // raised once, so the restore cannot put back the raised priority.
+  RtBoost(std::initializer_list<pthread_t> threads, int prio)
+      : RtBoost(std::vector<pthread_t>(threads), prio) {}
+  RtBoost(const std::vector<pthread_t>& threads, int prio) : prio_(prio) {
     if (prio <= 0) return;
     for (pthread_t t : threads) {
+      bool dup = false;
+      for (const Saved& s : saved_) dup = dup || pthread_equal(s.t, t);
+      if (dup) continue;
       Saved s{t, 0, {}};
       if (pthread_getschedparam(t, &s.policy, &s.param) != 0) {
         fail_ = "getschedparam";

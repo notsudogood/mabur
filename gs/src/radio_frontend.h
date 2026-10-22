@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <pthread.h>
+
 #include <thread>
 #include <vector>
 
@@ -74,6 +76,7 @@ class RadioFrontend : public LinkCard {
     bool batched_tune = true;
     bool lean_width = false;
     bool lean_verify = true;
+    int switch_rt_prio = 0;   // radio.switch_rt_prio (mabur/rt_boost.h)
   };
 
   RadioFrontend(Cfg cfg, BodyQueue& out);
@@ -126,7 +129,9 @@ class RadioFrontend : public LinkCard {
 
  private:
   // The last FastSetChannel's devourer breakdown to stderr (chset_stats.h).
-  void log_set_stats_(const char* what, uint8_t from, uint8_t to);
+  std::vector<pthread_t> switch_threads_();   // for mabur::RtBoost
+  // rt_note: the switch boost's note (mabur/rt_boost.h), "" when off.
+  void log_set_stats_(const char* what, uint8_t from, uint8_t to, const char* rt_note);
   void on_packet(const Packet& pkt);
 
   // rx_pace gauge (usb-feed probe, docs/findings/2026-08-31-dq-spike.md

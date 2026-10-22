@@ -98,7 +98,7 @@
 #include "UsbOpen.h"
 #include "IRtlRadio.h"
 #include "mabur/chset_stats.h"
-#include "rt_boost.h"
+#include "mabur/rt_boost.h"
 #include "WiFiDriver.h"
 #include "logger.h"
 
@@ -545,7 +545,7 @@ struct RealActuator : mabur::Actuator {
   uint8_t home_width = 20;       // cfg.radio.home_width (stepping) or max_width
   uint32_t width_hold_ms = 3000;
   bool fast_hop_at_80 = false;   // cfg.radio.fast_hop_at_80
-  // radio.switch_rt_prio (rt_boost.h): > 0 raises this thread and the RX
+  // radio.switch_rt_prio (mabur/rt_boost.h): > 0 raises this thread and the RX
   // thread (rx_thread: the one that runs StartRxLoop and reaps USB
   // completions) to SCHED_FIFO at that priority for each FastSetChannel /
   // FastRetune. 0 = off.
@@ -1796,7 +1796,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   actuator.width_hold_ms = static_cast<uint32_t>(cfg.radio.width_hold_ms);
   actuator.fast_hop_at_80 = cfg.radio.fast_hop_at_80;
   // This thread runs StartRxLoop below, so it is the RX thread the switch
-  // boost raises (rt_boost.h).
+  // boost raises (mabur/rt_boost.h).
   actuator.switch_rt_prio = cfg.radio.switch_rt_prio;
   actuator.rx_thread = pthread_self();
   actuator.narrow_rescue_ms = static_cast<uint32_t>(cfg.radio.narrow_rescue_ms);

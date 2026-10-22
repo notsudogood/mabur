@@ -726,8 +726,9 @@ TEST(narrow10_section_is_opt_in_and_parses) {
   c = maburgs::load_config(write_tmp("[radio]\nnarrow_20 = true\nfast_hop_at_80 = true\nbatched_tune = false\n"));
   CHECK(c.radio.narrow_20 && c.radio.fast_hop_at_80 && !c.radio.batched_tune);
   CHECK(!c.radio.lean_width && c.radio.lean_verify);   // lean width switch off, verify on
-  c = maburgs::load_config(write_tmp("[radio]\nlean_width = true\nlean_verify = false\n"));
-  CHECK(c.radio.lean_width && !c.radio.lean_verify);
+  CHECK(c.radio.switch_rt_prio == 0);                  // switch boost off
+  c = maburgs::load_config(write_tmp("[radio]\nlean_width = true\nlean_verify = false\nswitch_rt_prio = 60\n"));
+  CHECK(c.radio.lean_width && !c.radio.lean_verify && c.radio.switch_rt_prio == 60);
 }
 
 TEST(width_issue_helpers_match_the_loader) {

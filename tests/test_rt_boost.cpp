@@ -2,7 +2,7 @@
 #include <sched.h>
 
 #include "mtest.h"
-#include "rt_boost.h"
+#include "mabur/rt_boost.h"
 
 using mabur::RtBoost;
 
@@ -45,6 +45,19 @@ TEST(rt_boost_restores_the_thread_after_its_scope) {
       CHECK(pol == pol0 && p == p0);
       CHECK(b.note().find("failed") != std::string::npos);
     }
+  }
+  int p = 0;
+  CHECK(policy_of(pthread_self(), &p) == pol0 && p == p0);
+}
+
+// A thread listed twice is saved once: restoring it twice in order would
+// put the raised priority back last.
+TEST(rt_boost_a_thread_listed_twice_is_restored_to_its_own) {
+  int p0 = 0;
+  const int pol0 = policy_of(pthread_self(), &p0);
+  {
+    RtBoost b({pthread_self(), pthread_self()}, 10);
+    CHECK(b.raised() <= 1);
   }
   int p = 0;
   CHECK(policy_of(pthread_self(), &p) == pol0 && p == p0);

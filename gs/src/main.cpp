@@ -311,6 +311,7 @@ static int run_radio(const maburgs::Config& cfg) {
     fc.batched_tune = cfg.radio.batched_tune;
     fc.lean_width = cfg.radio.lean_width;
     fc.lean_verify = cfg.radio.lean_verify;
+    fc.switch_rt_prio = cfg.radio.switch_rt_prio;
     for (size_t s = 0; s < 2; ++s)
       fc.sbi_block_payload[s] = mabur::UepDecoder::block_payload(cfg.uep_layers()[s]);
     fronts.push_back(std::make_unique<maburgs::RadioFrontend>(fc, queue));

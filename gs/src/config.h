@@ -171,6 +171,11 @@ struct RadioCfg {
   bool lean_width = false;
   // With lean_width: read back and fall back on any difference.
   bool lean_verify = true;
+  // > 0: each card width switch and full-set hop runs its calling thread
+  // and that card's RX thread at this SCHED_FIFO priority, then restores
+  // both (mabur/rt_boost.h). The drone measured 14-17 ms with it against
+  // 79-135 without; the GS cards (25-36 ms) have not run it. 0 = off.
+  int switch_rt_prio = 0;
   // Empty + auto_scan: probe the bus and use every supported card found
   // (card_scan.h). A non-empty list pins exactly those devices and skips
   // the probe entirely -- that is the config-only way to fly one card.

@@ -19,6 +19,7 @@
 #include "logger.h"
 #include "mabur/chset_stats.h"
 #include "mabur/ht40.h"
+#include "mabur/rt_boost.h"
 #include "mabur/node.h"
 #include "mabur/sbi.h"
 
@@ -332,12 +333,17 @@ bool RadioFrontend::retune(uint8_t ch) {
                      (w == 80 || (w == 40 && mabur::ht40_offset(ch) != mabur::ht40_offset(dbg_from))));
   if (w == 80 && !mabur::vht80_ok(ch)) return false;
   rx_channel_.store(0, std::memory_order_release);
-  if (full)
-    device_->FastSetChannel(tune_for(ch, w));
-  else
-    device_->FastRetune(ch, /*cache_rf=*/true);
+  std::string rt_note;
+  {
+    mabur::RtBoost boost(switch_threads_(), cfg_.switch_rt_prio);
+    rt_note = boost.note();
+    if (full)
+      device_->FastSetChannel(tune_for(ch, w));
+    else
+      device_->FastRetune(ch, /*cache_rf=*/true);
+  }
   channel_.store(ch, std::memory_order_release);
-  if (full) log_set_stats_("hop", dbg_from, ch);
+  if (full) log_set_stats_("hop", dbg_from, ch, rt_note.c_str());
   if (hopdbg)
     std::fprintf(stderr, "retunedbg card=%u tid=%lu %u->%u t0=%llu dur_us=%llu rf_central=%d path=%s\n",
                  static_cast<unsigned>(cfg_.card_id),
@@ -350,14 +356,22 @@ bool RadioFrontend::retune(uint8_t ch) {
   return true;
 }
 
+// The threads a card switch waits on: the caller, and this card's RX thread
+// (it reaps the USB completions) while one runs.
+std::vector<pthread_t> RadioFrontend::switch_threads_() {
+  std::vector<pthread_t> t{pthread_self()};
+  if (rx_thread_.joinable()) t.push_back(rx_thread_.native_handle());
+  return t;
+}
+
 // devourer's breakdown of the channel set that just ran (chset_stats.h),
 // and any lean-switch readback mismatches, one line each.
-void RadioFrontend::log_set_stats_(const char* what, uint8_t from, uint8_t to) {
+void RadioFrontend::log_set_stats_(const char* what, uint8_t from, uint8_t to, const char* rt_note) {
   const devourer::ChannelSetStats st = device_->LastChannelSetStats();
   const std::string line = mabur::chset_stats_line(st);
   if (!line.empty())
-    std::fprintf(stderr, "maburgs radio: card %u %s %u -> %u set: %s\n", static_cast<unsigned>(cfg_.card_id),
-                 what, static_cast<unsigned>(from), static_cast<unsigned>(to), line.c_str());
+    std::fprintf(stderr, "maburgs radio: card %u %s %u -> %u set: %s%s\n", static_cast<unsigned>(cfg_.card_id),
+                 what, static_cast<unsigned>(from), static_cast<unsigned>(to), line.c_str(), rt_note);
   for (const std::string& m : mabur::chset_miss_lines(st))
     std::fprintf(stderr, "maburgs radio: card %u %s\n", static_cast<unsigned>(cfg_.card_id), m.c_str());
 }
@@ -372,13 +386,18 @@ bool RadioFrontend::set_width(uint8_t ch, uint8_t width_mhz) {
   width_.store(width_mhz, std::memory_order_release);
   if (!ready_.load(std::memory_order_acquire) || !device_) return false;
   rx_channel_.store(0, std::memory_order_release);   // same blinding as retune()
-  device_->FastSetChannel(tune_for(ch, width_mhz));
+  std::string rt_note;
+  {
+    mabur::RtBoost boost(switch_threads_(), cfg_.switch_rt_prio);
+    rt_note = boost.note();
+    device_->FastSetChannel(tune_for(ch, width_mhz));
+  }
   channel_.store(ch, std::memory_order_release);
   rx_channel_.store(ch, std::memory_order_release);
   std::fprintf(stderr, "maburgs radio: card %u width %u -> %u MHz on ch %u\n",
                static_cast<unsigned>(cfg_.card_id), static_cast<unsigned>(was),
                static_cast<unsigned>(width_mhz), static_cast<unsigned>(ch));
-  log_set_stats_("width", ch, ch);
+  log_set_stats_("width", ch, ch, rt_note.c_str());
   return true;
 }
 

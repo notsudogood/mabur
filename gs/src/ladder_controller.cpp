@@ -25,6 +25,7 @@ const char* to_string(CtlReason r) {
     case CtlReason::Fade: return "fade";
     case CtlReason::PromoteProbed: return "promote_probed";
     case CtlReason::HopRestore: return "hop_restore";
+    case CtlReason::Latency: return "latency";
   }
   return "unknown";
 }
@@ -79,6 +80,7 @@ bool LadderController::s3_usable(const LinkHealth& h) const {
 
 void LadderController::mark_transition(double now_ms) {
   s3_blank_until_ms_ = now_ms + cfg_.s3_settle_ms;
+  lat_over_since_ms_ = -1.0;
   s3_util_start_ms_ = -1.0;
   // The new rung's probe has measured nothing yet: drop the streak and the
   // last-sample stamp, and log the NoInfo edge so the ctl log shows the gap
@@ -383,6 +385,37 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
     return true;
   }
 
+  // 4a. Promote latency guard: the promoted rung is not getting the frames
+  // out. Probation only, after the post-change blank, sustained; a NaN
+  // (no AU measured) breaks the run, erring toward not demoting. Exempt
+  // from min_between_changes_ms like the residual demote above, and booked
+  // the same way: a probation failure plus the rung's penalty.
+  if (cfg_.promote_lat_guard_ms > 0 && probation_active_ && idx_ == probation_rung_ &&
+      idx_ > 0 && now_ms - last_change_ms_ >= cfg_.lat_guard_blank_ms) {
+    const bool over = !std::isnan(h.transit_ms) && h.transit_ms >= cfg_.promote_lat_guard_ms;
+    if (!over) {
+      lat_over_since_ms_ = -1.0;
+    } else {
+      if (lat_over_since_ms_ < 0.0) lat_over_since_ms_ = now_ms;
+      if (now_ms - lat_over_since_ms_ >= cfg_.lat_guard_confirm_ms) {
+        const int from = idx_;
+        ++counters_.probation_fails;
+        penalize_rung(from, now_ms);
+        probation_active_ = false;
+        idx_ = (probation_from_ >= 0 && probation_from_ < from) ? probation_from_ : from - 1;
+        last_down_ms_ = now_ms;
+        last_change_ms_ = now_ms;
+        reset_windows();
+        mark_transition(now_ms);
+        ++counters_.demotes_latency;
+        set_event(now_ms, from, idx_, CtlReason::Latency, u_, snr_now_);
+        return true;
+      }
+    }
+  } else {
+    lat_over_since_ms_ = -1.0;
+  }
+
   // 4b. Part B: predictive fade demote. Both signals must drop together,
   // sustained continuously — a window where either condition fails OR either
   // signal is NaN breaks the run (errs toward not demoting). Latched to
@@ -625,6 +658,7 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
       reset_windows();
       probation_active_ = true;
       probation_rung_ = idx_;
+      probation_from_ = from;
       probation_until_ms_ = now_ms + cfg_.probation_ms;
       mark_transition(now_ms);
       ++counters_.promotes;

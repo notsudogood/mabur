@@ -111,6 +111,21 @@ struct LadderCfg {
   // steps at 28-70 % pre-FEC loss). The fade, probation, starved and
   // timeout paths are unchanged. 0 = off: one rung per demote.
   double fast_fall_pre = 0.0;
+  // Promote latency guard. While a freshly promoted rung is on probation,
+  // drone-to-GS transit (LinkHealth::transit_ms: the drone's queue wait plus
+  // what the frame spent in its radio and on air, above the session's best)
+  // at or over this many ms, sustained lat_guard_confirm_ms, sends the link
+  // straight back to the rung it came from, as a probation failure (penalty
+  // included). A rung that cannot carry its bitrate shows here before it
+  // shows as post-FEC loss: bench 2026-10-23, 4/20 -> 3/40 on ch 132, this
+  // rule at 100 ms fires 0.8-1.35 s after each promote against residual
+  // demotes at 1.1-2.2 s, and the drone's queue overflowed in between. The
+  // worst good promote in four saved sessions peaked at 75 ms.
+  // Not re-checked for lat_guard_blank_ms after the change (a width switch
+  // stalls the drone's TX for its duration). 0 = off.
+  int promote_lat_guard_ms = 0;
+  int lat_guard_confirm_ms = 100;
+  int lat_guard_blank_ms = 300;
   // A starved sample (zero completed base packets in a decode window while
   // video frames still arrive) must PERSIST this long before it forces rung
   // 0. The decode window is one RCF period (50 ms on the bench GS), and a
@@ -184,11 +199,16 @@ struct LinkHealth {
   // streak's first Clean sample (ProbeCfg::clean_bodies).
   uint64_t probe_bodies_total = 0;
   int probe_rung = -1;           // rung the sample was commanded at
+  // Median drone-to-GS transit over the last ~200 ms of AUs, in ms above the
+  // session's best (the drone's TX queue wait + radio + air: the sideport's
+  // lat dq + air). NaN = no AU measured; inert. Read only by the promote
+  // latency guard (LadderCfg::promote_lat_guard_ms).
+  double transit_ms = std::numeric_limits<double>::quiet_NaN();
 };
 
 enum class CtlReason {
   None, Residual, Util, Probation, Starved, Timeout, Promote,
-  S3Residual, S3Util, Fade, PromoteProbed, HopRestore
+  S3Residual, S3Util, Fade, PromoteProbed, HopRestore, Latency
 };
 const char* to_string(CtlReason r);
 
@@ -248,6 +268,7 @@ struct CtlCounters {
   uint64_t demotes_s3_residual = 0, demotes_s3_util = 0;
   uint64_t demotes_fade = 0;
   uint64_t fast_falls = 0;  // loss-driven demotes that skipped rungs (fast_fall_pre)
+  uint64_t demotes_latency = 0;  // promote latency guard (promote_lat_guard_ms)
 };
 
 // Measured-loss ladder controller: walks a fixed, pre-filtered list of rungs
@@ -464,6 +485,8 @@ class LadderController {
   bool probation_active_ = false;
   double probation_until_ms_ = -1e18;
   int probation_rung_ = -1;
+  int probation_from_ = -1;            // the rung the probation promote left
+  double lat_over_since_ms_ = -1.0;    // promote latency guard's sustain run
 
   std::vector<int> fail_count_;        // per-rung consecutive probation-fail count k
   std::vector<double> penalty_until_;  // per-rung penalty expiry (ms); -1e18 = none

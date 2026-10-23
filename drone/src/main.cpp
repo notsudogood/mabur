@@ -3427,6 +3427,23 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
                dev_cfg.tuning.disable_cca
                    ? "OFF -- TX will not defer to co-channel traffic"
                    : "ON -- TX defers to any decodable 802.11 preamble (chip default)");
+  // radio.carrier_sense: the bench switch for the 40 MHz stall, applied once
+  // here, before the first frame. devourer re-asserts the gates after every
+  // channel set (tune_locked, SetMonitorChannel), so width switches and hops
+  // keep them. Refused (pre-bring-up, or a chip without the split) = carrier
+  // sense stays as InitWrite left it, and the line says so.
+  if (cfg.radio.carrier_sense != "on") {
+    const bool prim_off = cfg.radio.carrier_sense == "off" || cfg.radio.carrier_sense == "no_primary";
+    const bool ed_off = cfg.radio.carrier_sense == "off" || cfg.radio.carrier_sense == "no_edcca";
+    const bool ok = rtl_device->SetCcaGates(prim_off, ed_off);
+    bool rb_prim = false, rb_ed = false;
+    const bool rb = ok && rtl_device->GetCcaGates(rb_prim, rb_ed);
+    std::fprintf(stderr,
+                 "maburd radio: carrier_sense = \"%s\": %s (readback preamble gate %s, energy gate %s)\n",
+                 cfg.radio.carrier_sense.c_str(),
+                 ok ? "applied" : "REFUSED by the radio -- carrier sense stays ON",
+                 rb ? (rb_prim ? "off" : "on") : "?", rb ? (rb_ed ? "off" : "on") : "?");
+  }
 
   // Always start clean: a flat TXAGC index override is sticky in the chip
   // across a process restart, and the ONLY place that ever sets one is a

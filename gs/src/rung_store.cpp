@@ -69,7 +69,8 @@ void RungStore::on_transition(int from, int to, CtlReason reason,
   current_ = to;
   ++stats_[static_cast<std::size_t>(to)].visits;
   if (reason == CtlReason::Residual || reason == CtlReason::S3Residual ||
-      reason == CtlReason::Probation || reason == CtlReason::Starved) {
+      reason == CtlReason::Probation || reason == CtlReason::Starved ||
+      reason == CtlReason::Latency) {
     ++f.exits_bad;
   }
 }

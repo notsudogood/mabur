@@ -3,7 +3,7 @@
 What the operator has agreed goes into the next GS (and drone) build, in
 order. Each item names its evidence. Remove an item when it ships.
 
-**Status 2026-10-22 (bench only, nothing flown since gs10/d11).**
+**Status 2026-10-23 (bench only, nothing flown since gs10/d11).**
 
 | Item | Evidence so far | State |
 |---|---|---|
@@ -11,14 +11,14 @@ order. Each item names its evidence. Remove an item when it ships.
 | switch breakdown (d12) | found the cause: drone thread scheduling, not USB (docs/bw80.md) | done; the `set:` line stays |
 | 14 drone width steps | every switch on the right centre, `wsw_fail=0`, d11-d13 (~20 switches, ch 132, 40 <-> 80) | drone side passes on the bench; the GS cards' drop to 20 on the 20 rungs not yet seen in a log |
 | switch speed | d13 `switch_rt_prio = 60`: 14-17 ms (was 79-135); + `lean_width`: 7.8-8.5 ms drone, 11-13 ms GS cards, 0 readback misses | lean switching works on both ends (operator, 2026-10-23); open: 20 MHz and spur channels |
-| stutter (new) | gs12 + d13 bench video, ch 132: two failed 3/40 attempts (5-9 % post-FEC loss, latency p99 250-390 ms), then ~5 s stretches at 30 fps with no loss; on 80 MHz rungs 60 fps clean. Leading explanation: the drone's congestion shed (skips enhance frames, eases off one level per 2 s); not the switch boost (no drone width switch happened in those stretches) | needs the run's own log (flight.jsonl, ctl.log) to confirm |
+| stutter | gs12 + d13 bench logs, ch 132, three 4/20 -> 3/40 tries: the drone's radio held 40 MHz frames 60-300 ms on an air the GS read ~70 % idle with no foreign frames; the GS received 5-6 Mb/s at a 13.8 Mb/s setting; loss demote 1.1-2.2 s later; queue overflow at the demote; congestion shed 6 s of 30 fps each (13.5 s once). Not the switch boost (encode time flat at 7-8 ms, no drone width switch). The 20 Oct garage run (d11/gs10, same channel) carried 3/40 at 1.5 ms. Suspects: carrier sense on the 40 MHz pair's upper half (136), near-field bench (-30 dBm both ways), or this run's settings. d14 + gs13 add `radio.carrier_sense`, `link.shed_max_level` (drone) and `link.promote_lat_guard_ms` (GS), all at the old behaviour by default | cause open; d14/gs13 A/B |
 | 9 GS menu | gs10/gs11: stick read wrong (bias), then a crash on open; both fixed in gs12 | done: operator confirmed every part working on gs12 (2026-10-23) |
 | 0 hop at 80 | gs10 test doc steps 4-5 not yet run | untested (the original blocker) |
 | 7, 15, 4 | the garage run (gs10 step 7) not yet run | untested |
 | 5, 8, 10, bottom-rung fps | not run | untested |
 | 2 maburcal | built in gs8/d8 | not bench-checked |
 | 80 MHz any primary, channels above 165, spur fast path, VHT power diffs, ch 149 at 80 | only primary 132 (the block's lowest) has run at 80 | untested |
-| fast fall (new) | gs12 + d13 bench: a deep partial fade walked 8 -> 0 one rung per step at 28-70 % pre-FEC loss; `link.fast_fall_pre` (off) jumps to the rung that fits (docs/link-adaptation.md) | built, off, untested |
+| fast fall | gs12 + d13 bench: a deep partial fade walked 8 -> 0 one rung per step at 28-70 % pre-FEC loss; `link.fast_fall_pre` (off) jumps to the rung that fits (docs/link-adaptation.md) | in gs13, off, untested |
 | 3 drone CPU headroom | operator: cpu0 ~83 % busy | open |
 | 6 8812CU fix | Wyvern drone only | parked |
 

@@ -1192,6 +1192,44 @@ TEST(congestion_shed_escalates_and_recovers) {
   CHECK(agent.current().shed[1] == false);
 }
 
+// 9b. link.shed_max_level = 1: a queue that stays full for many ticks still
+// only reaches level 1, so the enh layer comes back one 2 s clean window
+// after the pressure ends -- not three (bench 2026-10-23: 30 fps ran 6 s after
+// every overflow, 13.5 s when two overlapped). REVERT CHECK: drop the
+// cfg_.link.shed_max_level cap and the t=2700 tick still sheds (level 3 -> 2).
+TEST(shed_max_level_1_lifts_after_one_clean_window) {
+  Config cfg = make_cfg();
+  cfg.link.shed_max_level = 1;
+  MockActuator act;
+  RcAgent agent(cfg, act);
+  agent.tick(0, RadioHealth{});
+  const uint32_t vtx = ack_agent(agent, act);
+
+  uint8_t profile_byte = encode_profile(PhyMode::HT, 5, 20);
+  auto wire = make_rcf_wire(1, profile_byte, 8, vtx);
+  agent.on_rc_frame(wire.data(), wire.size(), 0);
+
+  RadioHealth h;
+  h.txq_cap = 255;
+  h.txq_depth = 200;  // full for four ticks: the old guard would sit at level 3
+  for (uint64_t t = 100; t <= 400; t += 100) agent.tick(t, h);
+  CHECK(agent.current().shed[1] == true);
+
+  auto wire2 = make_rcf_wire(2, profile_byte, 8, vtx);
+  agent.on_rc_frame(wire2.data(), wire2.size(), 900);
+  auto wire3 = make_rcf_wire(3, profile_byte, 8, vtx);
+  agent.on_rc_frame(wire3.data(), wire3.size(), 1800);
+  h.txq_depth = 0;
+  agent.tick(2000, h);  // 1.6 s clean: still shed
+  CHECK(agent.current().shed[1] == true);
+  auto wire4 = make_rcf_wire(4, profile_byte, 8, vtx);
+  agent.on_rc_frame(wire4.data(), wire4.size(), 2600);
+  agent.tick(2700, h);  // 2.3 s clean: level 1 -> 0, 60 fps again
+  CHECK(agent.state() == RcAgent::State::LINKED);
+  CHECK(agent.current().shed[1] == false);
+  CHECK(agent.congestion_shed() == false);
+}
+
 // 9a. TxQueue backpressure is congestion too. The guard's only trigger was
 // TxStats::failed (USB bulk-OUT failures), so when the encoder overshot
 // the pipe the queue ran to its cap and drop-oldest threw bodies away with

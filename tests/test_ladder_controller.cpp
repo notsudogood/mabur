@@ -1524,3 +1524,84 @@ TEST(fast_fall_on_a_util_demote) {
   CHECK(ctl.last_event().reason == CtlReason::Util);
   CHECK(ctl.counters().fast_falls == 1u);
 }
+
+// --- promote latency guard (link.promote_lat_guard_ms) ----------------------
+// Bench 2026-10-23 (ch 132, 4/20 -> 3/40): transit crossed 100 ms 0.7-1.2 s
+// after each promote and kept climbing; the residual demote came 1.1-2.2 s
+// after. A good promote's worst was 74 ms, for ~250 ms.
+
+namespace {
+LinkHealth okt(double transit_ms) {
+  LinkHealth h = ok(0.0);
+  h.transit_ms = transit_ms;
+  return h;
+}
+}  // namespace
+
+TEST(lat_guard_off_never_demotes) {
+  LadderController ctl(make_cfg_noprobe());
+  double t = 0;
+  promote_to(ctl, t, 3);
+  for (int i = 0; i < 20; ++i, t += 50) ctl.update(okt(300.0), t);
+  CHECK(ctl.rung() == 3);
+  CHECK(ctl.counters().demotes_latency == 0u);
+}
+
+TEST(lat_guard_sends_a_promote_that_cannot_drain_back) {
+  LadderCfg cfg = make_cfg_noprobe();
+  cfg.promote_lat_guard_ms = 100;
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 3);
+  const double promoted = t - 50;
+  REQUIRE(ctl.probation_ms_left(t) > 0);
+  // Inside the 300 ms post-change blank: a width switch's stall, ignored.
+  for (; t < promoted + 300; t += 50) ctl.update(okt(250.0), t);
+  CHECK(ctl.rung() == 3);
+  // Past the blank: over at t0, t0+50 -- not yet sustained 100 ms.
+  ctl.update(okt(120.0), t); t += 50;
+  ctl.update(okt(140.0), t); t += 50;
+  CHECK(ctl.rung() == 3);
+  CHECK(ctl.update(okt(160.0), t));          // t0+100: back where it came from
+  CHECK(ctl.rung() == 2);
+  CHECK(ctl.last_event().reason == CtlReason::Latency);
+  CHECK(ctl.counters().demotes_latency == 1u);
+  CHECK(ctl.counters().probation_fails == 1u);
+  bool pen3 = false;
+  for (const auto& p : ctl.penalized(t)) pen3 = pen3 || p.first == 3;
+  CHECK(pen3);
+}
+
+TEST(lat_guard_needs_it_sustained) {
+  LadderCfg cfg = make_cfg_noprobe();
+  cfg.promote_lat_guard_ms = 100;
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 3);
+  t += 300;
+  // The good promote's shape: over for 100 ms at most between dips, and a
+  // NaN window (no AU closed) breaks the run rather than bridging it.
+  const double seq[] = {120, 150, 60, 130, 160, std::numeric_limits<double>::quiet_NaN(),
+                        170, 180, 40, 74};
+  for (double v : seq) { ctl.update(okt(v), t); t += 50; }
+  CHECK(ctl.rung() == 3);
+  CHECK(ctl.counters().demotes_latency == 0u);
+}
+
+TEST(lat_guard_only_during_probation) {
+  LadderCfg cfg = make_cfg_noprobe();
+  cfg.promote_lat_guard_ms = 100;
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 3);
+  feed_for(ctl, t, cfg.probation_ms + 200, 0.3);   // probation survived
+  REQUIRE(ctl.rung() == 3);
+  REQUIRE(ctl.probation_ms_left(t) == 0);
+  for (int i = 0; i < 10; ++i, t += 50) {
+    LinkHealth h = okt(300.0);
+    h.pre_fec_loss = 0.3 * ctl.budget_base();
+    ctl.update(h, t);
+  }
+  CHECK(ctl.rung() == 3);
+  CHECK(ctl.counters().demotes_latency == 0u);
+}

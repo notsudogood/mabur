@@ -729,6 +729,15 @@ TEST(narrow10_section_is_opt_in_and_parses) {
   CHECK(c.radio.switch_rt_prio == 0);                  // switch boost off
   c = maburgs::load_config(write_tmp("[radio]\nlean_width = true\nlean_verify = false\nswitch_rt_prio = 60\n"));
   CHECK(c.radio.lean_width && !c.radio.lean_verify && c.radio.switch_rt_prio == 60);
+  // Ladder switches of this build: both off unless set.
+  c = maburgs::load_config(write_tmp("[radio]\n"));
+  CHECK(c.link.ladder_cfg.fast_fall_pre == 0.0 && c.link.ladder_cfg.promote_lat_guard_ms == 0);
+  c = maburgs::load_config(write_tmp("[link]\nfast_fall_pre = 0.5\npromote_lat_guard_ms = 100\n"));
+  CHECK(c.link.ladder_cfg.fast_fall_pre == 0.5 && c.link.ladder_cfg.promote_lat_guard_ms == 100);
+  threw = false;
+  try { maburgs::load_config(write_tmp("[link]\npromote_lat_guard_ms = -5\n")); }
+  catch (const std::exception&) { threw = true; }
+  CHECK(threw);
 }
 
 TEST(width_issue_helpers_match_the_loader) {

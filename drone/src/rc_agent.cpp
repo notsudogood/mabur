@@ -580,7 +580,7 @@ void RcAgent::run_congestion_guard(uint64_t now_ms, const RadioHealth& health) {
   if (drops_rose || txq_pressure) {
     last_drop_rise_ms_ = now_ms;
     have_last_drop_rise_ = true;
-    if (shed_level_ < 3) {
+    if (shed_level_ < cfg_.link.shed_max_level) {
       ++shed_level_;
       changed = true;
     }
@@ -592,7 +592,17 @@ void RcAgent::run_congestion_guard(uint64_t now_ms, const RadioHealth& health) {
     }
   }
 
-  if (changed) reapply_with_shed();
+  if (changed) {
+    reapply_with_shed();
+    // Edges only: the 0 <-> 1 transitions are the ones that change the
+    // picture (30 <-> 60 fps); the climb above 1 only lengthens the tail.
+    if (shed_level_ == 1 && (drops_rose || txq_pressure))
+      std::fprintf(stderr, "rc: congestion shed ON (%s), 30 fps until up to %d s after it clears\n",
+                   txq_pressure ? "tx queue half full" : "tx drops rose",
+                   2 * cfg_.link.shed_max_level);
+    else if (shed_level_ == 0)
+      std::fprintf(stderr, "rc: congestion shed OFF\n");
+  }
 }
 
 void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {

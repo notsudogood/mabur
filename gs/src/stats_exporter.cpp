@@ -379,7 +379,9 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
                        {"probe_holds", c.probe_holds},
                        {"demotes_s3_residual", c.demotes_s3_residual},
                        {"demotes_s3_util", c.demotes_s3_util},
-                       {"demotes_fade", c.demotes_fade}};
+                       {"demotes_fade", c.demotes_fade},
+                       {"fast_falls", c.fast_falls},
+                       {"demotes_latency", c.demotes_latency}};
     // last_event.u carries u3 (also sentinel-guardable) for S3Residual/
     // S3Util reasons -- clamp unconditionally, it's a no-op for the s1
     // reasons' ordinary [0,1]-ish values.

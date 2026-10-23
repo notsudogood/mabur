@@ -44,6 +44,7 @@
 #include "ladder_residual.h"
 #include "link_health.h"
 #include "lat_window.h"
+#include "transit_window.h"
 #include "log_writer.h"
 #ifdef MABUR_LOSS_SIM
 #include "loss_control.h"
@@ -697,6 +698,9 @@ static int run_radio(const maburgs::Config& cfg) {
   // with no other AU's begin in between (single-threaded core loop).
   maburgs::PtsAnchor lat_anchor;
   maburgs::LatWindow lat_win;
+  // The ladder's view of the same per-AU samples (dq + air), time-windowed
+  // for the promote latency guard.
+  maburgs::TransitWindow transit_win;
   uint32_t cur_au_pts = 0;
   uint8_t cur_au_sid = 0;
   uint8_t cur_au_nslices = 1;  // ring v4: >= 2 = published slice by slice
@@ -827,6 +831,9 @@ static int run_radio(const maburgs::Config& cfg) {
                lat_win.add(lat.enc_us,
                            static_cast<uint32_t>(lat.drone_q_ms) * 1000,
                            static_cast<uint32_t>(excess > 0 ? excess : 0), fec);
+               transit_win.add(static_cast<double>(t_done) / 1000.0,
+                               static_cast<double>(lat.drone_q_ms) +
+                                   static_cast<double>(excess > 0 ? excess : 0) / 1000.0);
              }
            }
          }
@@ -1430,6 +1437,7 @@ static int run_radio(const maburgs::Config& cfg) {
       // holds up to kCap stale pre-reset samples that would silently mix
       // into that first post-reset flush -- worst right after a reconnect.
       lat_win.clear();
+      transit_win.clear();
       std::fprintf(stderr, "maburgs: video tail -> %s\n",
                    fw ? "frame wire" : "off (no session)");
     }
@@ -1473,7 +1481,10 @@ static int run_radio(const maburgs::Config& cfg) {
                              maburgs::LinkHealthInputs{vrx.cur_op(), vrx.probe_profile(),
                                                        vrx.ctl().probe_rung()});
     if (lh.probe_tail_ms) rcf_slot.set_probe_tail_ms(*lh.probe_tail_ms);
-    const maburgs::LinkHealth& health = lh.health;
+    // A copy, not a reference: the promote latency guard's input is added
+    // here (the assembler is shared with the web GS, which has no AU path).
+    maburgs::LinkHealth health = lh.health;
+    health.transit_ms = transit_win.p50(now_ms);
     // Loss episodes (fec.log): drained every tick whether or not the log is
     // open, so the decoder's closed-episode queue never fills. Stamped with
     // the op and the sid's own commanded overhead as of this tick.
@@ -1612,9 +1623,9 @@ static int run_radio(const maburgs::Config& cfg) {
     // listening).
     if (const auto& e = vrx.ctl().last_event(); e.t_ms != last_ctl_event_ms) {
       last_ctl_event_ms = e.t_ms;
-      std::fprintf(stderr, "ctl: rung %d->%d reason=%s u=%.2f pre=%.3f\n",
+      std::fprintf(stderr, "ctl: rung %d->%d reason=%s u=%.2f pre=%.3f transit=%.0fms\n",
                    e.from, e.to, maburgs::to_string(e.reason), e.u,
-                   health.pre_fec_loss);
+                   health.pre_fec_loss, health.transit_ms);
       if (ctl_log)
         ctl_log->event(e.t_ms, e.from, e.to, maburgs::to_string(e.reason),
                         e.u, e.snr_db, e.evm_db);
@@ -1951,6 +1962,8 @@ static int run_radio(const maburgs::Config& cfg) {
         ci.demotes_s3_residual = cnt.demotes_s3_residual;
         ci.demotes_s3_util = cnt.demotes_s3_util;
         ci.demotes_fade = cnt.demotes_fade;
+        ci.fast_falls = cnt.fast_falls;
+        ci.demotes_latency = cnt.demotes_latency;
         ci.fade_active = c.fade_active(now_ms);
         ci.fade_drssi = c.fade_drssi();
         ci.fade_dsnr = c.fade_dsnr();

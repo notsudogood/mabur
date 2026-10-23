@@ -160,6 +160,9 @@ struct StatsCtlIn {
   // event and re-arms only on an observed recovery (both deltas measurably
   // back under threshold).
   uint64_t demotes_fade = 0;
+  // fast_fall_pre demotes that skipped rungs, and promote latency guard
+  // demotes (LadderCfg::promote_lat_guard_ms).
+  uint64_t fast_falls = 0, demotes_latency = 0;
   bool fade_active = false;          // regime state (raw, cascade-independent)
   double fade_drssi = 0.0;           // baseline-minus-fast deltas; NaN -> null
   double fade_dsnr = 0.0;

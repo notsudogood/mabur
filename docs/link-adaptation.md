@@ -213,7 +213,13 @@ TxQueue is at or past **half its cap**:
 - The shed is applied at the UEP encoder before anything is queued, so
   there is no frame id and no expected symbol. The GS sees enh silence,
   which `s3_usable()` treats as no information, not loss.
-- Recovery is a 2 s clean window per shed level.
+- Recovery is a 2 s clean window per shed level. The level climbs one step
+  per tick (100 ms) while the queue stays half full, up to
+  `link.shed_max_level` (default 3). Every level sheds the same thing, so
+  the setting only sets the tail: 3 = up to 6 s at 30 fps after the queue
+  empties, 1 = 2 s. Bench 2026-10-23 (ch 132): each failed 3/40 promote
+  left 6 s of 30 fps behind it, 13.5 s when two overlapped. `rc: congestion
+  shed ON/OFF` lines in the drone log mark the edges.
 - Telem flags bit4 → sideport `drone.congestion_shed`; maburtop shows
   `CONG`.
 
@@ -394,6 +400,37 @@ needed, and the climb back runs at the normal promote pace (`clean_ms` plus
 the probe per rung). A short blip that crosses the threshold costs more
 picture than one rung would. A hand over the antennas is a sharper fade than
 most flights.
+
+## Promote latency guard (`link.promote_lat_guard_ms`, off)
+
+A promote to a rung the drone cannot drain shows on the GS first as
+transit, then as loss. Bench 2026-10-23 (gs12 + d13, ch 132, 4/20 -> 3/40,
+three tries): frames left the drone's queue on time and then sat in its
+radio; median transit (the drone's queue wait + radio + air, above the
+session's best) crossed 100 ms 0.7-1.2 s after each promote and kept
+climbing to 200-300 ms. The residual demote came 1.1-2.2 s after the
+promote, by which time the drone had raised its bitrate for the new rung,
+and its queue overflowed at the demote (33, 111, 152 bodies dropped).
+
+With `promote_lat_guard_ms` > 0, while the promoted rung is on probation
+and at least `lat_guard_blank_ms` (300) after the change, a median transit
+over the last 200 ms of AUs (`TransitWindow`, `LinkHealth::transit_ms`) at
+or over it, sustained `lat_guard_confirm_ms` (100), sends the link back to
+the rung it came from as a probation failure, penalty included. A window
+with no AU closed breaks the run. The E line reads `latency`, the
+`ctl: rung` line carries `transit=` on every change, and
+`CtlCounters::demotes_latency` counts them.
+
+Replayed at 100 ms on au.log (`tools/latguard_replay.py`: the same window,
+blank and sustain), it fires 0.8, 1.35 and 0.8 s after the three bad
+promotes, against residual demotes at 1.09, 2.20 and 1.62 s: 0.3-0.85 s
+sooner, and on the first try still after the drone's bitrate raise. It stays
+quiet on the other ~55 promotes in four saved sessions (this one, the 20 Oct
+garage run with its 40 -> 80 width steps, s0014, sess8). The worst of those
+was 75 ms for ~250 ms (3/20 -> 4/20 here, the encoder stepping up), so the
+margin is 25 ms, from one bench. A width switch to 80 MHz without the boost
+stalls the drone's TX for 70-130 ms; the blank covers the switch itself, not
+a slow drain after it. Off by default.
 
 ## Fade regime and predictive trigger
 

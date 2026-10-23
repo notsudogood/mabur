@@ -417,7 +417,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
                 "ladder", "max_mcs", "down_util", "up_util", "confirm_ms",
                 "clean_ms", "probation_ms", "penalty_base_ms", "penalty_max_ms",
                 "hold_after_down_ms", "min_between_changes_ms", "feedback_timeout_ms",
-                "starved_confirm_ms", "fast_fall_pre", "s3_demote", "s3_down_util",
+                "starved_confirm_ms", "fast_fall_pre", "promote_lat_guard_ms", "s3_demote", "s3_down_util",
                 "s3_settle_ms", "s3_min_syms",
                 "rung_stats", "fade", "probe",
                 "rcf_slot_hold_ms", "arrival_guard_syms",
@@ -524,6 +524,8 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
     c.link.ladder_cfg.starved_confirm_ms =
         static_cast<int>(get_int(r, "starved_confirm_ms", 300, 0, 600000, "link"));
     c.link.ladder_cfg.fast_fall_pre = get_num(r, "fast_fall_pre", 0.0, 0.0, 1.0, "link");
+    c.link.ladder_cfg.promote_lat_guard_ms =
+        static_cast<int>(get_int(r, "promote_lat_guard_ms", 0, 0, 2000, "link"));
 
     // s3 steady-state demote tuning (LadderCfg). s3_down_util keeps its
     // struct default (-1 sentinel) when absent from JSON and is resolved to

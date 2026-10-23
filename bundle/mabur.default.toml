@@ -29,6 +29,9 @@ lean_width = false     # width switch writes only what the full set would change
 lean_verify = true     # with lean_width: read the changed registers back, full set on any difference
 switch_rt_prio = 0     # > 0: width switches and hops run at this SCHED_FIFO priority (above the encoder's
                        # 50), with the RX thread; 0 = off (an experiment, d13)
+carrier_sense = "on"   # "on" = wait for a quiet channel before sending (the default). Bench switches for the
+                       # 40 MHz stall: "off", "no_edcca" (ignore raw energy), "no_primary" (ignore 802.11
+                       # preambles). Anything but "on" lets the drone talk over the ground station's uplink
 narrow_rescue_ms = 1500 # 10 MHz rung (switched on at the GS, [link.narrow10]): leave 10 MHz after this long
                         # without hearing the GS there; 0 = wait for the 3 s failsafe
 power_mode = "none"      # "none" = card's default TX power; "offset" = use the calibrated walls below.
@@ -131,6 +134,8 @@ rc_drain_ms     = 5        # how often commands from the ground station are appl
 rendezvous_ms   = 30000    # still silent this long after failsafe = back to RENDEZVOUS (the drone stays on its channel)
 move_confirm_ms = 2000     # after a channel move, hear the ground station within this or return to the channel we came from
 tick_ms         = 100      # housekeeping interval (health checks, stats)
+shed_max_level  = 3        # how far the queue-full guard climbs: each level is 2 s more at 30 fps after the
+                           # radio queue empties (3 = 6 s, the old behaviour; 1 = 2 s). Levels above 1 drop nothing more
 key_file        = "/etc/mabur.key"   # pairing key; same file on the ground station (docs/deploy.md "Pairing"). Missing = built-in default
 
 [msp]

@@ -87,7 +87,8 @@ void parse_radio(const Value& j, RadioCfg& r) {
                         "power_mode", "tx_threads", "tx_threads_hot", "rate_walls_rel",
                         "legacy_wall_rel", "wall_margin_db", "ldpc", "width_step",
                         "home_width", "width_hold_ms", "fast_hop_at_80", "batched_tune",
-                        "lean_width", "lean_verify", "switch_rt_prio", "narrow_rescue_ms"},
+                        "lean_width", "lean_verify", "switch_rt_prio", "narrow_rescue_ms",
+                        "carrier_sense"},
                    "radio");
   assign_if_present(j, "usb_vid", r.usb_vid, "radio");
   assign_if_present(j, "usb_pid", r.usb_pid, "radio");
@@ -104,6 +105,10 @@ void parse_radio(const Value& j, RadioCfg& r) {
   assign_if_present(j, "switch_rt_prio", r.switch_rt_prio, "radio");
   if (r.switch_rt_prio < 0 || r.switch_rt_prio > 89)
     fail("radio.switch_rt_prio", "must be 0 (off) to 89 (SCHED_FIFO priority; the encoder runs at 50)");
+  assign_if_present(j, "carrier_sense", r.carrier_sense, "radio");
+  if (r.carrier_sense != "on" && r.carrier_sense != "off" &&
+      r.carrier_sense != "no_edcca" && r.carrier_sense != "no_primary")
+    fail("radio.carrier_sense", "must be \"on\", \"off\", \"no_edcca\" or \"no_primary\"");
   assign_if_present(j, "narrow_rescue_ms", r.narrow_rescue_ms, "radio");
   if (r.narrow_rescue_ms < 0 || r.narrow_rescue_ms > 10000)
     fail("radio.narrow_rescue_ms", "must be in [0,10000]");
@@ -586,13 +591,16 @@ void parse_venc(const Value& j, VencSectionCfg& v) {
 
 void parse_link(const Value& j, LinkCfg& l) {
   check_known_keys(j, {"failsafe_ms", "rendezvous_ms", "tick_ms",
-                       "rc_drain_ms", "move_confirm_ms", "key_file"}, "link");
+                       "rc_drain_ms", "move_confirm_ms", "key_file", "shed_max_level"}, "link");
   assign_if_present(j, "failsafe_ms", l.failsafe_ms, "link");
   assign_if_present(j, "rendezvous_ms", l.rendezvous_ms, "link");
   assign_if_present(j, "move_confirm_ms", l.move_confirm_ms, "link");
   assign_if_present(j, "tick_ms", l.tick_ms, "link");
   assign_if_present(j, "rc_drain_ms", l.rc_drain_ms, "link");
   assign_if_present(j, "key_file", l.key_file, "link");
+  assign_if_present(j, "shed_max_level", l.shed_max_level, "link");
+  if (l.shed_max_level < 1 || l.shed_max_level > 3)
+    fail("link.shed_max_level", "must be in [1,3]");
 
   if (l.move_confirm_ms < 200 || l.move_confirm_ms > 30000)
     fail("link.move_confirm_ms", "must be in [200,30000]");

@@ -45,6 +45,18 @@ struct RadioCfg {
   // then return to their own (rt_boost.h). An experiment: d12 measured
   // ~0.5 ms per USB transfer in flight against 27 us at bring-up. 0 = off.
   int switch_rt_prio = 0;
+  // MAC carrier sense on the downlink, applied once right after bring-up
+  // (devourer SetCcaGates; it sticks across width switches and hops):
+  //   "on"         -- both gates on, the shipped behaviour (see main.cpp
+  //                   at dev_cfg.tuning.disable_cca for why).
+  //   "off"        -- TX never waits for the air to go quiet.
+  //   "no_edcca"   -- only the energy gate off; still waits for a
+  //                   decodable 802.11 preamble.
+  //   "no_primary" -- only the preamble gate off; still waits on energy.
+  // A bench switch for the 40 MHz stall (2026-10-23: 40 MHz frames held in
+  // the chip 60-130 ms on an idle channel). Anything but "on" costs the RCF
+  // uplink the collision protection carrier sense buys it.
+  std::string carrier_sense = "on";
   // 10 MHz rung (backlog item 10, ordered by the GS): with no RCF heard for
   // this long at 10 MHz the radio leaves 10 on its own (the GS does the same
   // when it stops hearing the drone). 0 = never; the 3 s failsafe still
@@ -216,6 +228,12 @@ struct LinkCfg {
   // the housekeeping to the drain period; == tick_ms reproduces the legacy
   // single-cadence loop.
   int rc_drain_ms = 5;
+  // Congestion guard (RcAgent::run_congestion_guard): the highest shed
+  // level a full TX queue or a USB failure can climb to. Every level >= 1
+  // sheds the same thing (the enh layer -- 30 fps), and each level costs one
+  // more 2 s clean window before it lifts, so this is the 30 fps tail after
+  // the queue empties: 3 = 6 s (the shipped guard), 1 = 2 s. [1,3].
+  int shed_max_level = 3;
   // Pairing key: the key FILE path. The file is read at load; a missing file
   // means the compiled-in default (and a boot log line), a malformed one
   // fails boot naming the file.

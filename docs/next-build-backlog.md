@@ -10,8 +10,9 @@ order. Each item names its evidence. Remove an item when it ships.
 | 13 OSD "/80" | shown on the d11-d13 width benches | done |
 | switch breakdown (d12) | found the cause: drone thread scheduling, not USB (docs/bw80.md) | done; the `set:` line stays |
 | 14 drone width steps | every switch on the right centre, `wsw_fail=0`, d11-d13 (~20 switches, ch 132, 40 <-> 80) | drone side passes on the bench; the GS cards' drop to 20 on the 20 rungs not yet seen in a log |
-| switch speed | d13 `switch_rt_prio = 60`: 14-17 ms (was 79-135); + `lean_width`: 7.8-8.5 ms, 0 readback misses (5 switches) | bench pass; open: video around a switch, 20 MHz and spur channels, the GS side (gs12) |
-| 9 GS menu | gs10/gs11: stick read wrong (bias), then a crash on open; both fixed in gs12 | retest on gs12 |
+| switch speed | d13 `switch_rt_prio = 60`: 14-17 ms (was 79-135); + `lean_width`: 7.8-8.5 ms drone, 11-13 ms GS cards, 0 readback misses | lean switching works on both ends (operator, 2026-10-23); open: 20 MHz and spur channels |
+| stutter (new) | gs12 + d13 bench video, ch 132: two failed 3/40 attempts (5-9 % post-FEC loss, latency p99 250-390 ms), then ~5 s stretches at 30 fps with no loss; on 80 MHz rungs 60 fps clean. Leading explanation: the drone's congestion shed (skips enhance frames, eases off one level per 2 s); not the switch boost (no drone width switch happened in those stretches) | needs the run's own log (flight.jsonl, ctl.log) to confirm |
+| 9 GS menu | gs10/gs11: stick read wrong (bias), then a crash on open; both fixed in gs12 | done: operator confirmed every part working on gs12 (2026-10-23) |
 | 0 hop at 80 | gs10 test doc steps 4-5 not yet run | untested (the original blocker) |
 | 7, 15, 4 | the garage run (gs10 step 7) not yet run | untested |
 | 5, 8, 10, bottom-rung fps | not run | untested |

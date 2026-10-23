@@ -101,6 +101,16 @@ struct LadderCfg {
   int penalty_base_ms = 10000, penalty_max_ms = 60000;
   int hold_after_down_ms = 4000, min_between_changes_ms = 150;
   int feedback_timeout_ms = 1000;
+  // A loss-driven demote (s1 or s3 residual or util) whose pre-FEC loss is
+  // at least this skips rungs: it lands on the highest rung below whose
+  // base-layer goodput (PHY rate / (1 + overhead_base)) fits what still gets
+  // through at the current one, goodput x (1 - loss), instead of the next
+  // rung down (fall_target()). Only the starved and timeout paths jumped
+  // before, and only on total silence; a deep partial fade walked down one
+  // rung per >= min_between_changes_ms (bench 2026-10-23: 8 -> 0 in nine
+  // steps at 28-70 % pre-FEC loss). The fade, probation, starved and
+  // timeout paths are unchanged. 0 = off: one rung per demote.
+  double fast_fall_pre = 0.0;
   // A starved sample (zero completed base packets in a decode window while
   // video frames still arrive) must PERSIST this long before it forces rung
   // 0. The decode window is one RCF period (50 ms on the bench GS), and a
@@ -237,6 +247,7 @@ struct CtlCounters {
   uint64_t promotes_probed = 0, probe_holds = 0;
   uint64_t demotes_s3_residual = 0, demotes_s3_util = 0;
   uint64_t demotes_fade = 0;
+  uint64_t fast_falls = 0;  // loss-driven demotes that skipped rungs (fast_fall_pre)
 };
 
 // Measured-loss ladder controller: walks a fixed, pre-filtered list of rungs
@@ -275,6 +286,10 @@ class LadderController {
   void blank_store(double until_ms);
 
   int rung() const { return idx_; }
+  // Where a loss-driven demote from `from` lands at pre-FEC loss `pre`:
+  // from - 1, or with fast_fall_pre on and reached, the highest rung below
+  // whose goodput fits goodput(from) x (1 - pre); 0 at the floor.
+  int fall_target(int from, double pre) const;
   // The rung the last VALID feedback sample was measured on, stamped before
   // any decision block runs. rung() is live and has already stepped down by
   // the time a demote returns, so anything that pairs a rung with the loss

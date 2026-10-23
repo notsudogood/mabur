@@ -4,6 +4,8 @@
 #include <cassert>
 #include <cmath>
 
+#include "mabur/profile.h"
+
 namespace maburgs {
 
 const char* to_string(CtlReason r) {
@@ -237,6 +239,28 @@ int LadderController::probation_ms_left(double now_ms) const {
   return 0;
 }
 
+namespace {
+// Base-layer goodput of a rung: PHY rate after the FEC overhead. 80 MHz
+// rungs fly VHT, 20/40 HT (vrx_controller.cpp).
+double rung_goodput_mbps(const Rung& r) {
+  mabur::rc::LayerTxSpec s;
+  s.mode = r.bw == 80 ? mabur::rc::PhyMode::VHT : mabur::rc::PhyMode::HT;
+  s.mcs = static_cast<uint8_t>(r.mcs);
+  s.bw = static_cast<uint8_t>(r.bw);
+  return mabur::rc::phy_rate_mbps(s) / (1.0 + r.overhead_base);
+}
+}  // namespace
+
+int LadderController::fall_target(int from, double pre) const {
+  if (from <= 0) return 0;
+  if (cfg_.fast_fall_pre <= 0.0 || pre < cfg_.fast_fall_pre) return from - 1;
+  const double fits = rung_goodput_mbps(cfg_.ladder[static_cast<size_t>(from)]) *
+                      (1.0 - std::min(pre, 1.0));
+  for (int r = from - 1; r > 0; --r)
+    if (rung_goodput_mbps(cfg_.ladder[static_cast<size_t>(r)]) <= fits) return r;
+  return 0;
+}
+
 // Check order (a contract; the block numbers below follow it):
 //   starved -> s1 residual -> fade -> s3 residual -> s1 util -> s3 util ->
 //   clean/probe-gated promote.
@@ -347,7 +371,8 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
       penalize_rung(from, now_ms);
       probation_active_ = false;
     }
-    idx_ = from - 1;
+    idx_ = fall_target(from, h.pre_fec_loss);
+    if (idx_ < from - 1) ++counters_.fast_falls;
     last_down_ms_ = now_ms;
     last_change_ms_ = now_ms;
     reset_windows();
@@ -469,7 +494,10 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
       penalize_rung(from, now_ms);
       probation_active_ = false;
     }
-    idx_ = from - 1;
+    // The enhance layer shows loss first, but the rung the base layer can
+    // still carry is the question, so the deeper of the two losses decides.
+    idx_ = fall_target(from, std::max(h.pre_fec_loss, h.s3_pre_fec_loss));
+    if (idx_ < from - 1) ++counters_.fast_falls;
     last_down_ms_ = now_ms;
     last_change_ms_ = now_ms;
     reset_windows();
@@ -523,7 +551,8 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
     if (idx_ > 0 && now_ms - confirm_start_ms_ >= eff_confirm_ms(now_ms) &&
         now_ms - last_change_ms_ >= cfg_.min_between_changes_ms) {
       const int from = idx_;
-      idx_ = from - 1;
+      idx_ = fall_target(from, h.pre_fec_loss);
+      if (idx_ < from - 1) ++counters_.fast_falls;
       last_down_ms_ = now_ms;
       last_change_ms_ = now_ms;
       reset_windows();

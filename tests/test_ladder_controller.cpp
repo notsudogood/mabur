@@ -1471,3 +1471,56 @@ TEST(blank_store_does_not_suspend_s3_decisions_only_the_ewma) {
   CHECK(ctl.last_event().reason == CtlReason::S3Residual);
   CHECK(ctl.rungs().stat(before_rung).s3_resid.n == before_n);
 }
+
+// --- fast fall (link.fast_fall_pre) ---------------------------------------
+// kLadder goodput (HT20 rate / (1 + overhead_base)): 2.17, 9.75, 26.0, 34.7,
+// 45.0, 54.2 Mb/s.
+
+TEST(fast_fall_off_steps_one_rung) {
+  LadderController ctl(make_cfg_noprobe());
+  CHECK(ctl.fall_target(5, 0.7) == 4);
+  CHECK(ctl.fall_target(1, 0.9) == 0);
+  CHECK(ctl.fall_target(0, 0.9) == 0);
+}
+
+TEST(fast_fall_lands_on_the_rung_that_fits_what_gets_through) {
+  LadderCfg cfg = make_cfg_noprobe();
+  cfg.fast_fall_pre = 0.5;
+  LadderController ctl(cfg);
+  CHECK(ctl.fall_target(5, 0.3) == 4);   // under the threshold: one rung
+  CHECK(ctl.fall_target(5, 0.5) == 2);   // 54.2 x 0.5 = 27.1 -> 26.0
+  CHECK(ctl.fall_target(5, 0.7) == 1);   // 54.2 x 0.3 = 16.3 -> 9.75
+  CHECK(ctl.fall_target(4, 0.5) == 1);   // 45.0 x 0.5 = 22.5 -> 9.75 (26.0 does not fit)
+  CHECK(ctl.fall_target(5, 1.0) == 0);   // nothing gets through
+  CHECK(ctl.fall_target(2, 0.6) == 1);   // never less than one rung: 26.0 x 0.4 = 10.4 -> 9.75
+}
+
+TEST(fast_fall_on_a_residual_demote) {
+  for (double ff : {0.0, 0.5}) {
+    LadderCfg cfg = make_cfg_noprobe();
+    cfg.fast_fall_pre = ff;
+    LadderController ctl(cfg);
+    double t = 0;
+    promote_to(ctl, t, 5);
+    LinkHealth h = ok(0.7);
+    h.residual_loss = 0.1;
+    CHECK(ctl.update(h, t));
+    CHECK(ctl.rung() == (ff > 0 ? 1 : 4));
+    CHECK(ctl.counters().fast_falls == (ff > 0 ? 1u : 0u));
+    CHECK(ctl.last_event().reason == CtlReason::Residual);
+  }
+}
+
+TEST(fast_fall_on_a_util_demote) {
+  LadderCfg cfg = make_cfg_noprobe();
+  cfg.fast_fall_pre = 0.5;
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 5);
+  feed_for(ctl, t, 4000, 0.3);   // past probation, neutral load
+  REQUIRE(ctl.rung() == 5);
+  for (int i = 0; i < 40 && ctl.rung() == 5; ++i, t += 50) ctl.update(ok(0.6), t);
+  CHECK(ctl.rung() == 1);        // 54.2 x 0.4 = 21.7 -> 9.75
+  CHECK(ctl.last_event().reason == CtlReason::Util);
+  CHECK(ctl.counters().fast_falls == 1u);
+}

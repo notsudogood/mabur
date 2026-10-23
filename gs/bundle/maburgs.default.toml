@@ -98,6 +98,8 @@ hold_after_down_ms     = 0      # wait after stepping down before stepping up ag
 min_between_changes_ms = 150    # minimum time between any two rung changes
 feedback_timeout_ms    = 1000   # no link reports this long = fall to the most robust rung
 starved_confirm_ms     = 300    # no video this long = fall to the most robust rung
+fast_fall_pre          = 0      # 0 = off. e.g. 0.5: a step down taken at >= 50 % loss before error
+                                # correction skips straight to a rung that fits what still gets through
 
 # A second loss check on the droppable enhance-layer frames, which show
 # trouble earlier than the base layer.

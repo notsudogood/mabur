@@ -368,6 +368,33 @@ History of the blanks and of attribution:
 - `docs/findings/2026-09-05-probe-stream-flight.md` §9
 - `docs/findings/2026-10-06-util-window-clear.md`
 
+## Fast fall on a deep partial fade (`link.fast_fall_pre`, off)
+
+Only two paths jumped rungs: `starved` (no completed video for
+`starved_confirm_ms`) and `timeout` (no link reports for
+`feedback_timeout_ms`), both to rung 0 and both on total silence. A deep fade
+that still lets some video through walks down one rung per loss-driven
+demote, each at least `min_between_changes_ms` after the last. Bench
+2026-10-23 (gs12 + d13, a hand over the drone's antennas): 8 -> 0 in nine
+steps at 28-70 % pre-FEC loss, the picture breaking up on the way.
+
+With `fast_fall_pre` > 0, a loss-driven demote (s1 or s3 residual, s1 or s3
+util) whose pre-FEC loss is at least that lands on the highest rung below
+whose base-layer goodput (PHY rate / (1 + `overhead_base`); VHT at 80 MHz,
+HT below) fits what still gets through at the current rung, goodput x
+(1 - loss), instead of the next rung down; rung 0 at the floor, never less
+than one rung (`LadderController::fall_target`). s3 events use the deeper
+of the s1 and s3 losses. Fade, probation, starved and timeout are
+unchanged. The E line and the `ctl: rung a->b` line show the skip;
+`CtlCounters::fast_falls` counts them.
+
+Counterpart, not yet measured: the fit assumes loss scales with airtime,
+while a lower MCS also gains SNR margin, so it tends to land lower than
+needed, and the climb back runs at the normal promote pace (`clean_ms` plus
+the probe per rung). A short blip that crosses the threshold costs more
+picture than one rung would. A hand over the antennas is a sharper fade than
+most flights.
+
 ## Fade regime and predictive trigger
 
 Two independent pieces, both in `[link.fade]` (optional; code defaults

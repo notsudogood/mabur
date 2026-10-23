@@ -17,6 +17,7 @@ order. Each item names its evidence. Remove an item when it ships.
 | 5, 8, 10, bottom-rung fps | not run | untested |
 | 2 maburcal | built in gs8/d8 | not bench-checked |
 | 80 MHz any primary, channels above 165, spur fast path, VHT power diffs, ch 149 at 80 | only primary 132 (the block's lowest) has run at 80 | untested |
+| fast fall (new) | gs12 + d13 bench: a deep partial fade walked 8 -> 0 one rung per step at 28-70 % pre-FEC loss; `link.fast_fall_pre` (off) jumps to the rung that fits (docs/link-adaptation.md) | built, off, untested |
 | 3 drone CPU headroom | operator: cpu0 ~83 % busy | open |
 | 6 8812CU fix | Wyvern drone only | parked |
 

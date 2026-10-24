@@ -138,6 +138,11 @@ bool RadioFrontend::open_and_start() {
   dev_cfg.tuning.lean_width = cfg_.lean_width;
   dev_cfg.tuning.lean_verify = cfg_.lean_verify;
   dev_cfg.tuning.spur_ext_8822e = cfg_.spur_ext;
+  // devourer's wide-TX IGI floor arms on the first >= 40 MHz frame a radio
+  // sends. The GS sends only MCS0/20 control frames (dot11.cpp), so it never
+  // arms here; pinned off anyway, because armed on a receive card it would
+  // cost ~20 dB of 40/80 MHz sensitivity (estimated) for the session.
+  dev_cfg.tuning.wide_tx_igi_floor = 0;
   // (The 0x41e8 protect_pathb_agc knob was chased here too — exonerated:
   // the real path-B killer was the DPDT pin-mux, fixed by devourer's eFEM
   // pinmux port; see DEVOURER_DPDT_MODE in RtlJaguar3Device.)

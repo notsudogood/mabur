@@ -3,6 +3,15 @@
 What the operator has agreed goes into the next GS (and drone) build, in
 order. Each item names its evidence. Remove an item when it ships.
 
+**Status 2026-10-24 (drone 2 on d13 + d14's maburd, gs13; garage walks on ch 132).**
+
+| Item | Evidence | State |
+|---|---|---|
+| stutter on drone 2 | run A climbed through /40 to /80 with no stall; the walks saw no `latency` step-downs (`demotes_latency` 0 in all four) | the 40 MHz stall did not reproduce on drone 2; drone 1 (the stalling unit) is boot-looping, awaiting a serial console |
+| top-rung cap | 50000 kbps: 5-8 queue-full sheds to 30 fps per 3-4 min walk, all on 4/80, frames p90 100-107 kB, queue wait max 33-36 ms; 40000 kbps: 0 sheds in 5.3 min, queue max 22 ms, median bitrate unchanged (33 vs 34 Mb/s), operator saw no softer picture. One walk per setting; scene and light not controlled | bundle default now 40000 (835f0a00) |
+| player timing | the three scheduling keys (`vsync_lock`, `sched_cap_ms`, `regulate_ms`) cut player drops from ~80/min to ~21/min (6/min in calm stretches) at +8 ms player hold; `phase_lock` on top held lock most of a walk and cut the hold back by ~6 ms, but that walk dropped more frames (48/min, few calm seconds to judge by) | operator prefers phase lock on; the gs bundle already defaults all four on |
+| fast fall | fired once in a walk: 6 -> 1 at 84 % pre-FEC loss, the player dropped 2 frames there | works; one event |
+
 **Status 2026-10-23 (bench only, nothing flown since gs10/d11).**
 
 | Item | Evidence so far | State |

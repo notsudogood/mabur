@@ -86,6 +86,26 @@ watch_ch() {
   return 0
 }
 
+# Drone log length now: the stall check reads only what the step adds.
+dmark() { $SSH root@$DRONE 'wc -l < /tmp/mabur.log' 2>/dev/null || echo 0; }
+
+# The stall signature for one step: the GS's step-downs (its log restarts with
+# maburgs, so it holds this step only), lateness step-downs among them, and from
+# the drone's lines since $1 the worst USB hand-off to the radio (a frozen radio
+# shows as tens to hundreds of ms; ~5-10 ms is normal) plus queue drops and
+# failed sends. The drone counters are cumulative: last minus first.
+stall() {
+  local g d
+  g=$($SSH root@$GS "awk '/ctl: rung/ { split(\$3, a, \"->\"); if (a[2] + 0 < a[1] + 0) n++; if (\$4 == \"reason=latency\") l++ } END { print n + 0, l + 0 }' /tmp/maburgs.log" 2>/dev/null)
+  d=$($SSH root@$DRONE "tail -n +$(( $1 + 1 )) /tmp/mabur.log | awk '
+    /usb_urb/ && match(\$0, /max=[0-9]+/) { v = substr(\$0, RSTART + 4, RLENGTH - 4) + 0; if (v > m) m = v }
+    /^stats/ && match(\$0, /txq_drop=[0-9]+/) { q = substr(\$0, RSTART + 9, RLENGTH - 9) + 0; if (q0 == \"\") q0 = q; q1 = q }
+    /^stats/ && match(\$0, /tx_failed=[0-9]+/) { f = substr(\$0, RSTART + 10, RLENGTH - 10) + 0; if (f0 == \"\") f0 = f; f1 = f }
+    END { printf \"%d %d %d\", m / 1000, q1 - q0, f1 - f0 }'" 2>/dev/null)
+  set -- $g $d
+  say "    stall check: ${1:-?} step-downs (${2:-?} for lateness), worst radio hand-off ${3:-?} ms, ${4:-?} queue drops, ${5:-?} failed sends"
+}
+
 logs() {  # $1 = file tag
   $SSH root@$DRONE "grep -E 'retune .*->' /tmp/mabur.log | tail -1" 2>/dev/null | sed 's/^/    drone: /' | tee -a "$SUM"
   $SSH root@$GS "grep -E 'maburgs channel: (drone found|relocate)|maburgs hop:' /tmp/maburgs.log | tail -3" 2>/dev/null | sed 's/^/    gs:    /' | tee -a "$SUM"
@@ -128,16 +148,20 @@ for i in $(seq 60); do ping -c1 -W1 "$DRONE" >/dev/null 2>&1 && break; sleep 2; 
 sleep 15
 e=$($SSH root@$DRONE "pidof maburd >/dev/null || grep -m1 '^error' /tmp/mabur.log || echo 'maburd is not running'" 2>/dev/null)
 [ -n "$e" ] && { say "drone: $e"; exit 1; }
+dm=$(dmark)
 echo "waiting for the start link on $START..."
 watch_ch "$START" "$tmin" || { say "no start link on $START: stopping"; exit 1; }
+stall "$dm"
 logs start
 
 fails=0
 for ch in $CHS; do
   echo "hop to $ch..."
+  dm=$(dmark)
   gs_pin "$ch"
   tmin=$(newest)
   if watch_ch "$ch" "$tmin"; then fails=0; else fails=$((fails + 1)); fi
+  stall "$dm"
   logs "$ch"
   [ $fails -ge 2 ] && { say "two failures in a row: stopping"; break; }
 done

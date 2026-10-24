@@ -49,6 +49,15 @@ struct RadioCfg {
   // devourer's 5880 MHz notch (tuning.spur_ext_8822e: 177@20 and the
   // 173+177 pair). Not a vendor setting, untested on air.
   bool spur_ext = false;
+  // devourer's wide-TX IGI floor (DeviceConfig::Tuning::wide_tx_igi_floor,
+  // docs/experiments/8822c-ht40-tx-stall.md there): a raised receiver-gain
+  // floor while tuned to 40/80 MHz, armed by the first >= 40 MHz frame. On a
+  // quiet channel without it the first 40 MHz frame can wait forever for the
+  // secondary 20 MHz to read idle. -1 = the image's default (off on an
+  // 8812EU image, 0x35 on an 8812CU one), 0 = off, 1..127 = the floor.
+  // Cost: ~1 dB of idle-channel RX sensitivity per step at 40/80 MHz
+  // (estimated, not measured).
+  int wide_igi_floor = -1;
   // > 0: for each width switch and hop, the switching thread and the RX
   // thread run at SCHED_FIFO with this priority (above the encoder's 50),
   // then return to their own (rt_boost.h). An experiment: d12 measured

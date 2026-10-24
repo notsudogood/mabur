@@ -1630,6 +1630,20 @@ TEST(radio_width_step_keys_parse_and_validate) {
   }
 }
 
+// radio.wide_igi_floor: -1 (image default) .. 127, validated.
+TEST(wide_igi_floor_key_parses_and_validates) {
+  CHECK(Config{}.radio.wide_igi_floor == -1);
+  auto p = write_temp_toml("[radio]\nchannels = [36]\nwide_igi_floor = 53\n");
+  CHECK(load_config(p.string()).radio.wide_igi_floor == 53);
+  std::filesystem::remove(p);
+  for (const char* v : {"-2", "128"}) {
+    auto b = write_temp_toml(std::string("[radio]\nchannels = [36]\nwide_igi_floor = ") + v + "\n");
+    std::string m = what_of([&] { (void)load_config(b.string()); });
+    CHECK(m.find("radio.wide_igi_floor") != std::string::npos);
+    std::filesystem::remove(b);
+  }
+}
+
 // radio.carrier_sense (bench switch for the 40 MHz stall) and
 // link.shed_max_level (the 30 fps tail): defaults are the shipped behaviour.
 TEST(carrier_sense_and_shed_max_level_parse_and_validate) {

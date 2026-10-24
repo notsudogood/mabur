@@ -1469,20 +1469,6 @@ uint16_t open_usb_and_get_pid(uint16_t vid, uint16_t configured_pid,
   return 0;
 }
 
-// Gilang's devourer has DeviceConfig::Tuning::wide_tx_igi_floor (a DIG floor
-// it applies after the first >= 40 MHz frame); the devourer this tree pins
-// has no such floor at all, which is what setting it to 0 asks for. Set it
-// only where the field exists, so the 8812EU image builds against either.
-template <typename Tuning, typename = void>
-struct has_wide_tx_igi_floor : std::false_type {};
-template <typename Tuning>
-struct has_wide_tx_igi_floor<Tuning, std::void_t<decltype(std::declval<Tuning&>().wide_tx_igi_floor)>>
-    : std::true_type {};
-template <typename Tuning>
-[[maybe_unused]] void set_no_wide_tx_igi_floor(Tuning& t) {
-  if constexpr (has_wide_tx_igi_floor<Tuning>::value) t.wide_tx_igi_floor = 0;
-  else (void)t;
-}
 
 int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_path) {
   // Before libusb_init and the venc bring-up, so every thread either
@@ -1626,9 +1612,23 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   // downlink at its first 40 MHz frame with the chip's TX FIFO full; give it
   // a floor then (devourer measured one EU unit that clears at 0x2c, not
   // 0x20).
+  // radio.wide_igi_floor: -1 = the image's default (off on an 8812EU-only
+  // image, devourer's 0x35 otherwise), 0 = off, else the floor itself.
+  {
 #if defined(DEVOURER_HAVE_JAGUAR3_8822E) && !defined(DEVOURER_HAVE_JAGUAR3_8822C)
-  set_no_wide_tx_igi_floor(dev_cfg.tuning);
+    const int image_floor = 0;
+#else
+    const int image_floor = dev_cfg.tuning.wide_tx_igi_floor;
 #endif
+    const int floor = cfg.radio.wide_igi_floor >= 0 ? cfg.radio.wide_igi_floor : image_floor;
+    dev_cfg.tuning.wide_tx_igi_floor = static_cast<uint8_t>(floor);
+    if (floor > 0)
+      std::fprintf(stderr, "maburd radio: wide-TX IGI floor 0x%02x at 40/80 MHz (%s)\n", floor,
+                   cfg.radio.wide_igi_floor >= 0 ? "radio.wide_igi_floor" : "image default");
+    else
+      std::fprintf(stderr, "maburd radio: wide-TX IGI floor off (%s)\n",
+                   cfg.radio.wide_igi_floor >= 0 ? "radio.wide_igi_floor = 0" : "image default");
+  }
   // Pinned here now that devourer defaults both the other way. A multi-packet
   // bulk-OUT that times out mid-transfer wedges the 8822EU's TX endpoint for
   // the rest of the session, so data sends never cancel one (the cost -- a

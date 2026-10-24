@@ -444,6 +444,36 @@ TEST(ctl_rung_wins_over_link_op_when_both_are_present) {
   CHECK(*s.fec_pct > 24.9 && *s.fec_pct < 25.1);
 }
 
+// The 10 MHz rung is the one place link.op wins over a present ctl.rung: the
+// ladder holds MCS0/20 frozen below it, so ctl alone read 0/20 for a link on
+// air at 10 MHz (bench, n10cycle, 2026-10-24). Its own FEC shows too.
+TEST(narrow_10_op_wins_over_the_frozen_bottom_rung) {
+  const char* j = R"({"v":1,
+    "link":{"ctl":{"rung":{"idx":0,"mcs":0,"bw":20,"ov_base":1.0}},
+            "op":{"mcs":0,"bw":10,"overhead_base":0.8}}})";
+  GsSnapshot s;
+  REQUIRE(parse(j, &s));
+  REQUIRE(s.mcs.has_value());
+  CHECK(*s.mcs == 0);
+  REQUIRE(s.bw.has_value());
+  CHECK(*s.bw == 10);
+  REQUIRE(s.fec_pct.has_value());
+  CHECK(*s.fec_pct > 79.9 && *s.fec_pct < 80.1);
+}
+
+// Any other width on link.op leaves the ctl rung in charge (mid-probe).
+TEST(non_narrow_op_bw_does_not_override_ctl) {
+  const char* j = R"({"v":1,
+    "link":{"ctl":{"rung":{"idx":5,"mcs":3,"bw":40,"ov_base":0.5}},
+            "op":{"mcs":3,"bw":80,"overhead_base":0.4}}})";
+  GsSnapshot s;
+  REQUIRE(parse(j, &s));
+  REQUIRE(s.bw.has_value());
+  CHECK(*s.bw == 40);
+  REQUIRE(s.fec_pct.has_value());
+  CHECK(*s.fec_pct > 49.9 && *s.fec_pct < 50.1);
+}
+
 TEST(scan_auto_is_false_when_off_or_absent) {
   GsSnapshot s;
   REQUIRE(parse(R"({"link": {"channel": 136}, "scan": {"state": "off", "rounds": 0, "pick": null}})", &s));

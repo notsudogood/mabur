@@ -163,11 +163,16 @@ bool parse_gs_snapshot(const char* data, size_t n, GsSnapshot* out) {
     // directly and the ladder branch fills from the same ctrl_.op() that
     // feeds ctl.rung above), so it carries exactly what is on air.
     // Mid-probe, though, link.op is the probe point while ctl.rung is the
-    // settled rung -- hence ctl first.
+    // settled rung -- hence ctl first. The exception is the 10 MHz rung
+    // ([link.narrow10]): it sits below the ladder, which holds its bottom
+    // rung (MCS0/20) frozen meanwhile, so ctl.rung read 0/20 for a link on
+    // air at 10 MHz. link.op carries the 10 MHz op, and it wins there.
     if (const json* op = obj(*link, "op")) {
-      if (!out->mcs) out->mcs = integer(*op, "mcs");
-      if (!out->bw) out->bw = integer(*op, "bw");
-      if (!out->fec_pct) {
+      const std::optional<int> op_bw = integer(*op, "bw");
+      const bool narrow = op_bw && *op_bw == 10;
+      if (!out->mcs || narrow) out->mcs = integer(*op, "mcs");
+      if (!out->bw || narrow) out->bw = op_bw;
+      if (!out->fec_pct || narrow) {
         if (const std::optional<double> ov = num(*op, "overhead_base"))
           out->fec_pct = *ov * 100.0;
       }

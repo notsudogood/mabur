@@ -6,14 +6,17 @@
 [radio]
 usb_vid    = 3034        # Realtek USB vendor ID (0x0bda) in decimal
 usb_pid    = 0           # 0 = find the card automatically (8812EU or 8812CU)
-channels   = [36, 132]  # the channel set, same as the ground station's (a superset is fine);
-                         # the drone parks on the remembered member and follows the GS to any member.
-                         # At width 80 every member is any channel of an 80 MHz block (36-48 52-64
-                         # 100-112 116-128 132-144 149-161 165-177 ...), all on the same side of their
-                         # 40 MHz pair (36 44 ... 132 140 149 157 165 173 = lower side). 36-48 and
-                         # 132-144 are the blocks with no 8812EU spur. 52-144 are DFS channels; 165 up
-                         # are past UNII-3, 181 up past the 8812EU's characterized range: your call.
-                         # For 40 MHz only, the old set was [40, 64, 112, 144] with width = 40.
+channels   = [36, 100, 116, 132]  # the channel set, same as the ground station's (a superset is fine);
+                         # the drone parks on the remembered member (else the first) and follows the GS
+                         # to any member. One member per 80 MHz block, all on the lower side of their
+                         # 40 MHz pair. At width 80 every member is any channel of an 80 MHz block
+                         # (36-48 52-64 100-112 116-128 132-144 149-161 165-177 ...), all on the same
+                         # side of their 40 MHz pair (36 44 ... 132 140 149 157 165 173 = lower side).
+                         # Bench 2026-10-24 (8812EU drone): 100-124, 132 and 144 clean at 80; the radio
+                         # stalls on 153, 161, 169 and 173 (and, predicted, 177): see spur_warn below.
+                         # 52-144 are DFS channels; 165 up are past UNII-3, 181 up past the 8812EU's
+                         # characterized range: your call. For 40 MHz only, the old set was
+                         # [40, 64, 112, 144] with width = 40.
 width      = 80        # 20, 40 or 80: the widest rung. Per-rung width comes from the GS ladder
                        # (docs/bw40.md, docs/bw80.md)
 width_step = true      # true = the radio sits at home_width and widens only while a wider rung flies or
@@ -32,8 +35,12 @@ switch_rt_prio = 0     # > 0: width switches and hops run at this SCHED_FIFO pri
 carrier_sense = "on"   # "on" = wait for a quiet channel before sending (the default). Bench switches for the
                        # 40 MHz stall: "off", "no_edcca" (ignore raw energy), "no_primary" (ignore 802.11
                        # preambles). Anything but "on" lets the drone talk over the ground station's uplink
-narrow_rescue_ms = 1500 # 10 MHz rung (switched on at the GS, [link.narrow10]): leave 10 MHz after this long
+narrow_rescue_ms = 1500 # 10 MHz rung (on at the GS, [link.narrow10]): leave 10 MHz after this long
                         # without hearing the GS there; 0 = wait for the 3 s failsafe
+spur_warn  = true      # warn at start for each member where this radio, if an 8812EU, stalls on its own
+                       # spur (153 161 169 177, and 173 at 40/80); a warning only, it never refuses a channel
+spur_ext   = false     # notch the 5880 MHz spur too (177 at 20 MHz, the 173+177 pair at 40): not a vendor
+                       # setting, untested on air (173 at 40 stalled without it)
 power_mode = "none"      # "none" = card's default TX power; "offset" = use the calibrated walls below.
                          # "offset" now shapes the 80 MHz (VHT) rungs like the 20/40 ones
 tx_threads = 4           # parallel USB senders; 4 is needed to reach full link speed
@@ -102,6 +109,11 @@ bw       = 20
 max_kbps = 500             # slowest rung: just enough picture to fly home on
 fps      = 0               # frame rate on this rung; 0 = the camera's own (60). Try 30: half the frames,
                            # each with twice the bits (less blocky). Each switch in or out costs a keyframe
+
+[[encoder.rung]]
+mcs      = 0
+bw       = 10              # the 10 MHz rung below MCS0/20 (GS [link.narrow10]): the same picture as
+max_kbps = 500             # MCS0/20. Without this entry it would take ~1 Mb/s of its half-size air
 
 [venc]
 sensor_bin = "/etc/sensors/imx415_greg_fpvXIX_colortrans.bin"  # camera sensor tuning file

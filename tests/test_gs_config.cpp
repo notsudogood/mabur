@@ -717,9 +717,12 @@ TEST(radio_width_is_20_40_or_80_and_each_needs_its_channels) {
   CHECK(threw);
 }
 
-TEST(narrow10_section_is_opt_in_and_parses) {
+TEST(narrow10_section_is_on_by_default_and_parses) {
+  // On since gs14, absent section included; enable = false turns it off.
   maburgs::Config c = maburgs::load_config(write_tmp("[radio]\nchannels = [36]\n"));
-  CHECK(!c.link.narrow10.enable);
+  CHECK(c.link.narrow10.enable);
+  CHECK(!maburgs::load_config(write_tmp("[link.narrow10]\nenable = false\n")).link.narrow10.enable);
+  CHECK(!maburgs::NarrowCfg{}.enable);   // the shared struct stays off (web GS)
   c = maburgs::load_config(write_tmp(
       "[link.narrow10]\nenable = true\nenter_ms = 900\nclean_ms = 4000\npromote_margin_db = 1.5\n"));
   CHECK(c.link.narrow10.enable && c.link.narrow10.enter_ms == 900 && c.link.narrow10.clean_ms == 4000);

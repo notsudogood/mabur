@@ -137,6 +137,7 @@ bool RadioFrontend::open_and_start() {
   dev_cfg.tuning.batched_chset = cfg_.batched_tune;
   dev_cfg.tuning.lean_width = cfg_.lean_width;
   dev_cfg.tuning.lean_verify = cfg_.lean_verify;
+  dev_cfg.tuning.spur_ext_8822e = cfg_.spur_ext;
   // (The 0x41e8 protect_pathb_agc knob was chased here too — exonerated:
   // the real path-B killer was the DPDT pin-mux, fixed by devourer's eFEM
   // pinmux port; see DEVOURER_DPDT_MODE in RtlJaguar3Device.)

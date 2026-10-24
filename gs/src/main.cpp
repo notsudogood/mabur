@@ -49,6 +49,7 @@
 #ifdef MABUR_LOSS_SIM
 #include "loss_control.h"
 #endif
+#include "mabur/spur_channels.h"
 #include "mabur/cal_wire.h"
 #include "mabur/channel_file.h"
 #include "mabur/channel_set.h"
@@ -270,6 +271,16 @@ static int run_radio(const maburgs::Config& cfg) {
                  pinned ? "pinned" : "auto", static_cast<unsigned>(start_ch),
                  start_remembered ? " (remembered)" : "");
   }
+  // radio.spur_warn: channels where an RTL8812EU drone stalls on its own
+  // spur. The GS cannot see the drone's chip, so it says "if".
+  if (cfg.radio.spur_warn) {
+    for (const std::string& w : mabur::e8822_stall_warnings(cfg.radio.channels, cfg.radio.pin,
+                                                            cfg.radio.width, cfg.radio.spur_ext))
+      std::fprintf(stderr,
+                   "maburgs WARNING spur: %s -- an RTL8812EU drone's radio stalls there; keep it "
+                   "out of radio.channels (radio.spur_warn = false silences this)\n",
+                   w.c_str());
+  }
 
   // Roster: USB cards first (0..n_usb-1, possibly none), then radio.relays
   // in config order (a relay-only GS is supported).
@@ -312,6 +323,7 @@ static int run_radio(const maburgs::Config& cfg) {
     fc.batched_tune = cfg.radio.batched_tune;
     fc.lean_width = cfg.radio.lean_width;
     fc.lean_verify = cfg.radio.lean_verify;
+    fc.spur_ext = cfg.radio.spur_ext;
     fc.switch_rt_prio = cfg.radio.switch_rt_prio;
     for (size_t s = 0; s < 2; ++s)
       fc.sbi_block_payload[s] = mabur::UepDecoder::block_payload(cfg.uep_layers()[s]);
@@ -635,6 +647,13 @@ static int run_radio(const maburgs::Config& cfg) {
   ccfg.radio = cfg.radio;
   ccfg.hop = cfg.hop;
   ccfg.narrow10 = cfg.link.narrow10;
+  // A pinned link (link.static_mcs) never ticks the ladder the 10 MHz rung
+  // sits under, and the pin overrides its order: a card moved to 10 would
+  // wait for a drone that never follows. Off there, said once.
+  if (cfg.link.static_mcs >= 0 && ccfg.narrow10.enable) {
+    ccfg.narrow10.enable = false;
+    std::fprintf(stderr, "maburgs narrow10: off while link.static_mcs pins the link\n");
+  }
   ccfg.key = cfg.link.key;
   ccfg.start_ch = start_ch;
   ccfg.n_usb = n_usb;

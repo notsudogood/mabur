@@ -180,6 +180,13 @@ struct RadioCfg {
   // both (mabur/rt_boost.h). The drone measured 14-17 ms with it against
   // 79-135 without; the GS cards (25-36 ms) have not run it. 0 = off.
   int switch_rt_prio = 0;
+  // Log a warning at start for each channel of the set (or the pin) where
+  // an RTL8812EU drone's radio stalls on its own spur (mabur/spur_channels.h:
+  // 153, 161, 169, 177; 173 at 40/80). Warns only, never refuses.
+  bool spur_warn = true;
+  // devourer's 5880 MHz notch (tuning.spur_ext_8822e: 177@20 and the
+  // 173+177 pair) on every card. Not a vendor setting, untested on air.
+  bool spur_ext = false;
   // Empty + auto_scan: probe the bus and use every supported card found
   // (card_scan.h). A non-empty list pins exactly those devices and skips
   // the probe entirely -- that is the config-only way to fly one card.
@@ -236,8 +243,11 @@ struct LinkCfg {
   // (checked).
   mabur::NackCfg nack = [] { mabur::NackCfg n; n.enable = true; return n; }();
   // 10 MHz bottom rung (backlog item 10, narrow_mode.h). Optional
-  // [link.narrow10]: absent = off.
-  NarrowCfg narrow10;
+  // [link.narrow10]: on in code and bundle alike since gs14 (absent = on);
+  // NarrowCfg's own default stays off, so a ChannelCoreCfg built without
+  // this config (the web GS) keeps it off. maburgs turns it off while
+  // link.static_mcs pins the link (the ladder that feeds it is not ticked).
+  NarrowCfg narrow10 = [] { NarrowCfg n; n.enable = true; return n; }();
   // Static-link mode: when static_mcs >= 0 the adaptive controller is
   // bypassed entirely and every RCF commands exactly this MCS/FEC overhead
   // (HT, 20 MHz). Rendezvous/keep-alive/failsafe machinery is unaffected.

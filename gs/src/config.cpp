@@ -188,7 +188,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
     const Value& r = j["radio"];
     check_keys(r, "radio", {"channel", "channels", "width", "cards", "tx_card", "scan", "relays",
                             "narrow_20", "fast_hop_at_80", "batched_tune", "lean_width", "lean_verify",
-                            "switch_rt_prio"});
+                            "switch_rt_prio", "spur_warn", "spur_ext"});
     c.radio.width = static_cast<uint8_t>(get_int(r, "width", 20, 20, 80, "radio"));
     c.radio.narrow_20 = get_bool(r, "narrow_20", c.radio.narrow_20, "radio");
     c.radio.fast_hop_at_80 = get_bool(r, "fast_hop_at_80", c.radio.fast_hop_at_80, "radio");
@@ -197,6 +197,8 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
     c.radio.lean_verify = get_bool(r, "lean_verify", c.radio.lean_verify, "radio");
     c.radio.switch_rt_prio =
         static_cast<int>(get_int(r, "switch_rt_prio", c.radio.switch_rt_prio, 0, 89, "radio"));
+    c.radio.spur_warn = get_bool(r, "spur_warn", c.radio.spur_warn, "radio");
+    c.radio.spur_ext = get_bool(r, "spur_ext", c.radio.spur_ext, "radio");
     if (r.contains("channels")) {
       g_line = r["channels"].line();
       if (!r["channels"].is_array()) fail("radio.channels", "not an array");

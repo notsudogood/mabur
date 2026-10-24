@@ -42,6 +42,13 @@ struct RadioCfg {
   // With lean_width: read the changed registers back and fall back to the
   // full set on any difference (tuning.lean_verify). Logs each mismatch.
   bool lean_verify = true;
+  // Log a warning at bring-up for each member of the set where this radio,
+  // if it is an RTL8812EU, stalls on its own spur (mabur/spur_channels.h:
+  // 153, 161, 169, 177; 173 at 40/80). Warns only, never refuses.
+  bool spur_warn = true;
+  // devourer's 5880 MHz notch (tuning.spur_ext_8822e: 177@20 and the
+  // 173+177 pair). Not a vendor setting, untested on air.
+  bool spur_ext = false;
   // > 0: for each width switch and hop, the switching thread and the RX
   // thread run at SCHED_FIFO with this priority (above the encoder's 50),
   // then return to their own (rt_boost.h). An experiment: d12 measured

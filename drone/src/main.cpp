@@ -54,6 +54,7 @@
 #include "debug_http.h"
 #include "frame_pipeline.h"
 #include "frame_source.h"
+#include "mabur/spur_channels.h"
 #include "mabur/channel_file.h"
 #include "mabur/channel_set.h"
 #include "mabur/frame_wire.h"
@@ -1642,6 +1643,8 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   // radio.lean_width / lean_verify: the lean width step (off by default).
   dev_cfg.tuning.lean_width = cfg.radio.lean_width;
   dev_cfg.tuning.lean_verify = cfg.radio.lean_verify;
+  // radio.spur_ext: devourer's 5880 MHz notch (177@20, the 173+177 pair).
+  dev_cfg.tuning.spur_ext_8822e = cfg.radio.spur_ext;
 
   WiFiDriver wifi_driver{logger};
   // mabur drives Realtek-only controls (TX-power tables, FastRetune, the
@@ -3414,6 +3417,15 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
                  ac.tune_5g.valid ? ac.tune_5g.min_mhz : 0, ac.tune_5g.valid ? ac.tune_5g.max_mhz : 0,
                  ac.fastretune_ok ? 1 : 0, e.valid_fa ? 1 : 0, e.valid_igi ? 1 : 0,
                  e.valid_nhm ? 1 : 0, e.valid_noise_floor ? 1 : 0);
+    // radio.spur_warn: set members where this 8812EU stalls on its own spur.
+    if (cfg.radio.spur_warn && ac.chip_name && std::strcmp(ac.chip_name, "RTL8822E") == 0) {
+      for (const std::string& w : mabur::e8822_stall_warnings(cfg.radio.channels, std::nullopt,
+                                                              cfg.radio.width, cfg.radio.spur_ext))
+        std::fprintf(stderr,
+                     "maburd WARNING spur: %s -- this radio stalls there; keep it out of "
+                     "radio.channels (radio.spur_warn = false silences this)\n",
+                     w.c_str());
+    }
   }
 
   // Bring-up record of the MAC carrier-sense state requested via

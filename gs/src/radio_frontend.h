@@ -76,6 +76,7 @@ class RadioFrontend : public LinkCard {
     bool batched_tune = true;
     bool lean_width = false;
     bool lean_verify = true;
+    bool spur_ext = false;    // radio.spur_ext: devourer's 5880 MHz notch (8822E)
     int switch_rt_prio = 0;   // radio.switch_rt_prio (mabur/rt_boost.h)
   };
 

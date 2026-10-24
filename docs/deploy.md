@@ -90,6 +90,35 @@ the same respawn loop (and `rmmod 8812eu` on start, so devourer can claim
 the cards), logging to `/tmp/maburgs.log`; `S97maburplay` logs to
 `/tmp/maburplay.log`.
 
+### Config refresh on a new image (d15 / gs14 on)
+
+`sysupgrade` keeps the drone's overlay and the GS's `/config`, so a config
+saved under an older image used to hide every default a new image changed
+(gs13 flew NACK and phase lock off that way). Now, once per change of the
+image's default:
+
+- **Drone**, at `S00mabur start` (or `S00mabur refresh` by hand): an
+  `/etc/mabur.toml` that differs from the image's `/rom/etc/mabur.toml` and
+  was not edited under this image (`/etc/mabur.toml.image` holds the default
+  it was last refreshed from) is copied to `/root/mabur.toml.oldN` and
+  replaced, with maburcal's four `[radio]` calibration lines carried over
+  when `power_mode = "offset"`. `/etc/mabur.keep` opts out; each refresh is
+  one line in `/root/mabur-config.log`. `bundle/install.sh` stamps a bench
+  drone's config as made on its image. Hand-installing a newer `mabur.toml`
+  over an older image needs the same stamp
+  (`cp /rom/etc/mabur.toml /etc/mabur.toml.image`), or the next start puts
+  the image's older file back.
+- **GS**, at sbc-groundstations' `S00config` (`S00config refresh` by hand):
+  the same for `/config/maburgs.toml` and `/config/maburplay.toml`, stamps in
+  `/config/.image-defaults/`, old copies in `/config/old/`, the menu's
+  `/etc/maburgs.menu` cleared with `maburgs.toml`, a line in
+  `/config/config-reset.log`; `/config/keep-config` opts out.
+
+Tests: `tests/integration/drone_config_refresh.sh` here, and
+`tests/config-refresh.test.sh` in sbc-groundstations. The code defaults
+also match the bundles now (`tests/bundle_parity.h`), so a key an old file
+lacks falls back to the shipped value.
+
 ## Supported drone cards
 
 `tools/build-arm.sh` builds maburd for the **RTL8812EU** only (devourer

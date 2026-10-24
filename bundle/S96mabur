@@ -1,6 +1,12 @@
 #!/bin/sh
 DAEMON=/usr/bin/maburd
-CONF=/etc/mabur.toml
+CONF=${MABUR_CONF:-/etc/mabur.toml}
+# The image's own default (OpenIPC's read-only squashfs), the copy of it the
+# current $CONF was last refreshed from, and the opt-out.
+IMAGE_CONF=${MABUR_IMAGE_CONF:-/rom/etc/mabur.toml}
+STAMP=${MABUR_CONF_STAMP:-$CONF.image}
+KEEP=${MABUR_CONF_KEEP:-/etc/mabur.keep}
+BACKUP_DIR=${MABUR_CONF_BACKUP:-/root}
 PIDFILE=/var/run/mabur-loop.pid
 LOGPIDFILE=/var/run/mabur-logwatch.pid
 LOG=/tmp/mabur.log
@@ -43,9 +49,62 @@ logwatch() {
 
 running() { [ -f "$1" ] && kill -0 "$(cat "$1")" 2>/dev/null; }
 
+same() {
+  [ -f "$1" ] && [ -f "$2" ] || return 1
+  if command -v cmp >/dev/null 2>&1; then cmp -s "$1" "$2"
+  else [ "$(md5sum < "$1")" = "$(md5sum < "$2")" ]; fi
+}
+
+# New image, new defaults: sysupgrade keeps the overlay, so a $CONF edited
+# under an older image (by hand, setch, maburcal) would hide every default
+# the new image changed -- and a key it lacks takes the code default, not
+# the bundle's. So once per image: an edited $CONF is copied to
+# $BACKUP_DIR/mabur.toml.oldN, the image's default replaces it, and the
+# radio's own TX-power calibration (maburcal's four [radio] lines) is
+# carried over when it is in use. Edits made on THIS image stay ($STAMP
+# matches the image). touch $KEEP to never refresh.
+refresh_config() {
+  [ -f "$IMAGE_CONF" ] || return 0              # no image copy (bench host): nothing to do
+  if [ ! -f "$CONF" ]; then
+    cp "$IMAGE_CONF" "$CONF" && cp "$IMAGE_CONF" "$STAMP"
+    echo "mabur config: $CONF was missing, restored the image default"
+    return 0
+  fi
+  if same "$IMAGE_CONF" "$CONF"; then
+    same "$IMAGE_CONF" "$STAMP" || cp "$IMAGE_CONF" "$STAMP"
+    return 0
+  fi
+  same "$IMAGE_CONF" "$STAMP" && return 0       # edited on this image: keep
+  if [ -f "$KEEP" ]; then
+    echo "mabur config: new image, $CONF kept as is ($KEEP is there)"
+    return 0
+  fi
+  n=1
+  while [ -e "$BACKUP_DIR/mabur.toml.old$n" ]; do n=$((n + 1)); done
+  old="$BACKUP_DIR/mabur.toml.old$n"
+  cp "$CONF" "$old" || { echo "mabur config: cannot back up $CONF, kept as is"; return 0; }
+  carried=""
+  if grep -q '^[[:space:]]*power_mode[[:space:]]*=[[:space:]]*"offset"' "$old"; then
+    grep -E '^[[:space:]]*(power_mode|rate_walls_rel|legacy_wall_rel|wall_margin_db)[[:space:]]*=' "$old" \
+      > "$CONF.carry"
+    carried=" (TX-power calibration kept)"
+  else
+    : > "$CONF.carry"
+  fi
+  # Each carried line replaces the first line of the same key in the new file.
+  awk 'FILENAME == ARGV[1] { k = $1; sub(/=.*/, "", k); keep[k] = $0; next }
+       { k = $1; sub(/=.*/, "", k)
+         if ((k in keep) && !(k in done)) { print keep[k]; done[k] = 1; next }
+         print }' "$CONF.carry" "$IMAGE_CONF" > "$CONF.new" &&
+    mv "$CONF.new" "$CONF" && cp "$IMAGE_CONF" "$STAMP"
+  rm -f "$CONF.carry" "$CONF.new"
+  echo "mabur config: new image -- $CONF reset to its default$carried; yours is $old"
+  echo "$(date) $CONF reset to the image default$carried; old copy $old" >> "$BACKUP_DIR/mabur-config.log"
+}
+
 case "$1" in
   start)
-    running "$PIDFILE" || { loop & echo $! > "$PIDFILE"; }
+    running "$PIDFILE" || { refresh_config; loop & echo $! > "$PIDFILE"; }
     # Checked independently of the respawn loop: a live daemon must not mask a
     # dead logwatch, since an uncapped log is the failure this guards against.
     running "$LOGPIDFILE" || { logwatch & echo $! > "$LOGPIDFILE"; }
@@ -63,8 +122,11 @@ case "$1" in
     sleep 1
     "$0" start
     ;;
+  refresh)
+    refresh_config
+    ;;
   *)
-    echo "usage: $0 {start|stop|restart}"
+    echo "usage: $0 {start|stop|restart|refresh}"
     exit 1
     ;;
 esac

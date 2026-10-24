@@ -61,8 +61,11 @@ else
 fi
 scp -O bundle/S96mabur "$HOST:/etc/init.d/S00mabur"
 
+# The config on a bench drone is the developer's: mark it as made on this
+# image, so the init script's new-image refresh leaves it alone.
 ssh "$HOST" '
   set -e
+  [ -f /rom/etc/mabur.toml ] && cp /rom/etc/mabur.toml /etc/mabur.toml.image
   rm -f /etc/init.d/S96mabur
   chmod +x /usr/bin/maburd /etc/init.d/S00mabur
   /etc/init.d/S00mabur start

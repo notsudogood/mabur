@@ -172,6 +172,7 @@ if(MABUR_BUILD_DRONE)
     ${CMAKE_SOURCE_DIR}/common/include)
 
   add_test(NAME host_e2e COMMAND bash ${CMAKE_SOURCE_DIR}/tests/integration/run_host_e2e.sh)
+  add_test(NAME drone_config_refresh COMMAND sh ${CMAKE_SOURCE_DIR}/tests/integration/drone_config_refresh.sh)
   set_tests_properties(host_e2e PROPERTIES
     ENVIRONMENT "BUILD=${CMAKE_BINARY_DIR}")
 endif()

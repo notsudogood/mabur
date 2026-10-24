@@ -3,6 +3,19 @@
 What the operator has agreed goes into the next GS (and drone) build, in
 order. Each item names its evidence. Remove an item when it ships.
 
+**d15 + gs14 (built 2026-10-24): fresh configs and new defaults.** None of it flown yet.
+
+| Change | Default | Evidence / counterpart |
+|---|---|---|
+| Config refresh once per new image: drone `/etc/mabur.toml` (S00mabur, maburcal's calibration lines kept), GS `/config/maburgs.toml` + `maburplay.toml` + the menu's `/etc/maburgs.menu` (S00config); old files backed up | on; opt out with `/etc/mabur.keep` / `/config/keep-config` | gs13 flew NACK and phase lock off from a config saved under an older image. Counterpart: every hand edit made under an older image is reset (backup kept) |
+| Code defaults = bundle defaults where an old file falls through (phase lock, sched_cap 16, NACK, narrow_20, hop confirm 1000, width_step) | parity test per loader | a missing key no longer means an older behaviour; the long-standing tuning keys keep their code values (listed in the tests) |
+| Channel set `[36, 100, 116, 132]`, `channel = "auto"` (hop on) | both bundles | 100-124, 132, 144 clean at 80 on the 10-24 tours; 36 had foreign Wi-Fi at the operator's site. The in-flight auto hop across four members at full rate is unflown |
+| 10 MHz bottom rung (`[link.narrow10]`) | on (off with `link.static_mcs`) | bench: 10/10 down, 9/9 up, 15-20 ms. Reach gain unmeasured; half the air of MCS0/20 |
+| Drone `[[encoder.rung]]` mcs 0 / bw 10: 500 kb/s | on | without it the 10 MHz rung ran ~1 Mb/s, double MCS0/20's cap |
+| `radio.spur_warn`: log the 8812EU stall channels in the set or pin (153 161 169 177, 173 at 40/80) | on, warn only | bench 10-24; 177 predicted, untested |
+| `radio.spur_ext`: devourer's 5880 MHz notch (177@20, 173+177@40) | off | not a vendor setting; untested on air; the vendor notch did not stop the stall on 153/161/169 |
+| GS menu in the Ascent layout (mock-up v5): tabs, Hop switch, channel cells, Bandwidth cell | on | same three settings as gs13; rendered on the host only |
+
 **Status 2026-10-24 (drone 2 on d13 + d14's maburd, gs13; garage walks on ch 132).**
 
 | Item | Evidence | State |

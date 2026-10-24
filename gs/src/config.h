@@ -278,12 +278,21 @@ struct LinkCfg {
   // {7,0.1}->{7,0.2}.
   // Same-rate fixed pairs: overhead is a base/enh pair; the
   // struct default duplicates each rung's value into both fields.
-  LadderCfg ladder_cfg{{{0, 2.0, 2.0},
-                        {2, 1.0, 1.0},
-                        {4, 0.5, 0.5},
-                        {5, 0.5, 0.5},
-                        {6, 0.5, 0.5},
-                        {7, 0.2, 0.2}}};
+  //
+  // The multi-rung drop (fast_fall_pre 0.5) and the promote latency guard
+  // (promote_lat_guard_ms 100) are on in code and bundle alike since gs15;
+  // LadderCfg's own defaults stay off for the controller's unit tests.
+  LadderCfg ladder_cfg = [] {
+    LadderCfg l{{{0, 2.0, 2.0},
+                 {2, 1.0, 1.0},
+                 {4, 0.5, 0.5},
+                 {5, 0.5, 0.5},
+                 {6, 0.5, 0.5},
+                 {7, 0.2, 0.2}}};
+    l.fast_fall_pre = 0.5;
+    l.promote_lat_guard_ms = 100;
+    return l;
+  }();
 
   // Pairing key (docs/link-pairing.md): the key FILE path. The
   // file is read at load; a missing file means the compiled-in default (and

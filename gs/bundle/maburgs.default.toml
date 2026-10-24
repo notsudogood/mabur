@@ -104,11 +104,15 @@ hold_after_down_ms     = 0      # wait after stepping down before stepping up ag
 min_between_changes_ms = 150    # minimum time between any two rung changes
 feedback_timeout_ms    = 1000   # no link reports this long = fall to the most robust rung
 starved_confirm_ms     = 300    # no video this long = fall to the most robust rung
-fast_fall_pre          = 0      # 0 = off. e.g. 0.5: a step down taken at >= 50 % loss before error
-                                # correction skips straight to a rung that fits what still gets through
-promote_lat_guard_ms   = 0      # 0 = off. e.g. 100: right after a step up, if frames start taking this many ms
-                                # longer than usual to arrive (the drone can't get them out at the new rung),
-                                # step straight back down instead of waiting for loss
+fast_fall_pre          = 0.5    # a step down taken at >= 50 % loss before error correction skips straight
+                                # to a rung that fits what still gets through; 0 = one rung at a time.
+                                # On since gs15: one real event, 6 -> 1 at 84 % loss, 2 frames dropped. It
+                                # can land lower than needed and climb back slower
+promote_lat_guard_ms   = 100    # right after a step up, if frames start taking this many ms longer than usual
+                                # to arrive (the drone can't get them out at the new rung), step straight back
+                                # down instead of waiting for loss; 0 = off. On since gs15: stepped down within
+                                # 100-150 ms on the stall channels, never fired wrongly in 4 walks; the slowest
+                                # good step up reached 75 ms (one bench), so the margin is thin
 
 # A second loss check on the droppable enhance-layer frames, which show
 # trouble earlier than the base layer.

@@ -525,9 +525,10 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
         static_cast<int>(get_int(r, "feedback_timeout_ms", 1000, 0, 600000, "link"));
     c.link.ladder_cfg.starved_confirm_ms =
         static_cast<int>(get_int(r, "starved_confirm_ms", 300, 0, 600000, "link"));
-    c.link.ladder_cfg.fast_fall_pre = get_num(r, "fast_fall_pre", 0.0, 0.0, 1.0, "link");
-    c.link.ladder_cfg.promote_lat_guard_ms =
-        static_cast<int>(get_int(r, "promote_lat_guard_ms", 0, 0, 2000, "link"));
+    c.link.ladder_cfg.fast_fall_pre =
+        get_num(r, "fast_fall_pre", c.link.ladder_cfg.fast_fall_pre, 0.0, 1.0, "link");
+    c.link.ladder_cfg.promote_lat_guard_ms = static_cast<int>(
+        get_int(r, "promote_lat_guard_ms", c.link.ladder_cfg.promote_lat_guard_ms, 0, 2000, "link"));
 
     // s3 steady-state demote tuning (LadderCfg). s3_down_util keeps its
     // struct default (-1 sentinel) when absent from JSON and is resolved to

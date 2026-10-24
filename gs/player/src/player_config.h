@@ -141,16 +141,17 @@ struct DisplayCfg {
   // many ms, instead of following its arrival. Late-tail frames within the
   // allowance keep their slot, so the clean-link repeat/skip judder in the
   // phases where frames arrive near the latch goes away, at up to one extra
-  // refresh of latency in those phases. 0 = off (arrival-based servo) in
-  // code; the bundle ships 16, used while the phase lock holds.
-  int sched_cap_ms = 0;
+  // refresh of latency in those phases. 0 = off (arrival-based servo).
+  // 16 in code and bundle alike (gs14), used while the phase lock holds.
+  int sched_cap_ms = 16;
 
   // Phase lock (phase_lock.h): steer the drone's sensor rate so every
   // frame's capture-time slot sits phase_margin_ms before its release, and
   // place frames by capture time only while that holds. Needs vsync_lock,
-  // sched_cap_ms > 0 and regulate_ms > 0. Code default off; the bundle
-  // ships it on.
-  bool phase_lock = false;
+  // sched_cap_ms > 0 and regulate_ms > 0. On in code and bundle alike
+  // (gs14); a file without the key gets it on only when those three hold,
+  // so an old file with sched_cap_ms = 0 still loads (lock off).
+  bool phase_lock = true;
   // Target gap between a frame's capture-time slot and its release, ms.
   // Smaller is lower latency but lets allowance changes push frames across
   // the edge into the next refresh.

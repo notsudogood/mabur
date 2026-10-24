@@ -107,7 +107,10 @@ struct HopCfg {
   int dwell_period_ms = 333;
   int rank_visits = 5;
   int rank_max_age_ms = 10000;
-  int confirm_ms = 500;
+  // 1000, not 500: hops touching the 8822E spur pairs confirmed in
+  // 423-460 ms, and 500 withdrew orders the drone had already obeyed -- a
+  // 60 s split (bench 2026-09-26). Code and bundle alike since gs14.
+  int confirm_ms = 1000;
   // While the op channel reads blocked, an unconfirmed order is kept this
   // long (from the order) before it is withdrawn -- the jam that blocks the
   // op usually blocks the uplink carrying the order too (bench session
@@ -153,7 +156,8 @@ struct RadioCfg {
   // Cards drop to 20 MHz while a 20 MHz rung is flown (width_policy.h),
   // ~0.5-1 dB on video there; the 20 -> 40 probe widens one card first.
   // Off = the cards stay at the home width (40) on every rung below 80.
-  bool narrow_20 = false;
+  // On in code and bundle alike since gs14 (the bundle since gs10).
+  bool narrow_20 = true;
   // Card hops: false = a card tuned 80 MHz, or one whose 40 MHz pair side
   // changes, takes devourer's FastSetChannel (the full channel set, batched)
   // -- the 80 MHz lean hop (FastRetune) is the prime suspect for the
@@ -225,9 +229,12 @@ struct LinkCfg {
   // ladder's util input: 192 symbols is ~60 ms at rung 5, ~165 ms at rung 0,
   // both under the feedback period + probation.
   int arrival_guard_syms = 192;
-  // Software NACK, base layer (docs/fec-nack.md). Optional
-  // [link.nack]: absent = off. lookback < fec.seq_horizon (checked).
-  mabur::NackCfg nack;
+  // Software NACK, base layer (docs/fec-nack.md). On in code and bundle
+  // alike since gs14 (the bundle since gs10): a file without [link.nack] or
+  // its enable key asks too. NackCfg's own default stays off -- the tracker
+  // is shared with tools that must not ask. lookback < fec.seq_horizon
+  // (checked).
+  mabur::NackCfg nack = [] { mabur::NackCfg n; n.enable = true; return n; }();
   // 10 MHz bottom rung (backlog item 10, narrow_mode.h). Optional
   // [link.narrow10]: absent = off.
   NarrowCfg narrow10;

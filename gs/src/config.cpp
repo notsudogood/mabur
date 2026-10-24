@@ -338,7 +338,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
     hc.dwell_period_ms = (int)get_int(h, "dwell_period_ms", 333, 20, 60000, "hop");
     hc.rank_visits = (int)get_int(h, "rank_visits", 5, 1, 100, "hop");
     hc.rank_max_age_ms = (int)get_int(h, "rank_max_age_ms", 10000, 1000, 600000, "hop");
-    hc.confirm_ms = (int)get_int(h, "confirm_ms", 500, 100, 5000, "hop");
+    hc.confirm_ms = (int)get_int(h, "confirm_ms", hc.confirm_ms, 100, 5000, "hop");
     hc.confirm_extend_ms = (int)get_int(h, "confirm_extend_ms", 3000, 0, 30000, "hop");
     hc.verify_ms = (int)get_int(h, "verify_ms", 1000, 200, 10000, "hop");
     hc.cooldown_ms = (int)get_int(h, "cooldown_ms", 2000, 0, 60000, "hop");

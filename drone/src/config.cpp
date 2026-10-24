@@ -95,8 +95,11 @@ void parse_radio(const Value& j, RadioCfg& r) {
   assign_if_present(j, "width", r.width, "radio");
   if (r.width != 20 && r.width != 40 && r.width != 80)
     fail("radio.width", "must be 20, 40 or 80 (80 = tuned VHT80, any 20 of the block the primary)");
-  assign_if_present(j, "width_step", r.width_step, "radio");
   assign_if_present(j, "home_width", r.home_width, "radio");
+  // Absent: on wherever it can run. A d8-d10 file at width = 20 has no
+  // width_step key, and "on" there would fail the home_width check below.
+  if (!j.contains("width_step")) r.width_step = r.width_step && r.home_width <= r.width;
+  assign_if_present(j, "width_step", r.width_step, "radio");
   assign_if_present(j, "width_hold_ms", r.width_hold_ms, "radio");
   assign_if_present(j, "fast_hop_at_80", r.fast_hop_at_80, "radio");
   assign_if_present(j, "batched_tune", r.batched_tune, "radio");

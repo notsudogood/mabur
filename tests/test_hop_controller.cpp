@@ -1,7 +1,9 @@
 #include "hop_controller.h"
 #include "mtest.h"
 using namespace maburgs;
-static HopCfg cfg() { return HopCfg{}; }
+// The timings below were written against a 500 ms confirm window, the code
+// default before gs14 (now 1000, the bundle's); pinned so they still read.
+static HopCfg cfg() { HopCfg c; c.confirm_ms = 500; return c; }
 static VerdictOut interfered(int ref = 5) { VerdictOut o; o.v = Verdict::Interfered; o.trigger = true; o.ref_rung = ref; return o; }
 static VerdictOut healthy() { return VerdictOut{}; }
 // A verdict with no span stamped on it is treated as one HopVerdict would

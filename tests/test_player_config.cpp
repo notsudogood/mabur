@@ -1,9 +1,11 @@
 #include <cstdio>
 #include <fstream>
+#include <set>
 #include <string>
 #include <vector>
 #include "mtest.h"
 #include "player_config.h"
+#include "bundle_parity.h"
 
 static std::string write_tmp_play(const char* text) {
   std::string path = "/tmp/maburplay_test_config.toml";
@@ -400,6 +402,29 @@ TEST(player_load_config_errors_carry_file_and_line) {
   CHECK(msg.find(".toml:4:") != std::string::npos);
 }
 
+// Code defaults = bundle defaults: a /config/maburplay.toml kept from an
+// older image lacks the keys added since, and each takes its CODE default.
+// gs13 flew phase_lock off that way. The list below holds the deliberate
+// differences only (tests/bundle_parity.h).
+TEST(code_defaults_match_the_bundle) {
+  std::vector<std::string> defaulted;
+  const std::string bundle = std::string(MABUR_PLAY_BUNDLE_DIR) + "/maburplay.default.toml";
+  maburplay::load_config(write_tmp_play(bundle_parity::skeleton(bundle, {
+      {"input.rec", "pin = 32"},  // required: no default to compare
+      {"input.menu", "up = 16\ndown = 18\nleft = 13\nright = 38\ncenter = 11"}}).c_str()), &defaulted);
+  const std::set<std::string> known = {
+      // The record button is the normal way; a GS without one keeps
+      // recording from boot, as before the button existed.
+      "dvr.autostart",
+      // Burned-in recording only: older, lower-load values in code.
+      "dvr.burned.bitrate_kbps", "dvr.burned.fps_cap",
+      // Undoes the drone's colortrans sensor file: right only with that file
+      // on the drone, so it stays opt-in in code.
+      "colortrans.enable",
+  };
+  CHECK(bundle_parity::mismatches(defaulted, bundle, known).empty());
+}
+
 MTEST_MAIN
 
 TEST(display_chain_budget_key) {
@@ -433,10 +458,11 @@ TEST(retired_genlock_keys_still_load) {
 
 TEST(display_sched_cap_ms_key) {
   // display.sched_cap_ms: capture-time scheduling's allowance cap. 0 = off
-  // (arrival-based servo) in code; the bundle ships 16, used while the
+  // (arrival-based servo); 16 in code and bundle (gs14), used while the
   // phase lock holds; range [0, 50].
   const auto bare = maburplay::load_config(write_tmp_play(""));
-  CHECK(bare.display.sched_cap_ms == 0);
+  CHECK(bare.display.sched_cap_ms == 16);
+  CHECK(maburplay::load_config(write_tmp_play("[display]\nregulate_ms = 12\n")).display.sched_cap_ms == 16);
   const auto cfg = maburplay::load_config(
       write_tmp_play("[display]\nsched_cap_ms = 16\n"));
   CHECK(cfg.display.sched_cap_ms == 16);
@@ -570,10 +596,18 @@ static bool load_throws(const char* text) {
 }
 
 TEST(display_phase_lock_keys) {
-  // display.phase_lock / phase_margin_ms: off and 4 in code; the lock needs
-  // the vsync servo, capture-time scheduling and the regulator itself.
+  // display.phase_lock / phase_margin_ms: on and 4 in code (gs14); the lock
+  // needs the vsync servo, capture-time scheduling and the regulator itself.
   const auto bare = maburplay::load_config(write_tmp_play(""));
-  CHECK(!bare.display.phase_lock);
+  CHECK(bare.display.phase_lock);
+  CHECK(maburplay::load_config(write_tmp_play("[display]\nvsync_lead_ms = 5\n")).display.phase_lock);
+  // Key absent, a prerequisite off: the lock stays off and the file loads
+  // (a pre-gs14 file must not stop the player).
+  CHECK(!maburplay::load_config(write_tmp_play("[display]\nsched_cap_ms = 0\n")).display.phase_lock);
+  CHECK(!maburplay::load_config(write_tmp_play("[display]\nvsync_lock = false\n")).display.phase_lock);
+  CHECK(!maburplay::load_config(write_tmp_play("[display]\nregulate_ms = 0\n")).display.phase_lock);
+  CHECK(!maburplay::load_config(
+             write_tmp_play("[display]\nphase_lock = false\n")).display.phase_lock);
   CHECK(bare.display.phase_margin_ms == 4);
   const auto on = maburplay::load_config(write_tmp_play(
       "[display]\nphase_lock = true\nphase_margin_ms = 6\nsched_cap_ms = 16\n"));

@@ -4,6 +4,7 @@
 #include <fstream>
 #include <functional>
 #include <stdexcept>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -11,6 +12,7 @@
 #include "mtest.h"
 #include "config.h"
 #include "mabur/link_key.h"
+#include "bundle_parity.h"
 using namespace mabur;
 
 namespace {
@@ -1613,6 +1615,12 @@ TEST(radio_width_step_keys_parse_and_validate) {
   CHECK(Config{}.radio.switch_rt_prio == 0);   // off
   CHECK(!Config{}.radio.lean_width && Config{}.radio.lean_verify);   // off, verify on
   std::filesystem::remove(p);
+  // width_step absent: on where it can run (d15), off where home_width > width.
+  auto absent = [](const char* body) { return load_config(write_temp_toml(body).string()).radio.width_step; };
+  CHECK(absent("[radio]\nchannels = [36]\nwidth = 80\n"));
+  CHECK(absent("[radio]\nchannels = [36]\nwidth = 40\n"));
+  CHECK(!absent("[radio]\nchannels = [36]\nwidth = 20\n"));
+  CHECK(!absent("[radio]\nchannels = [36]\nwidth = 80\nwidth_step = false\n"));
   for (const char* body : {"[radio]\nchannels = [36]\nwidth = 80\nhome_width = 80\n",
                            "[radio]\nchannels = [36]\nwidth = 20\nwidth_step = true\nhome_width = 40\n",
                            "[radio]\nchannels = [36]\nnarrow_rescue_ms = -1\n"}) {
@@ -1861,6 +1869,43 @@ TEST(core_placement_keys_reject_bad_values_naming_field) {
   std::string m3 = what_of([&] { (void)load_config(p3.string()); });
   CHECK(m3.find("radio.tx_threads_hot") != std::string::npos);
   std::filesystem::remove(p3);
+}
+
+// Code defaults = bundle defaults: a drone /etc/mabur.toml kept from an older
+// image lacks the keys added since, and each takes its CODE default. Where
+// that differs from the bundle the drone flies a setting nobody picked. The
+// list below holds the deliberate differences only (tests/bundle_parity.h).
+TEST(code_defaults_match_the_bundle) {
+  std::vector<std::string> defaulted;
+  auto path = write_temp_toml(
+      bundle_parity::skeleton(default_config_path(), {{"venc", "sensor_bin = \"/x.bin\""}}));
+  load_config(path.string(), &defaulted);
+  std::filesystem::remove(path);
+  const std::set<std::string> known = {
+      // In every mabur.toml since the key existed, so their code default
+      // never reaches a real drone; the code keeps the older, conservative
+      // values the unit tests are written against (venc.*: the encoder's own
+      // defaults, shared with the venc library).
+      "radio.width", "radio.channels", "fec.symbol_size", "fec.window",
+      "fec.blocks_per_body", "fec.flush_ms", "fec.feed_batch",
+      "encoder.bitrate_min_kbps", "encoder.bitrate_max_kbps", "encoder.airtime_budget",
+      "venc.gop_s", "venc.qp_delta", "venc.max_ipprop", "venc.min_iqp",
+      "venc.superframe_p_pct", "venc.intra_refresh_frames", "venc.slices",
+      "venc.roi.enabled", "link.failsafe_ms", "msp.update_rate_hz",
+      "ampdu.max_num", "ampdu.min_mcs_20", "ampdu.min_mcs_40", "air_clock.shed_ms",
+      "low_power.fps",
+      // Per-card calibration: the unit's own numbers, not a default.
+      "radio.rate_walls_rel",
+      // Follows venc.size when unset (the text says so, not a value).
+      "record.size",
+      // On where it can run (home_width <= width); with width's code default
+      // of 20 that is off (radio_width_step_keys_parse_and_validate).
+      "radio.width_step",
+      // Absent = off on purpose: a bench drone without a flight controller
+      // or an SD card.
+      "msp.enable", "low_power.enable", "record.enable",
+  };
+  CHECK(bundle_parity::mismatches(defaulted, default_config_path(), known).empty());
 }
 
 MTEST_MAIN

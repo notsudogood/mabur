@@ -21,8 +21,10 @@ struct RadioCfg {
   // only while one needs it, back after width_hold_ms. Each step is
   // devourer's FastSetChannel on the same primary (batched, est. a few ms on
   // this host, unmeasured). false = the radio stays at `width` for the
-  // session, as d8-d10 did.
-  bool width_step = false;
+  // session, as d8-d10 did. On in code and bundle alike since d15 (the
+  // bundle since d11); a file without the key gets it only where it can
+  // run (home_width <= width), so an old width = 20 file still loads.
+  bool width_step = true;
   uint8_t home_width = 40;
   int width_hold_ms = 3000;
   // Hops: false = at 80 MHz, or when the 40 MHz pair side changes, a hop is

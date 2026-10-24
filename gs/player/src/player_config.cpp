@@ -249,8 +249,14 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
     c.display.chain_budget =
         static_cast<int>(get_int(d, "chain_budget", 0, 0, 60, "display"));
     c.display.sched_cap_ms =
-        static_cast<int>(get_int(d, "sched_cap_ms", 0, 0, 50, "display"));
-    c.display.phase_lock = get_bool(d, "phase_lock", c.display.phase_lock, "display");
+        static_cast<int>(get_int(d, "sched_cap_ms", c.display.sched_cap_ms, 0, 50, "display"));
+    // Absent: on only where it can run, so a file from before gs14 that set
+    // sched_cap_ms = 0 (or vsync_lock = false) loads with the lock off
+    // rather than failing the check below. Present: as written, checked.
+    c.display.phase_lock = get_bool(
+        d, "phase_lock",
+        c.display.vsync_lock && c.display.sched_cap_ms > 0 && c.display.regulate_ms > 0,
+        "display");
     c.display.phase_margin_ms =
         static_cast<int>(get_int(d, "phase_margin_ms", 4, 1, 10, "display"));
     // genlock / genlock_miss_pct: our older camera steering, retired

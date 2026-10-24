@@ -3,11 +3,13 @@
 #include <fstream>
 #include <functional>
 #include <stdexcept>
+#include <set>
 #include <string>
 #include <vector>
 #include "mtest.h"
 #include "config.h"
 #include "mabur/link_key.h"
+#include "bundle_parity.h"
 
 static std::string write_tmp(const std::string& text) {
   std::string path = "/tmp/maburgs_test_config.toml";
@@ -315,14 +317,16 @@ TEST(out_entry_missing_a_port_is_rejected) {
   std::remove(p.c_str());
 }
 
-// Software NACK: [link.nack] is optional and absent = off; the spike's
-// settle_ms knob is gone (settle is adaptive), and lookback must stay inside
-// the decoder's seq horizon.
-TEST(link_nack_section_parses_and_defaults_off) {
-  auto off = maburgs::load_config(write_tmp(""));
-  CHECK(!off.link.nack.enable && off.link.nack.lookback == 256 &&
-        off.link.nack.repeat_ms == 16 && off.link.nack.max_tries == 2);
-  CHECK(off.link.nack.min_lead_ms == 12);
+// Software NACK: [link.nack] is optional and absent = on (gs14; off before);
+// the spike's settle_ms knob is gone (settle is adaptive), and lookback must
+// stay inside the decoder's seq horizon.
+TEST(link_nack_section_parses_and_defaults_on) {
+  auto dflt = maburgs::load_config(write_tmp(""));
+  CHECK(dflt.link.nack.enable && dflt.link.nack.lookback == 256 &&
+        dflt.link.nack.repeat_ms == 16 && dflt.link.nack.max_tries == 2);
+  CHECK(dflt.link.nack.min_lead_ms == 12);
+  CHECK(maburgs::load_config(write_tmp("[link.nack]\nlookback = 128\n")).link.nack.enable);
+  CHECK(!maburgs::load_config(write_tmp("[link.nack]\nenable = false\n")).link.nack.enable);
   auto on = maburgs::load_config(write_tmp(
       "[link.nack]\nenable = true\nlookback = 128\nrepeat_ms = 20\nmax_tries = 1\nmin_lead_ms = 8\n"));
   CHECK(on.link.nack.enable && on.link.nack.lookback == 128 &&
@@ -368,9 +372,10 @@ TEST(nack_disabled_sends_nothing) {
   // Config off => the exporter never sees a block and the tracker is never
   // constructed enabled; pinned here at the config/exporter seam, and in
   // test_nack_tracker's disabled_tracker_is_inert for the tracker itself.
-  auto off = maburgs::load_config(write_tmp(""));
+  // Off takes an explicit enable = false since gs14.
+  auto off = maburgs::load_config(write_tmp("[link.nack]\nenable = false\n"));
   CHECK(!off.link.nack.enable);
-  // The shipped bundle turns it on (gs10): only an absent section is off.
+  // The shipped bundle turns it on (gs10), and so does an absent section (gs14).
   auto bundle = maburgs::load_config(std::string(MABUR_GS_BUNDLE_DIR) + "/maburgs.default.toml");
   CHECK(bundle.link.nack.enable);
 }
@@ -586,7 +591,8 @@ TEST(hop_defaults_when_absent) {
   auto cfg = maburgs::load_config(write_tmp(""));
   CHECK(cfg.hop.window_ms == 150 && cfg.hop.persist == 2);
   CHECK(cfg.hop.dwell_observe_ms == 5 && cfg.hop.dwell_period_ms == 333);
-  CHECK(cfg.hop.confirm_ms == 500 && cfg.hop.verify_ms == 1000 && cfg.hop.cooldown_ms == 2000);
+  CHECK(cfg.hop.confirm_ms == 1000 && cfg.hop.verify_ms == 1000 && cfg.hop.cooldown_ms == 2000);
+  CHECK(maburgs::load_config(write_tmp("[hop]\nwindow_ms = 150\n")).hop.confirm_ms == 1000);
   CHECK(cfg.hop.max_hops_per_min == 4 && cfg.hop.backoff_ms == 30000 && cfg.hop.one_card_repeats == 5);
   CHECK(cfg.hop.verdict.loss_pct == 3.0 && cfg.hop.verdict.fa_pps == 100 && cfg.hop.verdict.weak_rssi_dbm == -78);
   CHECK(cfg.radio.scan.busy.busy_dbm == -83 && cfg.radio.scan.busy.blocked_pct == 50.0);
@@ -786,6 +792,34 @@ TEST(ladder_rung_with_base_below_enh_overhead_is_rejected) {
   auto ok = maburgs::load_config(write_tmp(
       "[[link.ladder]]\nmcs = 0\nbw = 20\noverhead_base = 0.5\noverhead_enh = 0.5\n"));
   CHECK(ok.link.ladder_cfg.ladder.size() == 1);
+}
+
+// Code defaults = bundle defaults: a /config/maburgs.toml kept from an older
+// image lacks the keys added since, and each takes its CODE default. Where
+// that differs from the bundle the GS flies a setting nobody picked. The list
+// below holds the deliberate differences only (tests/bundle_parity.h).
+TEST(code_defaults_match_the_bundle) {
+  std::vector<std::string> defaulted;
+  const std::string bundle = std::string(MABUR_GS_BUNDLE_DIR) + "/maburgs.default.toml";
+  maburgs::load_config(write_tmp(bundle_parity::skeleton(bundle)), &defaulted);
+  const std::set<std::string> known = {
+      // In every maburgs.toml since the key existed, so their code default
+      // never reaches a real GS; the code keeps the older, conservative
+      // values the unit tests are written against.
+      "radio.width", "radio.channels", "fec.symbol_size", "link.feedback_ms",
+      "link.ladder", "link.max_mcs", "link.down_util", "link.clean_ms",
+      "link.penalty_base_ms", "link.penalty_max_ms", "link.hold_after_down_ms",
+      "link.fade.rssi_db", "link.fade.snr_db", "video.frame_gap_timeout_max_ms",
+      "stats.interval_ms", "debug_log.ctl_period_ms",
+      // Same semantics, different spelling: no relays.
+      "radio.relays",
+      // Follow link.down_util when unset (the text says so, not a number).
+      "link.probe.max_util", "link.s3_down_util",
+      // Absent = off on purpose: a bench or host run without a flight
+      // controller, a player, a stats reader or a DVR card.
+      "msp.enable", "stats.enable", "au_ring.enable", "debug_log.enable",
+  };
+  CHECK(bundle_parity::mismatches(defaulted, bundle, known).empty());
 }
 
 MTEST_MAIN

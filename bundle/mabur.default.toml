@@ -79,8 +79,10 @@ roi_qp_normal      = 0
 mcs            = 4
 bw             = 80
 airtime_budget = 0.60
-max_kbps       = 50000     # top rung. Bench 2026-10-17: 50 Mbps costs CPU 0 ~60% in linkbench,
-                           # more with the camera running; watch the drone's cpu0 before trusting it
+max_kbps       = 40000     # top rung. Walks 2026-10-24 (drone 2, ch 132): at 50000, busy scenes made
+                           # 100-200 kB frames that backed the drone's queue up to 33 ms and shed to
+                           # 30 fps 5-8 times in 3-4 min; at 40000, none in 5 min, median bitrate the
+                           # same (33 vs 34 Mb/s), operator saw no softer picture. One walk each.
 
 [[encoder.rung]]
 mcs            = 3

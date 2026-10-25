@@ -95,7 +95,7 @@ void MenuLayer::draw_cell_(const Surface& s, const DirtyRect& r, const GsMenuCel
   const int by = baseline_in(*atlas_, in);
   if (centred) {
     const int tw = text_width(*atlas_, c.label.c_str());
-    draw_text(s, *atlas_, in.x + (in.w - tw) / 2, by, c.label.c_str(), txt);
+    draw_text_over(s, *atlas_, in.x + (in.w - tw) / 2, by, c.label.c_str(), txt);
   } else {
     // Label left and value right on one line; when they do not fit (the
     // dot, a narrow screen), the value goes under the label.
@@ -105,14 +105,14 @@ void MenuLayer::draw_cell_(const Surface& s, const DirtyRect& r, const GsMenuCel
     const bool one_line = pad_ + lw + pad_ / 2 + vw + pad_ / 2 <= in.w;
     const int lby = one_line ? by : in.y + (in.h - atlas_->glyph_h - small_->glyph_h) / 2 + atlas_->baseline;
     int x = in.x + pad_;
-    if (c.marked) x += draw_text(s, *atlas_, x, lby, dot, tok::kStatusOk);
-    draw_text(s, *atlas_, x, lby, c.label.c_str(), txt);
+    if (c.marked) x += draw_text_over(s, *atlas_, x, lby, dot, tok::kStatusOk);
+    draw_text_over(s, *atlas_, x, lby, c.label.c_str(), txt);
     if (vw > 0) {
       const uint32_t vc = c.active ? kTextRgb : tok::kTextSecondary;
       if (one_line)
-        draw_text(s, *small_, in.x + in.w - pad_ / 2 - vw, baseline_in(*small_, in), c.value.c_str(), vc);
+        draw_text_over(s, *small_, in.x + in.w - pad_ / 2 - vw, baseline_in(*small_, in), c.value.c_str(), vc);
       else
-        draw_text(s, *small_, in.x + pad_, lby - atlas_->baseline + atlas_->glyph_h + small_->baseline,
+        draw_text_over(s, *small_, in.x + pad_, lby - atlas_->baseline + atlas_->glyph_h + small_->baseline,
                   c.value.c_str(), vc);
     }
   }
@@ -132,14 +132,14 @@ void MenuLayer::draw_open_(const Surface& s, const GsMenuView& v) {
   const DirtyRect title_r{panel_x_, y, panel_w_, title_h_};
   fill_rect(s, title_r.x, title_r.y, title_r.w, title_r.h, kTitleRgb);
   const std::string title = v.title + "  <";
-  draw_text(s, *atlas_, panel_x_ + pad_, baseline_in(*atlas_, title_r), title.c_str(), kTextRgb);
+  draw_text_over(s, *atlas_, panel_x_ + pad_, baseline_in(*atlas_, title_r), title.c_str(), kTextRgb);
   if (v.has_toggle) {
     const int track_w = std::max(8, atlas_->glyph_h * 3 / 2);
     const int track_h = std::max(6, atlas_->glyph_h * 2 / 3);
     const int lw = text_width(*atlas_, v.toggle.label.c_str());
     const int tw = pad_ + lw + pad_ / 2 + track_w + pad_;
     const DirtyRect tr{panel_x_ + panel_w_ - tw, y, tw, title_h_};
-    draw_text(s, *atlas_, tr.x + pad_, baseline_in(*atlas_, tr), v.toggle.label.c_str(), kTextRgb);
+    draw_text_over(s, *atlas_, tr.x + pad_, baseline_in(*atlas_, tr), v.toggle.label.c_str(), kTextRgb);
     const int kx = tr.x + pad_ + lw + pad_ / 2, ky = y + (title_h_ - track_h) / 2;
     fill_rect(s, kx, ky, track_w, track_h, v.toggle_on ? tok::kStatusOk : tok::kTrack);
     const int inset = std::max(1, track_h / 6), knob = track_h - 2 * inset;
@@ -174,11 +174,11 @@ void MenuLayer::draw_open_(const Surface& s, const GsMenuView& v) {
     fill_rect(s, panel_x_, y - pad_ / 4, panel_w_, lines * line_ + pad_ / 2, kPanelRgb, 210);
   int by = y + small_->baseline;
   for (const std::string& l : help) {
-    draw_text(s, *small_, panel_x_ + pad_, by, l.c_str(), tok::kTextSecondary);
+    draw_text_over(s, *small_, panel_x_ + pad_, by, l.c_str(), tok::kTextSecondary);
     by += line_;
   }
   if (!v.status.empty())
-    draw_text(s, *small_, panel_x_ + pad_, by, v.status.c_str(), tok::kStatusCaution);
+    draw_text_over(s, *small_, panel_x_ + pad_, by, v.status.c_str(), tok::kStatusCaution);
 }
 
 int MenuLayer::draw_box_(const Surface& s, std::vector<DirtyRect>* out) {
@@ -201,7 +201,7 @@ int MenuLayer::draw_box_(const Surface& s, std::vector<DirtyRect>* out) {
     const int w = std::min(box_.w, text_width(*small_, v.status.c_str()) + 2 * pad_);
     const DirtyRect r{panel_x_ + (panel_w_ - w) / 2, panel_y_, w, btn_h_};
     fill_rect(s, r.x, r.y, r.w, r.h, kPanelRgb, 220);
-    draw_text(s, *small_, r.x + pad_, baseline_in(*small_, r), v.status.c_str(), kTextRgb);
+    draw_text_over(s, *small_, r.x + pad_, baseline_in(*small_, r), v.status.c_str(), kTextRgb);
   }
   return 1;
 }

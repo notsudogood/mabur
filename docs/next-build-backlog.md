@@ -8,6 +8,7 @@ order. Each item names its evidence. Remove an item when it ships.
 | Change | Why | Counterpart |
 |---|---|---|
 | Merge Gilang's master (4c94bc2): phase lock pauses when the drone's frame rate does not suit the panel (fps100), player release threads, uplink delivery on the OSD, burned-OSD recorder rework | drone 1 on gs15/d16, bench: `lock=oor` while low power held the camera at 30 fps (FC connected, disarmed). Ours is tuned for 60 fps, gives up after 60 s acquiring and waits 60 s, so after arming it can take up to ~1 min to lock | the trial merge conflicts in 7 files (player main.cpp, player_config.cpp, test_player_config.cpp, observability.md, the GS bundle, test_gs_config.cpp, test_web_gs.cpp); his release threads are new to our player and unflown here |
+| GS menu text without the see-through ring: menu text composites over its panel, no drop shadow (`draw_text_over`) | operator video of gs15: every letter had a ring where the video showed through the panel. `draw_text` writes, so its shadow replaced the panel's alpha; the host renders hid it (flat dark background). Host render over stripes: ring before, none after | white on the light grey cells (open tab, live channel) loses the shadow's edge; contrast there is ~2.9:1, darken that grey if it reads thin on the goggles |
 
 Drone 1 is back (2026-10-25): its d14 sysupgrade had stopped partway through
 the rootfs (the squashfs header was written, the tail at 0x815d40 was still

@@ -53,6 +53,15 @@ int text_width(const MaskAtlas& a, const char* utf8);
 int draw_text(const Surface& s, const MaskAtlas& a, int pen_x, int baseline_y,
               const char* utf8, uint32_t rgb);
 
+// draw_text for text drawn ON something, such as a menu panel: composites the
+// glyph over what the surface already holds (premultiplied src-over) and
+// leaves the shadow out. draw_text's write replaced a filled panel under
+// every shadow pixel with the shadow's lower alpha, so the video showed
+// through in a ring around each letter (the GS menu on gs15). Over an opaque
+// fill the result stays opaque everywhere. Returns the advance, as draw_text.
+int draw_text_over(const Surface& s, const MaskAtlas& a, int pen_x, int baseline_y,
+                   const char* utf8, uint32_t rgb);
+
 // Decodes one UTF-8 codepoint at *p, advancing *p. Returns 0xFFFD on a
 // malformed sequence and still advances one byte, so a bad string cannot
 // spin. Exposed for testing.

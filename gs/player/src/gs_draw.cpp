@@ -96,17 +96,14 @@ int text_width(const MaskAtlas& a, const char* utf8) {
   return w;
 }
 
-int draw_text(const Surface& s, const MaskAtlas& a, int pen_x, int baseline_y,
-              const char* utf8, uint32_t rgb) {
+namespace {
+// The glyph walk both text calls share: places each padded glyph cell at the
+// pen, clips it to the surface and hands every pixel with any coverage or
+// shadow to `plot`. With no pixels (measure-only) it still advances.
+template <typename Plot>
+int walk_glyphs(const Surface& s, const MaskAtlas& a, int pen_x, int baseline_y,
+                const char* utf8, Plot plot) {
   if (!utf8) return 0;
-  // Inverted colour and inverted BLACK for the shadow. The two are blended
-  // per pixel by coverage, and invert() is affine off the clip region, so
-  // inverting the two endpoints and blending equals blending then
-  // inverting. With no inverse set kr/kg/kb are 0 and this is the old code.
-  const uint32_t col = map_token(rgb);
-  const uint32_t blk = map_token(0x000000u);
-  const uint32_t cr = (col >> 16) & 0xFF, cg = (col >> 8) & 0xFF, cb = col & 0xFF;
-  const uint32_t kr = (blk >> 16) & 0xFF, kg = (blk >> 8) & 0xFF, kb = blk & 0xFF;
   int advanced = 0;
   const char* p = utf8;
   while (*p) {
@@ -136,18 +133,52 @@ int draw_text(const Surface& s, const MaskAtlas& a, int pen_x, int baseline_y,
         const uint32_t cov = src[gx * 2];
         const uint32_t sha = src[gx * 2 + 1];
         if (!cov && !sha) continue;
-        // alpha = cov over shadow; colour is premultiplied by cov alone
-        // because the shadow is black and contributes no chroma.
-        const uint32_t alpha = cov + sha * (255 - cov) / 255;
-        const uint32_t sh_w = sha * (255 - cov) / 255;  // shadow weight, premultiplied
-        const uint32_t r = (cr * cov + kr * sh_w) / 255;
-        const uint32_t gg = (cg * cov + kg * sh_w) / 255;
-        const uint32_t b = (cb * cov + kb * sh_w) / 255;
-        row[px] = (alpha << 24) | (r << 16) | (gg << 8) | b;
+        plot(row + px, cov, sha);
       }
     }
   }
   return advanced;
+}
+}  // namespace
+
+int draw_text(const Surface& s, const MaskAtlas& a, int pen_x, int baseline_y,
+              const char* utf8, uint32_t rgb) {
+  // Inverted colour and inverted BLACK for the shadow. The two are blended
+  // per pixel by coverage, and invert() is affine off the clip region, so
+  // inverting the two endpoints and blending equals blending then
+  // inverting. With no inverse set kr/kg/kb are 0 and this is the old code.
+  const uint32_t col = map_token(rgb);
+  const uint32_t blk = map_token(0x000000u);
+  const uint32_t cr = (col >> 16) & 0xFF, cg = (col >> 8) & 0xFF, cb = col & 0xFF;
+  const uint32_t kr = (blk >> 16) & 0xFF, kg = (blk >> 8) & 0xFF, kb = blk & 0xFF;
+  return walk_glyphs(s, a, pen_x, baseline_y, utf8, [&](uint32_t* px, uint32_t cov, uint32_t sha) {
+    // alpha = cov over shadow; colour is premultiplied by cov alone
+    // because the shadow is black and contributes no chroma.
+    const uint32_t alpha = cov + sha * (255 - cov) / 255;
+    const uint32_t sh_w = sha * (255 - cov) / 255;  // shadow weight, premultiplied
+    const uint32_t r = (cr * cov + kr * sh_w) / 255;
+    const uint32_t gg = (cg * cov + kg * sh_w) / 255;
+    const uint32_t b = (cb * cov + kb * sh_w) / 255;
+    *px = (alpha << 24) | (r << 16) | (gg << 8) | b;
+  });
+}
+
+int draw_text_over(const Surface& s, const MaskAtlas& a, int pen_x, int baseline_y,
+                   const char* utf8, uint32_t rgb) {
+  const uint32_t col = map_token(rgb);
+  const uint32_t cr = (col >> 16) & 0xFF, cg = (col >> 8) & 0xFF, cb = col & 0xFF;
+  return walk_glyphs(s, a, pen_x, baseline_y, utf8, [&](uint32_t* px, uint32_t cov, uint32_t) {
+    if (!cov) return;  // shadow only: what is underneath stays as it is
+    // Premultiplied src-over: the glyph at alpha cov over the pixel already
+    // there. Over an opaque pixel the alpha stays 255 (cov + (255 - cov)).
+    const uint32_t d = *px;
+    const uint32_t inv = 255 - cov;
+    const uint32_t al = cov + ((d >> 24) & 0xFF) * inv / 255;
+    const uint32_t r = (cr * cov + ((d >> 16) & 0xFF) * inv) / 255;
+    const uint32_t gg = (cg * cov + ((d >> 8) & 0xFF) * inv) / 255;
+    const uint32_t b = (cb * cov + (d & 0xFF) * inv) / 255;
+    *px = (al << 24) | (r << 16) | (gg << 8) | b;
+  });
 }
 
 }  // namespace maburplay

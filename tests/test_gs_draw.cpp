@@ -508,4 +508,34 @@ TEST(colour_inverse_hook_maps_tokens_and_the_shadow) {
   CHECK(premul(0xFFFFFFu, 255) == 0xFFFFFFFFu);
 }
 
+TEST(draw_text_over_keeps_an_opaque_panel_opaque_and_leaves_the_shadow_out) {
+  // Synthetic 1x1 glyphs: 'A' full coverage, 'B' shadow only, 'C' half
+  // coverage with shadow. draw_text WRITES, so on a filled panel its
+  // shadow-only pixels replaced the panel with a fainter alpha and the video
+  // showed through in a ring around each letter (the gs15 menu).
+  // draw_text_over must leave every pixel of an opaque panel opaque, the
+  // shadow-only pixel exactly the panel, and full coverage exactly the text.
+  const uint32_t cps[3] = {'A', 'B', 'C'};
+  const uint8_t mask[6] = {255, 0, 0, 255, 128, 128};
+  MaskAtlas a;
+  a.px = 1; a.glyph_w = 1; a.glyph_h = 1; a.advance_x = 1; a.baseline = 0;
+  a.n_glyphs = 3; a.codepoints = cps; a.pixels = mask;
+  const uint32_t panel = premul(0x2F3134u, 255);
+  Canvas c(3, 1);
+  fill_rect(c.s, 0, 0, 3, 1, 0x2F3134u);
+  CHECK(draw_text_over(c.s, a, 0, 0, "ABC", 0xF2F3F5u) == 3);
+  CHECK(c.at(0, 0) == premul(0xF2F3F5u, 255));
+  CHECK(c.at(1, 0) == panel);
+  CHECK((c.at(2, 0) >> 24) == 255u);
+  const uint32_t g = (c.at(2, 0) >> 8) & 0xFF;  // between the panel and the text
+  CHECK(g > ((panel >> 8) & 0xFF) && g < 0xF3u);
+  CHECK(c.guard_intact());
+
+  // On a cleared surface it is the coverage alone: no shadow pixel at all.
+  Canvas d(3, 1);
+  draw_text_over(d.s, a, 0, 0, "ABC", 0xF2F3F5u);
+  CHECK(d.at(1, 0) == 0u);
+  CHECK((d.at(2, 0) >> 24) == 128u);
+}
+
 MTEST_MAIN

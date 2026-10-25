@@ -69,7 +69,7 @@ TEST(menu_model_opens_edits_and_applies) {
   m.key(K::Center, 10);                 // opens on the tab bar, Channel tab
   CHECK(m.open() && m.tab() == GsMenuModel::Tab::Channel);
   auto v = m.view(132);
-  REQUIRE(v.tabs.size() == 2 && v.cells.size() == 4 && v.buttons.size() == 2);
+  REQUIRE(v.tabs.size() == 3 && v.cells.size() == 4 && v.buttons.size() == 2);
   CHECK(v.tabs[0].focus && v.tabs[0].active && !v.tabs[1].active);
   CHECK(v.has_toggle && v.toggle_on && v.cells[3].active && !v.cells[0].active);   // 132 live
   CHECK(v.cells[0].label == "CH 36" && v.cells[0].value == "5170-5250");   // the 80 MHz block
@@ -102,6 +102,8 @@ TEST(menu_model_opens_edits_and_applies) {
   CHECK(v.buttons[0].focus && !v.buttons[0].dim && v.help.find("restart") != std::string::npos);
   CHECK(m.key(K::Center, 90) == GsMenuModel::Action::Apply);
   CHECK(!m.open() && !m.current().hop && m.current().channel == 116 && !m.current().wide);
+  CHECK(m.take_settings_applied() && !m.take_settings_applied());   // consumed once
+  CHECK(m.take_camera_applied() == mabur::cam::kNoWish);            // no camera asked
 }
 
 TEST(menu_model_closes_on_close_and_idle_and_wraps) {
@@ -142,5 +144,74 @@ TEST(menu_model_eight_channels_take_two_rows) {
   CHECK(v.cells[0].value == "5170-5210");   // Normal: the 40 MHz pair
   m.key(K::Down, 4);
   CHECK(m.view().buttons[0].focus);
+}
+// Camera tab: the running preset is grey (active), a chosen one carries the
+// dot (marked), presets this drone has no mode for are dim and cannot be
+// chosen. Apply hands the preset over once and leaves the link settings
+// alone.
+TEST(menu_model_camera_tab_requests_a_preset) {
+  GsMenuModel m({36, 100}, false, maburplay::GsMenuSettings{false, 36, false});
+  m.set_camera(0, 0b0011, 0b0100);      // runs 1080p 60; 90 now; 720p 100 after a driver switch
+  m.key(K::Center, 0);
+  m.key(K::Left, 1);                    // wraps Channel -> Camera
+  CHECK(m.tab() == GsMenuModel::Tab::Camera);
+  auto v = m.view();
+  REQUIRE(v.tabs.size() == 3 && v.tabs[2].label == "Camera" && v.tabs[2].active);
+  REQUIRE(v.cells.size() == mabur::cam::kNumPresets && v.cols == 4 && v.title == "Camera");
+  CHECK(v.cells[0].label == "1080p 60" && v.cells[0].active && v.cells[0].value == "full view");
+  CHECK(!v.cells[1].dim && v.cells[2].value == "new driver" && !v.cells[2].dim);
+  CHECK(v.cells[3].dim && v.cells[3].value == "not here");
+  CHECK(v.buttons[0].label == "No change");
+  m.key(K::Down, 2);                    // the preset row, on the running preset
+  CHECK(m.view().cells[0].focus);
+  CHECK(m.view().help.find("runs this now") != std::string::npos);
+  m.key(K::Center, 3);                  // the running one: nothing to ask
+  CHECK(m.pending_camera() == mabur::cam::kNoWish);
+  m.key(K::Left, 4);                    // wraps to 544p 120: not on this drone
+  CHECK(m.view().help.find("Not on this drone") != std::string::npos);
+  m.key(K::Center, 5);
+  CHECK(m.pending_camera() == mabur::cam::kNoWish);
+  m.key(K::Left, 6);                    // 720p 100: needs the driver switch
+  CHECK(m.view().help.find("driver") != std::string::npos);
+  m.key(K::Center, 7);
+  CHECK(m.pending_camera() == 2 && m.view().cells[2].marked);
+  m.key(K::Center, 8);                  // pressed again: cleared
+  CHECK(m.pending_camera() == mabur::cam::kNoWish);
+  m.key(K::Left, 9);                    // 1080p 90
+  m.key(K::Center, 10);
+  CHECK(m.pending_camera() == 1);
+  m.key(K::Down, 11);                   // Apply
+  v = m.view();
+  CHECK(v.buttons[0].label == "Apply" && v.help.find("30 s") != std::string::npos);
+  CHECK(m.key(K::Center, 12) == GsMenuModel::Action::Apply);
+  CHECK(!m.take_settings_applied());
+  CHECK(m.take_camera_applied() == 1 && m.take_camera_applied() == mabur::cam::kNoWish);
+  m.key(K::Center, 20);                 // reopened: no choice carried over
+  CHECK(m.pending_camera() == mabur::cam::kNoWish);
+}
+
+TEST(menu_model_camera_tab_before_the_drone_reports) {
+  GsMenuModel m({36}, false, maburplay::GsMenuSettings{false, 36, false});
+  m.key(K::Center, 0);
+  m.key(K::Left, 1);
+  m.key(K::Down, 2);
+  auto v = m.view();
+  CHECK(v.cells[0].dim && v.cells[1].dim && !v.cells[0].active);
+  CHECK(v.help.find("not reported") != std::string::npos);
+  m.key(K::Center, 3);
+  CHECK(m.pending_camera() == mabur::cam::kNoWish);
+  const uint64_t ver = m.version();
+  m.set_camera(mabur::cam::kUnknown, 0, 0);   // 0xFF from an older drone: still nothing
+  m.set_camera(mabur::cam::kUnknown, 0, 0);
+  CHECK(m.version() == ver + 1);              // a repeat does not repaint
+}
+
+TEST(menu_model_camera_result_lines) {
+  CHECK(GsMenuModel::camera_result_text("").empty());
+  CHECK(GsMenuModel::camera_result_text("sent").empty());
+  for (const char* r : {"applying", "switched", "armed", "unavailable", "bad_config",
+                        "rolled_back", "timeout"})
+    CHECK(!GsMenuModel::camera_result_text(r).empty());
+  CHECK(GsMenuModel::camera_result_text("armed").find("disarm") != std::string::npos);
 }
 MTEST_MAIN

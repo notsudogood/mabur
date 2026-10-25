@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace maburplay {
@@ -90,6 +91,18 @@ struct GsSnapshot {
   // is null/absent or the keys are missing or mistyped.
   std::optional<int> uplink_pct;
   GsUplink uplink = GsUplink::kNone;
+  // Camera tab. drone.camera: the preset the drone runs (254 custom, 255
+  // unknown), the presets on offer now and after a driver switch (bit =
+  // preset id, mabur/camera_presets.h). camera_request: maburgs' pending
+  // preset, the preset the last settled request was for, and its result
+  // ("", "sent", "applying", "switched", "armed", "unavailable",
+  // "bad_config", "rolled_back", "timeout"). Empty / 0 / "" when absent.
+  std::optional<int> cam_cur;
+  int cam_now = 0;
+  int cam_switch = 0;
+  std::optional<int> cam_wish;
+  std::optional<int> cam_last;
+  std::string cam_result;
   // link.ctl.rung.mcs / .ov_base x 100, falling back to link.op.mcs /
   // .overhead_base x 100 when the ladder block is absent -- which is the
   // normal, permanent state of a static-pinned link (link.static_mcs >= 0

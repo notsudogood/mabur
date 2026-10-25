@@ -346,6 +346,11 @@ struct StatsInput {
   // JSON "rtt": null.
   std::optional<StatsRttIn> rtt;
 
+  // Camera tab: the request maburgs holds (CameraRequest).
+  uint8_t cam_wish = 0xFF;
+  uint8_t cam_last = 0xFF;
+  const char* cam_result = "";
+
   // Latest drone telemetry, if any this session: wire struct + GS arrival clock.
   std::optional<mabur::rc::Telem> telem;
   uint64_t telem_rx_ms = 0;   // GS monotonic arrival stamp

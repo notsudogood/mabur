@@ -632,4 +632,17 @@ TEST(drone_rec_parses_and_is_empty_when_absent) {
   REQUIRE(parse(R"({"link": {"channel": 136}, "drone": null})", &s));
   CHECK(!s.rec_state.has_value());
 }
+// drone.camera and camera_request (the menu's Camera tab). Absent: unknown
+// current preset, nothing on offer, no result.
+TEST(camera_blocks_parse_and_default_empty) {
+  GsSnapshot s;
+  REQUIRE(parse(R"({"drone": {"camera": {"cur": 1, "now": 3, "switch": 12, "state": "idle", "about": 15}},
+                    "camera_request": {"wish": 2, "last": null, "result": "applying"}})", &s));
+  REQUIRE(s.cam_cur); CHECK(*s.cam_cur == 1);
+  CHECK(s.cam_now == 3 && s.cam_switch == 12);
+  REQUIRE(s.cam_wish); CHECK(*s.cam_wish == 2);
+  CHECK(!s.cam_last && s.cam_result == "applying");
+  REQUIRE(parse(R"({"drone": null})", &s));
+  CHECK(!s.cam_cur && s.cam_now == 0 && s.cam_switch == 0 && !s.cam_wish && s.cam_result.empty());
+}
 MTEST_MAIN

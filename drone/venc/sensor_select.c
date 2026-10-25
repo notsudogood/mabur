@@ -9,6 +9,20 @@
 
 static SdkQuietState g_sensor_sdk_quiet = SDK_QUIET_STATE_INIT;
 
+/* Every mode the last find_best_mode() enumerated, for the GS menu's
+ * Camera tab (sensor_select_offered_modes). */
+#define SENSOR_SELECT_MAX_MODES 16
+static CameraMode g_offered[SENSOR_SELECT_MAX_MODES];
+static int g_offered_n;
+
+int sensor_select_offered_modes(CameraMode *out, int max)
+{
+	int n = g_offered_n < max ? g_offered_n : max;
+	for (int i = 0; i < n; ++i)
+		out[i] = g_offered[i];
+	return n;
+}
+
 /* ── Scoring helpers ─────────────────────────────────────────────────── */
 
 int sensor_mode_fps_supported(const MI_SNR_Res_t *mode, uint32_t fps)
@@ -309,6 +323,7 @@ static int find_best_mode(const SensorSelectConfig *cfg,
 	MI_U32 *out_mode_count)
 {
 	*out_mode_count = 0;
+	g_offered_n = 0;
 	int best_class = -1;
 	uint64_t best_cost = ~(uint64_t)0;
 
@@ -330,6 +345,9 @@ static int find_best_mode(const SensorSelectConfig *cfg,
 			ret = MI_SNR_GetRes((MI_SNR_PAD_ID_e)p, idx, &res);
 			if (ret != 0)
 				continue;
+			if (g_offered_n < SENSOR_SELECT_MAX_MODES)
+				g_offered[g_offered_n++] = (CameraMode){res.output.width,
+					res.output.height, (uint16_t)res.maxFps};
 			if (cfg->want_mode.w) {
 				const CameraMode got = {res.output.width,
 					res.output.height, (uint16_t)res.maxFps};

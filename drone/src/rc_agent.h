@@ -6,6 +6,7 @@
 #include <optional>
 #include <vector>
 
+#include "camera_switch.h"
 #include "config.h"
 #include "mabur/channel_set.h"
 #include "mabur/link_key.h"
@@ -316,6 +317,15 @@ class RcAgent {
   // policy input -- low_power() deliberately does not read it.
   bool armed_latched() const { return armed_latched_; }
 
+  // The GS's camera request from the last accepted RCF (Rcf::cam; 0xFF =
+  // none), dropped to none when the link fails. CameraSwitch decides on it.
+  uint8_t cam_wish() const { return cam_wish_; }
+
+  // The FC's arm state for a camera switch (camera_switch.h): NoFc with MSP
+  // off or no report ever, Armed/Disarmed while the last report is fresher
+  // than low_power.stale_ms, Stale once a reporting FC has gone quiet.
+  ArmView arm_view(uint64_t now_ms) const;
+
   // Latched on a BOOT/RENDEZVOUS -> LINKED transition — the process-(re)start
   // link-up, when frames encoded so far never reached the air and the GS may
   // hold a stale frame-id cursor. The caller consumes it to re-mark the frame
@@ -455,6 +465,7 @@ class RcAgent {
   // (rc::kRecKnown) is applied; link loss never touches it.
   int rec_applied_ = -1;
   int16_t snr_off_sent_ = 0;  // last offset handed to the actuator
+  uint8_t cam_wish_ = 0xFF;   // Rcf::cam, level; 0xFF = no camera request
   void intake_arm_state_(uint64_t now_ms);
 
   // GS-requested IDR. The last RCF

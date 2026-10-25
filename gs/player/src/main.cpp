@@ -1869,6 +1869,9 @@ int main(int argc, char** argv) {
   // first datagram that may never come.
   [[maybe_unused]] bool gs_needs_render = true;  // read only in the cross build
   bool gs_stale_last = false;
+  // The camera_request.result last seen; unset until the first datagram, so
+  // an outcome maburgs settled before this player started is not announced.
+  std::optional<std::string> cam_result_seen;
   // Both overlays' state for the composer, filled by the two intake blocks
   // and consumed by the single composition block after them.
   [[maybe_unused]] bool msp_ready = false;
@@ -1917,6 +1920,18 @@ int main(int argc, char** argv) {
         if (!p.b->is_open() || !p.b->poll(mnow)) continue;
         std::fprintf(stderr, "maburplay: menu key %s\n", p.name);
         if (menu_model->key(p.k, mnow) != maburplay::GsMenuModel::Action::Apply) continue;
+        // A camera preset goes to maburgs, which holds it in every RCF until
+        // the drone's telemetry settles it (gs/src/camera_request.h).
+        const uint8_t cam = menu_model->take_camera_applied();
+        if (cam != mabur::cam::kNoWish) {
+          char line[32];
+          std::snprintf(line, sizeof(line), "camera %u", static_cast<unsigned>(cam));
+          core_ctl.send_line(line);
+          std::fprintf(stderr, "maburplay: menu camera preset %u (%s) requested\n",
+                       static_cast<unsigned>(cam), mabur::cam::preset(cam)->label);
+          menu_model->set_status("Camera: asked the drone to switch", mnow);
+        }
+        if (!menu_model->take_settings_applied()) continue;
         const maburplay::GsMenuSettings& s = menu_model->current();
         maburgs::GsMenuChoice choice;
         choice.hop = s.hop;
@@ -2183,6 +2198,22 @@ int main(int argc, char** argv) {
       const uint64_t now_ms = mono_ms();
       if (gs_src->poll(now_ms)) gs_needs_render = true;
       gs_stale = gs_src->stale(now_ms);
+      if (menu_model && gs_src->have_any()) {
+        // The Camera tab's cells and the outcome line follow the stats
+        // sideport; a stale one keeps the last values (the drone rebooting
+        // into a new mode is exactly when the link is quiet).
+        const maburplay::GsSnapshot& sn = gs_src->snapshot();
+        if (!gs_stale) menu_model->set_camera(sn.cam_cur ? *sn.cam_cur : -1, sn.cam_now, sn.cam_switch);
+        if (!cam_result_seen) cam_result_seen = sn.cam_result;
+        if (sn.cam_result != *cam_result_seen) {
+          cam_result_seen = sn.cam_result;
+          const std::string msg = maburplay::GsMenuModel::camera_result_text(sn.cam_result);
+          if (!msg.empty()) {
+            std::fprintf(stderr, "maburplay: camera request: %s\n", sn.cam_result.c_str());
+            menu_model->set_status(msg, now_ms);
+          }
+        }
+      }
       if (gs_stale != gs_stale_last) {
         gs_stale_last = gs_stale;
         gs_needs_render = true;

@@ -2,6 +2,7 @@
 #pragma once
 #include <stddef.h> /* size_t — venc_cfg.h pulls in stdint/stdbool only */
 #include "venc_cfg.h"
+#include "camera_modes.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -60,6 +61,11 @@ void venc_get_stats(VencStats *out);
  * not running; telem then ships pts_at_build 0 and the GS skips the offset
  * sample (0 is the wire's "unavailable" sentinel, never a real clock). */
 uint64_t venc_cur_pts_us(void);
+
+/* The sensor driver's mode list as enumerated at venc_core_start (output
+ * size + maxFps per mode, in the driver's order), for the GS menu's Camera
+ * tab. Copies up to `max` into `out`; returns how many. 0 before a start. */
+int venc_sensor_modes(CameraMode *out, int max);
 
 /* One-shot JPEG snapshot (chn7). Returns malloc'd buffer via *out (caller
  * frees) and its size, or -1. Debug endpoint only. */

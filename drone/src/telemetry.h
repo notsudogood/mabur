@@ -55,6 +55,10 @@ struct TelemInputs {
   // fec-nack, per period: verified T_NACKs answered,
   // symbols re-sent, symbols the token bucket refused.
   uint64_t nack_rx = 0, retx_syms = 0, retx_refused = 0;
+  // Camera tab (mabur/camera_presets.h): this boot's preset, the presets the
+  // loaded driver offers / a driver switch would add, the last request's
+  // outcome (cam::State).
+  uint8_t cam_cur = 0xFF, cam_now = 0, cam_switch = 0, cam_state = 0;
   // RX-side channel view for this telemetry period (cca-on):
   // the RX callback's own / foreign / CRC-failed frame split.
   uint64_t rx_own = 0, rx_foreign = 0, rx_crcfail = 0;

@@ -70,6 +70,10 @@ rc::Telem make_telem(uint16_t tlm_seq, const TelemInputs& in) {
   t.nack_rx = saturate<uint16_t>(in.nack_rx);
   t.retx_syms = saturate<uint16_t>(in.retx_syms);
   t.retx_refused = saturate<uint16_t>(in.retx_refused);
+  t.cam_cur = in.cam_cur;
+  t.cam_now = in.cam_now;
+  t.cam_switch = in.cam_switch;
+  t.cam_state = in.cam_state;
   t.rx_own = saturate<uint16_t>(in.rx_own);
   t.rx_foreign = saturate<uint16_t>(in.rx_foreign);
   t.rx_crcfail = saturate<uint16_t>(in.rx_crcfail);

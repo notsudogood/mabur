@@ -89,6 +89,11 @@ bool parse_gs_snapshot(const char* data, size_t n, GsSnapshot* out) {
       out->soc_temp_c = integer(*sys, "soc_temp_c");
       if (out->soc_temp_c && *out->soc_temp_c == -128) out->soc_temp_c.reset();
     }
+    if (const json* cam = obj(*drone, "camera")) {
+      out->cam_cur = integer(*cam, "cur");
+      out->cam_now = integer(*cam, "now").value_or(0);
+      out->cam_switch = integer(*cam, "switch").value_or(0);
+    }
     if (const json* rcf = obj(*drone, "rcf")) {
       out->uplink_pct = integer(*rcf, "delivery_pct");
       auto u = rcf->find("uplink");
@@ -102,6 +107,12 @@ bool parse_gs_snapshot(const char* data, size_t n, GsSnapshot* out) {
           if (v == name) out->uplink = st;
       }
     }
+  }
+  if (const json* cr = obj(j, "camera_request")) {
+    out->cam_wish = integer(*cr, "wish");
+    out->cam_last = integer(*cr, "last");
+    auto it = cr->find("result");
+    if (it != cr->end() && it->is_string()) out->cam_result = it->get<std::string>();
   }
   // Captured here (top-level, like `scan`) and consumed once the `link`
   // block below has parsed out->channel -- hop.target alone says nothing

@@ -24,6 +24,7 @@ static Rcf rcf_from_json(const nlohmann::json& f) {
   r.rec = f.contains("rec") ? f["rec"].get<uint8_t>() : 0;
   r.idr_epoch = f.contains("idr_epoch") ? f["idr_epoch"].get<uint8_t>() : 0;
   r.snr_off = f.contains("snr_off") ? f["snr_off"].get<int16_t>() : 0;
+  r.cam = f.contains("cam") ? f["cam"].get<uint8_t>() : 0xFF;
   return r;
 }
 
@@ -55,7 +56,7 @@ TEST(rcf_tag_verifies_with_key_and_ctx_only) {
   Rcf r; r.seq = 7; r.profile = 0x24; r.fec_overhead_base = 0.5; r.fec_overhead_enh = 0.25;
   const TagCtx ctx{0xCAFEF00D, 0x12345678, 7};
   auto wire = pack_rcf(r, test_key(), ctx);
-  CHECK(wire.size() == 17 + kTagLen + 2);
+  CHECK(wire.size() == 18 + kTagLen + 2);
   REQUIRE(parse_rcf(wire.data(), wire.size()).has_value());   // structural parse ignores the tag
   CHECK(verify_control(wire.data(), wire.size(), test_key(), ctx));
   CHECK(!verify_control(wire.data(), wire.size(), kDefaultLinkKey, ctx));
@@ -138,7 +139,7 @@ TEST(verify_control_rejects_a_frame_shorter_than_structural_plus_tag_and_crc) {
   const TagCtx ctx{0xCAFEF00D, 0x12345678, 7};
   Rcf r; r.seq = 7;
   auto rcf = pack_rcf(r, test_key(), ctx);
-  CHECK(!verify_control(rcf.data(), 17 + kTagLen + 1, test_key(), ctx));
+  CHECK(!verify_control(rcf.data(), 18 + kTagLen + 1, test_key(), ctx));
   Disc d; d.vrx_nonce = 1;
   auto disc = pack_disc(d, test_key());
   CHECK(!verify_control(disc.data(), 17 + kTagLen + 1, test_key(), TagCtx{}));
@@ -174,15 +175,15 @@ TEST(rcf_matches_golden_wire) {
   //   std::fprintf(stderr, "%s\n", mtest::hex(wire).c_str());
   // Reverting any pack_rcf() layout change without updating these fails
   // here, which is the point -- the format cannot drift silently.
-  // Re-pinned for the RC_VERSION 15 -> 16 bump and the snr_off field
-  // (RCF head 15 -> 17): version byte 2 and the head length both moved,
-  // re-deriving the tag + CRC over the changed body.
+  // Re-pinned for the RC_VERSION 16 -> 17 bump and the cam field
+  // (RCF head 17 -> 18, cam 0xFF = no request): version byte 2 and the head
+  // length both moved, re-deriving the tag + CRC over the changed body.
   const std::vector<std::string> GOLDEN = {
-      "43521001000700243232ff0000000000003fe22979b1ca1456c4a0",
-      "4352100100ffff006464ff00000300c800031566e6d4ee392ad094",
+      "43521101000700243232ff000000000000ff8f4b3ba2d9606f4b6e67",
+      "4352110100ffff006464ff00000300c800ff4455f79426d27bec38a1",
       // Asym pair (base 1.0 / enh 0.5): ENH actually rides a different
       // literal overhead than BASE here, not a duplicated equal-pair scalar.
-      "43521001002a00086432060000025adbff18046eec6e79905933c3",
+      "43521101002a00086432060000025adbfffff4429816f315cf10d3f3",
   };
   auto j = mtest::load_json(std::string(MABUR_VECTOR_DIR) + "/rc.json");
   REQUIRE(j["rcf"].size() == GOLDEN.size());
@@ -213,9 +214,9 @@ TEST(disc_matches_golden_wire) {
   //   std::fprintf(stderr, "%s\n", mtest::hex(wire).c_str());
   // Reverting any pack_disc() layout change without updating this fails
   // here, which is the point -- the format cannot drift silently.
-  // Re-pinned for the RC_VERSION 15 -> 16 bump.
+  // Re-pinned for the RC_VERSION 16 -> 17 bump.
   const std::vector<std::string> GOLDEN = {
-      "43521002040100feca9514010000000200f553c20cceabffece5fc",
+      "43521102040100feca9514010000000200ec415c1db52a6b971401",
   };
   auto j = mtest::load_json(std::string(MABUR_VECTOR_DIR) + "/rc.json");
   REQUIRE(j["disc"].size() == GOLDEN.size());
@@ -246,9 +247,9 @@ TEST(disc_ack_matches_golden_wire) {
   //   std::fprintf(stderr, "%s\n", mtest::hex(wire).c_str());
   // Reverting any pack_disc_ack() layout change without updating this
   // fails here, which is the point -- the format cannot drift silently.
-  // Re-pinned for the RC_VERSION 15 -> 16 bump.
+  // Re-pinned for the RC_VERSION 16 -> 17 bump.
   const std::vector<std::string> GOLDEN = {
-      "43521003040100feca0200efbe03009514000100fbfa",
+      "43521103040100feca0200efbe03009514000100ca0a",
   };
   auto j = mtest::load_json(std::string(MABUR_VECTOR_DIR) + "/rc.json");
   REQUIRE(j["disc_ack"].size() == GOLDEN.size());
@@ -384,7 +385,7 @@ TEST(telem_round_trip_and_golden) {
   // VTX recorder status: state 2 (Error) | err 5 (LowSpace) << 2.
   t.rec_status = 0x16;
   auto wire = mabur::rc::pack_telem(t);
-  CHECK(wire.size() == 54 + 2);
+  CHECK(wire.size() == 58 + 2);
   CHECK(mabur::rc::frame_type(wire.data(), wire.size()) == mabur::rc::T_TELEM);
   auto back = mabur::rc::parse_telem(wire.data(), wire.size());
   REQUIRE(back.has_value());
@@ -408,13 +409,14 @@ TEST(telem_round_trip_and_golden) {
   CHECK(back->rx_crcfail == 15);
   CHECK(back->rec_status == 0x16);
   CHECK(back->nack_rx == 0 && back->retx_syms == 0 && back->retx_refused == 0);
+  CHECK(back->cam_cur == 0xFF && back->cam_now == 0 && back->cam_switch == 0 &&
+        back->cam_state == 0);
   // Golden pin: byte-exact wire so the format can never drift silently.
-  // Re-pinned for the RC_VERSION 15 -> 16 bump (version byte only; Telem's
-  // own layout is unchanged, so only the version byte and the CRC it feeds
-  // moved).
+  // Re-pinned for the RC_VERSION 16 -> 17 bump: the version byte, the four
+  // camera bytes at the tail (ff 00 00 00 at their defaults) and the CRC.
   const std::string GOLDEN =
-      "43521004090201022d0034127766554433221100a0860100282307000000d2040200"
-      "333415163d48000d000e000f001600000000000083f3";
+      "43521104090201022d0034127766554433221100a0860100282307000000d2040200"
+      "333415163d48000d000e000f0016000000000000ff000000ff6c";
   CHECK(mtest::hex(wire) == GOLDEN);
   // Corrupt/truncate rejection, mirroring the disc_ack tests:
   auto trunc = wire; trunc.pop_back();
@@ -449,7 +451,7 @@ TEST(rcf_probe_profile_is_a_fixed_head_byte) {
   none.probe_profile = kNoProbeProfile;
   auto wire_none = mabur::rc::pack_rcf(none);
   CHECK(wire.size() == wire_none.size());   // fixed byte, no optional tail
-  CHECK(wire.size() == 17 + kTagLen + 2);    // head 17 + tag + crc
+  CHECK(wire.size() == 18 + kTagLen + 2);    // head 18 + tag + crc
   CHECK(wire[4] == 0);                       // flags byte carries nothing
   CHECK(wire[10] == r.probe_profile);
   CHECK(wire_none[10] == 0xFF);
@@ -483,13 +485,13 @@ TEST(version_mismatch_rejected_both_directions) {
   CHECK(mabur::rc::parse_rcf(body.data(), body.size()).has_value());
 
   // Byte 2 is the version. Any other version must be refused outright —
-  // including 15, the version before the bump to 16.
+  // including 16, the version before the bump to 17.
   auto v_old = body;
-  v_old[2] = 15;
+  v_old[2] = 16;
   CHECK(!mabur::rc::parse_rcf(v_old.data(), v_old.size()).has_value());
 
   auto v_future = body;
-  v_future[2] = 17;
+  v_future[2] = 18;
   CHECK(!mabur::rc::parse_rcf(v_future.data(), v_future.size()).has_value());
 
   // The same guard must hold for telemetry, which travels the opposite
@@ -506,23 +508,26 @@ TEST(version_mismatch_rejected_both_directions) {
   CHECK(!mabur::rc::parse_telem(tv12.data(), tv12.size()).has_value());
 }
 
-TEST(rcf_head_is_seventeen_bytes) {
+TEST(rcf_head_is_eighteen_bytes) {
   mabur::rc::Rcf r; r.seq = 7; r.profile = 0x24;
   r.fec_overhead_base = 0.42; r.fec_overhead_enh = 0.37; r.hop_ch = 149; r.hop_epoch = 3;
   r.rec = 0x05;
   r.idr_epoch = 0xA7;
   r.snr_off = -37;
+  r.cam = 2;
   auto body = mabur::rc::pack_rcf(r);
-  CHECK(body.size() == 17 + mabur::rc::kTagLen + 2);
+  CHECK(body.size() == 18 + mabur::rc::kTagLen + 2);
   CHECK(body[8] == 42); CHECK(body[9] == 37); CHECK(body[10] == mabur::rc::kNoProbeProfile);
   CHECK(body[11] == 149); CHECK(body[12] == 3); CHECK(body[13] == 5);
   CHECK(body[14] == 0xA7);
   CHECK(body[15] == 0xDB); CHECK(body[16] == 0xFF);  // snr_off -37, little-endian
+  CHECK(body[17] == 2);                               // cam: preset 2 requested
   auto back = mabur::rc::parse_rcf(body.data(), body.size());
   REQUIRE(back.has_value());
   CHECK(back->hop_ch == 149); CHECK(back->hop_epoch == 3); CHECK(back->rec == 5);
   CHECK(back->idr_epoch == 0xA7);
   CHECK(back->snr_off == -37);
+  CHECK(back->cam == 2);
 }
 
 // The version check drops a foreign frame with no trace anywhere -- on a
@@ -659,17 +664,31 @@ TEST(cal_result_sentinel_is_minus_128_and_minus_1_is_a_real_wall) {
 TEST(telem_ack_is_the_cal_active_bit_alone) {
   // The anchor never leaves the drone: the calibration ack is flags bit6 and
   // nothing else (dropping the anchor shrank TELEM_LEN by one byte).
-  // TELEM_LEN is 54 at RC_VERSION 16.
+  // TELEM_LEN is 58 at RC_VERSION 17.
   mabur::rc::Telem t;
   t.flags = 0x40;
   auto b = mabur::rc::pack_telem(t);
-  CHECK(b.size() == 54 + 2);  // body + crc16
+  CHECK(b.size() == 58 + 2);  // body + crc16
   auto got = mabur::rc::parse_telem(b.data(), b.size());
   REQUIRE(got.has_value());
   CHECK((got->flags & 0x40) != 0);
 }
 
-TEST(rc_version_is_sixteen) { CHECK(mabur::rc::RC_VERSION == 16); }
+TEST(rc_version_is_seventeen) { CHECK(mabur::rc::RC_VERSION == 17); }
+
+TEST(telem_camera_bytes_round_trip) {
+  mabur::rc::Telem t;
+  t.cam_cur = 1; t.cam_now = 0x03; t.cam_switch = 0x0C; t.cam_state = 6;
+  t.retx_refused = 0xBEEF;  // the field just before them stays where it was
+  auto b = mabur::rc::pack_telem(t);
+  REQUIRE(b.size() == 58 + 2);
+  CHECK(b[54] == 1 && b[55] == 0x03 && b[56] == 0x0C && b[57] == 6);
+  auto got = mabur::rc::parse_telem(b.data(), b.size());
+  REQUIRE(got.has_value());
+  CHECK(got->cam_cur == 1 && got->cam_now == 0x03 && got->cam_switch == 0x0C &&
+        got->cam_state == 6);
+  CHECK(got->retx_refused == 0xBEEF);
+}
 
 TEST(nack_final_layout_round_trip_and_tag) {
   using namespace mabur::rc;

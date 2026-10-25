@@ -130,6 +130,8 @@ class VrxController {
   // Phase lock: maburplay's sensor-rate offset (via RecControl), carried in
   // every RCF. 0 = no steering.
   void set_snr_off(int16_t mfps) { snr_off_ = mfps; }
+  // Camera tab: the preset request every RCF carries (0xFF = none).
+  void set_cam_wish(uint8_t w) { cam_wish_ = w; }
   uint8_t proposal() const { return rz_.proposal(); }
   // Last accepted ack's agreed_channel (0 before any accept). Set BEFORE
   // peer_caps_ so a caller reading both on one tick sees a consistent pair.
@@ -181,6 +183,7 @@ class VrxController {
   uint8_t rec_wish_ = 0;
   uint8_t idr_epoch_ = 0;
   int16_t snr_off_ = 0;
+  uint8_t cam_wish_ = 0xFF;
   bool narrow_ = false;
 };
 

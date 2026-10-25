@@ -62,7 +62,9 @@ constexpr uint16_t RC_MAGIC = 0x5243;  // "RC"
 // replaces the spike's wire; Telem gains nack_rx/retx_syms/retx_refused.
 // Bumped 15 -> 16: RCF gains snr_off (phase lock: the GS's sensor-rate
 // steering offset, level-triggered in every RCF).
-constexpr uint8_t RC_VERSION = 16;
+// Bumped 16 -> 17: RCF gains cam (the GS menu's camera preset request) and
+// Telem gains cam_cur/cam_now/cam_switch/cam_state (mabur/camera_presets.h).
+constexpr uint8_t RC_VERSION = 17;
 
 // RCF probe_profile sentinel: the drone runs no probe stream.
 constexpr uint8_t kNoProbeProfile = 0xFF;
@@ -163,6 +165,12 @@ struct Rcf {
   // trim). Level-triggered in EVERY RCF; the drone clamps it to
   // kSnrOffRangeMfps and keeps the last value through link loss.
   int16_t snr_off = 0;
+
+  // Camera preset request (mabur/camera_presets.h): a preset id, or
+  // cam::kNoWish. Level-triggered in every RCF while the GS holds a request;
+  // the drone acts on a CHANGE to a preset it does not run, and only while
+  // the FC is not armed (a switch reboots the drone).
+  uint8_t cam = 0xFF;
 };
 
 // VRX -> VTX discovery beacon (rendezvous), addressed to a VTX_ID.
@@ -272,6 +280,16 @@ struct Telem {
   // Software NACK, per Telem period, saturating:
   // requests verified, source symbols re-sent, symbols refused by the air bucket.
   uint16_t nack_rx = 0, retx_syms = 0, retx_refused = 0;
+
+  // Camera (mabur/camera_presets.h): the preset this boot runs (cam::kCustom
+  // for another size/fps, cam::kUnknown before the pipeline is up), the
+  // presets the loaded sensor driver offers now (bit = preset id), those a
+  // driver switch would add, and the last request's outcome: cam::State in
+  // the low nibble, the preset it is about in the high one (cam::pack_state).
+  uint8_t cam_cur = 0xFF;
+  uint8_t cam_now = 0;
+  uint8_t cam_switch = 0;
+  uint8_t cam_state = 0;
 };
 
 // One rate's index range for a calibration phase. idx_step 4 is the coarse

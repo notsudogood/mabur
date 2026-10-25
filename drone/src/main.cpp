@@ -49,6 +49,8 @@
 #include "ampdu_policy.h"
 #include "cal_apply.h"
 #include "cal_sweep.h"
+#include "camera_ctl.h"
+#include "camera_switch.h"
 #include "config.h"
 #include "control_tx_mode.h"
 #include "debug_http.h"
@@ -1854,6 +1856,20 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     _exit(3);
   };
   vcb.user = &agent;
+#endif
+  // Camera tab (camera_ctl.h): a switch the last boot wrote is settled on
+  // this one -- committed once video flows, rolled back if it does not.
+  const mabur::CamFiles cam_files(cfg_path);
+  const std::optional<mabur::CamPending> cam_pending = mabur::cam_take_pending(cam_files);
+  const uint8_t cam_boot_state = mabur::cam_take_result(cam_files);
+  if (cam_pending) {
+    const mabur::cam::Preset* p = mabur::cam::preset(cam_pending->preset);
+    std::fprintf(stderr, "camera: booting into %s after a switch%s\n", p ? p->label : "?",
+                 cam_pending->driver_switched ? " (waybeam's IMX415 driver)" : "");
+  } else if (mabur::cam::state_of(cam_boot_state) == mabur::cam::State::RolledBack) {
+    std::fprintf(stderr, "camera: the last switch was rolled back; running the previous mode\n");
+  }
+#ifdef MABUR_HAVE_VENC
   // Cold boot: init starts maburd BEFORE the MI modules exist (S00mabur is
   // the first rcS entry; there is no S38vendor any more) and the loader
   // thread spawned at the top of this function is inserting them under the
@@ -1888,6 +1904,16 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
         &vtx_rec);
   }
   if (venc_core_start(&cfg.venc.core, &vcb) != 0) {
+    if (cam_pending) {
+      // The mode a camera switch asked for did not start (no such sensor
+      // mode in the loaded driver, an encoder refusal): the previous file
+      // back, then a reboot so the sensor driver reloads clean.
+      std::fprintf(stderr, "camera: the switched mode did not start the encoder -- rolling back "
+                           "and rebooting\n");
+      mabur::cam_roll_back(cam_files, *cam_pending);
+      std::fflush(stderr);
+      std::system("reboot");
+    }
     // Boot failure, not a transient: the wrapper's 2 s respawn is the retry.
     // Release the USB device on the way out (same shape as the
     // CreateRadio failure path above) — the radio is not up yet, so
@@ -1900,6 +1926,40 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     return 3;
   }
 #endif
+  // Camera tab: what this boot runs and what the GS menu may ask for.
+  uint8_t cam_now = 0;
+#ifdef MABUR_HAVE_VENC
+  {
+    CameraMode modes[16];
+    const int n = venc_sensor_modes(modes, 16);
+    cam_now = mabur::camera_offered_mask(modes, n);
+    std::string list;
+    for (int i = 0; i < n; ++i)
+      list += (i ? " " : "") + std::to_string(modes[i].w) + "x" + std::to_string(modes[i].h) +
+              "@" + std::to_string(modes[i].max_fps);
+    std::fprintf(stderr, "camera: sensor driver modes [%s]\n", list.c_str());
+  }
+#endif
+  uint8_t cam_switch = 0;
+  {
+    std::string proc_modules;
+    if (FILE* f = std::fopen("/proc/modules", "r")) {
+      char buf[512];
+      while (std::fgets(buf, sizeof(buf), f)) proc_modules += buf;
+      std::fclose(f);
+    }
+    cam_switch = mabur::cam_switch_mask(cam_now, proc_modules,
+                                        ::access(mabur::kStar6eKo, R_OK) == 0);
+  }
+  const uint8_t cam_cur = mabur::cam::preset_of(static_cast<uint16_t>(cfg.venc.core.width),
+                                                static_cast<uint16_t>(cfg.venc.core.height),
+                                                static_cast<uint16_t>(cfg.venc.core.fps));
+  std::fprintf(stderr,
+               "camera: running %ux%u@%u (%s); presets offered 0x%02x, a driver switch adds 0x%02x\n",
+               static_cast<unsigned>(cfg.venc.core.width), static_cast<unsigned>(cfg.venc.core.height),
+               static_cast<unsigned>(cfg.venc.core.fps),
+               mabur::cam::preset(cam_cur) ? mabur::cam::preset(cam_cur)->label : "no preset",
+               cam_now, cam_switch);
   vtx_rec.start_thread();
   // After venc_core_start: RcAgent's first tick (below) already commands a
   // bitrate through the verbs, so the ring/stats the debug endpoint reads
@@ -3142,6 +3202,23 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     bool cal_was_active_for_ladder = false;
     // TxStats::failed as of the last housekeeping tick, for send_telem.
     uint64_t telem_usb_fail = 0;
+    // Camera tab, agent-thread-only: requests decided once per change; a
+    // switched boot settled by kCamCommitFrames inside kCamCommitWindowMs.
+    mabur::CameraSwitch cam_switcher;
+    if (mabur::cam::state_of(cam_boot_state) == mabur::cam::State::RolledBack)
+      cam_switcher.seed_decided(mabur::cam::state_preset(cam_boot_state));
+    uint8_t cam_state = cam_boot_state;
+    bool cam_settled = !cam_pending;
+    bool cam_rebooting = false;
+    auto cam_reboot = [&cam_rebooting]() {
+      cam_rebooting = true;
+      // Late enough for one more Telem to carry the outcome to the GS.
+      std::thread([] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        std::fflush(stderr);
+        std::system("reboot");
+      }).detach();
+    };
     // One T_TELEM frame: the 1 Hz periodic one, and the link-pairing
     // "promote" frame sent right after an RCF promoted a session, before
     // tick() runs its deferred retune.
@@ -3153,6 +3230,10 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
       ti.low_power = agent.low_power();
       ti.auth_reject = agent.take_auth_reject();
       ti.rec_status = vtx_rec.status_byte();
+      ti.cam_cur = cam_cur;
+      ti.cam_now = cam_now;
+      ti.cam_switch = cam_switch;
+      ti.cam_state = cam_state;
       // have_feedback() false means no RCF has EVER been accepted (still
       // BOOT/RENDEZVOUS) — 0 would read as maximally fresh, the opposite of
       // the truth. Pass a value make_telem's saturate<uint16_t> clamps to
@@ -3260,6 +3341,48 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
         agent.tick(now, health);
         if (agent.take_link_established())
           link_up_discont.store(true, std::memory_order_relaxed);
+
+        // Camera tab: settle a switched boot, then decide on the GS's
+        // request (camera_switch.h / camera_ctl.h).
+        if (!cam_settled && !cam_rebooting) {
+          if (enc_frames_total.load(std::memory_order_relaxed) >= mabur::kCamCommitFrames) {
+            mabur::cam_commit(cam_files);
+            cam_settled = true;
+            cam_state = mabur::cam::pack_state(mabur::cam::State::Switched, cam_cur);
+            std::fprintf(stderr, "camera: switch committed, video is flowing\n");
+          } else if (now - start >= mabur::kCamCommitWindowMs) {
+            std::fprintf(stderr, "camera: no video %llu ms after the switch -- rolling back and "
+                                 "rebooting\n",
+                         static_cast<unsigned long long>(mabur::kCamCommitWindowMs));
+            mabur::cam_roll_back(cam_files, *cam_pending);
+            cam_state = mabur::cam::pack_state(mabur::cam::State::RolledBack, cam_pending->preset);
+            cam_reboot();
+          }
+        }
+        if (cam_settled && !cam_rebooting) {
+          const mabur::CamDecision cd = cam_switcher.on_wish(
+              agent.cam_wish(), cam_cur, cam_now, cam_switch, agent.arm_view(now));
+          const mabur::cam::Preset* want = mabur::cam::preset(agent.cam_wish());
+          if (cd.action == mabur::CamAction::Refuse) {
+            cam_state = mabur::cam::pack_state(cd.refused, want ? want->id : mabur::cam::kNoPreset);
+            std::fprintf(stderr, "camera: request for %s refused (%s)\n",
+                         want ? want->label : "an unknown preset",
+                         mabur::cam::state_name(cd.refused));
+          } else if (cd.action == mabur::CamAction::Apply && want) {
+            std::string err;
+            const mabur::cam::State st =
+                mabur::cam_apply(cam_files, cfg, *want, cd.driver_switch, &err);
+            cam_state = mabur::cam::pack_state(st, want->id);
+            if (st == mabur::cam::State::Applying) {
+              std::fprintf(stderr, "camera: switching to %s%s -- rebooting\n", want->label,
+                           cd.driver_switch ? " with waybeam's IMX415 driver" : "");
+              cam_reboot();
+            } else {
+              std::fprintf(stderr, "camera: request for %s refused: %s\n", want->label,
+                           err.c_str());
+            }
+          }
+        }
 
         // Watchdog: after an initial grace period, a heartbeat going stale for
         // > stale_ms means the corresponding loop is wedged — EXCEPT rx_beat,

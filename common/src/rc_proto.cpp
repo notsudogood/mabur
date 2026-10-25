@@ -65,10 +65,10 @@ void put_tag(std::vector<uint8_t>& body, const LinkKey& key, const TagCtx& ctx) 
   put64(body, siphash24(key, m.data(), m.size()));
 }
 
-constexpr size_t RCF_HEAD_LEN = 17;  // RC_VERSION 16: +snr_off (15)
+constexpr size_t RCF_HEAD_LEN = 18;  // RC_VERSION 17: +cam (17)
 constexpr size_t DISC_LEN = 17;
 constexpr size_t DISC_ACK_LEN = 20;  // RC_VERSION 14: vtx_nonce(4) + flags(1) added (15)
-constexpr size_t TELEM_LEN = 54;  // RC_VERSION 15: +nack_rx/retx_syms/retx_refused (48)
+constexpr size_t TELEM_LEN = 58;  // RC_VERSION 17: +cam_cur/cam_now/cam_switch/cam_state (54)
 
 // magic(2) | ver | type | flags | nonce(4) | phase | fpc(2) |
 // settle(2) | gap(2) | n_windows(1) | n * 4 bytes
@@ -105,6 +105,7 @@ std::vector<uint8_t> pack_rcf(const Rcf& r, const LinkKey& key, const TagCtx& ct
   body.push_back(r.rec);
   body.push_back(r.idr_epoch);
   put16(body, static_cast<uint16_t>(r.snr_off));
+  body.push_back(r.cam);
   put_tag(body, key, ctx);
   put_crc(body);
   return body;
@@ -127,6 +128,7 @@ std::optional<Rcf> parse_rcf(const uint8_t* buf, size_t len) {
   r.rec = buf[13];
   r.idr_epoch = buf[14];
   r.snr_off = static_cast<int16_t>(get16(buf, 15));
+  r.cam = buf[17];
   return r;
 }
 
@@ -329,6 +331,10 @@ std::vector<uint8_t> pack_telem(const Telem& t) {
   put16(body, t.nack_rx);
   put16(body, t.retx_syms);
   put16(body, t.retx_refused);
+  body.push_back(t.cam_cur);
+  body.push_back(t.cam_now);
+  body.push_back(t.cam_switch);
+  body.push_back(t.cam_state);
 
   put_crc(body);
   return body;
@@ -366,10 +372,14 @@ std::optional<Telem> parse_telem(const uint8_t* buf, size_t len) {
   t.rx_foreign = get16(buf, 43);
   t.rx_crcfail = get16(buf, 45);
   t.rec_status = buf[47];
-  const size_t o = TELEM_LEN - 6;
+  const size_t o = TELEM_LEN - 10;
   t.nack_rx = get16(buf, o);
   t.retx_syms = get16(buf, o + 2);
   t.retx_refused = get16(buf, o + 4);
+  t.cam_cur = buf[TELEM_LEN - 4];
+  t.cam_now = buf[TELEM_LEN - 3];
+  t.cam_switch = buf[TELEM_LEN - 2];
+  t.cam_state = buf[TELEM_LEN - 1];
   return t;
 }
 

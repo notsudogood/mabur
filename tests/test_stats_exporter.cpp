@@ -4,6 +4,7 @@
 #include <vector>
 #include "au_ring.h"
 #include "json.hpp"
+#include "mabur/camera_presets.h"
 #include "mabur/profile.h"
 #include "mtest.h"
 #include "stats_exporter.h"
@@ -1374,4 +1375,28 @@ TEST(video_exports_slice_salvage_counters) {
   CHECK(v["slice_fallback"]["no_params"] == 0);
 }
 
+// The Camera tab's keys: drone.camera from the Telem tail, camera_request
+// from maburgs' own pending request (null when none).
+TEST(camera_keys_exported) {
+  Capture cap;
+  StatsExporter ex(1, 500, cap.fn());
+  StatsInput in = base_input();
+  ex.poll(1000, in);
+  json j = cap.last();
+  CHECK(j["camera_request"]["wish"].is_null() && j["camera_request"]["last"].is_null());
+  CHECK(j["camera_request"]["result"] == "");
+  mabur::rc::Telem t;
+  t.tlm_seq = 1; t.state = 2;
+  t.cam_cur = 0; t.cam_now = 0x03; t.cam_switch = 0x0C;
+  t.cam_state = mabur::cam::pack_state(mabur::cam::State::RolledBack, 2);
+  in.telem = t; in.telem_rx_ms = 1400;
+  in.cam_wish = 1; in.cam_last = 2; in.cam_result = "sent";
+  ex.poll(1500, in);
+  j = cap.last();
+  CHECK(j["drone"]["camera"]["cur"] == 0 && j["drone"]["camera"]["now"] == 3);
+  CHECK(j["drone"]["camera"]["switch"] == 12);
+  CHECK(j["drone"]["camera"]["state"] == "rolled_back" && j["drone"]["camera"]["about"] == 2);
+  CHECK(j["camera_request"]["wish"] == 1 && j["camera_request"]["last"] == 2);
+  CHECK(j["camera_request"]["result"] == "sent");
+}
 MTEST_MAIN

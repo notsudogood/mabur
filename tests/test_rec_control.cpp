@@ -1,3 +1,6 @@
+#include <string>
+#include <vector>
+#include "camera_request.h"
 #include "mtest.h"
 #include "rec_control.h"
 #include "mabur/rc_proto.h"
@@ -71,4 +74,67 @@ TEST(rec_control_phase_rejects_bad_values) {
   CHECK(c.phase_rejects() == 4);
 }
 
+// "camera <id>": queued for take_camera(), never a VTX record change; ids
+// outside the preset table and junk are dropped.
+TEST(rec_control_camera_lines) {
+  RecControl c;
+  CHECK(!c.apply("camera 2"));
+  CHECK(!c.apply("camera 0\n"));
+  CHECK(!c.apply("camera 9"));
+  CHECK(!c.apply("camera -1"));
+  CHECK(!c.apply("camera x"));
+  CHECK(!c.apply("camera "));
+  const std::vector<uint8_t> got = c.take_camera();
+  REQUIRE(got.size() == 2);
+  CHECK(got[0] == 2 && got[1] == 0);
+  CHECK(c.take_camera().empty());
+  CHECK(c.wire() == 0);
+}
+
+namespace cam = mabur::cam;
+using maburgs::CameraRequest;
+
+TEST(camera_request_held_until_switched) {
+  CameraRequest r;
+  CHECK(r.wire(0) == cam::kNoWish && std::string(r.result()).empty());
+  r.request(1, 1000);
+  CHECK(r.wire(1000) == 1 && std::string(r.result()) == "sent");
+  r.on_telem(0, cam::pack_state(cam::State::Applying, 1), 1500);
+  CHECK(std::string(r.result()) == "applying" && r.wire(1500) == 1);   // still held
+  r.on_telem(1, cam::pack_state(cam::State::Switched, 1), 40000);
+  CHECK(std::string(r.result()) == "switched" && r.wire(40000) == cam::kNoWish);
+  CHECK(r.last() == 1);
+}
+
+TEST(camera_request_refusals_after_the_grace_only) {
+  CameraRequest r;
+  r.request(2, 1000);
+  // An "armed" about preset 2 inside the grace may answer an older request.
+  r.on_telem(0, cam::pack_state(cam::State::NoArmState, 2), 1000 + CameraRequest::kGraceMs - 1);
+  CHECK(r.wish() == 2);
+  r.on_telem(0, cam::pack_state(cam::State::NoArmState, 2), 1000 + CameraRequest::kGraceMs);
+  CHECK(r.wish() == cam::kNoWish && std::string(r.result()) == "armed" && r.last() == 2);
+  // An outcome about another preset never settles this one.
+  r.request(3, 5000);
+  r.on_telem(0, cam::pack_state(cam::State::Unavailable, 2), 9000);
+  CHECK(r.wish() == 3 && std::string(r.result()) == "sent");
+  r.on_telem(0, cam::pack_state(cam::State::RolledBack, 3), 90000);
+  CHECK(std::string(r.result()) == "rolled_back");
+}
+
+TEST(camera_request_clock_behind_the_request_settles_nothing) {
+  CameraRequest r;
+  r.request(2, 50000);
+  r.on_telem(0, cam::pack_state(cam::State::NoArmState, 2), 10000);   // older stamp
+  CHECK(r.wish() == 2);
+  CHECK(r.wire(10000) == 2);
+}
+
+TEST(camera_request_times_out) {
+  CameraRequest r;
+  r.request(1, 0);
+  CHECK(r.wire(CameraRequest::kTimeoutMs) == 1);
+  CHECK(r.wire(CameraRequest::kTimeoutMs + 1) == cam::kNoWish);
+  CHECK(std::string(r.result()) == "timeout" && r.last() == 1);
+}
 MTEST_MAIN

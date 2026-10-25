@@ -309,6 +309,25 @@ fields once per `drone.tlm_seq` (`flightreport.py` does).
   dead-antenna check); all `null` while the drone has heard no RC frame.
 - `sys.{soc_temp_c, cpu_pct}` (`cpu_pct` null on the first tick after a
   maburd start).
+- `camera = {cur, now, switch, state, about}` — the GS menu's Camera tab
+  (`docs/gs-menu.md`, presets in `common/include/mabur/camera_presets.h`).
+  `cur`: the preset this boot runs (0 1080p 60, 1 1080p 90, 2 720p 100,
+  3 544p 120; 254 = a size/fps that is no preset, 255 = not reported).
+  `now`: bitmask of the presets the loaded sensor driver offers; `switch`:
+  those a switch to waybeam's IMX415 driver would add. `state`: the outcome
+  of the last request (`idle`, `applying`, `armed` = refused while armed or
+  with a stale arm report, `unavailable`, `bad_config`, `rolled_back`,
+  `switched`), `about`: the preset it is about (15 = none).
+
+Top-level `camera_request = {wish, last, result}` is maburgs' own side of
+the same request (`gs/src/camera_request.h`): the preset it is asking for
+in every RCF (`null` = none), the preset the last settled request was for,
+and that request's result (`""`, `sent`, `applying`, then `switched`,
+`armed`, `unavailable`, `bad_config`, `rolled_back` or `timeout` after
+120 s). maburgs logs `camera request from the player: <preset>` and `camera request: <result>`; maburd logs
+`camera:` lines (driver modes at boot, the running preset, every decision,
+commit and rollback); maburplay logs `menu camera preset N requested` and
+`camera request: <result>`.
 
 ## Debug-log session directory
 

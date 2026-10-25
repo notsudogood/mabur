@@ -22,6 +22,7 @@
 #include "venc_core_internal.h"
 #include "venc_frame_ring.h"
 #include "venc_jpeg.h"
+#include "sensor_select.h"
 
 #include <dirent.h>
 #include <pthread.h>
@@ -472,6 +473,11 @@ int venc_set_superframe_p_pct(int pct)
 }
 
 /* ── Signals ──────────────────────────────────────────────────────────── */
+
+int venc_sensor_modes(CameraMode *out, int max)
+{
+	return sensor_select_offered_modes(out, max);
+}
 
 uint64_t venc_cur_pts_us(void)
 {

@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "mabur/camera_presets.h"
 #include "mabur/rc_proto.h"
 
 namespace maburgs {
@@ -26,7 +27,8 @@ constexpr int kRecControlPort = 8401;
 // frame; reasons are RefreshRequester's names, unknown ones are ignored),
 // "phase <mfps>" (the phase lock's sensor-rate offset, held for
 // kPhaseTimeoutMs: a silent player means no steering, unlike the record
-// wish). The wish is HELD until the next command -- no decay: a crashed player
+// wish), "camera <id>" (the menu's Camera tab: one preset request, handed to
+// CameraRequest via take_camera()). The wish is HELD until the next command -- no decay: a crashed player
 // must never stop the onboard recording by silence. It starts UNKNOWN
 // (wire byte 0), so a maburgs restart does not stop it either; the player
 // re-sends its wish every second. Non-blocking; polled from the core loop.
@@ -106,6 +108,17 @@ class RecControl {
       have_phase_ = true;
       return false;
     }
+    static const std::string kCamera = "camera ";
+    if (s.size() > kCamera.size() && s.compare(0, kCamera.size(), kCamera) == 0) {
+      const std::string v = s.substr(kCamera.size());
+      char* end = nullptr;
+      errno = 0;
+      const long id = std::strtol(v.c_str(), &end, 10);
+      if (errno == 0 && end != v.c_str() && *end == '\0' && id >= 0 &&
+          id < static_cast<long>(mabur::cam::kNumPresets))
+        camera_.push_back(static_cast<uint8_t>(id));
+      return false;
+    }
     bool on;
     if (s == "vtx_rec on") on = true;
     else if (s == "vtx_rec off") on = false;
@@ -114,6 +127,13 @@ class RecControl {
     known_ = true;
     on_ = on;
     return changed;
+  }
+
+  // Camera preset requests received since the last call, in arrival order.
+  std::vector<uint8_t> take_camera() {
+    std::vector<uint8_t> out;
+    out.swap(camera_);
+    return out;
   }
 
   // Refresh reasons received since the last call, in arrival order.
@@ -142,6 +162,7 @@ class RecControl {
   bool known_ = false;
   bool on_ = false;
   std::vector<std::string> refresh_;
+  std::vector<uint8_t> camera_;
   int16_t phase_ = 0;
   uint64_t phase_ms_ = 0;
   bool have_phase_ = false;

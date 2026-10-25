@@ -1265,3 +1265,13 @@ The GS bundle sets `[link.nack] enable = true`, so sideport `link.nack` and
 the `retx` accounting class are populated from boot on these recordings
 rather than only on a GS overlaid by hand. A recording that does open with a
 low-power segment came from a drone config with the mode turned back on.
+
+## 2026-10-25 — camera tab: RC_VERSION 17
+
+RCF head 17 → 18 bytes (`Rcf::cam`, the GS menu's camera preset request,
+0xFF = none), Telem 54 → 58 bytes (`cam_cur`, `cam_now`, `cam_switch`,
+`cam_state`). New sideport keys `drone.camera` and top-level
+`camera_request` (`docs/observability.md`). A drone and GS on either side of
+this change do not link. A recording can now change `venc` size and frame
+rate between two boots of the same flight day: read the `camera:` lines in
+maburd's log before comparing fps or bitrate across sessions.

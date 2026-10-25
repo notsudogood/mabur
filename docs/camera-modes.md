@@ -7,11 +7,13 @@ show it smoothly.
 
 ## The driver
 
-The drone image loads waybeam_venc's star6e IMX415 driver,
+Gilang's drone image loads waybeam_venc's star6e IMX415 driver,
 `sensor_imx415_star6e.ko` (from `../waybeam_venc/sensors/star6e/`, waybeam
-0c880d8), not OpenIPC's stock `sensor_imx415_mipi.ko`: `openipc-builder`'s
-`load_sigmastar` insmods it for `imx415`, and the stock module is left out
-of the image. It enumerates five modes:
+0c880d8), instead of OpenIPC's stock `sensor_imx415_mipi.ko`. This branch's
+image (notsudogood/openipc-builder) ships both and loads the stock one
+unless `/etc/sensor_star6e` exists; maburd writes that file when the GS
+menu's Camera tab asks for a preset only waybeam's driver has (see "Camera
+tab" below). The waybeam driver enumerates five modes:
 
 | idx | mode | readout | sensor window | share of the view (w × h) | aspect |
 |---|---|---|---|---|---|
@@ -115,3 +117,43 @@ Details: `docs/colortrans.md` ("Known limitations").
 - The H.265 engine runs one encode at a time and the live 1728x972@100
   encode alone is past its rated rate, so a recording adds encode time to
   the live link.
+
+## Camera tab (GS menu)
+
+The goggles' menu offers four presets (`common/include/mabur/camera_presets.h`):
+
+| Preset | venc | Sensor mode | View | Driver |
+|---|---|---|---|---|
+| 1080p 60 | 1920x1080 @ 60 | 1920x1080 binned | full | either |
+| 1080p 90 | 1920x1080 @ 90 | 1920x1080 binned | full | either |
+| 720p 100 | 1280x720 @ 100 | 1728x972 binned crop | 1.1x zoom | waybeam's |
+| 544p 120 | 1152x544 @ 120 | 1728x816 binned crop | wide crop (2.12:1) | waybeam's |
+
+Encoder load against its rated macroblock rate: 1080p 60 ~117 %, 1080p 90
+~176 % (never benched), 720p 100 86 % (its 1728x972 capture held 100 fps
+at 158 % on the bench), 544p 120 ~71 % (not run). 1440p is not offered: the
+IMX415's 1440-class modes are crops (~1.4x zoom), and 2560x1440 @ 60 would
+ask the encoder for ~2x its rated rate.
+
+A switch is a reboot: the encoder stays claimed until then. maburd
+(`drone/src/camera_switch.h`, `camera_ctl.h`):
+
+1. refuses while the FC reports armed, or while a reporting FC has gone
+   quiet (`armed`); with no FC connected it cannot tell and allows it;
+2. refuses a preset neither driver has (`unavailable`), or one the rest of
+   `mabur.toml` does not load with (`bad_config`);
+3. writes the new file as `/etc/mabur.toml.cam-new`, checks it loads, keeps
+   the running one as `.cam-prev`, writes `.cam-pending` (and
+   `/etc/sensor_star6e` if the driver must change), renames the new file
+   into place and reboots 1.5 s later. `venc.slices` moves to the nearest
+   legal count for the new height (544 lines: 1, 2, 3, 5 or 9), and
+   `record.size` follows the new picture's shape when it differs;
+4. on the next boot, keeps the switch once 100 frames encode inside 25 s;
+   otherwise (or when the encoder does not start) puts `.cam-prev` back,
+   removes the driver flag it set, and reboots again (`rolled_back`).
+
+`load_sigmastar` falls back to the stock driver (and deletes the flag) when
+waybeam's will not load, so a bad driver ends in a rollback, not a boot
+loop. Once a switch has loaded waybeam's driver it stays loaded for every
+preset (it has all four modes); delete `/etc/sensor_star6e` and reboot to
+go back to stock.

@@ -6,6 +6,7 @@
 
 #include "au_ring.h"
 #include "json.hpp"
+#include "mabur/camera_presets.h"
 #include "mabur/profile.h"
 #include "snr_units.h"
 
@@ -585,6 +586,15 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
   scan["rounds"] = in.scan_rounds;
   if (in.scan_pick) scan["pick"] = *in.scan_pick; else scan["pick"] = nullptr;
 
+  // Camera tab: the preset request maburgs holds (CameraRequest), top-level
+  // like `scan`: it is the GS's own state, present before any Telem.
+  // `wish` null = none pending; `last` the preset the last settled request
+  // was for; `result` "", "sent", "applying" or the settled outcome.
+  json& camreq = j["camera_request"];
+  camreq["wish"] = in.cam_wish == 0xFF ? json(nullptr) : json(in.cam_wish);
+  camreq["last"] = in.cam_last == 0xFF ? json(nullptr) : json(in.cam_last);
+  camreq["result"] = in.cam_result ? in.cam_result : "";
+
   // In-flight channel hop snapshot,
   // top-level like `scan`: it describes the hop feature's own state
   // machine, not a per-window link measurement.
@@ -681,6 +691,15 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     // verified, source symbols re-sent and symbols refused by the air
     // bucket -- per Telem period (not cumulative), straight from Telem.
     d["nack"] = {{"rx", t.nack_rx}, {"retx_syms", t.retx_syms}, {"retx_refused", t.retx_refused}};
+    // Camera tab (mabur/camera_presets.h): the preset this boot runs (254
+    // custom, 255 unknown), the presets on offer now and after a driver
+    // switch (bit = preset id), and the drone's last outcome with the preset
+    // it is about (15 = none).
+    d["camera"] = {{"cur", t.cam_cur},
+                   {"now", t.cam_now},
+                   {"switch", t.cam_switch},
+                   {"state", mabur::cam::state_name(mabur::cam::state_of(t.cam_state))},
+                   {"about", mabur::cam::state_preset(t.cam_state)}};
     json& rcf = d["rcf"];
     rcf["age_ms"] = t.rcf_age_ms;
     rcf["rx_pps"] = have_telem_rates_ ? json(telem_rcf_rx_pps_) : json(nullptr);

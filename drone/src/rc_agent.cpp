@@ -172,6 +172,14 @@ void RcAgent::note_chain_break() {
   chain_break_pending_.store(true, std::memory_order_relaxed);
 }
 
+ArmView RcAgent::arm_view(uint64_t now_ms) const {
+  if (!cfg_.msp.enable || !arm_reported_) return ArmView::NoFc;
+  const bool fresh = now_ms < last_arm_ms_ ||
+                     now_ms - last_arm_ms_ <= static_cast<uint64_t>(cfg_.low_power.stale_ms);
+  if (!fresh) return ArmView::Stale;
+  return last_armed_ ? ArmView::Armed : ArmView::Disarmed;
+}
+
 void RcAgent::note_arm_state(bool armed, uint64_t now_ms) {
   arm_report_.store(((now_ms + 1) << 1) | (armed ? 1u : 0u), std::memory_order_relaxed);
 }
@@ -752,6 +760,10 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
       snr_off_sent_ = r->snr_off;
     }
 
+    // Camera preset request: level-triggered, decided on the agent thread's
+    // tick by CameraSwitch (main.cpp), which acts once per change.
+    cam_wish_ = r->cam;
+
     // GS-requested IDR: a CHANGED epoch is a request.
     // Marked seen on receipt -- pending stays set until tick() serves it, so
     // any number of bumps collapse into one IDR. No silent adopt of the
@@ -877,6 +889,7 @@ void RcAgent::tick(uint64_t now_ms, const RadioHealth& health) {
     if (have_last_fb_ && now_ms - last_fb_ms_ >= static_cast<uint64_t>(cfg_.link.failsafe_ms)) {
       apply_max_range(now_ms);
       state_ = State::FAILSAFE;
+      cam_wish_ = 0xFF;  // a camera request needs a live GS behind it
       // Failsafe entry clears both sessions: a kept
       // pair would leave every RCF the GS sent during the fade replayable
       // for the life of the process. Recovery: the GS's next keep-alive

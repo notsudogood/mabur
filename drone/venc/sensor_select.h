@@ -107,6 +107,10 @@ int sensor_mode_score(const MI_SNR_Res_t *mode,
 uint64_t sensor_mode_cost(const MI_SNR_Res_t *mode,
 	uint32_t target_w, uint32_t target_h, uint32_t target_fps);
 
+/* Every mode the last selection enumerated (output size + maxFps), in the
+ * driver's order: up to `max` into `out`, returns how many. */
+int sensor_select_offered_modes(CameraMode *out, int max);
+
 #ifdef __cplusplus
 }
 #endif

@@ -27,6 +27,7 @@
 #include "au_log.h"
 #include "au_ring.h"
 #include "body_queue.h"
+#include "camera_request.h"
 #include "cal_control.h"
 #include "rec_control.h"
 #include "cal_log.h"
@@ -391,6 +392,9 @@ static int run_radio(const maburgs::Config& cfg) {
   // VTX onboard recorder wish from maburplay (rec_control.h). Loopback
   // only; a failure just means the drone never gets a known wish.
   maburgs::RecControl rec_ctl;
+  // Camera tab: the player's preset request, carried in every RCF until the
+  // drone's Telem settles it (camera_request.h).
+  maburgs::CameraRequest cam_req;
   if (!rec_ctl.open(maburgs::kRecControlPort))
     std::fprintf(stderr,
                  "warning: record control port %d unusable; the VTX recorder "
@@ -1026,6 +1030,12 @@ static int run_radio(const maburgs::Config& cfg) {
         rtt_est.on_telem(t->rcf_seq_echo, (t->flags & 0x08) != 0,
                          t->rcf_age_ms, t->pts_at_build, us);
         uplink.on_telem(t->tlm_seq, t->rcf_rx, t->state, us / 1000);
+        {
+          const char* before = cam_req.result();
+          cam_req.on_telem(t->cam_cur, t->cam_state, us / 1000);
+          if (cam_req.result() != before)
+            std::fprintf(stderr, "maburgs: camera request: %s\n", cam_req.result());
+        }
         // Calibration ack (Telem flags bit6 cal_active) -- the only
         // acknowledgment signal the wire carries for a T_CAL_CMD. Telem has
         // no nonce field, so cal_pending_nonce (stashed from the CalCmd the
@@ -1387,6 +1397,17 @@ static int run_radio(const maburgs::Config& cfg) {
     const auto cal_state_before_poll = cal_session.state();
     cal_ctl.poll(cal_session);
     rec_ctl.poll(drained_ms);
+    for (const uint8_t id : rec_ctl.take_camera()) {
+      cam_req.request(id, drained_ms);
+      const mabur::cam::Preset* p = mabur::cam::preset(id);
+      std::fprintf(stderr, "maburgs: camera request from the player: %s\n", p ? p->label : "?");
+    }
+    {
+      const char* before = cam_req.result();
+      vrx.set_cam_wish(cam_req.wire(drained_ms));
+      if (cam_req.result() != before)
+        std::fprintf(stderr, "maburgs: camera request: %s\n", cam_req.result());
+    }
     vrx.set_rec_wish(rec_ctl.wire());
     vrx.set_snr_off(rec_ctl.snr_off(drained_ms));
     for (const std::string& r : rec_ctl.take_refresh()) {
@@ -1906,6 +1927,9 @@ static int run_radio(const maburgs::Config& cfg) {
       sin.q_drop = queue.dropped();
       sin.telem = latest_telem.t;
       sin.telem_rx_ms = latest_telem.rx_ms;
+      sin.cam_wish = cam_req.wish();
+      sin.cam_last = cam_req.last();
+      sin.cam_result = cam_req.result();
       sin.rcf_slot = {rcf_slot.released_au(), rcf_slot.released_timeout(),
                       rcf_slot.passthru(), rcf_slot.released_probe(),
                       rcf_slot.tail_ub_ms()};

@@ -53,9 +53,10 @@ def tag(key: bytes, body: bytes, vrx: int, vtx: int, seq32: int) -> bytes:
     return struct.pack("<Q", siphash24(key, body + struct.pack("<III", vrx, vtx, seq32)))
 
 def pack_rcf(seq, profile, ovb_x100, ove_x100, probe=0xFF, hop_ch=0, hop_epoch=0, rec=0, idr_epoch=0,
-             snr_off=0, *, vrx=1, vtx=1, seq32=None, key=DEFAULT_KEY) -> bytes:
-    body = struct.pack("<HBBBHBBBBBBBBh", RC_MAGIC, RC_VERSION, T_RCF, 0, seq & 0xFFFF, profile,
-                       ovb_x100, ove_x100, probe, hop_ch, hop_epoch, rec, idr_epoch, snr_off)
+             snr_off=0, cam=0xFF, *, vrx=1, vtx=1, seq32=None, key=DEFAULT_KEY) -> bytes:
+    # cam (RC_VERSION 17): the Camera tab's preset request, 0xFF = none.
+    body = struct.pack("<HBBBHBBBBBBBBhB", RC_MAGIC, RC_VERSION, T_RCF, 0, seq & 0xFFFF, profile,
+                       ovb_x100, ove_x100, probe, hop_ch, hop_epoch, rec, idr_epoch, snr_off, cam)
     body += tag(key, body, vrx, vtx, seq if seq32 is None else seq32)
     return body + struct.pack("<H", crc16_ccitt(body))
 

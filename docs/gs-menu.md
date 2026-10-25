@@ -32,5 +32,27 @@ explicit value. At startup each line logs
 accepted press logs `maburplay: menu key <name>`.
 
 Limits: the box clears what is under it, and a flight-controller OSD cell
-there comes back only when it next changes. Resolution, frame rate,
-Spectrum and the rest of the v5 mock-up are not in this cut.
+there comes back only when it next changes. Spectrum and the rest of the
+v5 mock-up are not in this cut.
+
+## Camera tab
+
+The third tab lists the camera presets (`docs/camera-modes.md`, "Camera
+tab"): 1080p 60, 1080p 90, 720p 100, 544p 120. Each cell's second line says
+what it costs (`full view`, `1.1x zoom`, `wide crop`), or `new driver` when
+the drone must load waybeam's IMX415 driver for it, or `not here` (dimmed)
+when this drone's image has no mode for it. The grey cell is the preset the
+drone runs; Centre on another puts the green dot on it (Centre again clears
+it). Apply sends `camera <id>` to maburgs, which asks the drone in every
+RCF until the drone's telemetry answers.
+
+The drone then reboots into the new mode: about 30 s without video. It
+refuses while the FC reports armed. The status line shows the outcome:
+`Camera: switched`, `refused while armed - disarm first`, `no video in that
+mode - back on the old one`, `no answer from the drone` (after 2 min), and
+so on. Apply with both a link setting and a camera preset changed does
+both: maburgs restarts for the link setting, then the drone switches.
+
+The cells are filled from the stats sideport (`drone.camera`), so they read
+`not here` everywhere until the link is up, or with a drone image from
+before RC_VERSION 17 (which will not link anyway).

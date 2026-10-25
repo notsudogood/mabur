@@ -17,6 +17,17 @@ erased), so the kernel panicked mounting root and `panic=20` rebooted it every
 24 s. Rewritten from U-Boot over TFTP with d13's uImage + rootfs, both read
 back byte-identical; d16's maburd, S00mabur and mabur.toml copied in by hand.
 
+**173 with `radio.spur_ext` (2026-10-25, operator's report, logs not yet
+read).** Both ends pinned to 173, low power off, ~3 min per run: run 1
+(spur_ext off, 40 MHz max) stalled at the step to 40 as before; run 2
+(spur_ext on at both ends, 40 MHz max) held 40; run 3 (on, 80 allowed)
+reached 80 and held it, but only after several aborted climbs with large
+momentary latency spikes. Counterpart: one run per setting on one drone; the
+80 MHz case has no notch for the 5880 MHz spike (only the vendor's 5840 one),
+and every width switch on a spur channel takes the slow full channel set, so
+run 3's aborts are not yet attributed to either. spur_ext stays off by
+default until a flight on 173 confirms run 2.
+
 **d15 + gs14 (built 2026-10-24): fresh configs and new defaults.** None of it flown yet.
 
 | Change | Default | Evidence / counterpart |

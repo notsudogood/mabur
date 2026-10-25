@@ -3,6 +3,18 @@
 What the operator has agreed goes into the next GS (and drone) build, in
 order. Each item names its evidence. Remove an item when it ships.
 
+**Queued for the build after gs15 + d16 (agreed 2026-10-25).**
+
+| Change | Why | Counterpart |
+|---|---|---|
+| Merge Gilang's master (4c94bc2): phase lock pauses when the drone's frame rate does not suit the panel (fps100), player release threads, uplink delivery on the OSD, burned-OSD recorder rework | drone 1 on gs15/d16, bench: `lock=oor` while low power held the camera at 30 fps (FC connected, disarmed). Ours is tuned for 60 fps, gives up after 60 s acquiring and waits 60 s, so after arming it can take up to ~1 min to lock | the trial merge conflicts in 7 files (player main.cpp, player_config.cpp, test_player_config.cpp, observability.md, the GS bundle, test_gs_config.cpp, test_web_gs.cpp); his release threads are new to our player and unflown here |
+
+Drone 1 is back (2026-10-25): its d14 sysupgrade had stopped partway through
+the rootfs (the squashfs header was written, the tail at 0x815d40 was still
+erased), so the kernel panicked mounting root and `panic=20` rebooted it every
+24 s. Rewritten from U-Boot over TFTP with d13's uImage + rootfs, both read
+back byte-identical; d16's maburd, S00mabur and mabur.toml copied in by hand.
+
 **d15 + gs14 (built 2026-10-24): fresh configs and new defaults.** None of it flown yet.
 
 | Change | Default | Evidence / counterpart |

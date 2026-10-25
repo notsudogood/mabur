@@ -37,8 +37,10 @@ slot. The evidence is `docs/findings/2026-10-17-phase-lock-spike.md` and
    in every RCF; after 3 s without a `phase` line it sends 0.
 4. **The drone applies.** `RcAgent` hands each new `snr_off` to venc. The
    encoder thread sets the sensor to the trim request plus the offset,
-   clamped to ±200 mfps, once the boot trim has locked (or given up): one
-   sensor writer. 0 restores the trim's own request. Link loss keeps the
+   clamped to ±200 mfps and never above the sensor mode's ceiling (maxFps
+   × 1000: a mode whose maximum is its nominal rate, like 1728x972@100,
+   has the driver refuse anything faster), once the boot trim has locked
+   (or given up): one sensor writer. 0 restores the trim's own request. Link loss keeps the
    last value. A refused value is not retried until another request succeeds.
 
 ## States
@@ -53,6 +55,27 @@ slot. The evidence is `docs/findings/2026-10-17-phase-lock-spike.md` and
 lock → acq after 2 windows with \|e\| > 3 ms or incoherent. oor → wait
 after 60 s. An unreachable panel (50 Hz, 59 Hz) never produces a coherent
 window and ends in oor.
+
+## Rate mismatch
+
+The player measures the drone's frame rate (median pts step over 1 s,
+`SourceRate`) and compares it with the panel's refresh (`RateMatch`,
+`gs/player/src/rate_match.h`). More than 0.25 Hz apart (the steer reaches
+±0.2 fps) for 3 consecutive seconds is a mismatch: a drone `venc.fps` that
+does not match `screen_mode`, or a display that fell back to another mode
+because the sink does not offer the requested one. While it lasts the lock
+is held in wait and sends nothing (maburgs' RCF `snr_off` falls to 0 after
+its 3 s timeout, so the drone runs on its trim), capture-time placement is
+off, the OSD fps cell reads `src/panel` in caution, and the player logs
+`maburplay: rate mismatch: source X Hz, panel Y Hz -- phase lock paused`
+(and `... cleared` once 3 matched seconds follow). A drone reporting
+low-power is never a mismatch: its rate is low on purpose. The check runs
+whether or not the GS OSD is up; the low-power flag comes from its sideport
+reader and counts only while fresh. With the reader up but the sideport
+quiet the check holds its last decision; with no reader at all the drone is
+taken as armed. A pair close enough to call a match that the lock still
+gives up on (out of range: the steer cannot reach the panel, e.g. a mode
+whose ceiling sits just under it) tints the OSD fps cell caution too.
 
 A sensor that refuses every `SetFps` (or a drone build with no venc
 steering at all) never moves, so the centre walks to the range limit
@@ -80,13 +103,14 @@ goes in before its config -- an older binary exits on the new
 `maburplay.toml` `[display]`: `phase_lock` (code false, bundle true),
 `phase_margin_ms` (code and bundle 4, range 1-10), `sched_cap_ms` (bundle
 16; with the lock on, capture placement runs only while locked).
-`vsync_lead_ms` (bundle 5) is the release's lead before the vblank, and
-`rec_vsync_lead_ms` (code and bundle 8, range 1-10) replaces it while a
-burned recording runs: the recorder's fragment writes leave the main loop
-waking 3-6 ms late a few times a minute, which the 5 ms lead cannot absorb.
-The lock re-steers the sensor to the moved release over the following
-seconds, so a recording costs +3 ms of glass latency while it runs and
-nothing after (`docs/findings/2026-10-19-burned-dvr-live-repeat.md`).
+`vsync_lead_ms` (code and bundle 5) is the release's lead before the
+vblank, the only one -- recording runs under the same lead as live view.
+It covers the release thread's wake lateness (`reg.log` `rlate=`), the
+present() path and the kernel's latch deadline. `rt_priority` (code and
+bundle 10, range 0-50) is the release thread's `SCHED_FIFO` priority; 0
+runs it at ordinary priority. A refused request (the process lacks
+`CAP_SYS_NICE`) is logged once and the thread runs at ordinary priority
+(`rt=0`).
 `phase_lock` needs `vsync_lock = true`, `sched_cap_ms > 0` and
 `regulate_ms > 0`, or the player refuses to start.
 
@@ -100,10 +124,67 @@ the camera there (~3 lines, centre near −50 mfps). It logs
 
 The drone has no phase-lock config.
 
+## Threads
+
+maburplay runs four loops, so the release deadline never waits on
+anything slower than itself:
+
+- **Feed thread** (`FeedLoop`, `feed_loop.h`): blocks on the AU doorbell,
+  reads the ring, and makes every decoder *input* call (`AuRouter`,
+  `StreamFeeder`). It posts submit notes and delivery notes.
+- **Decode-output thread** (`DecodePump`, `decode_pump.h`): drives
+  `backend->poll()` (MPP blocks in it up to 4 ms waiting for a picture)
+  and returns released frames to the decoder -- the decoder's whole output
+  side. Per decoded frame, in order: the frame's submit notes (`lat`
+  submit stamps, incomplete-AU flags for the lateness window),
+  `lat.on_decoded`, the source-rate sample, the hand-over to the release
+  thread, and then the framebuffer prime, so the release thread's
+  present() finds the frame's framebuffer cached. It also takes the submit
+  notes after every poll round, frame or not, so they never queue up in
+  the feed while the decoder emits nothing.
+- **Release thread** (`ReleaseLoop`, `release_loop.h`, `SCHED_FIFO` at
+  `rt_priority`): owns the `FrameRegulator`'s decisions and every call
+  into the display. It sleeps on an absolute timer armed to the next
+  release (or a 10 ms idle tick), the hand-over queue and the display's
+  flip events. Each wake: reap flips, release due frames, offer newly
+  handed-over frames (a late one is presented at once), set the
+  presenter's paced mode, run the chain-break heal, and commit a pending
+  OSD on its own when no frame is held. A completed flip also feeds the
+  burned recorder: the flip sink runs `RecorderTap::on_flip`
+  (`recorder_tap.h`), which calls `BurnRecorder::submit()` on each
+  recorded slot of the vblank grid (one buffer reference and a mailbox
+  post). It never calls the decoder: displaced frames and frames the
+  display is done with go back through a release queue the decode-output
+  thread drains. Each offer's phase margin is queued for housekeeping.
+- **Housekeeping** (the main loop, 2 ms): delivery notes (raw DVR, OSD
+  figures), the record button, the phase lock itself (it takes the release
+  thread's margins while the source and panel rates match, ticks and sends
+  the offset), the rate match, OSD composition, the 1 Hz stats,
+  `lat.log`/`frame.log`/`reg.log`, the decode watchdog and the display
+  hotplug retry. It composes the screen's OSD only while no publish is
+  pending, so it never draws into a buffer that is on screen or about to
+  be; the burned recording's overlay, a canvas of its own at the record
+  size, composes from the same input whether a publish is pending or not.
+  It also installs and removes the recorder tap's hook (`RecorderTap::set`
+  after `BurnRecorder::start()`, `clear()` before `stop()`), so no record
+  start or stop runs on the release thread. A flush, a watchdog reset or
+  re-creation, a hotplug reacquire and shutdown park the decode-output
+  thread and then the release thread (which drops everything the display
+  and the regulator hold), return every frame to the decoder, and resume
+  them after; a thread that does not park within 2 s exits the player for
+  respawn.
+
+`--decode-only` (the hardware decode gate) and the host build have no
+decode-output or release thread: one loop polls the decoder and releases
+each frame on the spot.
+
 ## Observability
 
-- `reg.log` (`# reglog 2`) regulator line: `lock=<off|wait|acq|lock|oor>
-  lerr=<ms>ms loff=<mfps> lctr=<mfps>`.
+- `reg.log` (`# reglog 4`) regulator line: `lock=<off|wait|acq|lock|oor>
+  lerr=<ms>ms loff=<mfps> lctr=<mfps>`, and the release thread's
+  `rlate= hand= rt= flushes= recstarts=` plus the burned recorder's
+  `burn_in= burn_enc= burn_drop=` (docs/observability.md
+  "Regulator line").
 - maburplay stderr: `phase-lock: <state> err= off= centre=` on each state
   change.
 - Drone stats line: `snr_off=` (the offset on the sensor); `/tmp/mabur.log`

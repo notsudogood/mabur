@@ -42,6 +42,15 @@ TEST(live_when_venc_and_sensor_are_live) {
   CHECK(w.waited_ms < 50);
 }
 
+// waybeam_venc's IMX415 driver registers as sensor_imx415_star6e, not
+// sensor_*_mipi: the probe accepts any sensor_* driver name.
+TEST(live_with_the_star6e_sensor_driver) {
+  TmpRoot r;
+  r.module("mi_venc", "live");
+  r.module("sensor_imx415_star6e", "live");
+  CHECK(mabur::mi_modules_live(r.path));
+}
+
 TEST(not_live_without_a_sensor_driver) {
   TmpRoot r;
   r.module("mi_venc", "live");

@@ -1,14 +1,14 @@
 #include "feed_loop.h"
 
 #include <poll.h>
-#include <pthread.h>
 #include <sys/eventfd.h>
 #include <unistd.h>
 
-#include <csignal>
 #include <cstdio>
 #include <ctime>
 #include <utility>
+
+#include "worker_thread.h"
 
 namespace maburplay {
 namespace {
@@ -49,16 +49,9 @@ void FeedLoop::set_periodic(std::function<void()> fn, uint32_t every_ms) {
   every_ms_ = every_ms;
 }
 
-void FeedLoop::start() { th_ = std::thread([this] { run_(); }); }
+void FeedLoop::start() { th_ = start_worker_thread([this] { run_(); }); }
 
 void FeedLoop::run_() {
-  // Signals are the main thread's: SIGTERM must end ITS wait.
-  sigset_t s;
-  sigemptyset(&s);
-  sigaddset(&s, SIGINT);
-  sigaddset(&s, SIGTERM);
-  sigaddset(&s, SIGUSR1);
-  pthread_sigmask(SIG_BLOCK, &s, nullptr);
   uint64_t next = now_ms() + every_ms_;
   while (!stop_.load()) {
     if (!checkpoint()) break;
@@ -103,8 +96,21 @@ void FeedLoop::take_notes(std::vector<FeedNote>* out) {
   notes_.clear();
 }
 
+void FeedLoop::take_submit_notes(std::vector<FeedNote>* out) {
+  std::lock_guard<std::mutex> lk(mu_);
+  for (FeedNote& n : submit_notes_) out->push_back(std::move(n));
+  submit_notes_.clear();
+}
+
 void FeedLoop::push_note(FeedNote&& n) {
   std::lock_guard<std::mutex> lk(mu_);
+  if (n.kind == FeedNote::Kind::kSubmit) {
+    // No cap: a submit note is meta only (no AU bytes), one per AU sent to
+    // the decoder, so even a long stall holds little memory -- and dropping
+    // one would lose a lat row and an incomplete-AU mark, not just bytes.
+    submit_notes_.push_back(std::move(n));
+    return;
+  }
   if (notes_.size() >= cfg_.max_notes && !n.au.empty()) {
     std::vector<uint8_t>().swap(n.au);  // main is stalled: keep the record, not its bytes
     notes_dropped_.fetch_add(1);

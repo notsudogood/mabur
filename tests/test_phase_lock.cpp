@@ -17,19 +17,29 @@ using maburplay::PhaseLock;
 namespace {
 
 // The sensor driver turns a milli-fps request into a whole line count; the
-// real rate is the line rate over that count. These constants reproduce the
-// bench IMX415: the trim request 59718 mfps lands on 3391 lines = 59.987 Hz,
-// and 3390 lines = 60.005 Hz, so a 60.000 Hz panel sits between two lines.
+// real rate is the line rate over that count. These models reproduce the
+// bench IMX415.
 struct Sensor {
-  static constexpr double kDriverLinesPerS = 202503.0;  // what the driver assumes
-  static constexpr double kLinesPerS = 203416.4;        // 74.247 MHz / HMAX 365
-  static constexpr uint32_t kTrimMfps = 59718;
-  static double period_us(int32_t off_mfps) {
-    const double req = static_cast<double>(static_cast<int64_t>(kTrimMfps) + off_mfps) / 1000.0;
-    const double vmax = std::round(kDriverLinesPerS / req);
-    return vmax / kLinesPerS * 1e6;
+  double driver_lines_per_s;  // what the driver assumes: VMAX = round(this / request)
+  double lines_per_s;         // the real line rate
+  uint32_t trim_mfps;
+  uint32_t max_mfps;          // the mode's ceiling; the drone clamps requests to it (0 = none)
+  double period_us(int32_t off_mfps) const {
+    int64_t req_mfps = static_cast<int64_t>(trim_mfps) + off_mfps;
+    if (max_mfps && req_mfps > max_mfps) req_mfps = max_mfps;
+    const double vmax = std::round(driver_lines_per_s / (static_cast<double>(req_mfps) / 1000.0));
+    return vmax / lines_per_s * 1e6;
   }
 };
+
+// 60 fps, mode 2: the trim request 59718 mfps lands on 3391 lines =
+// 59.987 Hz, and 3390 lines = 60.005 Hz, so a 60.000 Hz panel sits between
+// two lines.
+constexpr Sensor kSensor60{202503.0, 203416.4, 59718, 0};
+// 100 fps, waybeam's 1728x972@100 (maxFps 100): 99958 mfps lands on 2035
+// lines = 99.959 Hz, 100000 on 2034 = 100.008 Hz (both read on the bench).
+// One line is ~49 mfps, and the driver refuses anything above 100000.
+constexpr Sensor kSensor100{203400.0, 203416.4, 99958, 100000};
 
 constexpr double kPanel60 = 1e6 / 60.0;
 constexpr double kPanel5994 = 1e6 * 1001.0 / 60000.0;
@@ -67,8 +77,10 @@ struct RunResult {
 // absorb rather than cause; the 30 s after it are likewise not scored.
 RunResult run(double panel_us, double seconds, double margin0_us, int frame_div = 1,
               double jump_at_s = -1.0, double jump_us = 0.0, double noise_us = 300.0,
-              double neutral_step_at_s = -1.0) {
+              double neutral_step_at_s = -1.0, const Sensor& sensor = kSensor60,
+              double source_hz = 0.0) {
   PhaseLock lock(kTargetUs / 1000.0);
+  (void)source_hz;
   RunResult r;
   std::deque<std::pair<double, int32_t>> cmd;
   int32_t applied = 0;
@@ -79,7 +91,7 @@ RunResult run(double panel_us, double seconds, double margin0_us, int frame_div 
       applied = cmd.front().second;
       cmd.pop_front();
     }
-    double pc = Sensor::period_us(applied);
+    double pc = sensor.period_us(applied);
     if (neutral_step_at_s >= 0 && t >= neutral_step_at_s * 1e6)
       pc /= (1.0 - 70.0 / 60000.0);
     const double t_prev = t;
@@ -147,6 +159,23 @@ TEST(locks_on_120hz_panel) {
   const RunResult r = run(1e6 / 120.0, 180, 6'000);
   CHECK(r.locked_at_s >= 0 && r.locked_at_s < 30.0);
   CHECK(r.worst_us <= 1'000.0);
+}
+
+// 100 fps on waybeam's 1728x972@100 into an exact 100.000 Hz panel (the
+// goggles) and into the bench monitor's 99.946 Hz: a line is ~49 mfps here,
+// so the hold has to move whole 100 fps lines. Ten minutes, no unlock.
+TEST(holds_100fps_into_100hz_for_ten_minutes) {
+  const RunResult r = run(1e6 / 100.0, 600, 8'000, 1, -1.0, 0.0, 300.0, -1.0, kSensor100, 100.0);
+  CHECK(r.locked_at_s >= 0 && r.locked_at_s < 60.0);
+  CHECK(r.unlocks == 0);
+  CHECK(r.final_state == PhaseLock::State::Locked);
+}
+
+TEST(holds_100fps_into_99946hz_for_ten_minutes) {
+  const RunResult r = run(1e6 / 99.946, 600, 8'000, 1, -1.0, 0.0, 300.0, -1.0, kSensor100, 100.0);
+  CHECK(r.locked_at_s >= 0 && r.locked_at_s < 60.0);
+  CHECK(r.unlocks == 0);
+  CHECK(r.final_state == PhaseLock::State::Locked);
 }
 
 TEST(locks_with_15fps_decimation) {
@@ -395,7 +424,8 @@ LoopResult run_closed_loop(bool with_lock, double seconds) {
       DmaFrame f;
       f.pts_us = static_cast<uint32_t>(static_cast<uint64_t>(cap[idx] - cap[0]));
       f.opaque = reinterpret_cast<void*>(static_cast<uintptr_t>((idx << 1) | 1u));
-      if (reg.offer(f, static_cast<uint64_t>(next_dec), &disp))
+      if (reg.offer(f, static_cast<uint64_t>(next_dec),
+                   static_cast<uint64_t>(next_dec), &disp))
         pending.push_back({next_dec, static_cast<int64_t>(idx)});
       double m = 0.0;
       if (with_lock && reg.take_margin(&m))
@@ -405,7 +435,7 @@ LoopResult run_closed_loop(bool with_lock, double seconds) {
         applied = cmd.front().second;
         cmd.pop_front();
       }
-      cap.push_back(cap.back() + Sensor::period_us(applied));
+      cap.push_back(cap.back() + kSensor60.period_us(applied));
       const double d = cap.back() + 20'000.0 + jitter(idx);
       prev_dec = d > prev_dec + 300.0 ? d : prev_dec + 300.0;
       next_dec = prev_dec;

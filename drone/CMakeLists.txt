@@ -14,8 +14,10 @@ add_library(mabur_drone_core STATIC
   # venc_cfg.c is dependency-free C99 (string.h only), so it compiles on
   # host too — config.cpp's parse_venc() needs venc_cfg_defaults() at
   # host-test time, not just on the ARM cross-build. Excluded from venc_core's glob below to avoid compiling it
-  # twice into the same link.
-  venc/venc_cfg.c)
+  # twice into the same link. camera_modes.c likewise: config.cpp checks
+  # venc.size against the sensor mode its fps selects.
+  venc/venc_cfg.c
+  venc/camera_modes.c)
 target_include_directories(mabur_drone_core
   PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/vendor
   PRIVATE ${CMAKE_SOURCE_DIR}/third_party)
@@ -47,9 +49,11 @@ if(CMAKE_CROSSCOMPILING)
   # cross-build that surfaces as a link error (or worse, a quietly missing
   # translation unit) far from its cause.
   file(GLOB VENC_CORE_SRC CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/venc/*.c)
-  # venc_cfg.c is already a source of mabur_drone_core (unconditionally,
-  # for host builds) — don't compile it a second time into venc_core.
-  list(REMOVE_ITEM VENC_CORE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/venc/venc_cfg.c)
+  # venc_cfg.c and camera_modes.c are already sources of mabur_drone_core
+  # (unconditionally, for host builds) — don't compile them a second time
+  # into venc_core.
+  list(REMOVE_ITEM VENC_CORE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/venc/venc_cfg.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/venc/camera_modes.c)
   # NOTE: waybeam links these translation units as a flat .o list; here they
   # become an archive, and an archive member is pulled in only to satisfy an
   # UNDEFINED symbol. Any "registers itself / overrides a weak default"

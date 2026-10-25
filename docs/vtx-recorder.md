@@ -88,16 +88,26 @@ size. The SigmaStar encoder cannot scale, so the sizes decide the port:
   `[record] no frame 2000 ms after start` if none arrive. An idle port 1
   reads `Pixel MAX, OutputW 0` in `/proc/mi_modules/mi_vpe/mi_vpe0` until
   ch1 starts; that is not a failure.
-- **Above 1920x1080** the pinned sensor mode 2 (1080p, binned) cannot feed
-  it: the pipeline switches to mode 0, 3840x2160@30 (full FOV, not binned,
-  `STAR6E_SENSOR_MODE_4K`), and the loader requires `venc.fps <= 30`. The
-  link then also runs at 30 fps from a downscaled 4K capture.
+- **Above 1920x1080** none of the link's sensor modes (1920x1080 binned up
+  to 90 fps, 1728x972 / 1728x816 above; `docs/camera-modes.md`) can feed
+  it: the pipeline switches to the 3840x2160@33 mode (full view, not
+  binned), and the loader requires `venc.fps <= 30`. The link then also
+  runs at 30 fps from a downscaled 4K capture.
 
 4K is not usable next to the link: the SigmaStar H.265 engine runs one
 encode at a time, and a 4K encode (~30 ms) fills the 31 ms frame period, so
 the link queues behind it and the recorder drops frames. A 720p link with a
 1080p port-1 recording costs the link nothing. Measurements:
 `docs/findings/2026-09-26-vtx-recorder-bench.md`.
+
+Above 90 fps the link runs a binned crop mode (1728x972 to 100 fps,
+1728x816 above; `docs/camera-modes.md`) and the recorder's rules stay as
+they are, which carries three risks: a `record.size` larger than the mode
+(the bundle's 1920x1080 against 1728x972) is an upscale on port 1; a
+`record.fps` that does not divide `venc.fps` (60 from 100) records uneven
+frame spacing, since the bind's frame-rate limiter passes 60 of every 100;
+and the live 1728x972@100 encode alone is past the engine's rated rate, so
+recording adds encode time to the link.
 
 Switching `venc.size` needs no other key change: the rolling-refresh key
 is `venc.intra_refresh_frames` (sweep length), whose rows per P the
@@ -145,6 +155,39 @@ returned: ≤ about 2 s (battery-pull bench: ≤ 2.0 s).
 The GS-only fault text is `● REC FAULT` (`● REC GS FAULT` while a VTX state is also shown). With `gs` among the
 targets, the clock is the GS DVR's clock. With `vtx` alone, it counts from
 the drone's first `Recording` report of this press.
+
+## Link latency cost
+
+The recorder's channel does not delay the link's frames in the H.265
+engine (the bind-order invariant above; the MI per-stage delays read the
+same recording and idle), but running it costs the link glass latency all
+the same: while the second encode runs, every `maburd` thread — the TX
+writer, the USB threads and the FEC worker on core 0, the frame producer
+alone on core 1, the encoder thread — spends 30–45 % more CPU on unchanged
+work, which is memory-system contention from the engine's second 1080p60
+encode. The per-frame transit tails (`dq`, `air`, `fec`) widen, and the GS
+regulator's capture-time allowance, the transit p99 − p1 over the last 600
+frames (`docs/phase-lock.md`), holds every frame longer.
+
+The cost scales with the pixels the record channel encodes per second and
+not with the bytes it writes: recording to a sink that discards everything
+costs the same as recording to the card, 5 Mb/s costs the same as
+40 Mb/s, and the writer's placement, priority, pacing and the kernel's
+writeback settings change nothing. Bench, 1080p60 link at rung 5, e2e p50:
+
+- `size` 1920x1080, `fps` 60 (bundle): **+1 to +2 ms**; in flight (0239,
+  `dvr.target = "both"`) **+4 ms**, the allowance pinned at `sched_cap_ms`
+  most of the time, and after each demote the drone's queue wait reaches
+  16–33 ms, which can trip the congestion shed (enhance layer dropped,
+  30 fps on the glass for a couple of seconds);
+- `fps` 30: about +1 ms;
+- `size` 1280x720 at 60 fps (VPE port 1): +0.3 to +0.9 ms, the method's
+  noise floor being about 0.5 ms.
+
+Records: `docs/findings/2026-10-25-vtx-recorder-engine-cost.md` (the
+mechanism and the levers tried) and
+`docs/findings/2026-10-24-vtx-recorder-latency.md` (the flight numbers; its
+writer-side reading is superseded).
 
 ## Known issues
 

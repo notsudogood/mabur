@@ -5,6 +5,8 @@ add_library(mabur_player_core STATIC
   src/stream_feeder.cpp
   src/au_router.cpp
   src/feed_loop.cpp
+  src/decode_pump.cpp
+  src/release_loop.cpp
   src/osd_font.cpp
   src/gs_font.cpp
   src/gs_draw.cpp

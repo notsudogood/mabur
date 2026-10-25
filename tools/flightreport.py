@@ -1212,10 +1212,12 @@ def refresh_span_ms(rr, ctl=None, fec_rows=None):
 
 
 def load_reglog_lock(path):
-    """reg.log phase-lock fields per 1 Hz regulator line (`# reglog 2`):
-    `lock=<off|wait|acq|lock|oor> lerr=<ms>ms loff=<mfps> lctr=<mfps>`.
-    Rows without them (reglog 1, before the phase lock) are skipped, so an
-    empty list means the recording has no lock data."""
+    """reg.log phase-lock fields per 1 Hz regulator line (`# reglog 2` and
+    later): `lock=<off|wait|acq|lock|oor> lerr=<ms>ms loff=<mfps>
+    lctr=<mfps>`. Other key=value tokens (reglog 3's `rlate= hand= rt=` and
+    reglog 4's `burn_in= burn_enc= burn_drop=` among them) are ignored. Rows
+    without the lock fields (reglog 1, before the phase lock) are skipped,
+    so an empty list means the recording has no lock data."""
     rows = []
     with open(path) as f:
         for line in f:
@@ -1229,6 +1231,100 @@ def load_reglog_lock(path):
                          "lerr": float(kv["lerr"].rstrip("ms")),
                          "loff": int(kv["loff"]), "lctr": float(kv["lctr"])})
     return rows
+
+
+def load_reglog_release(path):
+    """reg.log release-thread fields per 1 Hz regulator line (`# reglog 3`
+    and later): `rlate=<p99>/<max> hand=<p99>/<max> rt=<0|1>`, µs over the
+    line's own window, plus reglog 4's burned-DVR counters `burn_in=
+    burn_enc= burn_drop=` (the recorder's cumulative frames tapped,
+    encoded and dropped; 0 on a reglog 3 file, or when the line predates
+    them, or while no burned recording is running). Rows without
+    rlate/hand (reglog 1/2, before the release thread) are skipped, so an
+    empty list means the recording has none."""
+    rows = []
+    with open(path) as f:
+        for line in f:
+            tok = line.split()
+            if len(tok) < 3 or tok[1] != "regulator:":
+                continue
+            kv = dict(t.split("=", 1) for t in tok[2:] if "=" in t)
+            if "rlate" not in kv or "hand" not in kv:
+                continue
+            try:
+                rp99, rmax = (int(x) for x in kv["rlate"].split("/"))
+                hp99, hmax = (int(x) for x in kv["hand"].split("/"))
+            except ValueError:
+                continue
+            rows.append({"t_us": int(tok[0]), "rlate_p99": rp99, "rlate_max": rmax,
+                         "hand_p99": hp99, "hand_max": hmax, "rt": kv.get("rt") == "1",
+                         "burn_in": int(kv.get("burn_in", 0)),
+                         "burn_enc": int(kv.get("burn_enc", 0)),
+                         "burn_drop": int(kv.get("burn_drop", 0))})
+    return rows
+
+
+def _burn_recordings(rows):
+    """load_reglog_release rows, split into per-recording segments: the
+    BurnRecorder is a fresh object per recording (start_burn_if_needed(),
+    main.cpp), so burn_in/burn_enc/burn_drop restart at 0 every time one
+    starts. A segment ends -- and its last row is that recording's own
+    final tally -- wherever burn_in drops (a new recording started right
+    after the previous one, no gap) or a run of burn_in == 0 rows
+    (recording stopped) is followed by burn_in > 0 again. Returns each
+    recording's last row, in order; a session with one continuous
+    recording returns a single-element list."""
+    recs = []
+    cur = []
+    for r in rows:
+        if r["burn_in"] <= 0:
+            if cur:
+                recs.append(cur[-1])
+                cur = []
+            continue
+        if cur and r["burn_in"] < cur[-1]["burn_in"]:
+            recs.append(cur[-1])
+            cur = []
+        cur.append(r)
+    if cur:
+        recs.append(cur[-1])
+    return recs
+
+
+def print_release_report(rows):
+    """RELEASE section from load_reglog_release rows: the release thread's
+    lateness behind each held frame's scheduled release (rlate) and the
+    decode-to-offer hand-over (hand), per-second p99s summarised over the
+    recording, plus the worst single frame. Silent without reglog 3 rows.
+    When any row's burn_in > 0 (a burned recording ran), one more line
+    gives the session's burn_in/burn_enc/burn_drop totals -- summed across
+    every recording in the session (_burn_recordings), since each one's
+    own counters restart at 0 -- the recording count, and burn_drop per
+    recording minute, the minute count taken from all the burn_in > 0 rows
+    (reglog is 1 Hz, so their count is the session's total recording span
+    in seconds) -- the stutter signal across the session's burned
+    recordings."""
+    if not rows:
+        return
+    n = len(rows)
+    rt = sum(1 for r in rows if r["rt"])
+    print("RELEASE (reg.log, release thread)")
+    print(f"  rows={n} rt={'SCHED_FIFO' if rt == n else f'{rt}/{n} rows SCHED_FIFO'}")
+    for key, label in (("rlate", "rlate"), ("hand", "hand")):
+        p99s = [r[key + "_p99"] for r in rows]
+        worst = max(r[key + "_max"] for r in rows)
+        print(f"  {label} p99 per s p50/p90/max={_pct(p99s, 0.5)}/{_pct(p99s, 0.9)}/"
+              f"{max(p99s)} us, worst frame={worst} us")
+    active = [r for r in rows if r["burn_in"] > 0]
+    if active:
+        recs = _burn_recordings(rows)
+        total_in = sum(r["burn_in"] for r in recs)
+        total_enc = sum(r["burn_enc"] for r in recs)
+        total_drop = sum(r["burn_drop"] for r in recs)
+        minutes = len(active) / 60.0
+        per_min = total_drop / minutes if minutes > 0 else 0.0
+        print(f"  burn drop={total_drop} (in={total_in} enc={total_enc}, "
+              f"recordings={len(recs)}, {per_min:.1f}/min over {len(active)}s)")
 
 
 def print_lock_report(rows):
@@ -3094,8 +3190,10 @@ if __name__ == "__main__":
             print_ta_report(ta_pings(segs), rung_at, ladder,
                             unparsed=sum(seg["X"] for seg in segs))
         # reg.log is a sibling too: the PHASE LOCK section, silent when the
-        # recording predates the lock or ran with it off.
+        # recording predates the lock or ran with it off, and the RELEASE
+        # section, silent before reglog 3.
         if s.reg:
             print_lock_report(load_reglog_lock(s.reg))
+            print_release_report(load_reglog_release(s.reg))
     else:
         main(arg, sys.argv[2] if len(sys.argv) > 2 else None)

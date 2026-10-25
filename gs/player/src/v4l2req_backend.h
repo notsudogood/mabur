@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 
+#include "poll_wait.h"
 #include "stream_decoder.h"
 #include "video_backend.h"
 
@@ -16,16 +17,18 @@ namespace maburplay {
 //
 // Threads: libav may only be driven from one thread, so every libav call --
 // decode, and the frees that return buffers to its pool -- runs on the thread
-// that calls submit_au()/start()/append()/abort() (the feed thread, or main
-// when there is none). poll() and release_frame() run on main and only touch
-// a locked handoff: decoded frames wait in a ready queue for poll() to hand
-// to the FrameSink; released frames wait in a release queue that the next
-// submit_au(), start() or append() frees, which is exactly when the decoder
-// needs a free buffer again. flush() and the destructor run on main only
-// while the feed is parked (FeedLoop's flush contract) and free both queues
-// before resetting or freeing the decoder; abort() runs there too, when
-// main.cpp's do_flush calls StreamFeeder::on_flush to end a streamed
-// picture that never got its own close.
+// that calls submit_au()/start()/append()/abort() (the feed thread, or the
+// housekeeping thread when there is none). poll() and release_frame() run
+// on the decode-output thread (DecodePump) and only touch a locked handoff:
+// decoded frames wait in a ready queue for poll() to hand to the FrameSink;
+// released frames wait in a release queue that the next submit_au(),
+// start() or append() frees, which is exactly when the decoder needs a
+// free buffer again. flush() and the destructor run on the housekeeping
+// thread only while the feed and the decode-output thread are parked
+// (main.cpp's flush order) and free both queues before resetting or
+// freeing the decoder; abort() runs there too, when main.cpp's do_flush
+// calls StreamFeeder::on_flush to end a streamed picture that never got
+// its own close.
 //
 // No libav include here, as with mpp_backend.h: null_backend.cpp includes
 // this on every v4l2req build.
@@ -33,7 +36,7 @@ namespace maburplay {
 // Streams: the libav it builds against carries mabur's FFmpeg patch
 // (gs/player/ffmpeg-patches); without it this file does not compile and
 // init() fails -- there is no whole-only fallback.
-class V4l2ReqBackend : public VideoBackend, public StreamDecoder {
+class V4l2ReqBackend : public VideoBackend, public StreamDecoder, public PollWait {
  public:
   V4l2ReqBackend();
   ~V4l2ReqBackend() override;
@@ -51,6 +54,12 @@ class V4l2ReqBackend : public VideoBackend, public StreamDecoder {
   bool start(const uint8_t* p, size_t n, uint8_t nslices, uint32_t pts_us) override;
   bool append(const uint8_t* p, size_t n, uint32_t pts_us, bool last) override;
   void abort(uint32_t pts_us) override;
+
+  // PollWait: an empty ready queue holds poll() up to ms for the feed
+  // thread's next frame, so the decode-output thread sleeps here instead of
+  // between polls. After init() (false before); 0 restores a poll() that
+  // returns at once.
+  bool set_poll_timeout_ms(int ms) override;
 
   // Diagnostics (read by --decode-only and the feed thread's 5 s line).
   uint64_t frames() const;  // decoded frames delivered by poll() (to the FrameSink, or dropped if none)

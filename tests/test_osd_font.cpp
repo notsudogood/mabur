@@ -42,6 +42,17 @@ static void write_font_pixels(const ScratchFile& sf, int gw, int gh,
   std::fclose(f);
 }
 
+// A loaded font ready for atlas_at() tests that don't care about its exact
+// glyph shape, only that scaling has something small and divisible to work
+// from (2x3, matching the dedicated cache tests below).
+static OsdFont load_test_font() {
+  const ScratchFile p("osd_font", ".mfont");
+  write_font(p, 2, 3, 1024);
+  OsdFont font;
+  REQUIRE(font.load(p.path, nullptr));
+  return font;
+}
+
 TEST(load_reports_native_geometry) {
   const ScratchFile p("osd_font", ".mfont");
   write_font(p, 4, 6, 1024);
@@ -174,7 +185,7 @@ TEST(atlas_at_box_downscale_averages_each_quadrant) {
   CHECK(a->pixels[3] == br);
 }
 
-TEST(atlas_at_caches_one_size) {
+TEST(atlas_at_caches_two_sizes) {
   const ScratchFile p("osd_font", ".mfont");
   write_font(p, 2, 3, 1024);
   OsdFont font;
@@ -185,10 +196,35 @@ TEST(atlas_at_caches_one_size) {
   CHECK(font.builds() == 1);
   CHECK(a == b);
   CHECK(a->pixels == b->pixels);
-  // A different requested size must evict the cache and build again.
+  // A second, different size is cached alongside the first, not instead of
+  // it -- the two-entry cache holds both the screen's size and the burned
+  // recording's.
   const GlyphAtlas* c = font.atlas_at(2, 2, ScaleMode::kSharp);
   REQUIRE(c != nullptr);
   CHECK(font.builds() == 2);
+  const GlyphAtlas* a_again = font.atlas_at(4, 6, ScaleMode::kSharp);
+  CHECK(font.builds() == 2);
+  CHECK(a_again->pixels == a->pixels);
+}
+
+TEST(two_alternating_sizes_cost_two_builds_total) {
+  OsdFont font = load_test_font();
+  for (int i = 0; i < 10; ++i) {
+    CHECK(font.atlas_at(24, 36, ScaleMode::kSharp) != nullptr);
+    CHECK(font.atlas_at(18, 27, ScaleMode::kSharp) != nullptr);
+  }
+  CHECK(font.builds() == 2);
+}
+
+TEST(a_third_size_evicts_the_older_entry) {
+  OsdFont font = load_test_font();
+  font.atlas_at(24, 36, ScaleMode::kSharp);   // build 1
+  font.atlas_at(18, 27, ScaleMode::kSharp);   // build 2
+  font.atlas_at(30, 45, ScaleMode::kSharp);   // build 3, evicts 24x36
+  font.atlas_at(18, 27, ScaleMode::kSharp);   // hit
+  CHECK(font.builds() == 3);
+  font.atlas_at(24, 36, ScaleMode::kSharp);   // rebuilt
+  CHECK(font.builds() == 4);
 }
 
 TEST(set_inverse_transforms_pixels_keeps_alpha_and_feeds_scaled_atlases) {

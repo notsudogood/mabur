@@ -1,4 +1,5 @@
 #include <atomic>
+#include <chrono>
 #include <thread>
 #include <vector>
 
@@ -60,6 +61,39 @@ TEST(two_threads_conserve_frames) {
   CHECK(popped == kN);
   CHECK(released_n == kN);
   CHECK(released_sum == static_cast<long>(kN) * (kN + 1) / 2);
+}
+
+// The decode-output thread sleeps inside poll() until a frame is ready: an
+// empty queue holds the caller for the whole timeout and then reports no
+// frame.
+TEST(pop_ready_wait_times_out_empty) {
+  maburplay::FrameHandoff<int> h;
+  int v = -1;
+  const auto t0 = std::chrono::steady_clock::now();
+  CHECK(!h.pop_ready_wait(&v, std::chrono::milliseconds(20)));
+  const auto waited = std::chrono::steady_clock::now() - t0;
+  CHECK(waited >= std::chrono::milliseconds(20));
+  CHECK(v == -1);
+}
+
+// A push from the feed thread ends the wait at once: the frame comes out
+// well before the timeout, not after it.
+TEST(pop_ready_wait_wakes_on_push) {
+  maburplay::FrameHandoff<int> h;
+  std::thread feed([&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    h.push_ready(7);
+  });
+  int v = 0;
+  const auto t0 = std::chrono::steady_clock::now();
+  CHECK(h.pop_ready_wait(&v, std::chrono::milliseconds(500)));
+  const auto waited = std::chrono::steady_clock::now() - t0;
+  feed.join();
+  CHECK(v == 7);
+  CHECK(waited < std::chrono::milliseconds(200));
+  // Already-queued frames come out without waiting.
+  h.push_ready(8);
+  CHECK(h.pop_ready_wait(&v, std::chrono::milliseconds(500)) && v == 8);
 }
 
 TEST(entry_gate) {

@@ -121,8 +121,9 @@ struct MppEncoder::Impl {
   // kMaxRunningFailures in BurnRecorder only bounds a CONSECUTIVE run, and
   // consecutive_fail resets on every success -- so an intermittent
   // alternating ok/fail never trips the give-up and would log forever at up
-  // to fps_cap into /tmp/maburplay.log, an unrotated `>` redirect on tmpfs
-  // (which is RAM, shared with /dev/shm where the AU ring lives). Same
+  // to the encoder's frame rate into /tmp/maburplay.log, an unrotated `>`
+  // redirect on tmpfs (which is RAM, shared with /dev/shm where the AU ring
+  // lives). Same
   // first-then-every-300th gate the geometry-reject path uses; the counters
   // and errors() are never throttled.
   enum ErrSite { kErrFrameInit = 0, kErrPktInit, kErrPutFrame, kErrGetPacket, kErrSites };

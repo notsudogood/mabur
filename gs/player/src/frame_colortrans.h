@@ -1,6 +1,7 @@
 #ifndef MABUR_PLAYER_FRAME_COLORTRANS_H_
 #define MABUR_PLAYER_FRAME_COLORTRANS_H_
 
+#include "fit_rect.h"
 #include <cstdint>
 #include <string>
 
@@ -43,9 +44,11 @@ class FrameColorTrans {
   bool ready() const { return ready_; }
 
   // src: NV12 w x h, two planes in one dmabuf, UV at hs*vs. dst: NV12 at the
-  // init() output size, UV at dst_hs*dst_vs. false = logged (rate-limited).
+  // init() output size, UV at dst_hs*dst_vs. box: draw the picture into this
+  // sub-rectangle of the output, black around it (a letterbox, fit_rect.h);
+  // nullptr fills the output. false = logged (rate-limited).
   bool process(int src_fd, uint32_t w, uint32_t h, uint32_t hs, uint32_t vs, int dst_fd,
-               uint32_t dst_hs, uint32_t dst_vs);
+               uint32_t dst_hs, uint32_t dst_vs, const Rect* box = nullptr);
 
   // Cumulative per-step time of successful process() calls, microseconds:
   // import (EGLImage + texture), draw (draw + glFinish), rga (BGRA -> NV12).

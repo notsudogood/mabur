@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "camera_modes.h"
 #include "star6e.h"
 
 #ifdef __cplusplus
@@ -47,7 +48,7 @@ typedef struct {
 
 typedef struct {
 	int forced_pad;           /* -1 = auto-detect */
-	int forced_mode;          /* -1 = auto-select */
+	CameraMode want_mode;     /* the mode to use; w == 0 = auto-select */
 	uint32_t target_width;
 	uint32_t target_height;
 	uint32_t target_fps;

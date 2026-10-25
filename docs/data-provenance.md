@@ -6,7 +6,8 @@ not be pooled. Nothing in the sideport reports most of them, so the only
 reliable method is to date the recording against this page.
 
 Every format marker (`ctllog N`, `scanlog N`, `aulog N`, `probelog N`,
-`feclog N`, `latlog N`, `callog N`) and every removed sideport key is
+`feclog N`, `latlog N`, `framelog N`, `reglog N`, `callog N`) and every
+removed sideport key is
 recorded here with its date, so a recording on the DVR can be read with
 the meaning it was written under.
 
@@ -105,6 +106,22 @@ Chronological; each line names the section below that carries the detail.
   their place, for the few minutes before the framebuffer cache).
 - 2026-10-17 — demand refresh: `# aulog 7` (+vcl column), `feclog 4`
   (I/H rows), sideport `link.refresh` (docs/fec-nack.md "Demand refresh").
+- 2026-10-21 — maburplay's release thread (docs/phase-lock.md "Threads"):
+  `# reglog 3` appends `rlate= hand= rt= flushes= recstarts=` (reglog 2
+  rows, with the phase-lock fields, end at `ioctl=`); `t_release`,
+  `present=` and `present_jitter=` are the release thread's from here,
+  the main loop's before. `display.rec_vsync_lead_ms` is removed: a burned-DVR recording
+  from before ran the regulator's lead at 8 ms while recording (+3 ms on
+  `dsp` and `e2e` against live view), one from after runs the one
+  `vsync_lead_ms` throughout.
+- 2026-10-22 — `# reglog 4` appends `burn_in= burn_enc= burn_drop=`; reglog
+  3 rows end at `recstarts=`. Burned DVR files from this build record the
+  frames the display flipped to, stamped on the panel's vblank grid
+  thinned by `dvr.burned.every`, at `dvr.burned.size` (default the decoded
+  size); `dvr.burned.fps_cap` is removed. A burned file's sample
+  timestamps and durations therefore measure the display (holds are whole
+  grid periods), no longer the link: before this build they were the
+  drone's pts of decoded frames, capped by `fps_cap`.
 
 ## 2026-09-23 — `link.pre_fec_loss` scale break, twice
 
@@ -1238,3 +1255,13 @@ widths under the file's original marker: the marker is written when the
 file is created, not when a newer binary appends. Key per-row on the
 column count, not the marker, when reading such a file.
 
+
+## 2026-10-24 — bundle ships low-power off and NACK on
+
+The drone bundle sets `low_power.enable = false`: recordings from builds
+that ship this no longer open with the disarmed low-power segment described
+under 2026-09-20 — the ground phase runs at the full ladder bitrate and fps.
+The GS bundle sets `[link.nack] enable = true`, so sideport `link.nack` and
+the `retx` accounting class are populated from boot on these recordings
+rather than only on a GS overlaid by hand. A recording that does open with a
+low-power segment came from a drone config with the mode turned back on.

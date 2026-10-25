@@ -21,7 +21,9 @@ target      = "gs"         # where the record button records: "gs" = here, "vtx"
 # Recording settings for mode = "burned".
 [dvr.burned]
 bitrate_kbps = 8000
-fps_cap      = 60          # highest recorded frame rate
+every        = 1           # record every N-th screen refresh: 1 = the panel's rate, 2 = half of it
+                           # (a 100 Hz panel needs 2: the recorder tops out below 100 fps)
+size         = ""          # "WxH" picture size of the recording; "" = the size the drone sends (no scaling)
 
 # Flight-controller OSD (from the drone, relayed by maburgs).
 [osd]
@@ -64,12 +66,12 @@ gs_config  = "/etc/maburgs.toml"   # where the menu reads the channel set from
 regulate_ms   = 12         # fallback delay before showing a frame, used until refresh timing is learned
 vsync_lock    = true       # time frames to the screen refresh
 vsync_lead_ms = 5          # hand a frame to the display this long before the refresh
-rec_vsync_lead_ms = 8      # the same while a burned recording runs: its file writes make the player late now and then, and the extra lead (+3 ms latency, only while recording) keeps every frame on its refresh
 chain_budget  = 0          # 0 = never drop a frame to cut a one-refresh-late run (smooth; the run ends on its own);
                            # N = drop one after N such frames to regain the refresh (lower latency, visible drops)
 sched_cap_ms  = 16         # a frame may arrive up to this many ms late and keep its capture-time slot; 0 = time frames by arrival; with phase_lock on, capture-time placement itself runs only while the lock holds
 phase_lock    = true       # steer the drone camera's frame rate so frames land a fixed margin before the screen refresh (flat latency, no judder)
 phase_margin_ms = 4        # that margin, ms: smaller is lower latency but less room for late frames
+rt_priority = 10  # SCHED_FIFO priority of the release thread; 0 = ordinary scheduling
 
 # Undo the drone camera's colour tuning (the "colortrans" sensor file in the
 # drone's venc.sensor_bin) on the screen, the OSD and the recording.

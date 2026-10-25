@@ -26,6 +26,27 @@ test('stats view, GS adaptive', () => {
   assert.equal(statsView({ ...base, core: { ...core, drone_temp_c: null } }).droneTemp, '–');
 });
 
+// Uplink delivery comes computed from the core (uplink_pct + uplink);
+// the cell only maps state to text and tone.
+test('statsView uplink cell', () => {
+  const up = (uplink, uplink_pct, extra = {}) => statsView({ ...base, ...extra, core: { ...core, uplink, uplink_pct } });
+  let v = up('ok', 95);      assert.equal(v.uplink, '95'); assert.equal(v.uplinkTone, '');
+  v = up('low', 72);         assert.equal(v.uplink, '72'); assert.equal(v.uplinkTone, 'low');
+  v = up('dead', 88);        assert.equal(v.uplink, '0');  assert.equal(v.uplinkTone, 'dead');
+  v = up('idle', 95);        assert.equal(v.uplink, '–');  assert.equal(v.uplinkTone, 'dim');
+  v = up('stale', 95);       assert.equal(v.uplink, '95'); assert.equal(v.uplinkTone, 'dim');
+  v = up('stale', null);     assert.equal(v.uplink, '–');  assert.equal(v.uplinkTone, 'dim');
+  v = up('wait', null);      assert.equal(v.uplink, '–');  assert.equal(v.uplinkTone, '');
+  v = up('none', null);      assert.equal(v.uplink, '–');  assert.equal(v.uplinkTone, '');
+  v = up(undefined, undefined); assert.equal(v.uplink, '–'); assert.equal(v.uplinkTone, '');
+  v = up('ok', 95, { mode: 'spotter' }); assert.equal(v.uplink, '–'); assert.equal(v.uplinkTone, '');
+  v = statsView({ ...base, connected: false });
+  assert.equal(v.uplink, '–'); assert.equal(v.uplinkTone, '');
+  const g = debugGroups({ connected: true, mode: 'gs', core: { ...core, uplink: 'ok', uplink_pct: 95 },
+    ausRate: 60, hitches60: 0, hitchesTotal: 0, seg: { w1: {}, w60: {} } });
+  assert.equal(g[2].rows.find((r) => r.k === 'RCF heard %').v, '95');
+});
+
 test('codec line names the colour path', () => {
   assert.equal(statsView({ ...base, colour: 'colortrans' }).codecLine, 'H.265 · 1280×720 · colortrans');
   assert.equal(statsView({ ...base, colour: 'unavailable' }).codecLine, 'H.265 · 1280×720 · colortrans unavailable');
@@ -74,7 +95,7 @@ test('latency pick: GS capture->glass, spotter rx->glass sum', () => {
 });
 
 test('debug groups carry the handoff keys verbatim + counters', () => {
-  const g = debugGroups({ connected: true, mode: 'gs', core, rcfPct: 97.2, ausRate: 60,
+  const g = debugGroups({ connected: true, mode: 'gs', core, ausRate: 60,
     hitches60: 0, hitchesTotal: 18, seg: { w1: {}, w60: {} } });
   assert.deepEqual(g.map((x) => x.title), ['Link', 'Channel', 'Radio', 'Drone', 'Client',
     'Latency (ms; 1 s | 60 s windows)', 'Counters', 'NACK']);
@@ -82,16 +103,16 @@ test('debug groups carry the handoff keys verbatim + counters', () => {
     ['mode', 'session', 'peer_acked', 'rung', 'mcs', 'width', 'probe', 'key', 'key_mismatch']);
   assert.deepEqual(g[2].rows.map((r) => r.k), ['pre-FEC loss', 'residual', 'SNR', 'RSSI', 'RTT', 'RCF heard %']);
   assert.equal(g[4].rows[1].v, '0 last 60s (total 18)');
-  const sp = debugGroups({ connected: true, mode: 'spotter', core: { ...core, mode: 'spotter' }, rcfPct: null,
+  const sp = debugGroups({ connected: true, mode: 'spotter', core: { ...core, mode: 'spotter' }, 
     ausRate: 60, hitches60: 0, hitchesTotal: 0, seg: { w1: {}, w60: {} } });
   assert.equal(sp[0].rows[2].v, 'n/a'); assert.equal(sp[2].rows[4].v, '–');
-  const off = debugGroups({ connected: false, mode: 'gs', core: null, rcfPct: null, ausRate: 0,
+  const off = debugGroups({ connected: false, mode: 'gs', core: null, ausRate: 0,
     hitches60: 0, hitchesTotal: 0, seg: { w1: {}, w60: {} } });
   assert.ok(off.every((grp) => grp.rows.every((r) => r.v === '–')));
 });
 
 test('debug Client group shows the local recorder', () => {
-  const base = { connected: true, mode: 'gs', core: { mode: 'gs' }, rcfPct: null, ausRate: 60,
+  const base = { connected: true, mode: 'gs', core: { mode: 'gs' }, ausRate: 60,
     hitches60: 0, hitchesTotal: 0, seg: { w1: {}, w60: {} } };
   const row = (g) => g.find((x) => x.title === 'Client').rows.find((r) => r.k === 'local rec').v;
   assert.equal(row(debugGroups({ ...base, lrec: { state: 'recording', bytes: 3 * 1024 * 1024, rateBps: 4e6 } })),
@@ -105,7 +126,7 @@ test('debug Drone group shows IDR req in GS, n/a in spotter', () => {
   // The drone's served count (Telem.idr_gs) has left the wire: the
   // page sees for itself whether a key frame arrived.
   const args = { connected: true, mode: 'gs', core: { mode: 'gs', idr_req: 4 },
-    rcfPct: null, ausRate: 60, hitches60: 0, hitchesTotal: 0, seg: { w1: {}, w60: {} } };
+    ausRate: 60, hitches60: 0, hitchesTotal: 0, seg: { w1: {}, w60: {} } };
   const row = (g) => g.find((x) => x.title === 'Drone').rows.find((r) => r.k === 'IDR req').v;
   assert.equal(row(debugGroups(args)), '4');
   assert.equal(row(debugGroups({ ...args, core: { mode: 'gs', idr_req: null } })), '–');
@@ -154,7 +175,7 @@ test('status text and link tag', () => {
 });
 
 test('debugGroups shows a Relay group only for relay stats', () => {
-  const base = { connected: true, mode: 'gs', rcfPct: 90, ausRate: 60, hitches60: 0, hitchesTotal: 0, seg: {}, lrec: null };
+  const base = { connected: true, mode: 'gs', ausRate: 60, hitches60: 0, hitchesTotal: 0, seg: {}, lrec: null };
   const usb = debugGroups({ ...base, core: { radio: 'usb' } });
   assert.equal(usb.some((g) => g.title === 'Relay'), false);
   const rel = debugGroups({ ...base, core: { radio: 'relay', relay_state: 0, relay_ch: 136, relay_sec: 2,
@@ -171,7 +192,7 @@ test('debugGroups shows a Relay group only for relay stats', () => {
 });
 
 test('debugGroups Relay group: channel keys "retuning" on relay_state, not relay_ch', () => {
-  const base = { connected: true, mode: 'gs', rcfPct: 90, ausRate: 60, hitches60: 0, hitchesTotal: 0, seg: {}, lrec: null };
+  const base = { connected: true, mode: 'gs', ausRate: 60, hitches60: 0, hitchesTotal: 0, seg: {}, lrec: null };
   const relayCore = (over) => ({ radio: 'relay', relay_state: 0, relay_ch: 136, relay_sec: 2,
     relay_owned: 1, relay_you_own: 1, relay_frames: 0, relay_gaps: 0, relay_rx_drops: 0,
     relay_tx_ring_drops: 0, relay_tx: 0, relay_tx_fail: 0, relay_tx_refused: 0, relay_your_drops: 0, ...over });
@@ -185,7 +206,7 @@ test('debugGroups Relay group: channel keys "retuning" on relay_state, not relay
 });
 
 test('debugGroups: owner shows you_own, tuned shows relay_owned -- they can disagree', () => {
-  const base = { connected: true, mode: 'gs', rcfPct: 90, ausRate: 60, hitches60: 0, hitchesTotal: 0, seg: {}, lrec: null };
+  const base = { connected: true, mode: 'gs', ausRate: 60, hitches60: 0, hitchesTotal: 0, seg: {}, lrec: null };
   // Ownership just taken by another client: still tuned to our channel
   // (relay_owned reflects owned_and_tuned(), which was true a moment ago
   // and only clears once RelayClient sees the mismatch), but you_own is 0.
@@ -198,7 +219,7 @@ test('debugGroups: owner shows you_own, tuned shows relay_owned -- they can disa
 });
 
 test('debugGroups shows the slice-salvage counter next to trunc', () => {
-  const base = { connected: true, mode: 'gs', rcfPct: 90, ausRate: 60, hitches60: 0, hitchesTotal: 0, seg: {}, lrec: null };
+  const base = { connected: true, mode: 'gs', ausRate: 60, hitches60: 0, hitchesTotal: 0, seg: {}, lrec: null };
   const counters = (core) => debugGroups({ ...base, core }).find((g) => g.title === 'Counters').rows;
   assert.equal(counters({ radio: 'usb', trunc: 9, salvaged: 7 }).find((r) => r.k === 'salvaged').v, '7');
   assert.equal(counters({ radio: 'usb', trunc: 9 }).find((r) => r.k === 'salvaged').v,
@@ -206,7 +227,7 @@ test('debugGroups shows the slice-salvage counter next to trunc', () => {
 });
 
 test('debugGroups hides the USB-only rows (usb latency, txfail) over the relay radio', () => {
-  const base = { connected: true, mode: 'gs', rcfPct: 90, ausRate: 60, hitches60: 0, hitchesTotal: 0, seg: {}, lrec: null };
+  const base = { connected: true, mode: 'gs', ausRate: 60, hitches60: 0, hitchesTotal: 0, seg: {}, lrec: null };
   const usbCore = { radio: 'usb', usb_p99_us: 200, usb_max_us: 250, txfail: 3 };
   const usbGroups = debugGroups({ ...base, core: usbCore });
   assert.ok(usbGroups.find((g) => g.title.startsWith('Latency')).rows.some((r) => r.k === 'usb (core, 1 s)'));
@@ -241,13 +262,13 @@ test('channel line shows the live channel and a state word while scanning/moving
 test('debugGroups has a Channel group with the core fields when present', () => {
   const core = { mode: 'gs', channel: 64, scan_state: 'frozen', scan_rounds: 3, scan_pick: 64,
     hop: { state: 'idle', verdict: 'healthy', evidence: 0, target: null, epoch: 2, hops: 1, holds: 0 } };
-  const g = debugGroups({ connected: true, mode: 'gs', core, rcfPct: null, ausRate: 0, hitches60: 0, hitchesTotal: 0, seg: { w1: {}, w60: {} }, lrec: null });
+  const g = debugGroups({ connected: true, mode: 'gs', core, ausRate: 0, hitches60: 0, hitchesTotal: 0, seg: { w1: {}, w60: {} }, lrec: null });
   const ch = g.find((x) => x.title === 'Channel');
   assert.ok(ch);
   const row = (k) => ch.rows.find((r) => r.k === k)?.v;
   assert.equal(row('channel'), '64'); assert.equal(row('scan'), 'frozen · 3 rounds · pick 64');
   assert.equal(row('hop'), 'idle · healthy'); assert.equal(row('hop target'), '–'); assert.equal(row('hops / holds'), '1 / 0');
-  const sp = debugGroups({ connected: true, mode: 'spotter', core: { mode: 'spotter', channel: 64, scan_state: null, hop: null }, rcfPct: null, ausRate: 0, hitches60: 0, hitchesTotal: 0, seg: { w1: {}, w60: {} }, lrec: null });
+  const sp = debugGroups({ connected: true, mode: 'spotter', core: { mode: 'spotter', channel: 64, scan_state: null, hop: null }, ausRate: 0, hitches60: 0, hitchesTotal: 0, seg: { w1: {}, w60: {} }, lrec: null });
   assert.equal(sp.find((x) => x.title === 'Channel').rows.length, 1);   // channel only
 });
 
@@ -276,13 +297,13 @@ test('channel line shows the start channel while live before the first STATS', (
 
 test('debugGroups Channel group for a spotter: channel + follow rows', () => {
   const core = { mode: 'spotter', channel: 64, scan_state: null, hop: null, follow_state: 'following', follows: 2 };
-  const g = debugGroups({ connected: true, mode: 'spotter', core, rcfPct: null, ausRate: 0, hitches60: 0, hitchesTotal: 0, seg: { w1: {}, w60: {} }, lrec: null });
+  const g = debugGroups({ connected: true, mode: 'spotter', core, ausRate: 0, hitches60: 0, hitchesTotal: 0, seg: { w1: {}, w60: {} }, lrec: null });
   const ch = g.find((x) => x.title === 'Channel');
   assert.equal(ch.rows.length, 2);
   assert.equal(ch.rows.find((r) => r.k === 'channel').v, '64');
   assert.equal(ch.rows.find((r) => r.k === 'follow').v, 'following · 2 follows');
   // replay-shaped spotter stats (no follower): channel only, as before
-  const sp = debugGroups({ connected: true, mode: 'spotter', core: { mode: 'spotter', channel: 64, scan_state: null, hop: null, follow_state: null, follows: null }, rcfPct: null, ausRate: 0, hitches60: 0, hitchesTotal: 0, seg: { w1: {}, w60: {} }, lrec: null });
+  const sp = debugGroups({ connected: true, mode: 'spotter', core: { mode: 'spotter', channel: 64, scan_state: null, hop: null, follow_state: null, follows: null }, ausRate: 0, hitches60: 0, hitchesTotal: 0, seg: { w1: {}, w60: {} }, lrec: null });
   assert.equal(sp.find((x) => x.title === 'Channel').rows.length, 1);
 });
 
@@ -292,7 +313,7 @@ test('debug NACK group: tracker outcomes, fill ms, drone counters; off/null/spot
   const nack = { req: 120, rep: 18, syms: 140, tail: 9, fill: 100, late: 12, waste: 20, drop: 8, sup: 1,
     lead: 3, sent: 118, settle_ms: 14, fill_pps: 6.5, fill_p50: 11, fill_p90: 19, fill_max: 31, late_max: 9,
     drone_rx: 115, drone_syms: 133, drone_refused: 2 };
-  const args = { connected: true, mode: 'gs', core: { ...core, nack }, rcfPct: 97.2, ausRate: 60,
+  const args = { connected: true, mode: 'gs', core: { ...core, nack }, ausRate: 60,
     hitches60: 0, hitchesTotal: 0, seg: { w1: {}, w60: {} } };
   const grp = (a) => debugGroups(a).find((x) => x.title === 'NACK');
   const g = grp(args);

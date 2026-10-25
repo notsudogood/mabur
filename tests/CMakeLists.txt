@@ -106,6 +106,11 @@ add_mtest(test_hevc_skip_slice test_hevc_skip_slice.cpp)
 add_executable(slicefill ${CMAKE_SOURCE_DIR}/tools/slices/slicefill.cpp)
 target_link_libraries(slicefill PRIVATE mabur_common)
 add_mtest(test_dvr_mux test_dvr_mux.cpp)
+# Fixture paths for tools/bench/dvrcadence.py's own test (test_dvrcadence,
+# registered below): dvr_mux_writes_the_cadence_fixture writes them when
+# set, and is a no-op otherwise.
+set_tests_properties(test_dvr_mux PROPERTIES
+  ENVIRONMENT "MABUR_DVRCADENCE_FIXTURE_CLEAN=${CMAKE_BINARY_DIR}/tests/dvrcadence_clean.mp4;MABUR_DVRCADENCE_FIXTURE_OFFGRID=${CMAKE_BINARY_DIR}/tests/dvrcadence_offgrid.mp4;MABUR_DVRCADENCE_FIXTURE_FRACTIONAL=${CMAKE_BINARY_DIR}/tests/dvrcadence_fractional.mp4")
 add_mtest(test_raw_dvr test_raw_dvr.cpp)
 add_mtest(test_dvr_name test_dvr_name.cpp)
 add_mtest(test_threaded_sink test_threaded_sink.cpp)
@@ -165,6 +170,8 @@ if(MABUR_BUILD_DRONE)
     ${MABUR_VENC_DIR}/h26x_param_sets.c)
   target_include_directories(test_venc_h26x_param_sets PRIVATE ${MABUR_VENC_DIR})
   add_mtest(test_venc_cfg test_venc_cfg.cpp LIBS mabur_drone_core)
+  add_mtest(test_camera_modes test_camera_modes.cpp ${MABUR_VENC_DIR}/camera_modes.c)
+  target_include_directories(test_camera_modes PRIVATE ${MABUR_VENC_DIR})
   add_mtest(test_sensor_cal test_sensor_cal.cpp ${MABUR_VENC_DIR}/sensor_cal.c)
   target_include_directories(test_sensor_cal PRIVATE ${MABUR_VENC_DIR})
   add_mtest(test_sensor_steer test_sensor_steer.cpp ${MABUR_VENC_DIR}/sensor_steer.c)
@@ -189,14 +196,14 @@ if(MABUR_BUILD_GS)
   target_compile_definitions(test_player_config PRIVATE
     MABUR_PLAY_BUNDLE_DIR="${CMAKE_SOURCE_DIR}/gs/player/bundle")
   add_mtest(test_colortrans test_colortrans.cpp LIBS mabur_player_core)
-  add_mtest(test_fps_cap test_fps_cap.cpp LIBS mabur_player_core)
   add_mtest(test_frame_regulator test_frame_regulator.cpp LIBS mabur_player_core)
   add_mtest(test_phase_lock test_phase_lock.cpp LIBS mabur_player_core)
   add_mtest(test_mode_pick test_mode_pick.cpp LIBS mabur_player_core)
+  add_mtest(test_rate_match test_rate_match.cpp LIBS mabur_player_core)
+  add_mtest(test_fit_rect test_fit_rect.cpp LIBS mabur_player_core)
   add_mtest(test_lat_tracker test_lat_tracker.cpp LIBS mabur_player_core)
   add_mtest(test_vblank_estimator test_vblank_estimator.cpp LIBS mabur_player_core)
   add_mtest(test_lat_log test_lat_log.cpp LIBS mabur_player_core)
-  add_mtest(test_release_wait test_release_wait.cpp LIBS mabur_player_core)
   add_mtest(test_fb_cache test_fb_cache.cpp LIBS mabur_player_core)
   add_mtest(test_rec_button test_rec_button.cpp LIBS mabur_player_core)
   add_mtest(test_gs_menu test_gs_menu.cpp LIBS mabur_player_core)
@@ -207,9 +214,15 @@ if(MABUR_BUILD_GS)
   add_mtest(test_pts_unwrap test_pts_unwrap.cpp LIBS mabur_player_core)
   add_mtest(test_prime_frame test_prime_frame.cpp LIBS mabur_player_core)
   add_mtest(test_frame_handoff test_frame_handoff.cpp LIBS mabur_player_core pthread)
+  add_mtest(test_wake_queue test_wake_queue.cpp LIBS mabur_player_core pthread)
+  add_mtest(test_pi_mutex test_pi_mutex.cpp LIBS mabur_player_core pthread)
   add_mtest(test_au_router test_au_router.cpp LIBS mabur_player_core)
   add_mtest(test_feed_loop test_feed_loop.cpp LIBS mabur_player_core pthread)
+  add_mtest(test_decode_pump test_decode_pump.cpp LIBS mabur_player_core pthread)
+  add_mtest(test_release_loop test_release_loop.cpp LIBS mabur_player_core pthread)
   add_mtest(test_osd_font test_osd_font.cpp LIBS mabur_player_core)
+  add_mtest(test_glass_cadence test_glass_cadence.cpp LIBS mabur_player_core)
+  add_mtest(test_recorder_tap test_recorder_tap.cpp LIBS mabur_player_core pthread)
   add_mtest(test_gs_font test_gs_font.cpp LIBS mabur_player_core)
   add_dependencies(test_gs_font gsfont_fixtures)
   target_compile_definitions(test_gs_font PRIVATE
@@ -319,6 +332,7 @@ if(MABUR_BUILD_GS)
   add_mtest(test_drone_restart test_drone_restart.cpp LIBS mabur_gs_core)
   add_mtest(test_log_writer test_log_writer.cpp LIBS mabur_gs_core pthread)
   add_mtest(test_rtt_estimator test_rtt_estimator.cpp LIBS mabur_gs_core)
+  add_mtest(test_uplink_delivery test_uplink_delivery.cpp LIBS mabur_gs_core)
   add_mtest(test_ladder_residual test_ladder_residual.cpp LIBS mabur_gs_core)
   add_mtest(test_s1_loss test_s1_loss.cpp LIBS mabur_gs_core)
   add_mtest(test_transition_edge test_transition_edge.cpp LIBS mabur_gs_core)
@@ -419,6 +433,8 @@ if(Python3_EXECUTABLE)
   add_test(NAME test_airdrain
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/test_airdrain.py
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+  add_test(NAME test_latchgate
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/test_latchgate.py)
   add_test(NAME test_flightjitter
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/test_flightjitter.py
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
@@ -427,6 +443,12 @@ if(Python3_EXECUTABLE)
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
   add_test(NAME test_maburcal
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_maburcal.py)
+  add_test(NAME test_dvrcadence
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/test_dvrcadence.py
+            ${CMAKE_BINARY_DIR}/tests/dvrcadence_clean.mp4
+            ${CMAKE_BINARY_DIR}/tests/dvrcadence_offgrid.mp4
+            ${CMAKE_BINARY_DIR}/tests/dvrcadence_fractional.mp4)
+  set_tests_properties(test_dvrcadence PROPERTIES DEPENDS test_dvr_mux)
 endif()
 
 if(MABUR_BUILD_LINKBENCH)

@@ -16,7 +16,7 @@ uint32_t pipeline_common_gop_frames(double gop_seconds, uint32_t fps);
 /** Build sensor selection config from requested video parameters. */
 #ifndef PLATFORM_CV610
 SensorSelectConfig pipeline_common_build_sensor_select_config(int forced_pad,
-	int forced_mode, uint32_t target_width, uint32_t target_height,
+	CameraMode want_mode, uint32_t target_width, uint32_t target_height,
 	uint32_t target_fps);
 /** Log the selected sensor mode and actual frame rate. */
 void pipeline_common_report_selected_fps(const char *prefix,

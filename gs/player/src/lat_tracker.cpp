@@ -47,6 +47,7 @@ uint32_t LatTracker::percentile_(std::vector<uint32_t>& v, int pct) {
 }
 
 void LatTracker::on_submit(const maburgs::AuRecordMeta& m, uint64_t mono_us) {
+  std::lock_guard<PiMutex> lk(mu_);
   const int idx = alloc_(m.pts_us);
   Entry& e = map_[static_cast<std::size_t>(idx)];
   e = Entry{};
@@ -103,6 +104,7 @@ void LatTracker::on_submit(const maburgs::AuRecordMeta& m, uint64_t mono_us) {
 }
 
 void LatTracker::on_decoded(uint32_t pts_us, uint64_t mono_us) {
+  std::lock_guard<PiMutex> lk(mu_);
   const int idx = find_(pts_us);
   if (idx < 0) return;
   Entry& e = map_[static_cast<std::size_t>(idx)];
@@ -114,6 +116,7 @@ void LatTracker::on_decoded(uint32_t pts_us, uint64_t mono_us) {
 }
 
 void LatTracker::on_present(uint32_t pts_us, uint64_t mono_us) {
+  std::lock_guard<PiMutex> lk(mu_);
   const int idx = find_(pts_us);
   if (idx < 0) return;
   Entry& e = map_[static_cast<std::size_t>(idx)];
@@ -124,6 +127,7 @@ void LatTracker::on_present(uint32_t pts_us, uint64_t mono_us) {
 }
 
 void LatTracker::on_commit(uint32_t pts_us, uint64_t commit_mono_us, uint8_t bits) {
+  std::lock_guard<PiMutex> lk(mu_);
   const int idx = find_(pts_us);
   if (idx < 0) return;
   Entry& e = map_[static_cast<std::size_t>(idx)];
@@ -132,6 +136,7 @@ void LatTracker::on_commit(uint32_t pts_us, uint64_t commit_mono_us, uint8_t bit
 }
 
 void LatTracker::on_flip(uint32_t pts_us, uint64_t flip_mono_us, bool exact) {
+  std::lock_guard<PiMutex> lk(mu_);
   const int idx = find_(pts_us);
   if (idx < 0) return;
   Entry& e = map_[static_cast<std::size_t>(idx)];
@@ -182,11 +187,13 @@ void LatTracker::on_flip(uint32_t pts_us, uint64_t flip_mono_us, bool exact) {
 }
 
 void LatTracker::on_drop(uint32_t pts_us) {
+  std::lock_guard<PiMutex> lk(mu_);
   const int idx = find_(pts_us);
   if (idx >= 0) invalidate_(idx);
 }
 
 void LatTracker::flush_all() {
+  std::lock_guard<PiMutex> lk(mu_);
   for (auto& e : map_) e = Entry{};
   // New session's pts space is unrelated to the old one's -- same
   // reasoning as gs/src/main.cpp's lat_anchor.reset() on a discontinuity.
@@ -200,52 +207,78 @@ void LatTracker::flush_all() {
 }
 
 LatTracker::Line LatTracker::flush_line() {
+  // The window leaves under the lock; ranking it (nth_element over every
+  // segment) runs outside, so on_submit/on_decoded never wait on it.
   Line L{};
-  L.n = static_cast<int>(completed_.size());
-  L.anchor_ok = anchor_.usable();
-  L.dsp_exact = dsp_exact_window_;
-
-  if (L.n > 0) {
-    for (int s = 0; s < 8; ++s) {
-      std::vector<uint32_t> col(completed_.size());
-      for (std::size_t i = 0; i < completed_.size(); ++i)
-        col[i] = completed_[i].seg[s];
-      L.p50[s] = percentile_(col, 50);
-      L.p99[s] = percentile_(col, 99);
-    }
-    L.chk_ms = chk_n_ > 0 ? (chk_sum_us_ / chk_n_) / 1000.0 : 0.0;
-
-    // Rank on e2e (seg 7), then report THAT frame's own full breakdown --
-    // never a mix of independently-ranked per-segment percentiles, which
-    // would not sum to anything meaningful. Done identically for both ranks
-    // so the OSD's two rows stay comparable segment by segment.
-    auto rank_frame = [&](int pct, Breakdown& out) {
-      std::vector<uint32_t> e2es(completed_.size());
-      for (std::size_t i = 0; i < completed_.size(); ++i) e2es[i] = completed_[i].seg[7];
-      const uint32_t target = percentile_(e2es, pct);
-      for (const auto& c : completed_) {
-        if (c.seg[7] == target) {
-          out.valid = true;
-          for (int i = 0; i < 8; ++i)
-            out.ms[i] = static_cast<uint32_t>((c.seg[i] + 500) / 1000);
-          return;
-        }
-      }
-    };
-    rank_frame(99, p99_frame_);
-    rank_frame(50, p50_frame_);
+  double chk_sum_us = 0.0;
+  int chk_n = 0;
+  // The window leaves by swap with an empty vector already sized like the
+  // one going out, allocated here outside the lock: on_flip() appends on
+  // the release thread, and must never be the one to grow it from empty.
+  std::vector<FrameRow> fresh;
+  fresh.reserve(std::max(rows_cap_.load(std::memory_order_relaxed), kMinRowsCap));
+  {
+    std::lock_guard<PiMutex> lk(mu_);
+    L.rows.swap(completed_);
+    completed_.swap(fresh);
+    rows_cap_.store(L.rows.capacity(), std::memory_order_relaxed);
+    L.anchor_ok = anchor_.usable();
+    L.dsp_exact = dsp_exact_window_;
+    chk_sum_us = chk_sum_us_;
+    chk_n = chk_n_;
+    chk_sum_us_ = 0.0;
+    chk_n_ = 0;
+    dsp_exact_window_ = true;
   }
+  const std::vector<FrameRow>& rows = L.rows;
+  L.n = static_cast<int>(rows.size());
+  if (L.n == 0) return L;
 
-  L.rows = std::move(completed_);
-  completed_.clear();
-  chk_sum_us_ = 0.0;
-  chk_n_ = 0;
-  dsp_exact_window_ = true;
+  for (int s = 0; s < 8; ++s) {
+    std::vector<uint32_t> col(rows.size());
+    for (std::size_t i = 0; i < rows.size(); ++i) col[i] = rows[i].seg[s];
+    L.p50[s] = percentile_(col, 50);
+    L.p99[s] = percentile_(col, 99);
+  }
+  L.chk_ms = chk_n > 0 ? (chk_sum_us / chk_n) / 1000.0 : 0.0;
+
+  // Rank on e2e (seg 7), then report THAT frame's own full breakdown --
+  // never a mix of independently-ranked per-segment percentiles, which
+  // would not sum to anything meaningful. Done identically for both ranks
+  // so the OSD's two rows stay comparable segment by segment.
+  auto rank_frame = [&](int pct, Breakdown& out) {
+    std::vector<uint32_t> e2es(rows.size());
+    for (std::size_t i = 0; i < rows.size(); ++i) e2es[i] = rows[i].seg[7];
+    const uint32_t target = percentile_(e2es, pct);
+    for (const auto& c : rows) {
+      if (c.seg[7] == target) {
+        out.valid = true;
+        for (int i = 0; i < 8; ++i) out.ms[i] = static_cast<uint32_t>((c.seg[i] + 500) / 1000);
+        return;
+      }
+    }
+  };
+  Breakdown p99, p50;
+  rank_frame(99, p99);
+  rank_frame(50, p50);
+  // A flush_all() between the two locks needs no guard: it never touches the
+  // breakdowns (they stay stale across a reset on purpose), so storing this
+  // window's ranks now leaves the same state as this flush_line() finishing
+  // before that flush_all() began.
+  std::lock_guard<PiMutex> lk(mu_);
+  p99_frame_ = p99;
+  p50_frame_ = p50;
   return L;
 }
 
-LatTracker::Breakdown LatTracker::p99_frame() const { return p99_frame_; }
-LatTracker::Breakdown LatTracker::p50_frame() const { return p50_frame_; }
+LatTracker::Breakdown LatTracker::p99_frame() const {
+  std::lock_guard<PiMutex> lk(mu_);
+  return p99_frame_;
+}
+LatTracker::Breakdown LatTracker::p50_frame() const {
+  std::lock_guard<PiMutex> lk(mu_);
+  return p50_frame_;
+}
 
 int format_frame_row(const LatTracker::FrameRow& r, char* buf, size_t n) {
   return std::snprintf(buf, n,

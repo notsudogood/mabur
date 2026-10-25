@@ -18,7 +18,7 @@ bool BurnRecorder::start(const BurnCfg&, const std::string&, const VideoBackend*
   std::fprintf(stderr, "BurnRecorder: this build has no hardware encoder\n");
   return false;
 }
-void BurnRecorder::submit(const DmaFrame&) {}
+void BurnRecorder::submit(const DmaFrame&, uint64_t) {}
 void BurnRecorder::set_osd(const Surface&, const DirtyRect*, size_t) {}
 void BurnRecorder::request_idr() {}
 void BurnRecorder::drop_pending() {}

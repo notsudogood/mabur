@@ -34,6 +34,10 @@ class OsdFont {
   ~OsdFont();
   OsdFont(const OsdFont&) = delete;
   OsdFont& operator=(const OsdFont&) = delete;
+  // Move-only: tests build-and-return one by value (e.g. a loaded fixture
+  // helper); production code never moves a live instance.
+  OsdFont(OsdFont&&) noexcept;
+  OsdFont& operator=(OsdFont&&) noexcept;
 
   // On failure, *err (when non-null) gets a human-readable reason.
   bool load(const std::string& path, std::string* err);
@@ -53,13 +57,14 @@ class OsdFont {
   // pixels. Callable more than once; the last call wins.
   void set_inverse(const ColorTrans& t);
 
-  // Atlas with glyphs exactly w x h. Cached: one non-native size at a time
-  // (canvas changes are rare). Returns nullptr if not loaded, w/h <= 0, or
-  // w/h exceeds the sanity bound (kMaxGlyphDim in osd_font.cpp).
+  // Atlas with glyphs exactly w x h. Cached: two non-native sizes at a
+  // time -- the screen's and the burned recording's. Returns nullptr if
+  // not loaded, w/h <= 0, or w/h exceeds the sanity bound (kMaxGlyphDim in
+  // osd_font.cpp).
   const GlyphAtlas* atlas_at(int w, int h, ScaleMode mode);
 
   // Number of times atlas_at() has actually built a scaled atlas (i.e. a
-  // cache miss for a non-native size). Exposed for testing the one-entry
+  // cache miss for a non-native size). Exposed for testing the two-entry
   // cache; not meaningful otherwise.
   uint64_t builds() const { return builds_; }
 
@@ -69,9 +74,17 @@ class OsdFont {
   GlyphAtlas native_;
   GlyphAtlas original_;          // the mmap view
   std::vector<uint32_t> inverted_;
-  GlyphAtlas cached_;
-  ScaleMode cached_mode_ = ScaleMode::kSharp;
-  std::vector<uint32_t> scaled_;
+
+  // A cached scaled atlas plus the build that produced it. `built_at` is a
+  // snapshot of `builds_` taken when this entry was (re)built, so the two
+  // entries can be ordered by recency without a separate LRU list.
+  struct Entry {
+    GlyphAtlas atlas;
+    ScaleMode mode = ScaleMode::kSharp;
+    std::vector<uint32_t> px;
+    uint64_t built_at = 0;
+  };
+  Entry entries_[2];
   uint64_t builds_ = 0;
 };
 

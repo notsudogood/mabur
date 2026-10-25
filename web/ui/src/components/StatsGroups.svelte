@@ -16,6 +16,8 @@
     <span class="dim5">Channel</span><span class="num nowrap">{v.chLine}</span></div>
   <div style="display:flex;justify-content:space-between;font-size:12px">
     <span class="dim5">Drone temp</span><span class="num nowrap">{v.droneTemp}{' °C'}</span></div>
+  <div style="display:flex;justify-content:space-between;font-size:12px">
+    <span class="dim5">Uplink</span><span class="num nowrap {v.uplinkTone}">{v.uplink}{' %'}</span></div>
 </div>
 
 <div class="group">
@@ -54,6 +56,9 @@
 </div>
 
 <style>
+  /* Uplink tones (view.js uplinkCell): amber below 80 %, red when the drone stopped hearing us. */
+  .low { color: var(--color-status-caution); } .dead { color: var(--color-status-critical); }
+  .dim { color: var(--color-neutral-400); }
   .nowrap { white-space: nowrap; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; }
   .cell { display: flex; flex-direction: column; gap: 2px; }

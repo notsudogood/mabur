@@ -210,6 +210,28 @@ struct Rig {
     return ran;
   }
   uint32_t px(int b, int x, int y) const { return buf[b].px[(size_t)y * W + x]; }
+
+  // A fresh MSP screen landing this iteration, no GS input. Built the same
+  // way make_in()'s other callers build one; kept as a Rig method because
+  // the burn-lineage tests drive compose_screen()/compose_burn() directly
+  // rather than through step()/tick().
+  OsdComposeIn fresh_msp_in() const {
+    static const mabur::MspScreen scr = full_screen('X');
+    OsdComposeIn in;
+    in.screen = &scr;
+    in.msp_fresh = true;
+    return in;
+  }
+  // A GS figure moving this iteration, no MSP input.
+  OsdComposeIn fresh_gs_in() const {
+    static const GsSnapshot sn = snap_cards(3);
+    static const GsPlayerState ps = player(60.0);
+    OsdComposeIn in;
+    in.snap = &sn;
+    in.gs_ps = ps;
+    in.gs_dirty = true;
+    return in;
+  }
 };
 
 static OsdComposeIn make_in(const mabur::MspScreen* scr, bool fresh, bool stale,
@@ -1103,6 +1125,127 @@ TEST(a_new_burn_sink_gets_a_full_msp_restate_too) {
   r.step(make_in(&scr, true, false, nullptr, GsPlayerState{}, false));
   r.commit();
   CHECK(second.wrong_against(r.buf[r.front].s) == 0);
+}
+
+// ======================================================================
+// The burn lineage's own size and its own trigger
+// ======================================================================
+
+TEST(the_burn_sink_receives_the_burn_size_not_the_screen_size) {
+  Rig r;  // 1920x1080 screens, MSP + GS, as the file's other tests build it
+  int got_w = 0, got_h = 0;
+  r.comp.set_burn_sink([&](const Surface& s, const DirtyRect*, size_t) { got_w = s.width; got_h = s.height; });
+  std::string err;
+  REQUIRE(r.comp.set_burn_size(1728, 972, &err));
+  r.comp.compose(0, r.buf[0].s, r.fresh_msp_in());
+  CHECK(got_w == 1728 && got_h == 972);
+  CHECK(r.buf[0].s.width == 1920);
+}
+
+TEST(the_burn_half_composes_without_the_screen_half) {
+  Rig r; int calls = 0;
+  r.comp.set_burn_sink([&](const Surface&, const DirtyRect*, size_t) { ++calls; });
+  std::string err; REQUIRE(r.comp.set_burn_size(1728, 972, &err));
+  const OsdComposeIn in = r.fresh_msp_in();
+  r.comp.compose_burn(in);
+  CHECK(calls == 1);
+  r.comp.compose_burn(in);          // a repeat of the same screen draws nothing
+  CHECK(calls == 1);
+  CHECK(r.comp.wants(in));          // the screen half has not consumed it
+  r.comp.compose_screen(0, r.buf[0].s, in);
+  CHECK(!r.comp.blanked(0));
+}
+
+TEST(gs_layout_leaves_the_burn_layer_at_the_burn_size) {
+  Rig r; std::string err;
+  REQUIRE(r.comp.set_burn_size(1280, 720, &err));
+  REQUIRE(r.comp.gs_layout(1920, 1080, &err));
+  int got_w = 0;
+  r.comp.set_burn_sink([&](const Surface& s, const DirtyRect*, size_t) { got_w = s.width; });
+  r.comp.compose(0, r.buf[0].s, r.fresh_gs_in());
+  CHECK(got_w == 1280);
+}
+
+// A record size the GS bar cannot be laid out at refuses the recording
+// and nothing else: set_burn_size() fails, the burn size is cleared, and
+// the screen's GS overlay -- gs_[0]/gs_[1] and gs_[2] put back at the
+// screen size -- keeps drawing. A later, fitting record size still works.
+TEST(a_record_size_the_gs_bar_cannot_fit_refuses_only_the_recording) {
+  // Precondition: 320x240 really is too small for the bar with this font.
+  {
+    GsCompactBar probe(gsfont());
+    std::string perr;
+    REQUIRE(!probe.layout(320, 240, &perr));
+  }
+  Rig r(/*with_msp=*/false, /*with_gs=*/true);  // GS laid out at 1920x1080
+  std::string err;
+  CHECK(!r.comp.set_burn_size(320, 240, &err));
+  CHECK(!err.empty());
+  CHECK(r.comp.gs_present());
+  CHECK(r.comp.gs_live());
+
+  // The screen composition still draws the GS layer, identical to a rig
+  // that never saw the refused size.
+  const OsdComposeIn in = r.fresh_gs_in();
+  const OsdComposeOut out = r.comp.compose(0, r.buf[0].s, in);
+  CHECK(out.gs_drawn > 0);
+  CHECK(diff_px(r.buf[0].px, reference(in, false, true)) == 0);
+
+  // The burn canvas follows the screen again, with gs_[2] laid out there.
+  int got_w = 0, got_h = 0, calls = 0;
+  r.comp.set_burn_sink([&](const Surface& s, const DirtyRect*, size_t) {
+    got_w = s.width;
+    got_h = s.height;
+    ++calls;
+  });
+  r.comp.compose(1, r.buf[1].s, r.fresh_gs_in());
+  CHECK(calls == 1 && got_w == W && got_h == H);
+
+  REQUIRE(r.comp.set_burn_size(1280, 720, &err));
+  CHECK(r.comp.gs_live());
+}
+
+// Without a screen layout yet the refusal leaves all three un-laid, as
+// set_gs() left them; gs_layout() then lays them out together.
+TEST(a_refused_record_size_before_any_screen_layout_keeps_all_three_unlaid) {
+  OsdComposer comp;
+  comp.set_gs(make_gs_layer(gsfont()), make_gs_layer(gsfont()), make_gs_layer(gsfont()));
+  std::string err;
+  CHECK(!comp.set_burn_size(320, 240, &err));
+  CHECK(comp.gs_present());
+  CHECK(!comp.gs_live());
+  REQUIRE(comp.gs_layout(W, H, &err));
+  CHECK(comp.gs_live());
+}
+
+// Pins the burn's OWN blank, independent of screen_blank_: with the screen
+// half never run at all, a fresh MSP screen composed into the burn canvas,
+// then a stale input. The first stale composition is the transition and
+// emits the clear; a second stale composition is a repeat of the already-
+// blank canvas and must emit nothing -- the mirror image of the screen
+// half's `screen_blank_`/`blanked_[]`, but tracked for the burn's own
+// canvas rather than borrowed from the screen's.
+TEST(the_burn_half_tracks_its_own_blank_not_the_screens) {
+  const mabur::MspScreen scr = full_screen('X');
+  Rig r(/*with_msp=*/true, /*with_gs=*/false);
+  int calls = 0;
+  r.comp.set_burn_sink([&](const Surface&, const DirtyRect*, size_t) { ++calls; });
+  std::string err;
+  REQUIRE(r.comp.set_burn_size(1280, 720, &err));
+
+  OsdComposeIn fresh;
+  fresh.screen = &scr;
+  fresh.msp_fresh = true;
+  r.comp.compose_burn(fresh);
+  CHECK(calls == 1);  // the fresh screen lands in the burn canvas
+
+  OsdComposeIn stale;
+  stale.screen = &scr;
+  stale.msp_stale = true;
+  r.comp.compose_burn(stale);
+  CHECK(calls == 2);  // the transition: the burn's own blank, sunk once
+  r.comp.compose_burn(stale);
+  CHECK(calls == 2);  // a repeat of the stale episode draws nothing more
 }
 
 MTEST_MAIN

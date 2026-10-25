@@ -657,9 +657,10 @@ in about 14–17 s.
 ### Low-power (disarmed) mode
 
 While the FC reports DISARMED, `RcAgent` runs the encoder at
-`low_power.bitrate_kbps` / `low_power.fps`. The bundle ships 1 Mb/s and
-30 fps; the code defaults are 1000 kbps and 15 fps. An ARMED report
-returns full power.
+`low_power.bitrate_kbps` / `low_power.fps`. The bundle ships the mode
+**off** (`low_power.enable = false`) with 1 Mb/s and 30 fps ready for when
+it is turned on; the code defaults are 1000 kbps and 15 fps. An ARMED
+report returns full power.
 
 The mode tracks the FC's **current** arm state both ways. It is not a
 one-shot pre-arm latch, so a DISARMED report re-enters it however many

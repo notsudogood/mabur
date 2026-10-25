@@ -232,41 +232,6 @@ export function capToGlass({ capToCompleteUs, tEmitMs, tRecvMs, tPresentMs }) {
   return capToCompleteUs / 1000 + (tRecvMs - tEmitMs) + (tPresentMs - tRecvMs);
 }
 
-// % of GS->drone RCFs the drone reports having heard, over the delta
-// between two stats snapshots. The denominator is `rcf_sent` (RCFs only),
-// never `sends`: the drone's Telem.rcf_rx counts RCFs only, and `sends`
-// also counts DISC beacons/keep-alives, which would cap the ratio below the
-// 95 % pass mark. null when either snapshot is missing, either is missing
-// drone_rcf_rx/rcf_sent, rcf_sent didn't advance, or drone_rcf_rx went
-// backwards (counter reset, e.g. drone restart) rather than wrapping cleanly.
-export function rcfHeardPct(prev, cur) {
-  if (!prev || !cur) return null;
-  if (prev.drone_rcf_rx == null || cur.drone_rcf_rx == null) return null;
-  if (prev.rcf_sent == null || cur.rcf_sent == null) return null;
-  const dSent = cur.rcf_sent - prev.rcf_sent;
-  if (!(dSent > 0)) return null;
-  const dRcf = cur.drone_rcf_rx - prev.drone_rcf_rx;
-  if (dRcf < 0) return null;
-  return 100 * dRcf / dSent;
-}
-
-// F2: dividing adjacent 1 s stats ticks overshoots (100-105 %) because
-// drone_rcf_rx (drone Telem, 1 Hz) and rcf_sent (GS-side) are sampled at
-// different instants -- the two counters' phase drifts a tick's worth
-// relative to each other. Diffing over a ~10-tick (~10 s) window absorbs
-// that skew instead of clamping it away. `ring` is the trailing stats
-// history, oldest first, one entry per second (the page's existing 60-
-// entry stats ring); picks the entry `windowTicks` back from the newest,
-// or the oldest available if the ring is shorter than that. null on an
-// empty or single-entry ring (rcfHeardPct itself covers the missing-field
-// / reset / non-positive-delta cases).
-export function rcfHeardPctWindowed(ring, windowTicks = 10) {
-  if (!ring || ring.length < 2) return null;
-  const cur = ring[ring.length - 1];
-  const prev = ring[Math.max(0, ring.length - 1 - windowTicks)];
-  return rcfHeardPct(prev, cur);
-}
-
 // R12 / F1: the running WASM module keeps the mode/channel/width it was
 // started with -- changing the mode radio or the channel/width inputs
 // after Connect does nothing but fight the module's actual (unchanged)

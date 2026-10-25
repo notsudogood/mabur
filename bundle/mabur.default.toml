@@ -121,7 +121,8 @@ max_kbps = 500             # MCS0/20. Without this entry it would take ~1 Mb/s o
 [venc]
 sensor_bin = "/etc/sensors/imx415_greg_fpvXIX_colortrans.bin"  # camera sensor tuning file
 size       = "1920x1080"
-fps        = 60
+fps        = 60            # 1..120: up to 90 the full-view 1920x1080 camera mode, 91-100 1728x972, 101-120 1728x816;
+                           # size must keep that mode's aspect ratio and fit inside it (docs/camera-modes.md)
 gop_s      = 0             # seconds between refresh starts; 0 = none: the GS asks for an IDR when its picture is damaged
 qp_delta   = 4             # quality offset between keyframes and P-frames
 max_ipprop = 2             # keyframe may be at most this many times a P-frame's size
@@ -167,7 +168,9 @@ overhead       = 1.0            # extra repair data (1.0 = +100 %)
 
 [low_power]
 # While disarmed: lower bitrate and frame rate to keep the VTX cool.
-# Needs the flight controller's arm state over [msp].
+# Needs the flight controller's arm state over [msp]. On in this bundle
+# (Gilang's ships it off); the phase lock pauses while it holds the camera
+# at a lower rate, and locks again once armed.
 enable       = true
 bitrate_kbps = 1000
 fps          = 30

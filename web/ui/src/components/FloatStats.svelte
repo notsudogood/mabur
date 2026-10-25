@@ -90,6 +90,7 @@
         <div class="c"><span class="l">Latency</span><span class="n">{v.latency}<span class="l">{' ms'}</span></span></div>
         <div class="c"><span class="l">FPS · jitter</span><span class="n">{v.fps} · {v.jitter}<span class="l">{' ms'}</span></span></div>
         <div class="c"><span class="l">Drone temp</span><span class="n">{v.droneTemp}<span class="l">{' °C'}</span></span></div>
+        <div class="c"><span class="l">Uplink</span><span class="n {v.uplinkTone}">{v.uplink}<span class="l">{' %'}</span></span></div>
       </div>
     </div>
   {:else}
@@ -109,6 +110,9 @@
   .nw { white-space: nowrap; }
   .g2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3) var(--space-4); }
   .c { display: flex; flex-direction: column; } .l { font-size: 11px; color: var(--color-neutral-400); } .n { font-size: 15px; }
+  /* Uplink tones (view.js uplinkCell): amber below 80 %, red when the drone stopped hearing us. */
+  .n.low { color: var(--color-status-caution); } .n.dead { color: var(--color-status-critical); }
+  .n.dim { color: var(--color-neutral-400); }
   .pill { touch-action: none; user-select: none; display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 12px; border: 0;
           border-radius: var(--radius-md); background: color-mix(in srgb, var(--color-surface) 80%, transparent);
           backdrop-filter: blur(12px); box-shadow: var(--shadow-md); color: var(--color-text); font: inherit; font-size: 12px; cursor: pointer; }

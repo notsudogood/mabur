@@ -69,6 +69,7 @@
 #include "rcf_slot.h"
 #include "refresh_requester.h"
 #include "rtt_estimator.h"
+#include "uplink_delivery.h"
 #include "link_card.h"
 #include "radio_frontend.h"
 #include "remote_card.h"
@@ -550,6 +551,9 @@ static int run_radio(const maburgs::Config& cfg) {
   // from the same core thread as latest_telem: RCF send stamps below,
   // telem echoes in the rc sink.
   maburgs::RttEstimator rtt_est;
+  // Uplink delivery % + state for the OSD: fed every RCF that leaves (past
+  // the scout gate) and every Telem, on this same core thread.
+  maburgs::UplinkDelivery uplink;
   // RCF slotting (docs/findings/2026-09-02-gs-uplink-self-blanking.md):
   // control frames wait for the end-of-AU callback (FrameStream sink below) so the
   // send lands in the drone's inter-AU idle. See rcf_slot.h.
@@ -682,7 +686,10 @@ static int run_radio(const maburgs::Config& cfg) {
                    static_cast<unsigned long long>(now_ms - rcf_slot.last_au_ms()));
     }
     const bool ok = fronts[static_cast<size_t>(f.card)]->send_control(f.frame);
-    if (f.stamp_rtt) rtt_est.on_rcf_sent(f.seq, mono_us());
+    if (f.stamp_rtt) {
+      rtt_est.on_rcf_sent(f.seq, mono_us());
+      uplink.on_rcf_sent(mono_ms());
+    }
     chan.note_sent(ok, f.stamp_rtt);
   };
 
@@ -1018,6 +1025,7 @@ static int run_radio(const maburgs::Config& cfg) {
         // stamps below, so the subtraction is one clock throughout.
         rtt_est.on_telem(t->rcf_seq_echo, (t->flags & 0x08) != 0,
                          t->rcf_age_ms, t->pts_at_build, us);
+        uplink.on_telem(t->tlm_seq, t->rcf_rx, t->state, us / 1000);
         // Calibration ack (Telem flags bit6 cal_active) -- the only
         // acknowledgment signal the wire carries for a T_CAL_CMD. Telem has
         // no nonce field, so cal_pending_nonce (stashed from the CalCmd the
@@ -1935,6 +1943,7 @@ static int run_radio(const maburgs::Config& cfg) {
         }
         sin.rtt = ri;
       }
+      sin.uplink = uplink.view(mono_ms());
       // lat_win.flush() is destructive (reads AND clears); safe here because
       // the block runs only on a poll that will emit, so the window spans
       // the whole interval rather than the last loop tick.

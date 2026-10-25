@@ -843,7 +843,13 @@ The panel shows a 1 Hz snapshot from the core (`webgs::Stats` /
 receipt. The snapshot includes the recorder's `rec_state`/`rec_err` (Record,
 above) and `drone_temp_c`. That is Telem `soc_temp_c`, null until a Telem
 lands or when the drone reports −128 (no thermal source), and it is shown as
-"Drone temp" on both the Stats tab and the floating panel.
+"Drone temp" on both the Stats tab and the floating panel. Below it, both
+show **Uplink**, the share of this GS's RCFs the drone accepted (`uplink_pct`,
+with its state in `uplink`; see "RCF heard %" below):
+- amber below 80 %
+- red `0` when the drone reports it has stopped hearing us
+- dimmed while the GS sends no RCFs or the drone's Telem is stale
+- `–` in spotter mode, which sends no RCFs
 
 Where the panel lives depends on the layout:
 
@@ -890,12 +896,15 @@ Link state shown alongside:
 - probe gate state.
 - pre-FEC loss and residual.
 - SNR/RSSI.
-- **RCF heard %:** Δ`Telem.rcf_rx` / Δ`rcf_sent` over a trailing ~10 s
-  window of the stats ring, not the adjacent 1 s tick
-  (`rcfHeardPctWindowed()` in `web/ui/src/lib/logic.mjs`). The two counters
-  are sampled at different instants, so adjacent ticks can read over 100 %.
-  `rcf_sent` counts RCFs only, not the DISC beacons/keep-alives that `sends`
-  also counts, because the drone's `rcf_rx` counts RCFs only.
+- **RCF heard %:** `uplink_pct`. It's computed in the core by
+  `maburgs::UplinkDelivery` (`gs/src/uplink_delivery.h`), the same class
+  maburgs runs for the sideport, so the two GSes report one number:
+  Δ`Telem.rcf_rx` over Δ RCFs sent, between Telems ~10 s apart. Adjacent
+  1 s ticks can read over 100 %, because the two counters are sampled at
+  different instants. The denominator counts RCFs only, never the DISC
+  beacons/keep-alives that `sends` also counts, because the drone's
+  `rcf_rx` counts RCFs only. `uplink` is that class's state:
+  `none / wait / ok / low / dead / idle / stale`.
 - AUs/s.
 - hitches (gaps > 1.5× the frame period).
 

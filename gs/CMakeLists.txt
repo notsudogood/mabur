@@ -44,6 +44,7 @@ add_library(mabur_gs_core STATIC
   src/probe_track.cpp
   src/link_health.cpp
   src/rtt_estimator.cpp
+  src/uplink_delivery.cpp
   src/stats_exporter.cpp
   src/stats_sink.cpp)
 target_include_directories(mabur_gs_core

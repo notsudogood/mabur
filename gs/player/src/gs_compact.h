@@ -31,6 +31,7 @@ constexpr const char* kFps = "\U000F0230";      // filmstrip
 constexpr const char* kJit = "\U000F0430";      // pulse
 constexpr const char* kLat = "\U000F051B";      // timer-outline
 constexpr const char* kLoss = "\U000F033A";     // link-variant-off
+constexpr const char* kUplink = "\U000F005D";   // arrow-up
 }  // namespace gs_icon
 
 // The GS link-status OSD: two rows along the bottom edge, each item an icon,
@@ -39,14 +40,17 @@ constexpr const char* kLoss = "\U000F033A";     // link-variant-off
 //                                                   ● REC 12:47   <- top right
 //   ...
 //   [wifi] 149 [tune-vertical] 5/20 [chart-donut] 62% [signal] -70/-72
-//     [waveform] 22/20 [thermometer] 41
+//     [waveform] 22/20 [thermometer] 41 [arrow-up] 95%
 //   [speedometer] 8.1 [aspect-ratio] 720p [filmstrip] 60 [pulse] 5.2
 //     [timer-outline] 45/78 [link-variant-off] 0.3/0.0
 //
-// Row 0 is channel, mcs/width, airtime, per-card RSSI, per-card SNR and the
+// Row 0 is channel, mcs/width, airtime, per-card RSSI, per-card SNR, the
 // drone SoC temperature (sideport drone.sys.soc_temp_c, caution-coloured
 // from 70 C -- on the radio row because it is drone-sourced, not
-// player-measured). Row 1 is bitrate, the decoded resolution as its height
+// player-measured) and the uplink delivery % (drone.rcf, the share of the
+// GS's RCFs the drone accepted). Uplink is not in the column grid: nothing
+// sits below it, so it trails temp at plain item spacing rather than
+// after the column temp shares with loss. Row 1 is bitrate, the decoded resolution as its height
 // plus "p", fps, jitter, latency p50/p99 and pre/post-FEC loss.
 //
 // With the GS's channel scan enabled (sideport scan.state != "off") the
@@ -57,13 +61,14 @@ constexpr const char* kLoss = "\U000F033A";     // link-variant-off
 // width, so the pilot reads the radio on one line and the picture on the
 // other; `loss` sits with the video row it explains rather than with the
 // radio figures that cause it. Two rows rather than one for type size: all
-// twelve items on one line would cap the type too small to read on the GS
+// thirteen items on one line would cap the type too small to read on the GS
 // screen.
 //
 // The two rows share COLUMNS: an item starts at the same x as the item
 // above or below it (ch/bitrate, mcs/res, air/fps, rssi/jit, snr/lat,
 // temp/loss), each column as wide as the wider of its two worst cases, and
-// the grid -- not each row -- is centred. Rows centred on their own widths
+// the grid -- not each row -- is centred, uplink's overhang past the last
+// column included. Rows centred on their own widths
 // put every item at an arbitrary offset from its neighbour on the other row.
 //
 // The TYPE SIZE is pinned, not "whatever fits": layout() takes the largest
@@ -73,12 +78,14 @@ constexpr const char* kLoss = "\U000F033A";     // link-variant-off
 // widest row from when the items carried text labels, and the operator
 // chose that size; the icons made the real rows narrower, and the width
 // they freed stays slack rather than growing the bar into the picture. The
-// real worst-case grid must fit too, so a wider item can never overflow.
+// real worst-case grid (uplink's overhang included) must fit too, so a
+// wider item can never overflow -- and an item wide enough to push the
+// grid past the reference steps the whole bar down a size.
 //
 // No status colours, no meters, no bars -- every glyph takes
-// tok::kTextPrimary, with three deliberate exceptions.
+// tok::kTextPrimary, with four deliberate exceptions.
 //
-// The first is staleness: the six LINK-sourced items dim to
+// The first is staleness: the LINK-sourced items dim to
 // tok::kTextLabel while the sideport is quiet, because the alternative is
 // a line of frozen numbers that looks live, which is the failure this OSD
 // exists to prevent. The player-measured items never dim -- they are
@@ -109,6 +116,15 @@ constexpr const char* kLoss = "\U000F033A";     // link-variant-off
 // by a frozen flag over a live number is the same failure staleness
 // dimming exists to prevent.
 //
+// The fourth is the uplink cell (drone.rcf): tok::kStatusCaution below
+// 80 % delivery, and "0%" in tok::kStatusCritical while the drone reports
+// it has stopped hearing the GS -- the one failure every other figure on
+// this line misses, since video and the downlink stay healthy. While the
+// GS itself sends no RCFs (rendezvous back to beaconing, key mismatch,
+// calibration silence) the cell is a dim "--": the drone failing safe then
+// says nothing about the uplink. Both tints are gated on !stale like
+// temp's.
+//
 // The glyph mask's baked drop shadow stays. It is part of the glyph, not
 // styling: without it the line is unreadable over bright video.
 //
@@ -134,6 +150,7 @@ enum class GsBarField {
   kRssi,
   kSnr,
   kTemp,
+  kUplink,
   kBitrate,
   kRes,
   kFps,
@@ -198,9 +215,11 @@ class GsCompactBar final : public GsLayer {
   // kCorner for the recording indicator, which is right-flushed at the top
   // inset and belongs to no row.
   static int row_of(GsBarField id);
-  // Which grid column an item draws in, 0..kCols-1; -1 for the corner item.
+  // Which grid column an item draws in, 0..kCols-1; kTrail for row 0's
+  // trailing item (uplink), which has no column; -1 for the corner item.
   static int col_of(GsBarField id);
   static constexpr int kCols = 6;
+  static constexpr int kTrail = kCols;
   static constexpr int kRows = 2;
   static constexpr int kCorner = -1;
   // The widest string field `id` can render with `n_cards` cards -- what

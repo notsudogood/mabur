@@ -172,7 +172,7 @@
     } else if (!live || lv.state !== (lrec && lrec.state)) {
       lrec = live ? { ...lv, rateBps: lrec ? lrec.rateBps : 0 } : null;
     }
-    groups = debugGroups({ connected: live, mode: shownMode, core, rcfPct: tele.rcfPct, ausRate: tele.ausRate,
+    groups = debugGroups({ connected: live, mode: shownMode, core, ausRate: tele.ausRate,
       hitches60: tele.hitches60(nowMs), hitchesTotal: video.hitchesTotal, seg: tele.seg || { w1: {}, w60: {} }, lrec });
     spark = live ? sparkPoints(tele.spark) : '0,24 100,24';
     tag = linkTag({ state: sess.state, mode: sess.mode, core });

@@ -81,6 +81,7 @@ Two kinds of doc, two rules:
 | shipping a binary or config to a device | `docs/deploy.md` |
 | calibrating a VTX's TX-power walls, maburcal, cal.log | `docs/calibration.md` |
 | a specific past investigation, or why something is the way it is | `docs/findings/README.md` (dated index) |
+| camera modes and field of view per `venc.fps` (1920x1080@90 full view, 1728x972@100, 1728x816@120), allowed `venc.size`, binning, the waybeam IMX415 driver the image ships, matching the GS `screen_mode` / the fps mismatch warning / letterboxing, SD-recorder risks above 90 fps, the GS burned recorder at 100 fps | `docs/camera-modes.md` |
 | airtime/serialization math, per-stream FEC overhead, why jitter ∝ frame size, the encoder bitrate formula, encoder size knobs (max_ipprop, min_iqp, superframe_p_pct, `ref_*`/intra-refresh, dead SDK caps) | `docs/airtime-model.md` |
 | half-duplex timing: who transmits when, the slotter, airtime budget, why RCFs get lost | `docs/tx-rx-timing.md` |
 | boot time, the OpenIPC init chain, U-Boot/serial console on the drone | `docs/findings/2026-09-07-boot-time.md` |

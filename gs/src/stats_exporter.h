@@ -15,6 +15,7 @@
 #include "op_point.h"
 #include "refresh_requester.h"
 #include "relay_stats.h"
+#include "uplink_delivery.h"
 
 namespace maburgs {
 
@@ -348,6 +349,9 @@ struct StatsInput {
   // Latest drone telemetry, if any this session: wire struct + GS arrival clock.
   std::optional<mabur::rc::Telem> telem;
   uint64_t telem_rx_ms = 0;   // GS monotonic arrival stamp
+  // UplinkDelivery's view, exported under drone.rcf (so it is null with
+  // the drone block before the first Telem).
+  UplinkView uplink;
 
   // Head-segment latency aggregates (latency accounting): nullopt while the
   // pts anchor isn't usable() yet. The core loop builds a StatsInput only on

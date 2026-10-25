@@ -61,6 +61,7 @@
 #include "rcf_slot.h"
 #include "relay_stats.h"
 #include "rtt_estimator.h"
+#include "uplink_delivery.h"
 #include "spotter_follow.h"
 #include "stats_exporter.h"
 #include "vrx_controller.h"
@@ -127,6 +128,11 @@ struct Stats {
   // "RCF heard %" against the drone's Telem.rcf_rx, which counts RCFs only.
   uint64_t rcf_sent = 0;
   std::optional<uint32_t> drone_rcf_rx;   // Telem, cumulative
+  // UplinkDelivery's view (gs/src/uplink_delivery.h): delivery % over a
+  // ~10 s window and its state, spelled as on the maburgs sideport.
+  // Spotter: always "none" (it sends no RCFs and is never fed).
+  std::optional<int> uplink_pct;
+  std::string uplink = "none";
   std::optional<uint8_t> drone_state;
   std::optional<uint8_t> rec_status;      // Telem.rec_status raw (VTX recorder)
   uint32_t idr_req = 0;                   // page IDR requests so far (set_idr_requests)
@@ -294,6 +300,9 @@ class WebGs {
   std::optional<uint16_t> nack_tlm_seen_;   // last tlm_seq whose counters were summed
   uint64_t drone_nack_rx_ = 0, drone_retx_syms_ = 0, drone_retx_refused_ = 0;
   maburgs::RttEstimator rtt_;
+  // Uplink delivery % + state: Gs only, fed with rtt_ (RCF sends and Telem)
+  // on the same tick clock and thread.
+  maburgs::UplinkDelivery uplink_;
   // Gs: in SESSION && peer CAP_FRAME_WIRE (edge-reset). Spotter: always true.
   bool frame_wire_ = false;
   maburgs::DroneRestartDetector restart_;         // Spotter only

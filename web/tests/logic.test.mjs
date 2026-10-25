@@ -123,7 +123,7 @@ test('DecoderSlot.replace closes the previous decoder unless already closed', ()
 });
 
 import {
-  SegWindow, capToGlass, rcfHeardPct, rcfHeardPctWindowed, errorText, ht40Offset,
+  SegWindow, capToGlass, errorText, ht40Offset,
   pruneSubmitted, trimBefore, copyStatsPayload, controlsLocked,
   isStalePresentSample,
 } from '../ui/src/lib/logic.mjs';
@@ -147,23 +147,6 @@ test('SegWindow p50/p99/max over 1 s and 60 s', () => {
 test('capToGlass null without offset, sum with it', () => {
   assert.equal(capToGlass({ capToCompleteUs: -1, tEmitMs: 0, tRecvMs: 1, tPresentMs: 5 }), null);
   assert.equal(capToGlass({ capToCompleteUs: 30000, tEmitMs: 100, tRecvMs: 102, tPresentMs: 120 }), 50);
-});
-
-test('rcfHeardPct deltas, resets and missing fields', () => {
-  assert.equal(rcfHeardPct(null, { drone_rcf_rx: 5, rcf_sent: 5 }), null);
-  assert.equal(rcfHeardPct({ drone_rcf_rx: 100, rcf_sent: 100 }, { drone_rcf_rx: 119, rcf_sent: 120 }), 95);
-  assert.equal(rcfHeardPct({ drone_rcf_rx: 100, rcf_sent: 100 }, { drone_rcf_rx: 3, rcf_sent: 120 }), null);
-  assert.equal(rcfHeardPct({ drone_rcf_rx: null, rcf_sent: 1 }, { drone_rcf_rx: null, rcf_sent: 2 }), null);
-});
-
-test('rcfHeardPct divides by rcf_sent, not sends (DISC keep-alives are not RCFs)', () => {
-  // 20 RCFs all heard, plus 5 DISC keep-alives in the same second: 100 %,
-  // not 80 %.
-  const prev = { drone_rcf_rx: 100, rcf_sent: 100, sends: 110 };
-  const cur = { drone_rcf_rx: 120, rcf_sent: 120, sends: 135 };
-  assert.equal(rcfHeardPct(prev, cur), 100);
-  // No rcf_sent (old core): no number rather than a wrong one.
-  assert.equal(rcfHeardPct({ drone_rcf_rx: 1, sends: 1 }, { drone_rcf_rx: 2, sends: 2 }), null);
 });
 
 test('ht40Offset matches common/include/mabur/ht40.h', () => {
@@ -191,31 +174,6 @@ test('copyStatsPayload carries core stats and page segments', () => {
   const out = JSON.parse(copyStatsPayload(['{"aus":1}', 'garbage'], snap));
   assert.deepEqual(out.core, [{ aus: 1 }, 'garbage']);
   assert.deepEqual(out.segments, snap);
-});
-
-test('rcfHeardPctWindowed diffs newest vs. ~10 ticks back, not adjacent ticks (F2)', () => {
-  // Jittery per-tick rcf_sent deltas (10, 1, 19, 1, 19, 1, 19, 1, 19, 10) with
-  // rx advancing evenly by 9/tick: tick 2 alone is 9/1 = 900 %, but the
-  // 10-tick window (idx 0 vs idx 10) is 90/100 = 90 %.
-  const sent = [0, 10, 11, 30, 31, 50, 51, 70, 71, 90, 100];
-  const ring = sent.map((s, i) => ({ drone_rcf_rx: i * 9, rcf_sent: s }));
-  assert.equal(rcfHeardPct(ring[0], ring[1]), 90);
-  assert.ok(rcfHeardPct(ring[1], ring[2]) > 100);
-  assert.equal(rcfHeardPctWindowed(ring), 90);
-});
-
-test('rcfHeardPctWindowed uses the oldest available entry when the ring is shorter than the window', () => {
-  const ring = [
-    { drone_rcf_rx: 0, rcf_sent: 0 },
-    { drone_rcf_rx: 10, rcf_sent: 10 },
-    { drone_rcf_rx: 19, rcf_sent: 20 },
-  ];
-  assert.equal(rcfHeardPctWindowed(ring), 95);   // vs ring[0], not ring[1]
-});
-
-test('rcfHeardPctWindowed null on an empty or single-entry ring', () => {
-  assert.equal(rcfHeardPctWindowed([]), null);
-  assert.equal(rcfHeardPctWindowed([{ drone_rcf_rx: 1, rcf_sent: 1 }]), null);
 });
 
 test('controlsLocked locks while connecting or connected, not when idle (R12/F1)', () => {

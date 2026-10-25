@@ -21,7 +21,9 @@ namespace maburplay {
 // doorbell, reads the ring and feeds the decoder through an AuRouter, so a
 // slice reaches MPP within a doorbell wake of landing whatever the render
 // loop is doing. Crossing to the main thread:
-//  - FeedNotes (lat submit stamps, DVR bytes, delivery figures): a queue;
+//  - FeedNotes: two queues, routed by Kind -- kSubmit (lat submit stamps,
+//    incomplete-frame flags) drained by take_submit_notes, kDelivery (DVR
+//    bytes, delivery figures) drained by take_notes;
 //  - flushes: the feed PARKS (park_for_flush) and the main thread flushes
 //    while it is parked -- only it can release the frames the presenter,
 //    regulator and recorder hold, which must precede mpi->reset;
@@ -48,7 +50,8 @@ class FeedLoop {
 
   // --- main thread ---
   void wait_main(int timeout_ms);              // ends early when a flush waits or the feed ends
-  void take_notes(std::vector<FeedNote>* out); // appends, oldest first
+  void take_notes(std::vector<FeedNote>* out); // appends, oldest first; kDelivery only
+  void take_submit_notes(std::vector<FeedNote>* out);  // appends, oldest first; kSubmit only
   bool flush_waiting() const;
   bool park(std::chrono::milliseconds limit);  // false = not parked in time (nothing changed)
   void resume();                               // ends a park, flush or main
@@ -85,7 +88,8 @@ class FeedLoop {
 
   mutable std::mutex mu_;
   std::condition_variable cv_;
-  std::deque<FeedNote> notes_;
+  std::deque<FeedNote> notes_;         // kDelivery, capped by max_notes
+  std::deque<FeedNote> submit_notes_;  // kSubmit: meta only, uncapped (see push_note)
   Park parked_ = Park::kNone;
   bool resume_ = false;
   DrainResult drain_result_;

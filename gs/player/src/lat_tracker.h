@@ -2,11 +2,14 @@
 #define MABUR_PLAYER_LAT_TRACKER_H_
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <vector>
 
 #include "au_ring.h"     // maburgs::AuRecordMeta
+#include "pi_mutex.h"
 #include "pts_anchor.h"  // maburgs::PtsAnchor -- the ONE anchor impl
 
 namespace maburplay {
@@ -29,8 +32,18 @@ namespace maburplay {
 // The inflight map is a small bounded array (kMaxInflight slots,
 // drop-oldest by insertion order) so a wedged decoder or a presenter that
 // stops flipping cannot grow it -- a stuck pipeline just ages entries out.
+//
+// Thread-safe: every public method takes mu_. on_submit/on_decoded run on
+// the decode-output thread; on_present/on_commit/on_flip/on_drop on the
+// release thread (on_drop also on the controlling thread for a park before
+// the release thread starts); flush_all/flush_line/p99_frame/p50_frame/
+// anchor on housekeeping. Each holds it for a map scan at most;
+// flush_line() takes the window under it and ranks after. No public method
+// calls another, so none re-enters the lock.
 class LatTracker {
  public:
+  LatTracker() { completed_.reserve(kMinRowsCap); }
+
   void on_submit(const maburgs::AuRecordMeta& m, uint64_t mono_us);
   void on_decoded(uint32_t pts_us, uint64_t mono_us);
   void on_present(uint32_t pts_us, uint64_t mono_us);  // t_release
@@ -102,7 +115,11 @@ class LatTracker {
   // OWN anchor — the daemon's floor_ms export used ITS anchor and the two
   // warm up independently, so borrowing the exported floor here would mix
   // anchor domains.
-  const maburgs::PtsAnchor& anchor() const { return anchor_; }
+  // A copy, taken under the lock: the decode-output thread moves the anchor.
+  maburgs::PtsAnchor anchor() const {
+    std::lock_guard<PiMutex> lk(mu_);
+    return anchor_;
+  }
 
  private:
   struct Entry {
@@ -133,13 +150,19 @@ class LatTracker {
   void invalidate_(int idx);
   static uint32_t percentile_(std::vector<uint32_t>& v, int pct);
 
+  mutable PiMutex mu_;
   std::array<Entry, kMaxInflight> map_{};
   uint64_t next_seq_ = 0;
 
   maburgs::PtsAnchor anchor_;
 
   // Completed-frame window, since the last flush_line() (or construction).
+  // flush_line() hands it out and puts back an empty one reserved to the
+  // capacity of the last (rows_cap_, at least kMinRowsCap), so the
+  // release thread's on_flip() append does not allocate in steady state.
+  static constexpr std::size_t kMinRowsCap = 256;
   std::vector<FrameRow> completed_;
+  std::atomic<std::size_t> rows_cap_{0};
   double chk_sum_us_ = 0.0;
   int chk_n_ = 0;
   bool dsp_exact_window_ = true;

@@ -22,12 +22,14 @@ constexpr uint32_t kTextLabel = 0x93989Du;      // labels, units, separators,
 constexpr uint32_t kTrack = 0x43474Bu;          // meter track, unlit bars
 constexpr uint32_t kStatusOk = 0x3FC99Au;
 constexpr uint32_t kStatusCaution = 0xDFA63Au;  // also the ceiling tick
-// The seventh token, and the one deviation from the handoff's "no third
-// colour" rule. That rule governs status ESCALATION -- it exists so a
-// critical link state cannot invent a colour the alert layer owns.
 // Recording is a mode indicator, not a status, and a white dot does not
-// read as recording. Faults still use kStatusCaution.
+// read as recording. Recorder faults use kStatusCaution.
 constexpr uint32_t kStatusRec = 0xE5484Du;
+// The one critical link state: the drone has stopped hearing the GS (the
+// uplink cell, gs_compact.h). The same hue as kStatusRec but its own token,
+// because it means a fault, not a mode -- a caller must never pick one for
+// the other.
+constexpr uint32_t kStatusCritical = 0xE5484Du;
 }  // namespace tok
 
 // Player-measured half of the OSD's inputs. maburgs cannot supply these:
@@ -52,6 +54,15 @@ struct RecState {
 
 struct GsPlayerState {
   double fps = 0.0;
+  // Drone fps vs panel Hz (rate_match.h). rate_mismatch: too far apart
+  // for the phase lock; the fps cell then shows src_hz/panel_hz. Both are
+  // player-measured (pts cadence, vblank), so they never dim.
+  bool rate_mismatch = false;
+  double src_hz = 0.0;
+  double panel_hz = 0.0;
+  // The phase lock gave up (out of range) on a pair that otherwise matches:
+  // the steer cannot reach the panel. Caution tint on the fps cell.
+  bool phase_oor = false;
   double jitter_ms = 0.0;
   double mbps = 0.0;
   RecState rec;

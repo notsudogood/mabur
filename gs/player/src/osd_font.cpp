@@ -89,6 +89,36 @@ OsdFont::~OsdFont() {
   if (map_) munmap(map_, map_bytes_);
 }
 
+OsdFont::OsdFont(OsdFont&& o) noexcept
+    : map_(o.map_), map_bytes_(o.map_bytes_), native_(o.native_), original_(o.original_),
+      inverted_(std::move(o.inverted_)), entries_{std::move(o.entries_[0]), std::move(o.entries_[1])},
+      builds_(o.builds_) {
+  o.map_ = nullptr;
+  o.map_bytes_ = 0;
+  o.native_ = GlyphAtlas{};
+  o.original_ = GlyphAtlas{};
+  o.builds_ = 0;
+}
+
+OsdFont& OsdFont::operator=(OsdFont&& o) noexcept {
+  if (this == &o) return *this;
+  if (map_) munmap(map_, map_bytes_);
+  map_ = o.map_;
+  map_bytes_ = o.map_bytes_;
+  native_ = o.native_;
+  original_ = o.original_;
+  inverted_ = std::move(o.inverted_);
+  entries_[0] = std::move(o.entries_[0]);
+  entries_[1] = std::move(o.entries_[1]);
+  builds_ = o.builds_;
+  o.map_ = nullptr;
+  o.map_bytes_ = 0;
+  o.native_ = GlyphAtlas{};
+  o.original_ = GlyphAtlas{};
+  o.builds_ = 0;
+  return *this;
+}
+
 bool OsdFont::load(const std::string& path, std::string* err) {
   // A repeated load() must not leak the previous mapping; drop it (and any
   // state derived from it) before attempting the new one.
@@ -100,8 +130,8 @@ bool OsdFont::load(const std::string& path, std::string* err) {
   native_ = GlyphAtlas{};
   original_ = GlyphAtlas{};
   inverted_.clear();
-  cached_ = GlyphAtlas{};
-  scaled_.clear();
+  entries_[0] = Entry{};
+  entries_[1] = Entry{};
   builds_ = 0;
 
   const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
@@ -158,26 +188,32 @@ void OsdFont::set_inverse(const ColorTrans& t) {
   inverted_.resize(n);
   for (size_t i = 0; i < n; ++i) inverted_[i] = invert_premul_argb(t, original_.pixels[i]);
   native_ = GlyphAtlas{original_.glyph_w, original_.glyph_h, original_.n_glyphs, inverted_.data()};
-  cached_ = GlyphAtlas{};  // built from the old pixels; atlas_at() rebuilds
-  scaled_.clear();
+  // Both cached atlases were built from the old pixels; atlas_at() rebuilds.
+  entries_[0] = Entry{};
+  entries_[1] = Entry{};
 }
 
 const GlyphAtlas* OsdFont::atlas_at(int w, int h, ScaleMode mode) {
   if (!native_.pixels || w <= 0 || h <= 0 || w > (int)kMaxGlyphDim || h > (int)kMaxGlyphDim)
     return nullptr;
   if (w == native_.glyph_w && h == native_.glyph_h) return &native_;
-  if (cached_.pixels && cached_.glyph_w == w && cached_.glyph_h == h && cached_mode_ == mode)
-    return &cached_;
+  for (Entry& e : entries_)
+    if (e.atlas.pixels && e.atlas.glyph_w == w && e.atlas.glyph_h == h && e.mode == mode)
+      return &e.atlas;
 
+  // Replace whichever entry was built longest ago (built_at == 0 for an
+  // entry never built, so a cold cache fills entries_[0] then entries_[1]
+  // before either is reused).
+  Entry& e = (entries_[0].built_at <= entries_[1].built_at) ? entries_[0] : entries_[1];
   ++builds_;
-  scaled_.assign((size_t)w * h * native_.n_glyphs, 0u);
+  e.px.assign((size_t)w * h * native_.n_glyphs, 0u);
   const bool integer_up = w >= native_.glyph_w && h >= native_.glyph_h &&
                           w % native_.glyph_w == 0 && h % native_.glyph_h == 0 &&
                           w / native_.glyph_w == h / native_.glyph_h;
   const bool shrink = w <= native_.glyph_w && h <= native_.glyph_h;
   for (int gi = 0; gi < native_.n_glyphs; ++gi) {
     const uint32_t* src = native_.pixels + (size_t)gi * native_.glyph_w * native_.glyph_h;
-    uint32_t* dst = scaled_.data() + (size_t)gi * w * h;
+    uint32_t* dst = e.px.data() + (size_t)gi * w * h;
     if (integer_up) {
       replicate(src, native_.glyph_w, native_.glyph_h, dst, w, h);
     } else if (shrink) {
@@ -186,9 +222,10 @@ const GlyphAtlas* OsdFont::atlas_at(int w, int h, ScaleMode mode) {
       bilinear(src, native_.glyph_w, native_.glyph_h, dst, w, h);
     }
   }
-  cached_ = GlyphAtlas{w, h, native_.n_glyphs, scaled_.data()};
-  cached_mode_ = mode;
-  return &cached_;
+  e.atlas = GlyphAtlas{w, h, native_.n_glyphs, e.px.data()};
+  e.mode = mode;
+  e.built_at = builds_;
+  return &e.atlas;
 }
 
 }  // namespace maburplay

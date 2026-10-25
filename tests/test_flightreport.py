@@ -2713,6 +2713,118 @@ class PhaseLockReportTest(unittest.TestCase):
         self.assertEqual(out.getvalue(), "")
 
 
+class ReleaseReportTest(unittest.TestCase):
+    REG3 = (
+        "# reglog 3\n"
+        "1000000 regulator: held=1 alw=2.0ms lslot=0 lock=lock lerr=0.10ms loff=8 lctr=7.0 "
+        "present=60 acq=1/2 req=1/2 ioctl=300/900 rlate=120/400 hand=80/250 rt=1\n"
+        "2000000 regulator: held=2 alw=2.0ms lslot=0 lock=lock lerr=0.20ms loff=8 lctr=7.0 "
+        "present=60 acq=1/2 req=1/2 ioctl=300/900 rlate=150/2100 hand=90/300 rt=1\n"
+        "3000000 regulator: off present_jitter=0.40ms rlate=0/0 hand=70/200 rt=1\n"
+    )
+
+    def test_reglog_3_rows_and_report(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "reg.log")
+            with open(p, "w") as f:
+                f.write(self.REG3)
+            rows = flightreport.load_reglog_release(p)
+            lock_rows = flightreport.load_reglog_lock(p)
+        # The lock parser reads the same rows past the new trailing fields.
+        self.assertEqual(len(lock_rows), 2)
+        self.assertEqual(lock_rows[1]["loff"], 8)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[1]["rlate_max"], 2100)
+        self.assertEqual(rows[2]["hand_p99"], 70)
+        self.assertEqual(rows[0]["burn_drop"], 0)  # reglog 3 carries no burn_* tokens
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            flightreport.print_release_report(rows)
+        text = out.getvalue()
+        self.assertIn("RELEASE", text)
+        self.assertIn("rows=3 rt=SCHED_FIFO", text)
+        self.assertIn("rlate p99 per s p50/p90/max=120/150/150 us, worst frame=2100 us", text)
+        self.assertIn("hand p99 per s p50/p90/max=80/90/90 us, worst frame=300 us", text)
+        self.assertNotIn("burn drop=", text)  # no burn_in>0 row, no burn line
+
+    REG4 = (
+        "# reglog 4\n"
+        "1000000 regulator: held=1 alw=2.0ms lslot=0 lock=lock lerr=0.10ms loff=8 lctr=7.0 "
+        "present=60 acq=1/2 req=1/2 ioctl=300/900 rlate=120/400 hand=80/250 rt=1 "
+        "burn_in=600 burn_enc=598 burn_drop=2\n"
+        "2000000 regulator: held=2 alw=2.0ms lslot=0 lock=lock lerr=0.20ms loff=8 lctr=7.0 "
+        "present=60 acq=1/2 req=1/2 ioctl=300/900 rlate=150/2100 hand=90/300 rt=1 "
+        "burn_in=1200 burn_enc=1196 burn_drop=4\n"
+    )
+
+    def test_reglog_4_rows_and_burn_line(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "reg.log")
+            with open(p, "w") as f:
+                f.write(self.REG4)
+            rows = flightreport.load_reglog_release(p)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[1]["burn_drop"], 4)
+        self.assertEqual(rows[1]["burn_in"], 1200)
+        self.assertEqual(rows[1]["burn_enc"], 1196)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            flightreport.print_release_report(rows)
+        text = out.getvalue()
+        self.assertIn("burn drop=4", text)
+        self.assertIn("recordings=1", text)  # one continuous burn_in run
+
+    # Two burned recordings in one session: the BurnRecorder is a fresh
+    # object per recording, so burn_in/burn_enc/burn_drop restart at 0 at
+    # every rec start. The first recording ramps 600/598/2 -> 1200/1196/4,
+    # a burn_in=0 row covers the gap between recordings, then the second
+    # ramps straight to its own final tally 300/299/1. The session total
+    # must be the SUM of each recording's own last row (4 + 1 = 5), not
+    # just the last row in the file.
+    REG4_TWO_RECORDINGS = (
+        "# reglog 4\n"
+        "1000000 regulator: held=1 alw=2.0ms lslot=0 lock=lock lerr=0.10ms loff=8 lctr=7.0 "
+        "present=60 acq=1/2 req=1/2 ioctl=300/900 rlate=120/400 hand=80/250 rt=1 "
+        "burn_in=600 burn_enc=598 burn_drop=2\n"
+        "2000000 regulator: held=2 alw=2.0ms lslot=0 lock=lock lerr=0.20ms loff=8 lctr=7.0 "
+        "present=60 acq=1/2 req=1/2 ioctl=300/900 rlate=150/2100 hand=90/300 rt=1 "
+        "burn_in=1200 burn_enc=1196 burn_drop=4\n"
+        "3000000 regulator: held=2 alw=2.0ms lslot=0 lock=lock lerr=0.20ms loff=8 lctr=7.0 "
+        "present=60 acq=1/2 req=1/2 ioctl=300/900 rlate=150/2100 hand=90/300 rt=1 "
+        "burn_in=0 burn_enc=0 burn_drop=0\n"
+        "4000000 regulator: held=3 alw=2.0ms lslot=0 lock=lock lerr=0.20ms loff=8 lctr=7.0 "
+        "present=60 acq=1/2 req=1/2 ioctl=300/900 rlate=150/2100 hand=90/300 rt=1 "
+        "burn_in=300 burn_enc=299 burn_drop=1\n"
+    )
+
+    def test_reglog_4_two_recordings_sum_not_last_row(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "reg.log")
+            with open(p, "w") as f:
+                f.write(self.REG4_TWO_RECORDINGS)
+            rows = flightreport.load_reglog_release(p)
+        recs = flightreport._burn_recordings(rows)
+        self.assertEqual([r["burn_drop"] for r in recs], [4, 1])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            flightreport.print_release_report(rows)
+        text = out.getvalue()
+        self.assertIn("burn drop=5", text)  # 4 + 1, not the last row's 1
+        self.assertIn("recordings=2", text)
+
+    def test_reglog_2_prints_no_release_section(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "reg.log")
+            with open(p, "w") as f:
+                f.write(PhaseLockReportTest.REG)
+            rows = flightreport.load_reglog_release(p)
+        self.assertEqual(rows, [])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            flightreport.print_release_report(rows)
+        self.assertEqual(out.getvalue(), "")
+
+
 if __name__ == "__main__":
     test_fec_section_counterfactual_overhead_per_sid_and_rung()
     test_session_dir_mode_prints_fec_section()

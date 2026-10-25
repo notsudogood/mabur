@@ -1,6 +1,8 @@
 #ifndef MABUR_PLAYER_FRAME_HANDOFF_H_
 #define MABUR_PLAYER_FRAME_HANDOFF_H_
 
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <mutex>
@@ -11,25 +13,35 @@ namespace maburplay {
 
 // The thread boundary of a decoder whose API may only be driven from one
 // thread (libav). The feed thread decodes and pushes finished frames to the
-// ready queue; the main thread pops them for display and, once the display
-// is done with one, pushes it to the release queue; the feed thread frees
-// released frames before its next decode, so every decoder call -- including
-// the frees, which return buffers to the decoder's pool -- stays on the feed
-// thread. drain_all() is for flush/teardown, which run on the main thread
-// only while the feed is parked.
+// ready queue; the decode-output thread pops them (poll()) -- waiting there
+// for the next one when asked (pop_ready_wait), so it sleeps inside the
+// decoder's poll() rather than between polls -- and, once the display is
+// done with one, pushes it to the release queue; the feed thread frees
+// released frames before its next decode, so every decoder call --
+// including the frees, which return buffers to the decoder's pool -- stays
+// on the feed thread. drain_all() is for flush/teardown, which run on the
+// housekeeping thread only while the feed and the decode-output thread are
+// parked.
 template <typename T>
 class FrameHandoff {
  public:
   void push_ready(T t) {
-    std::lock_guard<std::mutex> lk(mu_);
-    ready_.push_back(std::move(t));
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      ready_.push_back(std::move(t));
+    }
+    ready_cv_.notify_one();
   }
   bool pop_ready(T* out) {
     std::lock_guard<std::mutex> lk(mu_);
-    if (ready_.empty()) return false;
-    *out = std::move(ready_.front());
-    ready_.pop_front();
-    return true;
+    return pop_ready_locked_(out);
+  }
+  // pop_ready, but an empty queue waits up to `limit` for a push first.
+  // false = still empty after the wait.
+  bool pop_ready_wait(T* out, std::chrono::milliseconds limit) {
+    std::unique_lock<std::mutex> lk(mu_);
+    ready_cv_.wait_for(lk, limit, [this] { return !ready_.empty(); });
+    return pop_ready_locked_(out);
   }
   void push_release(T t) {
     std::lock_guard<std::mutex> lk(mu_);
@@ -58,7 +70,15 @@ class FrameHandoff {
   }
 
  private:
+  bool pop_ready_locked_(T* out) {
+    if (ready_.empty()) return false;
+    *out = std::move(ready_.front());
+    ready_.pop_front();
+    return true;
+  }
+
   mutable std::mutex mu_;
+  std::condition_variable ready_cv_;
   std::deque<T> ready_;
   std::deque<T> release_;
 };

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 
+#include "poll_wait.h"
 #include "video_backend.h"
 #include "stream_decoder.h"
 
@@ -27,7 +28,7 @@ namespace maburplay {
 // itself (pure video_backend.h types + std only). All mpp includes and
 // the actual MppCtx/MppApi/MppFrame state live behind the Impl pimpl in
 // mpp_backend.cpp.
-class MppBackend : public VideoBackend, public StreamDecoder {
+class MppBackend : public VideoBackend, public StreamDecoder, public PollWait {
  public:
   MppBackend();
   ~MppBackend() override;
@@ -62,6 +63,14 @@ class MppBackend : public VideoBackend, public StreamDecoder {
   // watchdog park or a stop). Before init() or after; survives nothing --
   // set again on a re-created backend. nullptr = one thread (decode-only).
   void set_input_cancel(const std::atomic<bool>* cancel);
+
+  // PollWait: decode_get_frame waits up to ms for a frame
+  // (MPP_SET_OUTPUT_TIMEOUT), so poll() returns as soon as one is ready and
+  // otherwise after ms. After init() (false before, or if MPP refuses);
+  // survives nothing -- set again on a re-created backend. For the
+  // decode-output thread only: in the one-thread mode put_packet's
+  // BUFFER_FULL retry drains frames and would wait there too.
+  bool set_poll_timeout_ms(int ms) override;
 
  private:
   bool stream_wanted_ = false;

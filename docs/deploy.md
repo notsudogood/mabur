@@ -347,6 +347,14 @@ prints it, only the fingerprint).
   (`docs/link-adaptation.md`). `curl 127.0.0.1:8301/venc` on the drone
   (`venc.debug_port`) shows the encoder's status.
 - The remembered channel is `/etc/mabur.channel` (`docs/channel-select.md`).
+- The image loads waybeam_venc's IMX415 driver, `sensor_imx415_star6e.ko`,
+  not the stock `sensor_imx415_mipi.ko` (`openipc-builder`'s
+  `load_sigmastar`; `docs/camera-modes.md`). maburd fails boot with
+  `sensor mode WxH@F not offered by the driver` under the stock one. A
+  drone on an older image takes it by hand: copy the module into
+  `/lib/modules/4.9.84/sigmastar/` under the name `load_sigmastar` loads
+  (keep the old file) and reboot; `lsmod` then lists
+  `sensor_imx415_star6e`.
 
 **GS.**
 

@@ -1,5 +1,6 @@
 /* ported from waybeam_venc f956a52:src/pipeline_common.c */
 #include "pipeline_common.h"
+#include "sensor_cal.h"
 #include "venc_cfg.h"
 
 #include <ctype.h>
@@ -15,13 +16,13 @@ uint32_t pipeline_common_gop_frames(double gop_seconds, uint32_t fps)
 
 #ifndef PLATFORM_CV610
 SensorSelectConfig pipeline_common_build_sensor_select_config(int forced_pad,
-	int forced_mode, uint32_t target_width, uint32_t target_height,
+	CameraMode want_mode, uint32_t target_width, uint32_t target_height,
 	uint32_t target_fps)
 {
 	SensorSelectConfig cfg;
 
 	cfg.forced_pad = forced_pad;
-	cfg.forced_mode = forced_mode;
+	cfg.want_mode = want_mode;
 	cfg.target_width = target_width;
 	cfg.target_height = target_height;
 	cfg.target_fps = target_fps;
@@ -169,7 +170,8 @@ int pipeline_common_cap_exposure_for_fps(uint32_t fps,
 	}
 
 	divisor = shutter_rule_180 ? fps * 2 : fps;
-	target_us = 1000000 / divisor;
+	target_us = shutter_rule_180 ? 1000000 / divisor :
+		sensor_cal_shutter_cap_us(fps);
 	if (config.maxShutterUs <= target_us) {
 		printf("> Exposure %s: maxShutter %uus (already <= %uus for %u fps%s), enforcing\n",
 			shutter_rule_180 ? "pin" : "cap",

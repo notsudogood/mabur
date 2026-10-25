@@ -12,10 +12,12 @@
 // "Live" is read from sysfs, not from a sentinel the script would have to
 // write: /sys/module/<name>/initstate is "live" once the module's init has
 // returned, and load_sigmastar's last step is the sensor driver insmod, so
-// mi_venc live + any sensor_*_mipi live means the whole chain has finished.
-// (sensor_config.ko, which the script inserts and removes during detection,
-// does not match the sensor_*_mipi glob on purpose.) On a warm restart both
-// are already live and the wait costs one directory scan.
+// mi_venc live + any sensor_* driver live means the whole chain has finished.
+// The driver's name is not fixed -- OpenIPC's stock modules are
+// sensor_<chip>_mipi, waybeam_venc's IMX415 driver is sensor_imx415_star6e --
+// so any sensor_* module counts except sensor_config, the helper the script
+// inserts and removes during detection, which is excluded by name. On a warm
+// restart both are already live and the wait costs one directory scan.
 #pragma once
 #include <dirent.h>
 
@@ -38,7 +40,8 @@ inline bool module_live(const std::string& sysfs_module_root, const std::string&
   return std::strcmp(buf, "live") == 0;
 }
 
-// True when mi_venc is live and at least one sensor_*_mipi driver is live.
+// True when mi_venc is live and at least one sensor_* driver (not
+// sensor_config) is live.
 inline bool mi_modules_live(const std::string& sysfs_module_root) {
   if (!module_live(sysfs_module_root, "mi_venc")) return false;
   DIR* d = opendir(sysfs_module_root.c_str());
@@ -46,8 +49,7 @@ inline bool mi_modules_live(const std::string& sysfs_module_root) {
   bool sensor = false;
   while (dirent* e = readdir(d)) {
     const char* n = e->d_name;
-    size_t len = std::strlen(n);
-    if (len > 12 && std::strncmp(n, "sensor_", 7) == 0 && std::strcmp(n + len - 5, "_mipi") == 0 &&
+    if (std::strncmp(n, "sensor_", 7) == 0 && std::strcmp(n, "sensor_config") != 0 &&
         module_live(sysfs_module_root, n)) {
       sensor = true;
       break;

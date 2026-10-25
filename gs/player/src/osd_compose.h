@@ -73,8 +73,12 @@ struct OsdComposeOut {
 // drain and blow vsync release deadlines on every burned recording. The
 // canvas costs one extra cached draw per update and 4 bytes/px of heap;
 // reads out of it run at the benched speed. It is single (not per DRM
-// buffer): it follows the SCREEN, exactly like the recorder's index map,
-// which is what makes its lineage the simple one.
+// buffer), and it has ITS OWN size and ITS OWN trigger: set_burn_size()
+// pins it to the recording's own dimensions (0x0, the default, follows
+// the screen surface), and compose_burn()
+// draws it independently of compose_screen() -- the burn's cadence is
+// whatever the live recorder's housekeeping loop calls it at, not the
+// screen's publish state.
 class OsdComposer {
  public:
   // Rect-scoped index-map update for the burned DVR. Never called with a
@@ -84,9 +88,10 @@ class OsdComposer {
 
   // Null raster => this run has no MSP overlay. Not owned.
   void set_raster(OsdRaster* r) { raster_ = r; }
-  // All three or none: buffer 0, buffer 1, and the burn's lineage. All
-  // three must be the SAME layout -- they are three lineages of one
-  // overlay, not three overlays (see make_gs_layer).
+  // All three or none: buffer 0, buffer 1, and the burn's lineage -- they
+  // are three lineages of one overlay, not three overlays (see
+  // make_gs_layer). Laid out at the SAME size unless a burn size is set
+  // (set_burn_size), in which case gs_[2]'s size is its own.
   void set_gs(std::unique_ptr<GsLayer> b0, std::unique_ptr<GsLayer> b1,
               std::unique_ptr<GsLayer> burn);
   // Installing a sink resets the burn's OWN lineage -- burn_shadow_ (the
@@ -99,8 +104,22 @@ class OsdComposer {
   // cadence -- see CLAUDE.md on the 2 ms pump budget.
   void set_burn_sink(BurnSink s);
 
-  // Lays out all three GS layers at the same size. On failure drops all
-  // three (so gs_present() goes false) and sets *err.
+  // Sizes the burn canvas (and lays gs_[2] out) at w x h, independent of
+  // the screen surface; 0x0 (the default) makes it follow the screen --
+  // the size compose_screen() was last given, or nothing yet if
+  // compose_screen() has never run. Resets the burn lineages, same shape
+  // as set_burn_sink(). False (with *err) when the GS bar does not fit
+  // w x h: the burn size is left cleared and gs_[2] re-laid at the screen
+  // size, so the screen's GS overlay carries on and only the recording is
+  // refused. Housekeeping, at recorder start: not a call the
+  // per-iteration path makes.
+  bool set_burn_size(int w, int h, std::string* err);
+
+  // Lays out gs_[0] and gs_[1] at screen_w x screen_h, and gs_[2] at the
+  // same size UNLESS a burn size is set (set_burn_size), in which case
+  // gs_[2] keeps that size instead -- the burn's own geometry outlives a
+  // screen resize. On failure drops all three (so gs_present() goes false)
+  // and sets *err.
   bool gs_layout(int screen_w, int screen_h, std::string* err);
 
   bool gs_present() const { return gs_[0] != nullptr; }
@@ -113,14 +132,30 @@ class OsdComposer {
   // it publishes whichever buffer is back, so the answer cannot depend on
   // which one that is. Asking it per buffer is what made the stale blank
   // unreachable whenever the back buffer was already blank and the front
-  // still carried a grid.
+  // still carried a grid. Says nothing about the burn half: compose_burn()
+  // runs on its own trigger, not this one.
   bool wants(const OsdComposeIn& in) const;
 
-  // MSP draw-or-blank, GS collision reclaim, GS update, burn feeds. Leaves
-  // buffer `idx` current in both layers.
+  // The screen half of compose(): MSP draw-or-blank, GS collision reclaim,
+  // GS update into buffer idx. Leaves buffer `idx` current in both layers.
+  OsdComposeOut compose_screen(int idx, const Surface& s, const OsdComposeIn& in);
+
+  // The burn half: the burn lineages into the canvas, then the burn sink.
+  // Runs with or without compose_screen() this iteration -- the live
+  // recorder's housekeeping calls this every iteration it is running,
+  // independent of whether the screen's publish state wanted a
+  // composition -- and a repeat of the same screen/GS sample draws
+  // nothing and sinks nothing.
+  void compose_burn(const OsdComposeIn& in);
+
+  // compose() == compose_screen() then compose_burn(). Kept for the tests
+  // and --gs-render, which still want both halves on one call.
   OsdComposeOut compose(int idx, const Surface& s, const OsdComposeIn& in);
 
  private:
+  // Drops all three GS lineages: the all-or-none rule of gs_layout().
+  void drop_gs();
+
   OsdRaster* raster_ = nullptr;
   std::unique_ptr<GsLayer> gs_[3];
   BurnSink burn_;
@@ -143,6 +178,23 @@ class OsdComposer {
   DirtyRect last_grid_{0, 0, 0, 0};  // where the grid was, for the blank feed
   bool have_screen_ = false;         // a complete MSP screen has ever arrived
   bool gs_laid_out_ = false;
+  // The burn canvas's own blank latch -- screen_blank_'s counterpart, but
+  // for the burn's own transition rather than the screen's. Needed because
+  // compose_burn() may run on iterations compose_screen() does not (or vice
+  // versa): borrowing screen_blank_ would mean a burn-only run never sees
+  // the transition, and a screen-only run would flip it without the burn
+  // canvas having changed at all.
+  bool burn_blank_ = false;
+  // The burn canvas's own size; 0x0 (the default) means "follow the
+  // screen", via screen_w_/screen_h_ below. Set by set_burn_size().
+  int burn_w_ = 0, burn_h_ = 0;
+  // The last screen Surface compose_screen() was given -- what the burn
+  // canvas falls back to sizing itself from when burn_w_/burn_h_ are 0x0.
+  int screen_w_ = 0, screen_h_ = 0;
+  // The last screen_w/screen_h gs_layout() was called with -- what gs_[2]
+  // is re-laid out at when set_burn_size(0, 0, ...) clears the burn size
+  // back to following the screen.
+  int gs_screen_w_ = 0, gs_screen_h_ = 0;
   // Card count buffer i's overlay has reconciled, -1 == never. The card
   // block is the ONLY part of the GS layout that moves after layout(), and
   // a box it vacates is a box it clears and never draws again -- which
@@ -155,10 +207,17 @@ class OsdComposer {
   int burn_gs_cards_ = -1;
 
   // The burn feed's cached mirror of the picture -- see the file comment.
-  // Sized lazily to the surface compose() is given; resizing resets the
-  // burn lineages, same as set_burn_sink().
+  // Sized to burn_w_/burn_h_ when set, else lazily to the screen surface
+  // compose_screen() is given; resizing resets the burn lineages, same as
+  // set_burn_sink().
   std::vector<uint32_t> burn_px_;
   Surface burn_canvas_;
+  // (Re)points burn_canvas_/burn_px_ at w x h (0x0 leaves it unallocated --
+  // nothing has sized it yet) and resets everything that follows its
+  // geometry: burn_shadow_, gs_[2]'s reconciliation mark, burn_blank_, and
+  // the pixels themselves. Shared by set_burn_sink(), set_burn_size(), and
+  // compose_burn()'s own resize-on-mismatch check.
+  void realloc_burn_canvas(int w, int h);
 
   // Hoisted so a steady-state composition allocates nothing.
   // gs_reclaim_ holds the boxes the MSP collision actually forced GS to

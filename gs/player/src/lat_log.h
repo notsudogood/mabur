@@ -18,12 +18,15 @@ namespace maburplay {
 // mabur_gs_core -- the two constants must stay equal.
 inline constexpr const char* kSessionMarker = "/tmp/mabur-session";
 
+// reg.log's format marker (docs/observability.md "reg.log").
+inline constexpr const char* kRegLogHeader = "# reglog 4";
+
 // Persists a player record into the CURRENT debug session, so it survives
 // power-off (/tmp is tmpfs; the flight-0035 tail was lost exactly that
 // way). Three instances exist: the 1 Hz `lat:` line (lat.log, "# latlog 2"),
 // the per-frame rows behind it (frame.log, "# framelog 3", batched: each
 // second's rows are written together at flush()) and the 1 Hz `regulator:`
-// line (reg.log, "# reglog 1").
+// line (reg.log, kRegLogHeader).
 //
 // maburplay holds no logging config: it follows the marker maburgs writes.
 // No marker means no session means no file -- which is how one knob in
@@ -36,9 +39,9 @@ inline constexpr const char* kSessionMarker = "/tmp/mabur-session";
 // Never blocks, never throws, never spams. Every file operation -- the
 // marker read, fopen, the writes, fflush, fclose -- runs on the instance's
 // own writer thread; write() and flush() only queue under a short lock. The
-// caller is maburplay's main loop, which also drives decode and display: a
-// write that waited on the SD card there froze the picture for as long as
-// the card stalled. The queue is bounded (kQueueBytes); a row that does not
+// caller is maburplay's housekeeping loop, which also runs the OSD, the
+// phase lock and the decode watchdog: a write that waited on the SD card
+// there would stall all of them for as long as the card stalled. The queue is bounded (kQueueBytes); a row that does not
 // fit is dropped and counted, and the file gets one "# dropped N" line where
 // the gap is. A missing or unusable session is re-checked at most every 5 s
 // of row stamps (kRecheckUs), and the lat: line always still goes to stderr

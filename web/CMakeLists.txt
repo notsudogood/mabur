@@ -59,6 +59,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     ${MABUR_DIR}/gs/src/rendezvous.cpp ${MABUR_DIR}/gs/src/ladder_controller.cpp
     ${MABUR_DIR}/gs/src/rung_store.cpp ${MABUR_DIR}/gs/src/rcf_slot.cpp
     ${MABUR_DIR}/gs/src/rtt_estimator.cpp ${MABUR_DIR}/gs/src/dot11.cpp
+    ${MABUR_DIR}/gs/src/uplink_delivery.cpp
     ${MABUR_DIR}/gs/src/msp_sink.cpp
     ${MABUR_DIR}/gs/src/relay_wire.cpp ${MABUR_DIR}/gs/src/relay_client.cpp
     ${MABUR_DIR}/gs/src/channel_core.cpp ${MABUR_DIR}/gs/src/channel_plan.cpp

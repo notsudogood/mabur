@@ -199,9 +199,11 @@ WebGs::WebGs(const maburgs::Config& cfg, Mode mode, uint8_t start_ch, int width,
         if (!vrx_ && restart_.on_telem(t->tlm_seq, static_cast<double>(us) / 1000.0))
           reset_video_();
         // RTT pairs telem echoes with our own sends: Gs only.
-        if (vrx_)
+        if (vrx_) {
           rtt_.on_telem(t->rcf_seq_echo, (t->flags & 0x08) != 0, t->rcf_age_ms,
                         t->pts_at_build, us);
+          uplink_.on_telem(t->tlm_seq, t->rcf_rx, t->state, us / 1000);
+        }
         // Drone NACK counters are per Telem period: sum each period once.
         if (nack_ && (!nack_tlm_seen_ || *nack_tlm_seen_ != t->tlm_seq)) {
           nack_tlm_seen_ = t->tlm_seq;
@@ -395,6 +397,7 @@ bool WebGs::send_(const maburgs::SlotFrame& f) {
   if (f.stamp_rtt) {
     ++rcf_sent_;
     rtt_.on_rcf_sent(f.seq, now_us_);
+    uplink_.on_rcf_sent(now_us_ / 1000);
   }
   if (chan_) chan_->note_sent(ok, f.stamp_rtt);
   return true;
@@ -561,6 +564,11 @@ Stats WebGs::stats() const {
   s.sends = sends_;
   s.rcf_sent = rcf_sent_;
   s.idr_req = idr_req_;
+  // The tick clock rtt_ and the Telem stamps use -- not now_ms_for_core_(),
+  // which is the channel core's (real-time when threaded).
+  const maburgs::UplinkView up = uplink_.view(now_us_ / 1000);
+  s.uplink_pct = up.pct;
+  s.uplink = maburgs::to_string(up.state);
   if (telem_) {
     s.drone_rcf_rx = telem_->rcf_rx;
     s.drone_state = telem_->state;
@@ -636,6 +644,8 @@ std::string stats_json(const Stats& s) {
   opt("rtt_min_ms", s.rtt_min_ms);
   opt("pts_off_us", s.pts_off_us);
   opt("drone_rcf_rx", s.drone_rcf_rx);
+  opt("uplink_pct", s.uplink_pct);
+  j["uplink"] = s.uplink;
   opt("drone_state", s.drone_state);
   opt("drone_temp_c", s.drone_temp_c);
   if (s.rec_status) {

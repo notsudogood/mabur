@@ -1,6 +1,7 @@
 #include "v4l2req_backend.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <utility>
 
@@ -71,6 +72,7 @@ struct V4l2ReqBackend::Impl {
   FrameHandoff<DmaFrame> handoff;
   EntryGate gate;
   std::atomic<uint64_t> frames{0}, errors{0}, bitstream{0}, dropped_shape{0}, gated{0};
+  std::atomic<int> poll_timeout_ms{0};  // PollWait; read by poll(), written from any thread
   bool logged_shape = false;
   bool stream_open = false;
   bool logged_stream_error = false;
@@ -299,10 +301,19 @@ void V4l2ReqBackend::abort(uint32_t pts_us) {
   m.drain();
 }
 
+bool V4l2ReqBackend::set_poll_timeout_ms(int ms) {
+  if (!impl_ || ms < 0) return false;
+  impl_->poll_timeout_ms.store(ms);
+  return true;
+}
+
 void V4l2ReqBackend::poll() {
   if (!impl_) return;
   DmaFrame f;
-  while (impl_->handoff.pop_ready(&f)) {
+  const int wait_ms = impl_->poll_timeout_ms.load();
+  bool got = wait_ms > 0 ? impl_->handoff.pop_ready_wait(&f, std::chrono::milliseconds(wait_ms))
+                         : impl_->handoff.pop_ready(&f);
+  for (; got; got = impl_->handoff.pop_ready(&f)) {
     ++impl_->frames;
     if (impl_->sink) {
       impl_->sink(f);

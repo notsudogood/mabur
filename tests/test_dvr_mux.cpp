@@ -1,3 +1,4 @@
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -509,6 +510,55 @@ TEST(prefixed_path_writes_byte_identical_files) {
   CHECK(read_whole_file(pa) == read_whole_file(pb));
   std::remove(pa.c_str());
   std::remove(pb.c_str());
+}
+
+// tools/bench/dvrcadence.py's own test (test_dvrcadence) drives this file's
+// output against the tool as a subprocess rather than re-deriving a trun
+// layout in Python; writing the fixture here, from the real muxer, is what
+// keeps that gate honest if DvrMux's trun shape ever changes. A no-op
+// outside that gate (neither env var set) so this file still runs standalone.
+TEST(dvr_mux_writes_the_cadence_fixture) {
+  const char* clean_path = std::getenv("MABUR_DVRCADENCE_FIXTURE_CLEAN");
+  const char* offgrid_path = std::getenv("MABUR_DVRCADENCE_FIXTURE_OFFGRID");
+  const char* fractional_path = std::getenv("MABUR_DVRCADENCE_FIXTURE_FRACTIONAL");
+  if (!clean_path && !offgrid_path && !fractional_path) return;
+
+  std::vector<uint8_t> hvcc(23, 0x5A);
+  std::vector<uint8_t> au = fake_au(0x77);
+
+  auto write_fixture = [&](const char* path, const std::vector<uint32_t>& pts) {
+    DvrMux mux;
+    REQUIRE(mux.open(path, hvcc, 1920, 1080));
+    for (size_t i = 0; i < pts.size(); ++i) {
+      mux.write_sample(au.data(), au.size(), pts[i], /*key=*/i == 0);
+    }
+    mux.close();
+  };
+
+  // On-grid cadence at a 20000us grid: durations 1,1,2,1,3 grid units.
+  // Six samples, not five -- the LAST sample's own trun duration has no
+  // real successor to measure against (it's dropped by the tool, same as
+  // any DvrMux file), so it takes a 6th pts to produce 5 measured
+  // durations.
+  if (clean_path) write_fixture(clean_path, {0, 20000, 40000, 80000, 100000, 160000});
+
+  // Same cadence, one extra sample whose duration (30000us, 1.5 grid
+  // units) lands off grid.
+  if (offgrid_path)
+    write_fixture(offgrid_path, {0, 20000, 40000, 80000, 100000, 160000, 190000});
+
+  // A fractional period, stamped the way the recorder stamps it
+  // (llround(slot * period)): 1080p60's 16666.667us at slots
+  // 0,1,2,3,7,8,18,19, i.e. holds of 1,1,1,4,1,10 units plus the final
+  // unmeasured sample. Every duration is 16666 or 16667us per unit, so a
+  // grid read off the shortest one drifts out of tolerance on the long
+  // holds.
+  if (fractional_path) {
+    std::vector<uint32_t> pts;
+    for (int slot : {0, 1, 2, 3, 7, 8, 18, 19})
+      pts.push_back(static_cast<uint32_t>(std::llround(slot * 16666.667)));
+    write_fixture(fractional_path, pts);
+  }
 }
 
 MTEST_MAIN

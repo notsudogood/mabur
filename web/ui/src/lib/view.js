@@ -51,6 +51,7 @@ export function statsView({ connected, connecting = false, mode, ch, w, core, pa
     // Telem.soc_temp_c, 1 Hz; the core sends null until a Telem with a
     // reading lands (-128 on the wire = the drone has no thermal source).
     droneTemp: on ? fx(core.drone_temp_c, 0) : D,
+    ...uplinkCell(on && !spot ? core : null),
     preLoss: on && has(core.pre_fec_loss) ? (core.pre_fec_loss * 100).toFixed(1) : D,
     postLoss: on && has(core.residual) ? (core.residual * 100).toFixed(2) : D,
     bitrate: on && page ? fx(page.bitrateMbps, 1) : D,
@@ -73,6 +74,24 @@ function segRow(name, seg) {
   return `${segCell(a)} | ${segCell(b)}`;
 }
 
+// Uplink delivery, computed by the core (gs/src/uplink_delivery.h):
+// uplink_pct is the share of our RCFs the drone accepted over ~10 s, and
+// uplink the state to colour it by. Dead reads 0 whatever the window still
+// holds; idle (the GS sends no RCFs) and stale (old drone Telem) dim.
+// core is null when disconnected or a spotter (it sends no RCFs).
+function uplinkCell(core) {
+  if (!core) return { uplink: D, uplinkTone: '' };
+  const pct = has(core.uplink_pct) ? String(core.uplink_pct) : D;
+  switch (core.uplink) {
+    case 'ok': return { uplink: pct, uplinkTone: '' };
+    case 'low': return { uplink: pct, uplinkTone: 'low' };
+    case 'dead': return { uplink: '0', uplinkTone: 'dead' };
+    case 'idle': return { uplink: D, uplinkTone: 'dim' };
+    case 'stale': return { uplink: pct, uplinkTone: 'dim' };
+    default: return { uplink: D, uplinkTone: '' };
+  }
+}
+
 // rateBps = bytes/s over the last stats tick (App computes it).
 function lrecText(l) {
   if (!l || l.state === 'off' || l.state === 'unknown') return 'off';
@@ -82,7 +101,7 @@ function lrecText(l) {
   return `${l.state} · ${size} · ${((l.rateBps || 0) * 8 / 1e6).toFixed(1)} Mb/s`;
 }
 
-export function debugGroups({ connected, mode, core, rcfPct, ausRate, hitches60, hitchesTotal, seg, lrec }) {
+export function debugGroups({ connected, mode, core, ausRate, hitches60, hitchesTotal, seg, lrec }) {
   const on = !!connected && !!core;
   const spot = mode === 'spotter';
   const isRelay = on && core.radio === 'relay';
@@ -113,7 +132,7 @@ export function debugGroups({ connected, mode, core, rcfPct, ausRate, hitches60,
       ['residual', v(has(core?.residual) ? (core.residual * 100).toFixed(2) + ' %' : D)],
       ['SNR', v(fmt(core?.snr_db, 1, ' dB'))], ['RSSI', v(fmt(core?.rssi_dbm, 1, ' dBm'))],
       ['RTT', v(!spot && has(core?.rtt_ms) ? `${fmt(core.rtt_ms)} ms (min ${fmt(core.rtt_min_ms)} ms)` : D)],
-      ['RCF heard %', v(!spot && rcfPct != null ? rcfPct.toFixed(1) : D)],
+      ['RCF heard %', v(!spot && has(core?.uplink_pct) ? String(core.uplink_pct) : D)],
     ]) },
     { title: 'Drone', rows: rows([
       ['drone_state', v(core?.drone_state ?? D)], ['drone_rcf_rx', v(core?.drone_rcf_rx ?? D)],

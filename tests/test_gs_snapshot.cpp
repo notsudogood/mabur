@@ -590,6 +590,32 @@ TEST(drone_soc_temp_parses_and_drops_the_sentinel) {
   CHECK(!s.soc_temp_c);
 }
 
+// drone.rcf.{delivery_pct, uplink} (UplinkDelivery on maburgs): the
+// compact bar's uplink cell. An unknown state string, a wrong type or an
+// absent/null drone block all read "no claim" (kNone, no pct).
+TEST(drone_rcf_uplink_parses) {
+  GsSnapshot s;
+  REQUIRE(parse(R"({"drone": {"rcf": {"delivery_pct": 72, "uplink": "low"}}})", &s));
+  REQUIRE(s.uplink_pct); CHECK(*s.uplink_pct == 72);
+  CHECK(s.uplink == GsUplink::kLow);
+  REQUIRE(parse(R"({"drone": {"rcf": {"delivery_pct": 95, "uplink": "ok"}}})", &s));
+  CHECK(s.uplink == GsUplink::kOk);
+  REQUIRE(parse(R"({"drone": {"rcf": {"delivery_pct": 0, "uplink": "dead"}}})", &s));
+  CHECK(s.uplink == GsUplink::kDead);
+  REQUIRE(parse(R"({"drone": {"rcf": {"delivery_pct": null, "uplink": "wait"}}})", &s));
+  CHECK(!s.uplink_pct); CHECK(s.uplink == GsUplink::kWait);
+  REQUIRE(parse(R"({"drone": {"rcf": {"uplink": "idle"}}})", &s));
+  CHECK(s.uplink == GsUplink::kIdle);
+  REQUIRE(parse(R"({"drone": {"rcf": {"uplink": "stale"}}})", &s));
+  CHECK(s.uplink == GsUplink::kStale);
+  REQUIRE(parse(R"({"drone": {"rcf": {"delivery_pct": 50, "uplink": "bogus"}}})", &s));
+  CHECK(s.uplink == GsUplink::kNone);
+  REQUIRE(parse(R"({"drone": {"rcf": {"delivery_pct": "lots", "uplink": 3}}})", &s));
+  CHECK(!s.uplink_pct); CHECK(s.uplink == GsUplink::kNone);
+  REQUIRE(parse(R"({"drone": null})", &s));
+  CHECK(!s.uplink_pct); CHECK(s.uplink == GsUplink::kNone);
+}
+
 // drone.rec (VTX recorder): the drone recorder's state/err,
 // and drone.tlm_age_ms alongside it. Empty when the drone block is
 // null/absent or the keys are missing/mistyped.

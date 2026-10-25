@@ -41,7 +41,7 @@ in BAR_ICONS only (same 2.304 cell, each icon one cell wide), all 30 sizes:
        --sizes 13,14,15,16,17,19,21,22,23,24,25,26,28,29,32,34,35,37,38,42,\\
 44,45,48,51,52,56,68,75,76,112"
 
-Expect **14,805,496 bytes** and ~5 minutes of pure-Python box blur (this is
+Expect **14,937,678 bytes** and ~5 minutes of pure-Python box blur (this is
 a build-time tool; it is not on any hot path). A materially different byte
 count means something changed -- a different weight or family, a different
 size list, a different subset -- and should be explained before committing.
@@ -97,6 +97,7 @@ BAR_ICONS = [
     0xF0430,  # jit      pulse
     0xF051B,  # lat      timer-outline
     0xF033A,  # loss     link-variant-off
+    0xF005D,  # uplink   arrow-up
 ]
 SUBSET = ([c for c in range(0x20, 0x7F)] + [0x2014, 0x2212, 0x2192, 0x25CF, 0x25CB]
           + sorted(BAR_ICONS))

@@ -3,6 +3,7 @@
 #include <cmath>
 #include <limits>
 #include <string>
+#include <utility>
 
 #include "json.hpp"
 
@@ -87,6 +88,19 @@ bool parse_gs_snapshot(const char* data, size_t n, GsSnapshot* out) {
     if (const json* sys = obj(*drone, "sys")) {
       out->soc_temp_c = integer(*sys, "soc_temp_c");
       if (out->soc_temp_c && *out->soc_temp_c == -128) out->soc_temp_c.reset();
+    }
+    if (const json* rcf = obj(*drone, "rcf")) {
+      out->uplink_pct = integer(*rcf, "delivery_pct");
+      auto u = rcf->find("uplink");
+      if (u != rcf->end() && u->is_string()) {
+        static const std::pair<const char*, GsUplink> kStates[] = {
+            {"wait", GsUplink::kWait}, {"ok", GsUplink::kOk},     {"low", GsUplink::kLow},
+            {"dead", GsUplink::kDead}, {"idle", GsUplink::kIdle}, {"stale", GsUplink::kStale},
+        };
+        const std::string& v = u->get_ref<const std::string&>();
+        for (const auto& [name, st] : kStates)
+          if (v == name) out->uplink = st;
+      }
     }
   }
   // Captured here (top-level, like `scan`) and consumed once the `link`

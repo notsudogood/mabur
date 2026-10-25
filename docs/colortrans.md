@@ -26,14 +26,28 @@ The H618's 3×4 is derived from `kColorTrans3` at startup, so a retune needs
 no extra edit there; a retune to `gamma != 1` is not affine and leaves the
 H618 flat (logged).
 
-The ct thread also SCALES: the burned DVR's picture is the OSD surface's
-size, not the decoded size, because the encoder lays the OSD 1:1 from the
-top-left while the panel stretches the video under it — recording at the
-decoded size would put the OSD offset and clipped on a 720p drone with a
-1080p panel. With colortrans the shader draw scales (target = OSD size,
-LINEAR sampler); without it, one RGA NV12 resize. So the ct thread runs
-whenever there is an OSD region, colortrans or not, and a 720p drone
-records a 1080p file.
+The ct thread also SCALES: the burned DVR's picture is the recording's own
+size (`dvr.burned.size`, default the decoded size when the recording
+starts), and every frame of another size is scaled to it — the encoder
+latches its picture size from the first frame and lays the OSD 1:1 from
+the top-left, and the burned overlay is composed at the record size, so a
+decoded size that changes mid-recording (a rung change) or a `size` set
+apart from the drone's (a 720p drone recorded at 1080p) keeps recording
+with the OSD in place. With colortrans the shader draw scales (target =
+record size, LINEAR sampler); without it, one RGA NV12 resize. The
+encoder also latches the first frame's strides, so a frame whose
+geometry (size or strides) differs from what the encoder latched goes
+through the same path — at equal size that is a restride copy. So the ct
+thread runs in every GPU build, colortrans or not. A picture of another
+aspect ratio than the record size (1728x816 into 1920x1080) is
+letterboxed like the screen shows it (`fit_rect.h`):
+the shader clears to black and draws into the centred sub-rectangle; the
+RGA path fills the bars once per destination buffer and scales into it.
+A frame the stage cannot conform (both the shader and RGA failed, or the
+destination buffers could not be allocated) is dropped and counted in
+`burn_drop`, never recorded at another geometry: forwarded, it would fix
+the encoder's latch at the wrong size and the record-size OSD would be
+refused for the whole file.
 
 ## Kernel facts — RK3566 (GS kernel 6.1.84, `rockchip_drm_vop2.c`)
 
@@ -152,6 +166,17 @@ A recording must not cost the live picture a vsync. What makes that hold:
   `IN_FENCE_FD` on every video-plane commit, so the plane helper takes no
   implicit fence. Startup log:
   `DrmPresenter: video plane commits carry an explicit IN_FENCE_FD (...)`.
+- **An O(1) tap on the flip.** `BurnRecorder::submit()` runs on the
+  `SCHED_FIFO` release thread (docs/phase-lock.md "Threads"), from the
+  display's flip through `RecorderTap` (`recorder_tap.h`), on each
+  recorded slot of the vblank grid: one buffer reference and a mailbox
+  post under a `PiMutex`, never a copy and never a buffer release. A
+  displaced mailbox entry waits on a two-deep list for the stage thread to
+  release it; with the list full, or four decoder buffers already held by
+  the recorder (counted, in every mode), the flip takes no reference and
+  counts as dropped. Record start and stop install and remove the hook from the
+  housekeeping loop (`RecorderTap::set`/`clear`, cleared before `stop()`),
+  so neither runs on the release thread.
 - **Pipelined ct thread.** The stage runs on its own thread (EGL is
   thread-bound) with three destination buffers and a latest-wins handoff to
   the encode thread (`burn_recorder.h`, THREADING).
@@ -162,12 +187,14 @@ A recording must not cost the live picture a vsync. What makes that hold:
   per source buffer (the decoder pool is 24 fixed buffers), so imports
   happen once per buffer per recording, not per frame.
 - **Palette memoised at boot** (`maburplay: burn palette built: N entries`),
-  so a record start does not histogram the MSP atlas on the main loop. A
-  record start/stop still costs a one-shot GPU bring-up/teardown.
-- **Schedule-based `dvr.burned.fps_cap`** (`gs/player/src/fps_cap.h`,
-  `test_fps_cap`): a frame is admitted when its slot is due and slots
-  advance one interval per admit, so a source at or under the cap passes
-  whole even though decoded frames arrive in pairs.
+  so a record start does not histogram the MSP atlas on the housekeeping
+  loop. A record start/stop still costs a one-shot GPU bring-up/teardown.
+- **`dvr.burned.every`: counted thinning on the vblank grid**
+  (`gs/player/src/glass_cadence.h`, `test_glass_cadence`): the recorder is
+  fed from the display's flip, and one flip per `every` vblank periods is
+  recorded, stamped with its ideal grid time; the encoder's rate is
+  `round(1e6 / (period × every))`. No wall clock or rate estimate decides
+  which frames go in, so the file samples exactly what the glass showed.
 - **File I/O off the encode thread.** The mux writes through
   `mabur::ThreadedSink` (`common/include/mabur/threaded_sink.h`,
   `test_threaded_sink`). A closing fragment is ~2.5 MB at 20 Mbit/s and
@@ -179,25 +206,18 @@ A recording must not cost the live picture a vsync. What makes that hold:
   so a fragment's kernel work (the page-cache copy and a FAT buffer head per
   512-byte sector) is spread over ~320 ms instead of landing in one ~22 ms
   burst. The burst was the live picture's cost: with the encoder, the GPU
-  stage, the decoder and the writer all busy at once, the main loop woke a
-  few ms late, or its commit ioctl or the decode ran long, and the frame
-  missed its vblank about once per 45-90 s of recording. Lowering the
+  stage, the decoder and the writer all busy at once, the loop that
+  released frames woke a few ms late, or its commit ioctl or the decode ran
+  long, and the frame missed its vblank about once per 45-90 s of
+  recording, measured with frames released from a normal-priority loop;
+  the release thread runs `SCHED_FIFO` (`display.rt_priority`). Lowering the
   writer's priority does not prevent that (a thread that just woke from a
   long sleep keeps the CPU against the loop's wake-up until the tick), so
   the writer runs 10 nice steps below the player only as a tie-breaker.
   The gaps stop while the queue holds 4 MB or more (the card is slower than
   the trickle: catch up) and during the sink's destructor (record stop
-  drains it on the main loop). Record of the search and the gate:
+  drains it on the housekeeping loop). Record of the search and the gate:
   `docs/findings/2026-10-19-burned-dvr-live-repeat.md`.
-
-- **A longer vsync lead while recording.** The trickle halves the live
-  cost but does not remove it: the main loop still wakes 3-6 ms late a few
-  times a minute while the recorder runs, and the 5 ms lead
-  (`display.vsync_lead_ms`) leaves ~3 ms to the latch. At record start the
-  regulator switches to `display.rec_vsync_lead_ms` (bundle 8) and back at
-  stop (`maburplay: rec: vsync lead 5 -> 8 ms for the recording`); the phase
-  lock re-steers the sensor to the moved release. +3 ms of glass latency
-  while recording, 0 repeats on the bench.
 
 `BurnRecorder: stopped` reports `ct_ms=mean/max enc_ms=mean/max`; the ct
 thread logs `colortrans stage mean per frame ...: import, draw+finish, rga`
@@ -208,12 +228,32 @@ measured without a hand on the GS.
 Bench record of the three fixes and their numbers:
 `docs/findings/2026-09-17-colortrans-recording-latency.md`.
 
+## Known limitations
+
+- **The burned recorder cannot record every vblank at 100 Hz.** The period
+  is 10 ms and both stages are slower at 1728x972: the colour stage takes
+  ~15 ms a frame (GPU draw ~9.5 + RGA ~5.3) and `encode()` ~11.4 ms
+  (rkvenc stays at 297 MHz: `venc_ondemand` never raises it). With
+  `dvr.burned.every = 1` on a 100 Hz panel the latest-wins mailboxes drop
+  20-35 % of the flips for the whole recording (`burn_drop=` climbs
+  ~20-30/s), so the file stutters. Use `every = 2` (50 fps) at 100 Hz.
+  With colortrans off and the rkvenc governor set to `performance` by hand
+  (400 MHz, ~9.2 ms) every vblank fits; the player sets no encoder clock.
+- **The colour stage costs live view at 100 fps.** Its GPU and RGA memory
+  traffic slows the hardware decoder (`dec` p50 +1.5-2 ms, p99 roughly
+  doubled), the regulator's allowance follows the wider tail, and e2e p50
+  rises ~4 ms while recording (~3.5 ms at `every = 2`). With colortrans off
+  the recording costs live view nothing measurable. At 60 fps the stage
+  fits and the cost is ~0.5 ms of `dec`.
+
+Measurements: `docs/findings/2026-10-22-burned-dvr-100fps-throughput.md`.
+
 ## Not done / follow-ups
 
-- A record start or stop blocks the main loop for 70-180 ms:
-  `BurnRecorder::start()` (encoder init, palette upload) and `stop()`
-  (thread joins, encoder teardown, mux close) run synchronously from
-  `rec_start`/`rec_stop`.
+- A record start or stop blocks the housekeeping loop (OSD, stats; not the
+  decode-output or release thread) for 70-180 ms: `BurnRecorder::start()`
+  (encoder init, palette upload) and `stop()` (thread joins, encoder
+  teardown, mux close) run synchronously from `rec_start`/`rec_stop`.
 - Live retune (config + restart is the loop).
 - EGL YUV colour-space / range hints on the dmabuf import (none are passed;
   a mismatch is a slight tint between the display and the DVR).

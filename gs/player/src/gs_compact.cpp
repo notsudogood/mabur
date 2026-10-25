@@ -15,7 +15,7 @@ namespace {
 // the panel bezel on the GS's own display.
 constexpr int kInsetX = 32, kInsetY = 24;
 
-// The eleven items, in draw order, and the row each one lands on. This IS
+// The items, in draw order, and the row each one lands on. This IS
 // the reading order on the glass: row 0 is the radio (what the link is
 // doing), row 1 the picture (what came out of it). Split by source rather
 // than by width -- an even split would put `snr` next to `bitrate`, which
@@ -23,18 +23,19 @@ constexpr int kInsetX = 32, kInsetY = 24;
 //
 // The two rows share columns: an item's column is its position within its
 // row, so kOrder pairs ch/bitrate, mcs/res, air/fps, rssi/jit, snr/lat and
-// temp/loss. The worst-case grid is 72 cells plus 5 gaps, inside the
-// sizing reference row's 76 + 5, so the reference -- not the grid --
-// decides the type size (gs_compact.h). REC sits in the corner because in
-// the grid it would eat that slack and shift a column whenever the
-// recorder was merely armed.
+// temp/loss. Uplink trails row 0 (col_of == kTrail): it follows temp at item
+// spacing, overhanging the last column when it has to. The sizing reference
+// row, not the grid, decides the type size (gs_compact.h). REC sits in the corner because in
+// the grid it would widen it and shift a column whenever the recorder was
+// merely armed.
 constexpr GsBarField kOrder[] = {
     GsBarField::kCh,   GsBarField::kMcs, GsBarField::kAir,     GsBarField::kRssi,
-    GsBarField::kSnr,  GsBarField::kTemp, GsBarField::kRec,    GsBarField::kBitrate,
+    GsBarField::kSnr,  GsBarField::kTemp, GsBarField::kUplink, GsBarField::kRec,
+    GsBarField::kBitrate,
     GsBarField::kRes,  GsBarField::kFps, GsBarField::kJit,     GsBarField::kLat,
     GsBarField::kLoss,
 };
-constexpr int kRow[] = {0, 0, 0, 0, 0, 0, GsCompactBar::kCorner, 1, 1, 1, 1, 1, 1};
+constexpr int kRow[] = {0, 0, 0, 0, 0, 0, 0, GsCompactBar::kCorner, 1, 1, 1, 1, 1, 1};
 static_assert(sizeof(kOrder) / sizeof(kOrder[0]) == (size_t)GsBarField::kCount,
               "every field must appear exactly once in the draw order");
 static_assert(sizeof(kRow) / sizeof(kRow[0]) == (size_t)GsBarField::kCount,
@@ -44,8 +45,8 @@ constexpr int items_in_row(int row) {
   for (int r : kRow) n += (r == row);
   return n;
 }
-static_assert(items_in_row(0) == GsCompactBar::kCols && items_in_row(1) == GsCompactBar::kCols,
-              "both rows fill every column of the shared grid");
+static_assert(items_in_row(0) == GsCompactBar::kCols + 1 && items_in_row(1) == GsCompactBar::kCols,
+              "both rows fill the shared grid; the radio row adds one trailing item");
 
 // Gap between the two rows, on top of the cell height. The boxes span the
 // padded CELL, so stacking by glyph_h alone already separates them; this is
@@ -153,10 +154,14 @@ std::string GsCompactBar::worst_case(GsBarField id, int n_cards,
     // int8 on the wire, rendered clamped to [0, 127]: "127" beats "--" by
     // one glyph.
     case GsBarField::kTemp:    return tag(gs_icon::kTemp) + "127";
+    // Clamped to [0, 100]; "--" is narrower.
+    case GsBarField::kUplink:  return tag(gs_icon::kUplink) + "100%";
     case GsBarField::kBitrate: return tag(gs_icon::kBitrate) + "999.9";
     // The decoded height plus "p", clamped to four digits.
     case GsBarField::kRes:     return tag(gs_icon::kRes) + "9999p";
-    case GsBarField::kFps:     return tag(gs_icon::kFps) + "999";
+    // "999/999": a drone-fps / panel-Hz mismatch reads source/panel. Any
+    // wider and the grid outgrows the sizing reference, shrinking the type.
+    case GsBarField::kFps:     return tag(gs_icon::kFps) + "999/999";
     case GsBarField::kJit:     return tag(gs_icon::kJit) + "999.9";
     case GsBarField::kLat:     return tag(gs_icon::kLat) + "999/999";
     case GsBarField::kLoss:    return tag(gs_icon::kLoss) + "100.0/100.0";
@@ -194,9 +199,24 @@ static void column_widths(const MaskAtlas& a, int n_cards, int* cw) {
   for (int k = 0; k < GsCompactBar::kCols; ++k) cw[k] = 0;
   for (int i = 0; i < (int)GsBarField::kCount; ++i) {
     const int k = GsCompactBar::col_of(kOrder[i]);
-    if (k < 0) continue;
+    if (k < 0 || k >= GsCompactBar::kCols) continue;  // corner / trailing item
     cw[k] = std::max(cw[k], text_width(a, GsCompactBar::worst_case(kOrder[i], n_cards).c_str()));
   }
+}
+
+// How far row 0's trailing item (uplink) reaches past the last grid column:
+// it starts one item gap after the last column's row-0 item (temp) ends, so
+// it overhangs only when temp + gap + uplink outgrows that column.
+static int trail_overhang(const MaskAtlas& a, int n_cards, const int* cw) {
+  int last = 0, trail = 0;
+  for (int i = 0; i < (int)GsBarField::kCount; ++i) {
+    if (kRow[i] != 0) continue;
+    const int col = GsCompactBar::col_of(kOrder[i]);
+    const int w = text_width(a, GsCompactBar::worst_case(kOrder[i], n_cards).c_str());
+    if (col == GsCompactBar::kCols - 1) last = w;
+    if (col == GsCompactBar::kTrail) trail = w;
+  }
+  return std::max(0, last + item_gap(&a) + trail - cw[GsCompactBar::kCols - 1]);
 }
 
 int GsCompactBar::worst_grid_width(const MaskAtlas& a, int n_cards) {
@@ -204,14 +224,15 @@ int GsCompactBar::worst_grid_width(const MaskAtlas& a, int n_cards) {
   column_widths(a, n_cards, cw);
   int w = 0;
   for (int k = 0; k < kCols; ++k) w += cw[k];
-  // Gaps between columns, then the first box's left pad and the last one's
-  // right.
-  return w + (kCols - 1) * item_gap(&a) + 2 * pad_h(&a);
+  // Gaps between columns, the trailing item's overhang, then the first
+  // box's left pad and the last one's right.
+  return w + (kCols - 1) * item_gap(&a) + trail_overhang(a, n_cards, cw) + 2 * pad_h(&a);
 }
 
 int GsCompactBar::sizing_row_width(const MaskAtlas& a) {
   return kSizingChars * a.advance_x + (kSizingItems - 1) * item_gap(&a) + 2 * pad_h(&a);
 }
+
 
 bool GsCompactBar::layout(int screen_w, int screen_h, std::string* err) {
   laid_out_ = false;
@@ -232,8 +253,8 @@ bool GsCompactBar::layout(int screen_w, int screen_h, std::string* err) {
   const int inset_y = (int)(kInsetY * scale + 0.5);
   const int avail_w = screen_w - 2 * inset_x;
 
-  // Largest baked size at which the sizing reference row AND both
-  // worst-case rows fit, and the stack fits the height (gs_compact.h). One
+  // Largest baked size at which the sizing reference row AND the worst-case
+  // grid fit, and the stack fits the height (gs_compact.h). One
   // type size, no per-resolution table: the same rule renders a readable
   // bar on a 720p panel and a bigger one on a 4K panel.
   const MaskAtlas* best = nullptr;
@@ -241,8 +262,8 @@ bool GsCompactBar::layout(int screen_w, int screen_h, std::string* err) {
   for (int px = 1; px <= 512; ++px) {
     const MaskAtlas* a = font_.atlas(px);
     if (!a || a->advance_x <= 0) continue;
-    bool fits = sizing_row_width(*a) <= avail_w &&
-                worst_grid_width(*a, kMaxCards) <= avail_w;
+    const bool fits = sizing_row_width(*a) <= avail_w &&
+                      worst_grid_width(*a, kMaxCards) <= avail_w;
     if (!fits) continue;
     // The stack also has to sit ABOVE the bottom inset without running off
     // the top of a short surface.
@@ -310,18 +331,23 @@ void GsCompactBar::place_(int n_cards) {
   // worst case, not the column, so a narrow item's redraw stays narrow.
   int cw[kCols];
   column_widths(*atlas_, n_cards, cw);
-  int total = (kCols - 1) * gap_;
+  int total = (kCols - 1) * gap_ + trail_overhang(*atlas_, n_cards, cw);
   for (int k = 0; k < kCols; ++k) total += cw[k];
   // Centred, but never past the inset: with kMaxCards the grid can be wide
   // enough that centring and the inset disagree, and the inset wins.
   int col_x[kCols];
   col_x[0] = std::max((screen_w_ - total) / 2, inset_x_ + pad);
   for (int k = 1; k < kCols; ++k) col_x[k] = col_x[k - 1] + cw[k - 1] + gap_;
+  // The trailing item follows the last column's row-0 item at item spacing.
+  int trail_x = 0;
+  for (int i = 0; i < (int)GsBarField::kCount; ++i)
+    if (kRow[i] == 0 && col_of(kOrder[i]) == kCols - 1) trail_x = col_x[kCols - 1] + w[i] + gap_;
   for (int i = 0; i < (int)GsBarField::kCount; ++i) {
     const int row = kRow[i];
     if (row == kCorner) continue;
     Field& f = f_(kOrder[i]);
-    f.pen_x = col_x[col_of(kOrder[i])];
+    const int col = col_of(kOrder[i]);
+    f.pen_x = col == kTrail ? trail_x : col_x[col];
     f.baseline_y = baseline_y_[row];
     f.box = DirtyRect{f.pen_x - pad, baseline_y_[row] - atlas_->baseline,
                       w[i] + 2 * pad, atlas_->glyph_h};
@@ -411,6 +437,42 @@ GsCompactBar::FieldState GsCompactBar::state_of_(const GsSnapshot& snap,
         st.text = tag(gs_icon::kTemp) + "--";
       }
       break;
+    case GsBarField::kUplink: {
+      // drone.rcf via maburgs' UplinkDelivery. Link-sourced: dims and holds
+      // while the sideport is stale, and every tint is gated on !stale.
+      st.rgb = link;
+      const std::string pct =
+          snap.uplink_pct ? ascii_int(std::clamp(*snap.uplink_pct, 0, 100)) + "%" : "--";
+      switch (snap.uplink) {
+        case GsUplink::kNone:
+        case GsUplink::kWait:
+          st.text = tag(gs_icon::kUplink) + "--";
+          break;
+        case GsUplink::kOk:
+          st.text = tag(gs_icon::kUplink) + pct;
+          break;
+        case GsUplink::kLow:
+          st.text = tag(gs_icon::kUplink) + pct;
+          if (!stale) st.rgb = tok::kStatusCaution;
+          break;
+        case GsUplink::kDead:
+          // Whatever the window still holds, the drone has stopped hearing us.
+          st.text = tag(gs_icon::kUplink) + "0%";
+          if (!stale) st.rgb = tok::kStatusCritical;
+          break;
+        case GsUplink::kIdle:
+          // The GS is sending no RCFs: nothing to measure, not a fault.
+          st.text = tag(gs_icon::kUplink) + "--";
+          st.rgb = tok::kTextLabel;
+          break;
+        case GsUplink::kStale:
+          // The drone's Telem is old: hold the last figure, dimmed.
+          st.text = tag(gs_icon::kUplink) + pct;
+          st.rgb = tok::kTextLabel;
+          break;
+      }
+      break;
+    }
     case GsBarField::kBitrate:
       // Player-measured: AU bytes off the ring, not an encoder setpoint.
       st.text = tag(gs_icon::kBitrate) + fmt_one_dp(std::clamp(ps.mbps, 0.0, 999.9));
@@ -424,6 +486,24 @@ GsCompactBar::FieldState GsCompactBar::state_of_(const GsSnapshot& snap,
                      : "--");
       break;
     case GsBarField::kFps:
+      if (ps.rate_mismatch) {
+        // The drone's rate and the panel's are too far apart for the phase
+        // lock (rate_match.h): source/panel in caution. Both are
+        // player-measured, so the warning holds while the sideport is stale.
+        const double src = std::clamp(ps.src_hz, 0.0, 999.0);
+        const double pan = std::clamp(ps.panel_hz, 0.0, 999.0);
+        // Rates that round alike get a decimal on the source when it still
+        // fits the cell's 7 characters (59.7/60); at three digits it does
+        // not, and the tint alone says they differ (120/120).
+        std::string txt = fmt_int(src) + "/" + fmt_int(pan);
+        if (std::lround(src) == std::lround(pan)) {
+          const std::string dp = fmt_one_dp(src) + "/" + fmt_int(pan);
+          if (dp.size() <= 7) txt = dp;
+        }
+        st.text = tag(gs_icon::kFps) + txt;
+        st.rgb = tok::kStatusCaution;
+        break;
+      }
       st.text = tag(gs_icon::kFps) + fmt_int(std::clamp(ps.fps, 0.0, 999.0));
       // Low-power (pre-arm) mode: the rate is low on purpose. Caution
       // tint, same text. The CELL is player-measured and so never dims --
@@ -433,6 +513,9 @@ GsCompactBar::FieldState GsCompactBar::state_of_(const GsSnapshot& snap,
       // from a frozen flag is exactly the "looks live" failure the
       // staleness rule exists to prevent. Quiet sideport = no claim.
       if (snap.low_power && !stale) st.rgb = tok::kStatusCaution;
+      // The phase lock gave up on a pair close enough to call a match (the
+      // steer cannot reach the panel): player-measured, so never gated.
+      if (ps.phase_oor) st.rgb = tok::kStatusCaution;
       break;
     case GsBarField::kJit:
       st.text = tag(gs_icon::kJit) + fmt_one_dp(std::clamp(ps.jitter_ms, 0.0, 999.9));

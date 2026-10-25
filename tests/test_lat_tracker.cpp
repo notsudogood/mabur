@@ -1,5 +1,7 @@
+#include <atomic>
 #include <cstdint>
 #include <string>
+#include <thread>
 
 #include "au_ring.h"
 #include "lat_tracker.h"
@@ -555,6 +557,44 @@ TEST(on_commit_stamps_the_row_and_defaults_to_zero) {
   CHECK(L2.rows.size() == 1);
   CHECK(L2.rows[0].t_commit_us == 0);
   CHECK(L2.rows[0].pbits == 0x04);
+}
+
+TEST(the_decode_side_and_housekeeping_share_the_tracker) {
+  // on_submit/on_decoded on one thread (the decode-output side), the tail
+  // stamps and 1 Hz flush_line() on another: every frame completes once and
+  // lands in exactly one window.
+  LatTracker lat;
+  warm(lat);
+  constexpr int kN = 2000;
+  std::atomic<int> decoded{0}, flipped{0};
+  std::thread dec([&] {
+    for (int i = 0; i < kN; ++i) {
+      // Stay well inside the inflight map: never run more than 16 ahead.
+      while (i - flipped.load() > 16) std::this_thread::yield();
+      AuRecordMeta m;
+      m.pts_us = static_cast<uint32_t>((kWarmFrames + i) * kFrameStep);
+      m.t_first_us = m.pts_us + kC;
+      m.t_complete_us = m.t_first_us + 1000;
+      lat.on_submit(m, m.t_complete_us);
+      lat.on_decoded(m.pts_us, m.t_complete_us + 2000);
+      decoded.store(i + 1);
+    }
+  });
+  int total = 0;
+  for (int i = 0; i < kN; ++i) {
+    while (decoded.load() <= i) std::this_thread::yield();
+    const uint32_t pts = static_cast<uint32_t>((kWarmFrames + i) * kFrameStep);
+    const uint64_t t = pts + kC + 4000;
+    lat.on_present(pts, t);
+    lat.on_flip(pts, t + 1000, true);
+    flipped.store(i + 1);
+    if (i % 50 == 0) total += lat.flush_line().n;
+    (void)lat.p99_frame();
+    (void)lat.anchor().usable();
+  }
+  dec.join();
+  total += lat.flush_line().n;
+  CHECK(total == kN);
 }
 
 MTEST_MAIN

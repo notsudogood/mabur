@@ -1,6 +1,9 @@
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <functional>
+#include <random>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -29,7 +32,7 @@ TEST(disabled_passes_through) {
   FrameRegulator reg(0);
   CHECK(!reg.enabled());
   FrameRegulator::Displaced disp;
-  CHECK(reg.offer(frame(0), kT0, &disp));
+  CHECK(reg.offer(frame(0), kT0, kT0, &disp));
   CHECK(disp.n == 0);
   CHECK(!reg.holding());
 }
@@ -38,7 +41,7 @@ TEST(first_frame_seeds_floor_and_holds_exactly_d) {
   FrameRegulator reg(12);
   FrameRegulator::Displaced disp;
   DmaFrame out;
-  CHECK(!reg.offer(frame(0), kT0, &disp));  // held
+  CHECK(!reg.offer(frame(0), kT0, kT0, &disp));  // held
   CHECK(disp.n == 0);
   CHECK(reg.holding());
   CHECK(!reg.release_due(kT0 + kD - 1, &out));
@@ -52,12 +55,12 @@ TEST(steady_cadence_releases_on_pts_grid_not_arrival) {
   FrameRegulator reg(12);
   FrameRegulator::Displaced disp;
   DmaFrame out;
-  CHECK(!reg.offer(frame(0), kT0, &disp));
+  CHECK(!reg.offer(frame(0), kT0, kT0, &disp));
   CHECK(reg.release_due(kT0 + kD, &out));
   // Frame 1 arrives 5 ms jittery-late relative to the floor: it must still
   // release at floor + pts + D, i.e. only 7 ms after its own arrival.
   const uint64_t a1 = kT0 + kFrame + 5'000;
-  CHECK(!reg.offer(frame(kFrame), a1, &disp));
+  CHECK(!reg.offer(frame(kFrame), a1, a1, &disp));
   // (small slack: the drift leak may shift the floor by ~1 µs per frame)
   CHECK(!reg.release_due(kT0 + kFrame + kD - 1'000, &out));
   CHECK(reg.release_due(kT0 + kFrame + kD + 16, &out));
@@ -68,11 +71,11 @@ TEST(late_frame_presents_immediately) {
   FrameRegulator reg(12);
   FrameRegulator::Displaced disp;
   DmaFrame out;
-  CHECK(!reg.offer(frame(0), kT0, &disp));
+  CHECK(!reg.offer(frame(0), kT0, kT0, &disp));
   CHECK(reg.release_due(kT0 + kD, &out));
   // Arrival AFTER its own release point (floor + pts + D).
   const uint64_t a1 = kT0 + kFrame + kD + 1'000;
-  CHECK(reg.offer(frame(kFrame), a1, &disp));  // present now
+  CHECK(reg.offer(frame(kFrame), a1, a1, &disp));  // present now
   CHECK(disp.n == 0);
   CHECK(!reg.holding());
   CHECK(reg.late_count() == 1);
@@ -83,12 +86,12 @@ TEST(faster_frame_snaps_floor_down) {
   FrameRegulator::Displaced disp;
   DmaFrame out;
   // Seed with a SLOW first frame (its arrival becomes the provisional floor).
-  CHECK(!reg.offer(frame(0), kT0, &disp));
+  CHECK(!reg.offer(frame(0), kT0, kT0, &disp));
   CHECK(reg.release_due(kT0 + kD, &out));
   // Frame 1 arrives 3 ms faster than the provisional floor predicts: floor
   // snaps down and its release is exactly its own arrival + D.
   const uint64_t a1 = kT0 + kFrame - 3'000;
-  CHECK(!reg.offer(frame(kFrame), a1, &disp));
+  CHECK(!reg.offer(frame(kFrame), a1, a1, &disp));
   CHECK(!reg.release_due(a1 + kD - 1, &out));
   CHECK(reg.release_due(a1 + kD, &out));
 }
@@ -100,18 +103,19 @@ TEST(floor_leaks_upward_to_track_drift) {
   // Seed the floor, then feed frames arriving a constant 2 ms above it.
   // The leak (~1 µs per frame at 60 fps) must close that gap: after 3000
   // frames the floor has crept >= 2 ms, so hold time is back to ~D.
-  CHECK(!reg.offer(frame(0), kT0, &disp));
+  CHECK(!reg.offer(frame(0), kT0, kT0, &disp));
   CHECK(reg.release_due(kT0 + kD, &out));
   uint64_t pts = 0, arrival = 0;
   for (int i = 1; i <= 3000; ++i) {
     pts = static_cast<uint64_t>(i) * kFrame;
     arrival = kT0 + pts + 2'000;
-    if (!reg.offer(frame(static_cast<uint32_t>(pts)), arrival, &disp))
+    if (!reg.offer(frame(static_cast<uint32_t>(pts)), arrival, arrival, &disp))
       CHECK(reg.release_due(arrival + kD, &out));  // drain
   }
   // Final frame: floor >= arrival-offset, so release is within [arr, arr+D].
   const uint64_t a = kT0 + 3001ull * kFrame + 2'000;
   const bool held = !reg.offer(frame(static_cast<uint32_t>(3001ull * kFrame)),
+                               a,
                                a, &disp);
   if (held) {
     CHECK(!reg.release_due(a - 1, &out));      // never before arrival
@@ -126,9 +130,9 @@ TEST(newer_frame_replaces_held_mailbox_style) {
   FrameRegulator reg(12);
   FrameRegulator::Displaced disp;
   DmaFrame out;
-  CHECK(!reg.offer(frame(0), kT0, &disp));
+  CHECK(!reg.offer(frame(0), kT0, kT0, &disp));
   // Burst decode: frame 1 offered before frame 0's release.
-  CHECK(!reg.offer(frame(kFrame), kT0 + 1'000, &disp));
+  CHECK(!reg.offer(frame(kFrame), kT0 + 1'000, kT0 + 1'000, &disp));
   CHECK(disp.n == 1);
   CHECK(disp.f[0].opaque == frame(0).opaque);  // caller must free this one
   CHECK(reg.replaced_count() == 1);
@@ -141,10 +145,10 @@ TEST(pts_wrap_is_invisible) {
   FrameRegulator::Displaced disp;
   DmaFrame out;
   const uint32_t p0 = 0xFFFFF000u;  // wraps on the next step
-  CHECK(!reg.offer(frame(p0), kT0, &disp));
+  CHECK(!reg.offer(frame(p0), kT0, kT0, &disp));
   CHECK(reg.release_due(kT0 + kD, &out));
   const uint32_t p1 = p0 + static_cast<uint32_t>(kFrame);  // wrapped
-  CHECK(!reg.offer(frame(p1), kT0 + kFrame, &disp));
+  CHECK(!reg.offer(frame(p1), kT0 + kFrame, kT0 + kFrame, &disp));
   CHECK(!reg.release_due(kT0 + kFrame + kD - 1'000, &out));
   CHECK(reg.release_due(kT0 + kFrame + kD + 16, &out));
 }
@@ -153,16 +157,16 @@ TEST(pts_discontinuity_resets_and_passes_through) {
   FrameRegulator reg(12);
   FrameRegulator::Displaced disp;
   DmaFrame out;
-  CHECK(!reg.offer(frame(0), kT0, &disp));
+  CHECK(!reg.offer(frame(0), kT0, kT0, &disp));
   // Drone restart: pts jumps 5 s. The frame passes through immediately and
   // the held old-timebase frame comes back for release.
-  CHECK(reg.offer(frame(5'000'000), kT0 + 2'000, &disp));
+  CHECK(reg.offer(frame(5'000'000), kT0 + 2'000, kT0 + 2'000, &disp));
   CHECK(disp.n == 1);
   CHECK(disp.f[0].opaque == frame(0).opaque);
   CHECK(!reg.holding());
   // Next frame re-seeds a fresh floor and is held for exactly D again.
   const uint64_t a = kT0 + 20'000;
-  CHECK(!reg.offer(frame(5'000'000 + static_cast<uint32_t>(kFrame)), a,
+  CHECK(!reg.offer(frame(5'000'000 + static_cast<uint32_t>(kFrame)), a, a,
                    &disp));
   CHECK(!reg.release_due(a + kD - 1, &out));
   CHECK(reg.release_due(a + kD, &out));
@@ -171,10 +175,10 @@ TEST(pts_discontinuity_resets_and_passes_through) {
 TEST(fallback_mode_displaces_like_single_slot_mailbox) {
   FrameRegulator reg(12);  // vsync_lock defaults false
   FrameRegulator::Displaced disp;
-  CHECK(!reg.offer(frame(0), kT0, &disp));
+  CHECK(!reg.offer(frame(0), kT0, kT0, &disp));
   CHECK(disp.n == 0);
   // Second frame arrives while the first is held: displaced (v=0 == v=0).
-  CHECK(!reg.offer(frame(kFrame), kT0 + 2'000, &disp));
+  CHECK(!reg.offer(frame(kFrame), kT0 + 2'000, kT0 + 2'000, &disp));
   CHECK(disp.n == 1);
   CHECK(disp.f[0].opaque == frame(0).opaque);
   CHECK(reg.replaced_count() == 1);
@@ -205,34 +209,12 @@ TEST(servo_releases_at_vblank_minus_lead) {
   DmaFrame out;
   // Decoded 9 ms before the next vblank: plenty of lead margin.
   const uint64_t t_dec = phase + kVb - 9'000;
-  CHECK(!reg.offer(frame(0), t_dec, &disp));
+  CHECK(!reg.offer(frame(0), t_dec, t_dec, &disp));
   CHECK(reg.servo_locked());
   const uint64_t release = phase + kVb - kLead;
   CHECK(!reg.release_due(release - 1, &out));
   CHECK(reg.release_due(release, &out));
   CHECK(reg.fallback_frames() == 0);
-}
-
-// A recording raises the lead (display.rec_vsync_lead_ms): every frame
-// placed from then on releases that much earlier before its vblank, so a
-// main loop that wakes a few ms late during a fragment write still makes
-// the latch. Frames already held keep the release they were given.
-TEST(set_lead_moves_the_next_release_earlier) {
-  FrameRegulator reg(12, /*vsync_lock=*/true, /*vsync_lead_ms=*/3);
-  warm(reg);
-  const uint64_t phase = kT0 + 7 * kVb;
-  FrameRegulator::Displaced disp;
-  DmaFrame out;
-  reg.set_lead_ms(6);
-  const uint64_t t_dec = phase + kVb - 9'000;
-  CHECK(!reg.offer(frame(0), t_dec, &disp));
-  const uint64_t release = phase + kVb - 6'000;
-  CHECK(!reg.release_due(release - 1, &out));
-  CHECK(reg.release_due(release, &out));
-  reg.set_lead_ms(3);
-  CHECK(!reg.offer(frame(1), t_dec + kVb, &disp));
-  CHECK(!reg.release_due(phase + 2 * kVb - 3'001, &out));
-  CHECK(reg.release_due(phase + 2 * kVb - 3'000, &out));
 }
 
 TEST(servo_inside_lead_window_targets_next_vblank) {
@@ -243,7 +225,7 @@ TEST(servo_inside_lead_window_targets_next_vblank) {
   DmaFrame out;
   // Only 2 ms of margin left (< lead): must NOT gamble on this vblank.
   const uint64_t t_dec = phase + kVb - 2'000;
-  CHECK(!reg.offer(frame(0), t_dec, &disp));
+  CHECK(!reg.offer(frame(0), t_dec, t_dec, &disp));
   CHECK(!reg.release_due(phase + kVb, &out));            // not this one
   CHECK(reg.release_due(phase + 2 * kVb - kLead, &out)); // the next
 }
@@ -261,8 +243,8 @@ TEST(servo_burst_pair_takes_sequential_vblanks) {
   FrameRegulator::Displaced disp;
   DmaFrame out;
   const uint64_t t1 = phase + kVb - 12'000;
-  CHECK(!reg.offer(frame(0), t1, &disp));
-  CHECK(!reg.offer(frame(kFrame), t1 + 1'000, &disp));
+  CHECK(!reg.offer(frame(0), t1, t1, &disp));
+  CHECK(!reg.offer(frame(kFrame), t1 + 1'000, t1 + 1'000, &disp));
   CHECK(disp.n == 0);              // NOT displaced
   CHECK(reg.vsync_skips() == 0);
   CHECK(reg.release_due(phase + kVb - kLead, &out));
@@ -278,9 +260,9 @@ TEST(servo_distinct_targets_hold_both) {
   const uint64_t phase = kT0 + 7 * kVb;
   FrameRegulator::Displaced disp;
   DmaFrame out;
-  CHECK(!reg.offer(frame(0), phase + kVb - 9'000, &disp));
+  CHECK(!reg.offer(frame(0), phase + kVb - 9'000, phase + kVb - 9'000, &disp));
   // Second frame decodes after vblank+1's lead cutoff: targets vblank+2.
-  CHECK(!reg.offer(frame(kFrame), phase + kVb - 1'000, &disp));
+  CHECK(!reg.offer(frame(kFrame), phase + kVb - 1'000, phase + kVb - 1'000, &disp));
   CHECK(disp.n == 0);
   CHECK(reg.holding());
   CHECK(reg.release_due(phase + kVb - kLead, &out));
@@ -298,7 +280,7 @@ TEST(servo_falls_back_when_stale_and_recovers) {
   DmaFrame out;
   // 40 periods after the last flip: stale -> fallback rule (floor + D).
   const uint64_t t_dec = phase + 40 * kVb;
-  CHECK(!reg.offer(frame(0), t_dec, &disp));
+  CHECK(!reg.offer(frame(0), t_dec, t_dec, &disp));
   CHECK(!reg.servo_locked());
   CHECK(reg.fallback_frames() == 1);
   // Fallback release = anchored floor + 12 ms; this frame seeds the
@@ -307,7 +289,7 @@ TEST(servo_falls_back_when_stale_and_recovers) {
   CHECK(reg.release_due(t_dec + kD, &out));
   // Flips resume: servo re-engages (phase recency revalidates).
   for (int i = 0; i < 8; ++i) reg.on_flip(t_dec + 20'000 + i * kVb, true);
-  CHECK(!reg.offer(frame(2 * kFrame), t_dec + 20'000 + 8 * kVb, &disp));
+  CHECK(!reg.offer(frame(2 * kFrame), t_dec + 20'000 + 8 * kVb, t_dec + 20'000 + 8 * kVb, &disp));
   CHECK(reg.servo_locked());
 }
 
@@ -323,7 +305,7 @@ TEST(servo_safety_clamp_uses_fallback_rule) {
   FrameRegulator::Displaced disp;
   DmaFrame out;
   const uint64_t t_dec = phase + 10 * kVb - 60'000;  // 60 ms before phase
-  CHECK(!reg.offer(frame(0), t_dec, &disp));
+  CHECK(!reg.offer(frame(0), t_dec, t_dec, &disp));
   CHECK(reg.fallback_frames() == 1);  // clamp routed to fallback
   CHECK(reg.release_due(t_dec + kD, &out));
 }
@@ -331,9 +313,9 @@ TEST(servo_safety_clamp_uses_fallback_rule) {
 TEST(mixed_fallback_and_servo_targets_all_hold) {
   // Mixed fallback/servo queue: start stale (fallback frame held,
   // target_v==0), re-warm to a fresh grid, then hold TWO servo frames at
-  // distinct targets. Under the old 2-deep queue the third frame evicted
-  // the fallback head; at kMaxHeld=4 all three coexist and each releases
-  // by its own rule (fallback at floor+D, servo at vblank-lead). The
+  // distinct targets. At kMaxHeld=4 all three coexist (a 2-deep queue
+  // would evict the fallback head) and each releases by its own rule
+  // (fallback at floor+D, servo at vblank-lead). The
   // full-queue eviction path is pinned by
   // full_queue_evicts_overdue_head_on_fifth_target.
   FrameRegulator reg(12, /*vsync_lock=*/true, /*vsync_lead_ms=*/3);
@@ -344,7 +326,7 @@ TEST(mixed_fallback_and_servo_targets_all_hold) {
   // 1) Stale offer: estimator hasn't flipped in 40 periods -> fallback
   // rule, held with target_v == 0.
   const uint64_t t_dec1 = phase0 + 40 * kVb;
-  CHECK(!reg.offer(frame(0), t_dec1, &disp));
+  CHECK(!reg.offer(frame(0), t_dec1, t_dec1, &disp));
   CHECK(!reg.servo_locked());
   CHECK(reg.fallback_frames() == 1);
 
@@ -356,7 +338,7 @@ TEST(mixed_fallback_and_servo_targets_all_hold) {
   // 3) Servo frame targeting vblank phase1+kVb: distinct from the held
   // fallback target (0) -> both held, count_ == 2.
   const uint64_t t_dec2 = phase1 + kVb - 9'000;
-  CHECK(!reg.offer(frame(kFrame), t_dec2, &disp));
+  CHECK(!reg.offer(frame(kFrame), t_dec2, t_dec2, &disp));
   CHECK(reg.servo_locked());
   CHECK(disp.n == 0);
   CHECK(reg.holding());
@@ -366,7 +348,7 @@ TEST(mixed_fallback_and_servo_targets_all_hold) {
   // (phase1+2*kVb), matching neither held target (0 or phase1+kVb). Three
   // distinct targets, all held -- no eviction, no skip.
   const uint64_t t_dec3 = phase1 + kVb - 1'000;
-  CHECK(!reg.offer(frame(2 * kFrame), t_dec3, &disp));
+  CHECK(!reg.offer(frame(2 * kFrame), t_dec3, t_dec3, &disp));
   CHECK(disp.n == 0);
   CHECK(reg.replaced_count() == 0);
   CHECK(reg.vsync_skips() == 0);
@@ -396,18 +378,18 @@ TEST(discont_flushes_both_held_slots) {
   FrameRegulator::Displaced disp;
 
   const uint64_t t_dec1 = phase0 + 40 * kVb;
-  CHECK(!reg.offer(frame(0), t_dec1, &disp));  // fallback frame held
+  CHECK(!reg.offer(frame(0), t_dec1, t_dec1, &disp));  // fallback frame held
 
   const uint64_t phase1 = t_dec1 + 20'000 + 7 * kVb;
   for (int i = 0; i < 8; ++i) reg.on_flip(t_dec1 + 20'000 + i * kVb, true);
 
   const uint64_t t_dec2 = phase1 + kVb - 9'000;
-  CHECK(!reg.offer(frame(kFrame), t_dec2, &disp));  // servo frame held
+  CHECK(!reg.offer(frame(kFrame), t_dec2, t_dec2, &disp));  // servo frame held
   CHECK(reg.holding());
 
   const uint64_t t_dec3 = t_dec2 + 1'000;
   const uint32_t pts_jump = kFrame + 3'000'000u;  // > kResyncUs past last pts
-  CHECK(reg.offer(frame(pts_jump), t_dec3, &disp));  // present now
+  CHECK(reg.offer(frame(pts_jump), t_dec3, t_dec3, &disp));  // present now
   CHECK(disp.n == 2);
   CHECK(disp.f[0].opaque == frame(0).opaque);       // oldest (fallback) first
   CHECK(disp.f[1].opaque == frame(kFrame).opaque);  // then the servo frame
@@ -448,7 +430,7 @@ BeatSim run_beat_sim(double src_period_us, double panel_period_us = 1e6 / 60.0) 
       flip_t += kPanel;
     } else {
       pts += static_cast<uint32_t>(src_period_us);
-      if (reg.offer(frame(pts), static_cast<uint64_t>(dec_t), &disp)) {
+      if (reg.offer(frame(pts), static_cast<uint64_t>(dec_t), static_cast<uint64_t>(dec_t), &disp)) {
         // late passthrough: presented immediately, counted via late_count()
       }
       ++s.offered;
@@ -541,7 +523,7 @@ TEST(panel_period_reseed_locks_120hz_grid) {
   FrameRegulator::Displaced disp;
   DmaFrame out;
   const uint64_t t_dec = phase + kVb120 - 5'000;
-  CHECK(!reg.offer(frame(0), t_dec, &disp));
+  CHECK(!reg.offer(frame(0), t_dec, t_dec, &disp));
   CHECK(reg.servo_locked());
   const uint64_t release = phase + kVb120 - kLead;
   CHECK(!reg.release_due(release - 1, &out));
@@ -556,7 +538,7 @@ TEST(without_reseed_120hz_flips_never_warm) {
   FrameRegulator reg(12, true, 3);
   for (int i = 0; i < 8; ++i) reg.on_flip(kT0 + i * kVb120, true);
   FrameRegulator::Displaced disp;
-  CHECK(!reg.offer(frame(0), kT0 + 8 * kVb120, &disp));
+  CHECK(!reg.offer(frame(0), kT0 + 8 * kVb120, kT0 + 8 * kVb120, &disp));
   CHECK(!reg.servo_locked());
   CHECK(reg.fallback_frames() == 1);
 }
@@ -573,11 +555,11 @@ TEST(stall_backlog_holds_three_distinct_targets) {
   const uint64_t phase = kT0 + 7 * kVb;
   FrameRegulator::Displaced disp;
   DmaFrame out;
-  CHECK(!reg.offer(frame(0), phase + kVb - 9'000, &disp));        // @v1
-  CHECK(!reg.offer(frame(kFrame), phase + kVb - 1'000, &disp));   // @v2
+  CHECK(!reg.offer(frame(0), phase + kVb - 9'000, phase + kVb - 9'000, &disp));        // @v1
+  CHECK(!reg.offer(frame(kFrame), phase + kVb - 1'000, phase + kVb - 1'000, &disp));   // @v2
   CHECK(disp.n == 0);
   // Stall: v1's release (v1 - lead) passes undrained; f3 decodes at v1+1ms.
-  CHECK(!reg.offer(frame(2 * kFrame), phase + kVb + 1'000, &disp));  // @v3
+  CHECK(!reg.offer(frame(2 * kFrame), phase + kVb + 1'000, phase + kVb + 1'000, &disp));  // @v3
   CHECK(disp.n == 0);
   CHECK(reg.replaced_count() == 0);
   CHECK(reg.vsync_skips() == 0);
@@ -599,11 +581,11 @@ TEST(discont_flushes_three_held_frames) {
   warm(reg);
   const uint64_t phase = kT0 + 7 * kVb;
   FrameRegulator::Displaced disp;
-  CHECK(!reg.offer(frame(0), phase + kVb - 9'000, &disp));
-  CHECK(!reg.offer(frame(kFrame), phase + kVb - 1'000, &disp));
-  CHECK(!reg.offer(frame(2 * kFrame), phase + kVb + 1'000, &disp));
+  CHECK(!reg.offer(frame(0), phase + kVb - 9'000, phase + kVb - 9'000, &disp));
+  CHECK(!reg.offer(frame(kFrame), phase + kVb - 1'000, phase + kVb - 1'000, &disp));
+  CHECK(!reg.offer(frame(2 * kFrame), phase + kVb + 1'000, phase + kVb + 1'000, &disp));
   const uint32_t pts_jump = 2 * kFrame + 3'000'000u;  // > kResyncUs
-  CHECK(reg.offer(frame(pts_jump), phase + kVb + 2'000, &disp));
+  CHECK(reg.offer(frame(pts_jump), phase + kVb + 2'000, phase + kVb + 2'000, &disp));
   CHECK(disp.n == 3);
   CHECK(disp.f[0].opaque == frame(0).opaque);
   CHECK(disp.f[1].opaque == frame(kFrame).opaque);
@@ -620,12 +602,12 @@ TEST(full_queue_evicts_overdue_head_on_fifth_target) {
   const uint64_t phase = kT0 + 7 * kVb;
   FrameRegulator::Displaced disp;
   DmaFrame out;
-  CHECK(!reg.offer(frame(0), phase + kVb - 9'000, &disp));            // @v1
-  CHECK(!reg.offer(frame(kFrame), phase + kVb - 1'000, &disp));       // @v2
-  CHECK(!reg.offer(frame(2 * kFrame), phase + kVb + 1'000, &disp));   // @v3
-  CHECK(!reg.offer(frame(3 * kFrame), phase + 2 * kVb + 1'000, &disp));  // @v4
+  CHECK(!reg.offer(frame(0), phase + kVb - 9'000, phase + kVb - 9'000, &disp));            // @v1
+  CHECK(!reg.offer(frame(kFrame), phase + kVb - 1'000, phase + kVb - 1'000, &disp));       // @v2
+  CHECK(!reg.offer(frame(2 * kFrame), phase + kVb + 1'000, phase + kVb + 1'000, &disp));   // @v3
+  CHECK(!reg.offer(frame(3 * kFrame), phase + 2 * kVb + 1'000, phase + 2 * kVb + 1'000, &disp));  // @v4
   CHECK(disp.n == 0);
-  CHECK(!reg.offer(frame(4 * kFrame), phase + 3 * kVb + 1'000, &disp));  // @v5
+  CHECK(!reg.offer(frame(4 * kFrame), phase + 3 * kVb + 1'000, phase + 3 * kVb + 1'000, &disp));  // @v5
   CHECK(disp.n == 1);
   CHECK(disp.f[0].opaque == frame(0).opaque);  // overdue head evicted
   CHECK(reg.replaced_count() == 1);
@@ -653,8 +635,8 @@ TEST(heal_slip_shifts_pending_releases_one_slot) {
   DmaFrame out;
   // Burst pair -> held at v and v+p.
   const uint64_t t1 = phase + kVb - 12'000;
-  CHECK(!reg.offer(frame(0), t1, &disp));
-  CHECK(!reg.offer(frame(kFrame), t1 + 1'000, &disp));
+  CHECK(!reg.offer(frame(0), t1, t1, &disp));
+  CHECK(!reg.offer(frame(kFrame), t1 + 1'000, t1 + 1'000, &disp));
   reg.heal_slip();
   CHECK(reg.heals() == 1);
   // Both slipped: first now releases for v+2p's predecessor... i.e. at
@@ -672,7 +654,7 @@ TEST(heal_slip_noop_in_fallback_or_empty) {
   CHECK(reg.heals() == 0);
   FrameRegulator::Displaced disp;
   // Fallback-held frame (estimator cold): target 0, heal must not touch.
-  CHECK(!reg.offer(frame(0), kT0, &disp));
+  CHECK(!reg.offer(frame(0), kT0, kT0, &disp));
   reg.heal_slip();
   CHECK(reg.heals() == 0);
   DmaFrame out;
@@ -684,7 +666,7 @@ TEST(next_release_us_reports_earliest_pending) {
   CHECK(reg.next_release_us() == 0);          // empty
   FrameRegulator::Displaced disp;
   DmaFrame out;
-  CHECK(!reg.offer(frame(0), kT0, &disp));    // fallback hold at kT0 + D
+  CHECK(!reg.offer(frame(0), kT0, kT0, &disp));    // fallback hold at kT0 + D
   CHECK(reg.next_release_us() == kT0 + kD);
   CHECK(reg.release_due(kT0 + kD, &out));
   CHECK(reg.next_release_us() == 0);          // drained
@@ -702,10 +684,10 @@ TEST(servo_triple_burst_claims_the_second_slot) {
   FrameRegulator::Displaced disp;
   DmaFrame out;
   const uint64_t t1 = phase + kVb - 12'000;
-  CHECK(!reg.offer(frame(0), t1, &disp));
-  CHECK(!reg.offer(frame(kFrame), t1 + 1'000, &disp));
+  CHECK(!reg.offer(frame(0), t1, t1, &disp));
+  CHECK(!reg.offer(frame(kFrame), t1 + 1'000, t1 + 1'000, &disp));
   CHECK(disp.n == 0);
-  CHECK(!reg.offer(frame(2 * kFrame), t1 + 2'000, &disp));
+  CHECK(!reg.offer(frame(2 * kFrame), t1 + 2'000, t1 + 2'000, &disp));
   CHECK(disp.n == 1);
   CHECK(disp.f[0].opaque == frame(kFrame).opaque);  // middle frame dropped
   CHECK(reg.vsync_skips() == 1);
@@ -717,31 +699,75 @@ TEST(servo_triple_burst_claims_the_second_slot) {
   CHECK(!reg.holding());
 }
 
-TEST(heal_slip_preserves_release_order_with_a_mixed_queue) {
-  // heal_slip() moves only servo entries, so a mixed queue [servo, fallback]
-  // could invert the sorted-by-release invariant that
-  // release_due()/next_release_us() head-inspect -- releasing the fallback
-  // frame late and out of pts order. Construct: fallback frame held first
-  // (cold estimator), then warm the grid so a servo frame lands with an
-  // EARLIER release, then heal.
+TEST(order_invariant_displaces_an_older_fallback_hold_behind_a_newer_servo_frame) {
+  // The order invariant is unqualified -- it applies to fallback and
+  // servo entries alike. An
+  // older-pts fallback frame, held with a release the vblank grid
+  // knows nothing about, cannot survive if a newer-pts servo frame's
+  // own vblank target happens to land earlier: showing the fallback
+  // frame afterward would be backwards, so it is displaced instead,
+  // freshest wins, exactly like any other collision. A mixed queue that
+  // heal_slip() has to keep in order is built by
+  // heal_slip_still_finds_the_true_head_in_a_mixed_queue below.
   FrameRegulator reg(12, true, 3);
   FrameRegulator::Displaced disp;
   DmaFrame out;
-  CHECK(!reg.offer(frame(0), kT0, &disp));           // fallback @ kT0+12ms
+  CHECK(!reg.offer(frame(0), kT0, kT0, &disp));  // fallback @ kT0+12ms (cold estimator)
   // Warm with flips whose next grid slot is kT0+8000.
   for (int i = 8; i >= 1; --i) reg.on_flip(kT0 + 8'000 - i * kVb, true);
-  CHECK(!reg.offer(frame(kFrame), kT0 + 2'000, &disp));  // servo @ kT0+5000
+  CHECK(!reg.offer(frame(kFrame), kT0 + 2'000, kT0 + 2'000, &disp));  // servo @ kT0+5000
+  CHECK(disp.n == 1);
+  CHECK(disp.f[0].opaque == frame(0).opaque);  // the older fallback hold, displaced
+  CHECK(reg.next_release_us() == kT0 + 5'000);
+  CHECK(reg.release_due(kT0 + 5'000, &out));
+  CHECK(out.opaque == frame(kFrame).opaque);   // the servo frame releases normally
+  CHECK(!reg.holding());
+}
+
+TEST(heal_slip_still_finds_the_true_head_in_a_mixed_queue) {
+  // heal_slip() slips every entry from the first servo entry onward,
+  // fallback entries included, so a mixed queue keeps its release order
+  // -- which is pts order. The reachable shape: an OLDER servo frame held
+  // first, then a NEWER fallback frame held with a release close behind
+  // it (within one period). Slipping only the servo entry would move the
+  // older frame past the newer one and release them backwards.
+  //
+  // Getting there needs now_us far enough from the vblank grid's phase
+  // to make the implausible-phase clamp drop this frame to the
+  // fallback rule (a single artificial flip, same trick as
+  // servo_safety_clamp_uses_fallback_rule), NOT estimator staleness:
+  // staleness needs now_us hundreds of ms past the last flip, and the
+  // fallback release (arrival_us + D) would then dwarf the servo
+  // frame's by the same margin, far outside the one-period window a
+  // slip can close.
+  FrameRegulator reg(12, true, 3);
+  warm(reg);
+  const uint64_t phase = kT0 + 7 * kVb;
+  FrameRegulator::Displaced disp;
+  DmaFrame out;
+
+  CHECK(!reg.offer(frame(0), phase + kVb - 9'000, phase + kVb - 9'000, &disp));
+  const uint64_t release1 = phase + kVb - kLead;  // f0 (servo, older pts)
+  CHECK(reg.next_release_us() == release1);
+
+  reg.on_flip(phase + 10 * kVb, true);  // artificial future jump
+
+  const uint64_t arrival1 = phase + kVb - 5'000;  // f1's own decode stamp
+  const uint64_t now1 = phase + kVb - 2'000;      // f1's hand-over
+  CHECK(!reg.offer(frame(kFrame), arrival1, now1, &disp));  // f1: clamp -> fallback, held
   CHECK(disp.n == 0);
-  CHECK(reg.next_release_us() == kT0 + 5'000);           // servo heads
+  CHECK(reg.fallback_frames() == 1);
+  const uint64_t release2 = arrival1 + kD;  // f1 (fallback, newer pts) -- still later than f0
+  CHECK(release2 > release1 && release2 - release1 < kVb);  // within one period
+  CHECK(reg.next_release_us() == release1);
+
   reg.heal_slip();
   CHECK(reg.heals() == 1);
-  // Servo slipped past the fallback frame: head must be the fallback
-  // release (kT0+12ms), not a stale claim of the slipped servo slot.
-  CHECK(reg.next_release_us() == kT0 + kD);
-  CHECK(reg.release_due(kT0 + kD, &out));
-  CHECK(out.opaque == frame(0).opaque);                  // fallback first
-  CHECK(reg.release_due(kT0 + 5'000 + kVb, &out));
-  CHECK(out.opaque == frame(kFrame).opaque);             // slipped servo
+  // Both slip one period: f0 still heads, f1 still follows.
+  CHECK(reg.next_release_us() == release1 + kVb);
+  std::vector<void*> drained;
+  while (reg.release_due(release2 + 2 * kVb, &out)) drained.push_back(out.opaque);
+  CHECK(drained == (std::vector<void*>{frame(0).opaque, frame(kFrame).opaque}));
   CHECK(!reg.holding());
 }
 
@@ -759,14 +785,14 @@ TEST(chain_counters_track_sequential_slot_assignments) {
   CHECK(reg.chained_count() == 0);
   CHECK(reg.chain_run() == 0);
   const uint64_t t1 = phase + kVb - 12'000;
-  CHECK(!reg.offer(frame(0), t1, &disp));                // natural slot
+  CHECK(!reg.offer(frame(0), t1, t1, &disp));                // natural slot
   CHECK(reg.chain_run() == 0);
-  CHECK(!reg.offer(frame(kFrame), t1 + 1'000, &disp));   // collision -> +1
+  CHECK(!reg.offer(frame(kFrame), t1 + 1'000, t1 + 1'000, &disp));   // collision -> +1
   CHECK(reg.chained_count() == 1);
   CHECK(reg.chain_run() == 1);
   // Next frame at exact source cadence: its natural slot is held by the
   // chained predecessor, so it chains as well.
-  CHECK(!reg.offer(frame(2 * kFrame), t1 + 1'000 + kFrame, &disp));
+  CHECK(!reg.offer(frame(2 * kFrame), t1 + 1'000 + kFrame, t1 + 1'000 + kFrame, &disp));
   CHECK(reg.chained_count() == 2);
   CHECK(reg.chain_run() == 2);
   CHECK(reg.chain_max() == 2);
@@ -777,7 +803,7 @@ TEST(chain_counters_track_sequential_slot_assignments) {
   while (reg.release_due(phase + 10 * kVb, &out)) {
   }
   CHECK(!reg.holding());
-  CHECK(!reg.offer(frame(3 * kFrame), phase + 5 * kVb - 9'000, &disp));
+  CHECK(!reg.offer(frame(3 * kFrame), phase + 5 * kVb - 9'000, phase + 5 * kVb - 9'000, &disp));
   CHECK(reg.chain_run() == 0);
   CHECK(reg.chained_count() == 2);
   CHECK(reg.chain_max() == 2);
@@ -790,17 +816,17 @@ TEST(chains_counter_counts_chain_starts_not_frames) {
   FrameRegulator::Displaced disp;
   DmaFrame out;
   const uint64_t t1 = phase + kVb - 12'000;
-  CHECK(!reg.offer(frame(0), t1, &disp));
-  CHECK(!reg.offer(frame(kFrame), t1 + 1'000, &disp));            // start
-  CHECK(!reg.offer(frame(2 * kFrame), t1 + 1'000 + kFrame, &disp));  // same chain
+  CHECK(!reg.offer(frame(0), t1, t1, &disp));
+  CHECK(!reg.offer(frame(kFrame), t1 + 1'000, t1 + 1'000, &disp));            // start
+  CHECK(!reg.offer(frame(2 * kFrame), t1 + 1'000 + kFrame, t1 + 1'000 + kFrame, &disp));  // same chain
   CHECK(reg.chains_count() == 1);
   CHECK(reg.chained_count() == 2);
   while (reg.release_due(phase + 10 * kVb, &out)) {
   }
   // Fresh collision after the queue drained = a second chain.
   const uint64_t t2 = phase + 12 * kVb - 12'000;
-  CHECK(!reg.offer(frame(3 * kFrame), t2, &disp));
-  CHECK(!reg.offer(frame(4 * kFrame), t2 + 1'000, &disp));
+  CHECK(!reg.offer(frame(3 * kFrame), t2, t2, &disp));
+  CHECK(!reg.offer(frame(4 * kFrame), t2 + 1'000, t2 + 1'000, &disp));
   CHECK(reg.chains_count() == 2);
 }
 
@@ -814,14 +840,14 @@ TEST(chain_budget_cuts_run_by_dropping_held_older_frame) {
   FrameRegulator::Displaced disp;
   DmaFrame out;
   const uint64_t t1 = phase + kVb - 12'000;
-  CHECK(!reg.offer(frame(0), t1, &disp));                              // slot 1
-  CHECK(!reg.offer(frame(kFrame), t1 + 1'000, &disp));                 // chained, slot 2
-  CHECK(!reg.offer(frame(2 * kFrame), t1 + 1'000 + kFrame, &disp));    // chained, slot 3
+  CHECK(!reg.offer(frame(0), t1, t1, &disp));                              // slot 1
+  CHECK(!reg.offer(frame(kFrame), t1 + 1'000, t1 + 1'000, &disp));                 // chained, slot 2
+  CHECK(!reg.offer(frame(2 * kFrame), t1 + 1'000 + kFrame, t1 + 1'000 + kFrame, &disp));    // chained, slot 3
   CHECK(reg.chain_run() == 2);
   CHECK(disp.n == 0);
   // Fourth frame at cadence: natural slot 3 is held by frame 2 -- budget
   // spent, so frame 2 is displaced and frame 3 takes slot 3.
-  CHECK(!reg.offer(frame(3 * kFrame), t1 + 1'000 + 2 * kFrame, &disp));
+  CHECK(!reg.offer(frame(3 * kFrame), t1 + 1'000 + 2 * kFrame, t1 + 1'000 + 2 * kFrame, &disp));
   CHECK(disp.n == 1);
   CHECK(disp.f[0].opaque == frame(2 * kFrame).opaque);
   CHECK(reg.chain_cuts() == 1);
@@ -844,9 +870,9 @@ TEST(chain_budget_zero_never_cuts) {
   const uint64_t phase = kT0 + 7 * kVb;
   FrameRegulator::Displaced disp;
   const uint64_t t1 = phase + kVb - 12'000;
-  CHECK(!reg.offer(frame(0), t1, &disp));
+  CHECK(!reg.offer(frame(0), t1, t1, &disp));
   for (int i = 1; i <= 3; ++i)
-    CHECK(!reg.offer(frame(i * kFrame), t1 + 1'000 + (i - 1) * kFrame, &disp));
+    CHECK(!reg.offer(frame(i * kFrame), t1 + 1'000 + (i - 1) * kFrame, t1 + 1'000 + (i - 1) * kFrame, &disp));
   CHECK(reg.chain_run() == 3);
   CHECK(reg.chain_cuts() == 0);
   CHECK(disp.n == 0);
@@ -929,7 +955,7 @@ ScreenSim run_screen_sim(int sched_cap_ms, double src_period_us, double seconds,
       DmaFrame f;
       f.pts_us = static_cast<uint32_t>(idx * src_period_us);
       f.opaque = reinterpret_cast<void*>(static_cast<uintptr_t>((idx << 1) | 1u));
-      if (reg.offer(f, static_cast<uint64_t>(next_dec), &disp))
+      if (reg.offer(f, static_cast<uint64_t>(next_dec), static_cast<uint64_t>(next_dec), &disp))
         pending.push_back({next_dec, static_cast<int64_t>(idx)});
       ++s.offered;
       ++idx;
@@ -1014,7 +1040,7 @@ TEST(capture_sched_salvaged_frames_do_not_widen_allowance) {
     if (salvaged) reg.note_incomplete(pts);
     const uint64_t t = kT0 + 8 * kVb + i * kFrame + (salvaged ? 30'000 : 0);
     flips_until(reg, &next_flip, t);
-    reg.offer(frame(pts), t, &disp);
+    reg.offer(frame(pts), t, t, &disp);
     while (reg.release_due(t, &out)) {}
   }
   CHECK(reg.allowance_ms() < 3.0);
@@ -1037,7 +1063,7 @@ TEST(capture_sched_one_fast_frame_does_not_widen_allowance) {
     const uint64_t noise = (i * 7919) % 1000;
     const uint64_t t = kT0 + 8 * kVb + 5'000 + i * kFrame + noise - (i == 300 ? 5'000 : 0);
     flips_until(reg, &next_flip, t);
-    reg.offer(frame(pts), t, &disp);
+    reg.offer(frame(pts), t, t, &disp);
     while (reg.release_due(t, &out)) {}
   }
   CHECK(reg.allowance_ms() < 3.0);
@@ -1073,7 +1099,7 @@ TEST(margin_is_release_minus_capture_want) {
   FrameRegulator::Displaced disp;
   double m = -1.0;
   CHECK(!reg.take_margin(&m));                       // nothing offered yet
-  reg.offer(frame(0), kT0 + 8 * kVb - 10'000, &disp);
+  reg.offer(frame(0), kT0 + 8 * kVb - 10'000, kT0 + 8 * kVb - 10'000, &disp);
   REQUIRE(reg.take_margin(&m));
   CHECK(m > 5'999.0 && m < 6'001.0);
   CHECK(!reg.take_margin(&m));                       // once per offer
@@ -1085,7 +1111,7 @@ TEST(no_margin_without_capture_scheduling) {
   warm(reg);
   FrameRegulator::Displaced disp;
   double m = 0.0;
-  reg.offer(frame(0), kT0 + 8 * kVb - 10'000, &disp);
+  reg.offer(frame(0), kT0 + 8 * kVb - 10'000, kT0 + 8 * kVb - 10'000, &disp);
   CHECK(!reg.take_margin(&m));
 }
 
@@ -1102,7 +1128,7 @@ TEST(phase_lock_mode_places_by_arrival_until_switched_on) {
   FrameRegulator off(12, true, 3, 3, 16);            // phase lock mode, not locked
   off.set_phase_lock_mode(true);
   warm(off);
-  CHECK(!off.offer(frame(0), t, &disp));
+  CHECK(!off.offer(frame(0), t, t, &disp));
   CHECK(off.next_release_us() == arrival_release);
   REQUIRE(off.take_margin(&m));                      // measured in both modes
   CHECK(m > kVb - 501.0 && m < kVb - 499.0);
@@ -1111,12 +1137,12 @@ TEST(phase_lock_mode_places_by_arrival_until_switched_on) {
   on.set_phase_lock_mode(true);
   on.set_capture_placement(true);
   warm(on);
-  CHECK(!on.offer(frame(0), t, &disp));
+  CHECK(!on.offer(frame(0), t, t, &disp));
   CHECK(on.next_release_us() == capture_release);
 
   FrameRegulator classic(12, true, 3, 3, 16);        // no phase lock: today's rule
   warm(classic);
-  CHECK(!classic.offer(frame(0), t, &disp));
+  CHECK(!classic.offer(frame(0), t, t, &disp));
   CHECK(classic.next_release_us() == capture_release);
 }
 
@@ -1132,4 +1158,433 @@ TEST(phase_lock_mode_switching_placement_never_shows_backwards) {
       /*phase_lock_mode=*/true);
   CHECK(s.offered > 3000);
   CHECK(s.backwards == 0);
+}
+
+// ---- arrival vs now ----
+
+TEST(arrival_feeds_the_window_and_now_decides_lateness) {
+  // vsync lock on, warm the estimator with 8 exact flips 16667 apart at kT0.
+  FrameRegulator reg(12, true, 3, 0, 16);
+  warm(reg);
+  // arrival = decode stamp 2 ms before now: this offer takes a capture
+  // slot (capture scheduling is on) and just establishes a sane baseline
+  // -- next_release_us() no earlier than now -- for the second offer
+  // below, which is the actual point.
+  FrameRegulator::Displaced d;
+  const bool now_ = reg.offer(frame(1000), /*arrival*/ kT0 + 10'000,
+                              /*now*/ kT0 + 12'000, &d);
+  CHECK(!now_);
+  CHECK(reg.next_release_us() >= kT0 + 12'000);
+  // The frame's natural slot comes from arrival (barely past the first
+  // one, still near kT0) via release_at_or_after, landing near-term; but
+  // `now` is pushed well past that slot's release (still inside the
+  // estimator's staleness window, so the servo stays engaged -- this is
+  // not the stale/fallback case). A hand-over this late presents at once:
+  // `now`, not `arrival`, decides lateness.
+  CHECK(reg.offer(frame(1000 + kFrame), kT0 + 10'000 + kFrame, kT0 + 200'000,
+                 &d));
+  CHECK(reg.late_count() == 1);
+  CHECK(reg.servo_locked());  // still on the grid, not the stale fallback
+}
+
+TEST(servo_handover_past_its_release_presents_now_not_held_a_period) {
+  // The specific pump-stall shape: arrival maps to vblank V1 (a normal,
+  // reachable slot), but the hand-over to offer() doesn't happen until
+  // `now` has already slid past V1's release -- into the lead window
+  // before V1 itself. The natural slot comes from arrival, so V1's
+  // already-past release is what the late check sees and the frame
+  // presents at once; a slot taken from now (next_release(now, ...))
+  // would always be >= now and park it on V2, a guaranteed
+  // one-period-late repeat.
+  FrameRegulator reg(12, true, 3);
+  warm(reg);
+  const uint64_t phase = kT0 + 7 * kVb;
+  const uint64_t arrival = phase + kVb - 9'000;    // maps to V1
+  const uint64_t v1_release = phase + kVb - kLead;  // V1 - lead
+  const uint64_t now = v1_release + 1'000;          // past release, before V1
+  FrameRegulator::Displaced disp;
+  CHECK(now > v1_release && now < phase + kVb);
+  CHECK(reg.offer(frame(0), arrival, now, &disp));  // presented now
+  CHECK(reg.late_count() == 1);
+  CHECK(!reg.holding());  // not parked on V2
+}
+
+TEST(a_vacated_slot_stays_taken_for_a_newer_frame_behind_a_chain) {
+  // f0 holds V1 and f1 collides with it, chaining to V1 + period. f0 is
+  // released. f2's own arrival maps to V1 again and its hand-over is past
+  // V1's release -- but f0 was committed for V1, so V1 is taken. f2 moves
+  // to the first vblank after it, finds f1 there and chains once more, to
+  // V1 + 2 periods. Nothing is displaced, nothing presents at once, and
+  // the three come out in pts order on consecutive vblanks.
+  FrameRegulator reg(12, true, 3);
+  warm(reg);
+  const uint64_t V1 = kT0 + 8 * kVb;
+  FrameRegulator::Displaced disp;
+  DmaFrame out;
+  CHECK(!reg.offer(frame(0), V1 - 9'000, V1 - 9'000, &disp));       // f0 -> V1
+  CHECK(!reg.offer(frame(kFrame), V1 - 8'000, V1 - 8'000, &disp));  // collides, chains to V1+kVb
+  CHECK(disp.n == 0);
+  CHECK(reg.release_due(V1 - kLead, &out));  // f0 goes out for V1
+  CHECK(out.opaque == frame(0).opaque);
+  CHECK(!reg.offer(frame(2 * kFrame), V1 - 7'000, V1 - 2'000, &disp));  // f2: held
+  CHECK(disp.n == 0);
+  CHECK(reg.late_count() == 0);
+  CHECK(reg.release_due(V1 + kVb - kLead, &out));
+  CHECK(out.opaque == frame(kFrame).opaque);
+  CHECK(!reg.release_due(V1 + 2 * kVb - kLead - 1, &out));
+  CHECK(reg.release_due(V1 + 2 * kVb - kLead, &out));
+  CHECK(out.opaque == frame(2 * kFrame).opaque);
+  CHECK(!reg.holding());
+}
+
+TEST(deeper_chain_emits_monotonic_pts_with_full_accounting) {
+  // A deeper version of the same shape: f1 chains past f0's slot; f0
+  // drains; f2 and f3 both map back to f0's vblank with late hand-overs;
+  // f4 maps to the vblank after it. f0's vblank stays taken, so f2 and f3
+  // chain past f1 and f3 takes f2's slot (freshest wins); f4 finds f1 on
+  // its own slot and claims the one after it from f3. Every offered frame
+  // is accounted for exactly once (emitted xor displaced), the emitted ones
+  // come out in increasing pts order, and f1 -- held throughout -- is shown.
+  FrameRegulator reg(12, true, 3);
+  warm(reg);
+  const uint64_t V1 = kT0 + 8 * kVb;
+  FrameRegulator::Displaced disp;
+  DmaFrame out;
+  std::vector<uint32_t> emitted, displaced;
+  const uint32_t pts[5] = {0, static_cast<uint32_t>(kFrame),
+                           static_cast<uint32_t>(2 * kFrame),
+                           static_cast<uint32_t>(3 * kFrame),
+                           static_cast<uint32_t>(4 * kFrame)};
+
+  CHECK(!reg.offer(frame(pts[0]), V1 - 9'000, V1 - 9'000, &disp));  // f0 -> V1
+  CHECK(!reg.offer(frame(pts[1]), V1 - 8'000, V1 - 8'000, &disp));  // f1, chains
+  CHECK(reg.release_due(V1 - 3'000, &out));
+  emitted.push_back(out.pts_us);  // f0
+
+  const bool p2 = reg.offer(frame(pts[2]), V1 - 7'000, V1 - 2'000, &disp);
+  for (int i = 0; i < disp.n; ++i) displaced.push_back(disp.f[i].pts_us);
+  if (p2) emitted.push_back(pts[2]);
+
+  const bool p3 = reg.offer(frame(pts[3]), V1 - 6'000, V1 - 2'000, &disp);
+  for (int i = 0; i < disp.n; ++i) displaced.push_back(disp.f[i].pts_us);
+  if (p3) emitted.push_back(pts[3]);
+
+  const bool p4 = reg.offer(frame(pts[4]), V1 - 2'000, V1 - 1'000, &disp);
+  for (int i = 0; i < disp.n; ++i) displaced.push_back(disp.f[i].pts_us);
+  if (p4) emitted.push_back(pts[4]);
+
+  while (reg.release_due(V1 + 10 * kVb, &out)) emitted.push_back(out.pts_us);
+
+  // Every offered frame is accounted for exactly once: emitted xor
+  // displaced, never both, never neither.
+  CHECK(emitted.size() + displaced.size() == 5);
+  for (uint32_t p : pts) {
+    const bool in_e = std::find(emitted.begin(), emitted.end(), p) != emitted.end();
+    const bool in_d = std::find(displaced.begin(), displaced.end(), p) != displaced.end();
+    CHECK(in_e != in_d);
+  }
+  CHECK(emitted == (std::vector<uint32_t>{pts[0], pts[1], pts[4]}));
+  CHECK(displaced == (std::vector<uint32_t>{pts[2], pts[3]}));
+  // Whatever IS emitted comes out in increasing pts order.
+  for (size_t i = 1; i < emitted.size(); ++i) CHECK(emitted[i] > emitted[i - 1]);
+}
+
+TEST(late_frame_offered_before_the_drain_displaces_every_held_frame) {
+  // The caller may offer before it drains the frames already due. f0 is
+  // held on V1; nothing drains it; f1's hand-over is past its own
+  // release, so f1 presents at once. f0's release is earlier than f1's,
+  // so a release comparison alone would keep it -- and the drain that
+  // follows would then show f0 AFTER f1. Presenting at once flushes
+  // every held frame instead: they are all older.
+  FrameRegulator reg(12, true, 3);
+  warm(reg);
+  const uint64_t V1 = kT0 + 8 * kVb;
+  const uint64_t V2 = V1 + kVb;
+  FrameRegulator::Displaced disp;
+  DmaFrame out;
+  CHECK(!reg.offer(frame(0), V1 - 9'000, V1 - 9'000, &disp));  // f0 -> V1
+  CHECK(reg.offer(frame(kFrame), V2 - 9'000, V2 - 1'000, &disp));  // f1: late, now
+  CHECK(disp.n == 1);
+  CHECK(disp.f[0].opaque == frame(0).opaque);  // f0 displaced, never shown after f1
+  CHECK(reg.late_count() == 1);
+  CHECK(!reg.holding());
+  CHECK(!reg.release_due(V2 - 1'000, &out));
+}
+
+TEST(pair_partner_handed_after_its_partner_left_takes_the_next_vblank) {
+  // A burst pair: A is decoded and offered before its release and goes out
+  // on vblank V at V - lead. B, its partner one pts step later, is decoded
+  // 0.1 ms before that release but offered 0.1 ms after it. B's arrival
+  // maps to V too -- the vblank A has already been committed for. A is no
+  // longer held, so only the regulator's memory of what it let go of can
+  // see that V is taken: B waits for V + period instead of presenting at
+  // once behind A's pending flip (which would make A repeat).
+  FrameRegulator reg(12, true, 3);
+  warm(reg);
+  const uint64_t V = kT0 + 8 * kVb;
+  const uint64_t relV = V - kLead;
+  FrameRegulator::Displaced disp;
+  DmaFrame out;
+  CHECK(!reg.offer(frame(0), relV - 800, relV - 700, &disp));  // A -> V
+  CHECK(reg.release_due(relV, &out));
+  CHECK(out.opaque == frame(0).opaque);
+  CHECK(!reg.offer(frame(kFrame), relV - 100, relV + 100, &disp));  // B: held
+  CHECK(disp.n == 0);
+  CHECK(reg.late_count() == 0);
+  CHECK(reg.next_release_us() == relV + kVb);
+  CHECK(!reg.release_due(relV + kVb - 1, &out));
+  CHECK(reg.release_due(relV + kVb, &out));
+  CHECK(out.opaque == frame(kFrame).opaque);
+}
+
+TEST(a_frame_presented_at_once_marks_its_vblank_taken) {
+  // S's own slot V has passed by the time it is offered and nothing went
+  // out on V, so S presents at once. T, decoded before V's release and
+  // offered just after S, maps to V as well: S has it, so T is held for
+  // V + period.
+  FrameRegulator reg(12, true, 3);
+  warm(reg);
+  const uint64_t V = kT0 + 8 * kVb;
+  const uint64_t relV = V - kLead;
+  FrameRegulator::Displaced disp;
+  DmaFrame out;
+  CHECK(reg.offer(frame(0), relV - 900, relV + 1'000, &disp));  // S: at once
+  CHECK(reg.late_count() == 1);
+  CHECK(!reg.offer(frame(kFrame), relV - 50, relV + 1'100, &disp));  // T: held
+  CHECK(disp.n == 0);
+  CHECK(reg.late_count() == 1);
+  CHECK(reg.next_release_us() == relV + kVb);
+  CHECK(reg.release_due(relV + kVb, &out));
+  CHECK(out.opaque == frame(kFrame).opaque);
+}
+
+TEST(forgetting_the_output_history_lets_a_late_frame_present_at_once) {
+  // The history of the last frame out is forgotten when a park dropped
+  // everything (reset_output_history), when the panel grid is reseeded
+  // (set_panel_period) and on a pts discontinuity. The pair partner of
+  // pair_partner_handed_after_its_partner_left_takes_the_next_vblank then
+  // presents at once: its slot has passed and nothing holds it any more.
+  for (int how = 0; how < 3; ++how) {
+    FrameRegulator reg(12, true, 3);
+    warm(reg);
+    const uint64_t V = kT0 + 8 * kVb;
+    const uint64_t relV = V - kLead;
+    FrameRegulator::Displaced disp;
+    DmaFrame out;
+    CHECK(!reg.offer(frame(0), relV - 800, relV - 700, &disp));
+    CHECK(reg.release_due(relV, &out));
+    uint32_t next_pts = static_cast<uint32_t>(kFrame);
+    if (how == 0) {
+      reg.reset_output_history();
+    } else if (how == 1) {
+      reg.set_panel_period(static_cast<double>(kVb));
+      warm(reg);
+    } else {
+      CHECK(reg.offer(frame(5'000'000), relV - 150, relV + 50, &disp));  // drone restart
+      CHECK(reg.discont_count() == 1);
+      next_pts = 5'000'000 + static_cast<uint32_t>(kFrame);
+    }
+    const uint64_t late_before = reg.late_count();
+    CHECK(reg.offer(frame(next_pts), relV - 100, relV + 100, &disp));
+    CHECK(reg.late_count() == late_before + 1);
+    CHECK(!reg.holding());
+  }
+}
+
+namespace {
+// Drives a regulator through n decode/hand-over pairs at src_period_us,
+// feeding on_flip at panel_period_us. Arrivals and hand-overs both move
+// forward only, and arrival_us <= now_us always, matching a real pump:
+// decode finishes, THEN the caller eventually offers it.
+//  - stalls: 25% of hand-overs land 0-20 ms past their own arrival.
+//  - drain_first_p: the probability that the caller drains the frames
+//    already due before offering; otherwise it offers first and drains
+//    after (the regulator's order must not depend on which).
+//  - bursts: 10% of the time a decode stall holds back 2-4 frames, which
+//    then arrive back-to-back (0-1.5 ms apart) at the last one's
+//    nominal arrival.
+//  - pairs: every odd frame is the second of a burst pair, decoded
+//    0.5-1.5 ms after its partner, and half of them are handed over up to
+//    2 ms after their decode -- so a partner can be offered just after the
+//    first frame of its pair was released.
+// Returns every frame actually emitted (via offer()'s immediate return
+// or release_due, in that order) and every frame displaced, both as
+// their own pts_us.
+struct OrderFuzzResult {
+  std::vector<uint32_t> emitted;
+  std::vector<uint32_t> displaced;
+};
+
+struct OrderFuzzMode {
+  bool stalls;
+  double drain_first_p;
+  bool bursts;
+  bool pairs;
+};
+
+OrderFuzzResult run_order_fuzz(unsigned seed, int n, double src_period_us,
+                               double panel_period_us, int chain_budget,
+                               int sched_cap_ms, OrderFuzzMode mode) {
+  std::mt19937 rng(seed);
+  std::uniform_real_distribution<double> U(0.0, 1.0);
+  FrameRegulator reg(12, true, 3, chain_budget, sched_cap_ms);
+  reg.set_panel_period(panel_period_us);
+  OrderFuzzResult r;
+  double flip_t = static_cast<double>(kT0);
+  const auto flips_to = [&](double t) {
+    while (flip_t <= t) {
+      reg.on_flip(static_cast<uint64_t>(flip_t), true);
+      flip_t += panel_period_us;
+    }
+  };
+  flips_to(flip_t + 7 * panel_period_us);
+  DmaFrame out;
+  const auto drain_to = [&](double t) {
+    flips_to(t);
+    while (reg.release_due(static_cast<uint64_t>(t), &out)) r.emitted.push_back(out.pts_us);
+  };
+  double nominal = flip_t + 1'000.0;
+  double last_arr = 0.0, last_now = 0.0;
+  int burst_left = 0;
+  for (int i = 0; i < n; ++i) {
+    const uint32_t pts = static_cast<uint32_t>(i * src_period_us);
+    double arr_t = nominal;
+    if (mode.bursts && burst_left == 0 && U(rng) < 0.1) {
+      burst_left = 2 + static_cast<int>(rng() % 3);
+      arr_t = nominal + (burst_left - 1) * src_period_us;  // held back to the last one's slot
+    } else if (burst_left > 0) {
+      arr_t = last_arr + U(rng) * 1'500.0;  // decoded back-to-back
+    }
+    if (burst_left > 0) --burst_left;
+    const bool pair_second = mode.pairs && (i % 2) == 1;
+    if (pair_second) arr_t = last_arr + 500.0 + U(rng) * 1'000.0;
+    arr_t = std::max(arr_t, last_arr);
+    double now_t = mode.stalls && U(rng) < 0.25 ? arr_t + U(rng) * 20'000.0 : arr_t;
+    if (pair_second && U(rng) < 0.5) now_t = arr_t + U(rng) * 2'000.0;
+    now_t = std::max(now_t, last_now);
+    last_arr = arr_t;
+    last_now = now_t;
+    if (U(rng) < mode.drain_first_p)
+      drain_to(now_t);
+    else
+      flips_to(now_t);
+    FrameRegulator::Displaced disp;
+    const bool now_ = reg.offer(frame(pts), static_cast<uint64_t>(arr_t),
+                                static_cast<uint64_t>(now_t), &disp);
+    for (int k = 0; k < disp.n; ++k) r.displaced.push_back(disp.f[k].pts_us);
+    if (now_) r.emitted.push_back(pts);
+    drain_to(now_t);
+    nominal += src_period_us + U(rng) * 2'000.0;
+  }
+  drain_to(flip_t + 20 * panel_period_us);
+  return r;
+}
+}  // namespace
+
+TEST(randomised_order_fuzz_never_emits_backwards) {
+  // Fixed seeds across 59.94/100 fps sources on a 60 Hz panel, capture
+  // placement on and off, chain_budget bounded and unbounded, in two
+  // pump shapes: drain-then-offer with stalled hand-overs, and a mixed
+  // pump (offer before the drain 30% of the time) with decode bursts on
+  // top, plus burst pairs whose second frame is often handed over just
+  // after the first one's release. Every offered frame is accounted for
+  // exactly once (emitted xor displaced) and the emitted ones never go
+  // backwards in pts. Cheap enough for the host suite.
+  const double kPanel = 1e6 / 60.0;
+  const double rates[] = {1e6 / 59.94, 1e6 / 100.0};
+  const int budgets[] = {0, 3};
+  const int caps[] = {0, 16};
+  const unsigned seeds[] = {1, 2, 3};
+  const OrderFuzzMode modes[] = {
+      {/*stalls=*/true, /*drain_first_p=*/1.0, /*bursts=*/false, /*pairs=*/false},
+      {/*stalls=*/true, /*drain_first_p=*/0.7, /*bursts=*/true, /*pairs=*/false},
+      {/*stalls=*/false, /*drain_first_p=*/1.0, /*bursts=*/false, /*pairs=*/true},
+      {/*stalls=*/true, /*drain_first_p=*/0.7, /*bursts=*/false, /*pairs=*/true},
+  };
+  int backwards = 0, misaccounted = 0;
+  for (const OrderFuzzMode& mode : modes) {
+    for (double src : rates) {
+      for (int budget : budgets) {
+        for (int cap : caps) {
+          for (unsigned seed : seeds) {
+            const OrderFuzzResult r = run_order_fuzz(seed, 2000, src, kPanel, budget, cap, mode);
+            std::vector<uint32_t> seen = r.emitted;
+            seen.insert(seen.end(), r.displaced.begin(), r.displaced.end());
+            std::sort(seen.begin(), seen.end());
+            if (seen.size() != 2000 ||
+                std::adjacent_find(seen.begin(), seen.end()) != seen.end())
+              ++misaccounted;  // lost or duplicated a frame
+            for (size_t i = 1; i < r.emitted.size(); ++i)
+              if (r.emitted[i] <= r.emitted[i - 1]) ++backwards;
+          }
+        }
+      }
+    }
+  }
+  CHECK(misaccounted == 0);
+  CHECK(backwards == 0);
+}
+
+TEST(capture_window_and_lateness_split_between_arrival_and_now) {
+  // Pins BOTH halves of the split against the failure mode of collapsing
+  // them back into one clock. Frame A's arrival is on time (it matches
+  // the capture floor the window settles on) but its hand-over (`now`) is
+  // 50 ms late; frame B's roles are swapped -- its arrival is 5 ms late,
+  // its hand-over is on time. Passing `now` everywhere would seed the
+  // transit window from frame A's late `now` and frame B's on-time `now`
+  // -- the ~5 ms spread that actually happened (frame A on time, frame B
+  // late) would read as ~0, and frame A would win a capture slot instead
+  // of presenting at once, late (its `now`-derived "arrival" wouldn't
+  // look late to place_by_capture any more). Passing `arrival` everywhere
+  // would judge frame A's lateness against its own on-time arrival
+  // instead of its late hand-over, so it would ALSO wrongly win a slot.
+  FrameRegulator reg(12, true, 3, 3, 16);
+  warm(reg);
+  const uint64_t phase = kT0 + 7 * kVb;
+  FrameRegulator::Displaced disp;
+  double margin = 0.0;
+
+  // Frame A: arrival on time, hand-over 50 ms late.
+  const uint64_t arrival_a = phase;
+  const uint64_t now_a = phase + 50'000;
+  CHECK(reg.offer(frame(0), arrival_a, now_a, &disp));  // late: presented at once
+  CHECK(reg.late_count() == 1);
+  CHECK(!reg.holding());
+  REQUIRE(reg.take_margin(&margin));  // capture_slot still ran and set one
+  CHECK(margin > 12'000.0 && margin < 13'000.0);
+
+  // Frame B: arrival 5 ms late, hand-over on time.
+  const uint64_t arrival_b = arrival_a + kFrame + 5'000;
+  const uint64_t now_b = arrival_a + kFrame;
+  CHECK(!reg.offer(frame(kFrame), arrival_b, now_b, &disp));  // held
+  // Window now holds frame A's (on-time) and frame B's (5 ms late)
+  // transit: the spread reads ~5 ms if arrival fed it, not the ~0 either
+  // wrong wiring would see (both frames' `now` values are mutually
+  // consistent with each other, not with either frame's real transit).
+  CHECK(reg.allowance_ms() > 4.0);
+  CHECK(reg.allowance_ms() < 8.0);
+  CHECK(reg.next_release_us() == phase + 30'334);  // the slot its OWN arrival maps to
+}
+
+TEST(getters_are_safe_under_concurrent_offers) {
+  // A smoke test for the lock: no data race under TSAN, no crash otherwise.
+  FrameRegulator reg(12);
+  std::atomic<bool> stop{false};
+  std::thread t([&] {
+    while (!stop) {
+      (void)reg.held_count();
+      (void)reg.allowance_ms();
+      (void)reg.next_release_us();
+    }
+  });
+  for (int i = 0; i < 2000; ++i) {
+    FrameRegulator::Displaced d;
+    reg.offer(frame(static_cast<uint32_t>(i * kFrame)), kT0 + i * kFrame,
+             kT0 + i * kFrame, &d);
+    DmaFrame o;
+    while (reg.release_due(kT0 + i * kFrame + 20'000, &o)) {
+    }
+  }
+  stop = true;
+  t.join();
 }

@@ -25,7 +25,13 @@ struct DvrCfg {
   std::string osd_fc = "BTFL";  // .osd header firmware tag: BTFL, INAV or ARDU
   struct BurnedCfg {
     int bitrate_kbps = 12000;
-    int fps_cap = 30;   // encode is capped independently of display rate
+    // Record every N-th screen refresh: 1 = the panel's rate, 2 = half of
+    // it, ... up to 10.
+    int every = 1;
+    // Recording's picture size; 0x0 = the decoded (drone-sent) size, no
+    // scaling. Both dimensions even, W in 320-4096, H in 240-2304.
+    int size_w = 0;
+    int size_h = 0;
   } burned;
   // Where the record button records:
   // "gs" = this GS's DVR only, "vtx" = the drone's SD card only, "both".
@@ -109,23 +115,15 @@ struct DisplayCfg {
   // estimator is cold or stale.
   int regulate_ms = 12;
   // Servo release to next_vblank - vsync_lead_ms instead of the fixed
-  // hold. lead covers
-  // the present-path submission cost incl. the ~2 ms main-loop tick.
+  // hold. The lead covers the release thread's wake lateness and the
+  // present-path submission cost.
   bool vsync_lock = true;
-  // Default 5 (bench-measured, docs/findings/2026-10-17-vsync-lead-sweep.md):
-  // the lead covers the main loop's release lateness (p99.9 ~2.1 ms in
-  // flight), the present path (p99 0.8 ms with the framebuffer cache) and
-  // the kernel's ~1 ms latch deadline. 5 keeps the flight tail clear; 4
-  // costs about one missed latch a minute in flight; every ms is a ms of
-  // glass latency on every frame.
+  // Default 5 (docs/findings/2026-10-17-vsync-lead-sweep.md): the lead
+  // covers the release lateness (reg.log rlate=), the present path (p99
+  // 0.8 ms with the framebuffer cache) and the kernel's ~1 ms latch
+  // deadline. It is the one lead: recording runs under it too. Every ms
+  // is a ms of glass latency on every frame.
   int vsync_lead_ms = 5;
-  // The lead while the burned recorder runs. Its fragment writes, spread as
-  // they are, still leave the main loop waking 3-6 ms late a few times a
-  // minute, which a 5 ms lead cannot absorb: about one repeated frame per
-  // 45-90 s of recording. 8 absorbed every one on the bench
-  // (docs/findings/2026-10-19-burned-dvr-live-repeat.md) at +3 ms of glass
-  // latency, paid only while recording. Range [1,10].
-  int rec_vsync_lead_ms = 8;
   // Frames a sequential-slot chain may run before the regulator cuts it
   // with one dropped frame (frame_regulator.h chain_cuts). 0 = unbounded,
   // no chain cut at all: the default, and the bundle's. On a clean link the
@@ -156,6 +154,12 @@ struct DisplayCfg {
   // Smaller is lower latency but lets allowance changes push frames across
   // the edge into the next refresh.
   int phase_margin_ms = 4;
+  // SCHED_FIFO priority of the release thread (release_loop.h), the thread
+  // that hands each frame to the display at its release time; real-time
+  // so a busy CPU cannot make it wake late. 0 = ordinary scheduling. A
+  // refused request (no CAP_SYS_NICE) is logged and the thread runs at
+  // normal priority.
+  int rt_priority = 10;
 };
 
 // GS-side reverse of the drone's ColorTrans sensor tuning (docs/colortrans.md).

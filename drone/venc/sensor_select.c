@@ -326,13 +326,16 @@ static int find_best_mode(const SensorSelectConfig *cfg,
 			continue;
 
 		for (MI_U32 idx = 0; idx < count; ++idx) {
-			if (cfg->forced_mode >= 0 && (int)idx != cfg->forced_mode)
-				continue;
-
 			MI_SNR_Res_t res = {0};
 			ret = MI_SNR_GetRes((MI_SNR_PAD_ID_e)p, idx, &res);
 			if (ret != 0)
 				continue;
+			if (cfg->want_mode.w) {
+				const CameraMode got = {res.output.width,
+					res.output.height, (uint16_t)res.maxFps};
+				if (camera_mode_find(&got, 1, cfg->want_mode) != 0)
+					continue;
+			}
 
 			int cls = sensor_mode_score(&res,
 				cfg->target_width, cfg->target_height, cfg->target_fps);
@@ -351,9 +354,10 @@ static int find_best_mode(const SensorSelectConfig *cfg,
 	}
 
 	if (*best_index < 0) {
-		if (cfg->forced_mode >= 0)
-			fprintf(stderr, "ERROR: --sensor-mode %d is not available on selected pad(s)\n",
-				cfg->forced_mode);
+		if (cfg->want_mode.w)
+			fprintf(stderr, "ERROR: sensor mode %ux%u@%u not offered by the driver\n",
+				cfg->want_mode.w, cfg->want_mode.h,
+				cfg->want_mode.max_fps);
 		fprintf(stderr, "ERROR: Failed to select sensor mode on any pad\n");
 		return -1;
 	}

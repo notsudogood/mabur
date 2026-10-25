@@ -344,7 +344,7 @@ GLuint FrameColorTrans::src_texture(int fd, uint32_t w, uint32_t h, uint32_t hs,
 }
 
 bool FrameColorTrans::process(int src_fd, uint32_t w, uint32_t h, uint32_t hs, uint32_t vs,
-                              int dst_fd, uint32_t dst_hs, uint32_t dst_vs) {
+                              int dst_fd, uint32_t dst_hs, uint32_t dst_vs, const Rect* box) {
   if (!ready_) return false;
   const auto t0 = std::chrono::steady_clock::now();
   auto us_since = [](std::chrono::steady_clock::time_point t) {
@@ -361,7 +361,16 @@ bool FrameColorTrans::process(int src_fd, uint32_t w, uint32_t h, uint32_t hs, u
   target_idx_ = (target_idx_ + 1) % kTargets;
   Target& tgt = targets_[target_idx_];
   glBindFramebuffer(GL_FRAMEBUFFER, tgt.fbo);
-  glViewport(0, 0, (GLsizei)width_, (GLsizei)height_);
+  if (box) {
+    // Letterbox: black bars, picture in the centred sub-rectangle. The V
+    // flip below puts memory row 0 at GL y = 0, so box->y needs no flip.
+    glViewport(0, 0, (GLsizei)width_, (GLsizei)height_);
+    glClearColor(0.f, 0.f, 0.f, 1.f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glViewport(box->x, box->y, (GLsizei)box->w, (GLsizei)box->h);
+  } else {
+    glViewport(0, 0, (GLsizei)width_, (GLsizei)height_);
+  }
   glUseProgram(prog_);
   glUniform1i(loc_tex_, 0);
   // Flip V so top-origin NV12 memory lands at the top of the FB.

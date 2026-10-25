@@ -298,9 +298,16 @@ their variance into jitter. Knobs, in order of proven usefulness:
      re-requests the sensor in milli-fps (the driver accepts
      `[min*1000, max*1000]`) until the real rate sits in
      `[fps − 0.030, fps − 0.004]` Hz, just under the configured rate; one
-     VMAX line is 0.018 Hz at 60. Locks in 2–3 rounds (`[sensor] cal:`
-     lines, `snr_mhz=` on the stats line, `sensor_mhz` on `GET /venc`);
-     after 8 rounds without convergence, or a driver that refuses
+     VMAX line is 0.018 Hz at 60. A line is fps² / line rate (the IMX415
+     modes share ~202.5k lines/s), so above 60 fps the band and the
+     one-line nudge grow by (fps/60)²: at 100 fps a line is 0.049 Hz and
+     the band is `[fps − 0.083, fps − 0.011]`; a band narrower than a line
+     would be straddled forever. Locks in 2–3 rounds (`[sensor] cal:`
+     lines, `snr_mhz=` on the stats line, `sensor_mhz` on `GET /venc`).
+     The request never exceeds the sensor mode's ceiling (maxFps × 1000,
+     which the driver refuses above); a mode whose fastest line sits under
+     the band (1728x816@120 tops out at 119.660 Hz) locks at that ceiling
+     (`locked at the mode's ceiling`). After 8 rounds without convergence, or a driver that refuses
      milli-fps, it restores the integer boot request and stops. It only
      measures a full-rate stream: while the bind decimates (a drone that
      boots disarmed into low-power 30 fps) it holds, and resumes with a
@@ -311,6 +318,18 @@ their variance into jitter. Knobs, in order of proven usefulness:
      GS panel (60.000 Hz nominal): one panel repeat per ~100 s, the floor
      without genlock. Bench record:
      `docs/findings/2026-10-14-sensor-rate-trim.md`.
+- **Sensor mode and the shutter cap follow `venc.fps`.** The pipeline asks
+  the driver for the mode `camera_mode_for` names (`drone/venc/camera_modes.c`):
+  1920x1080@90 (2x2 binned, full view) up to 90 fps, 1728x972@100 up to
+  100, 1728x816@120 above. It finds that mode in the driver's list by size
+  and ceiling and fails boot if the driver lacks it. The VPE only scales
+  that mode down, so the loader requires `venc.size` to keep the mode's
+  aspect ratio and fit inside it; modes, views and size rules are in
+  `docs/camera-modes.md`. The AE shutter ceiling (`sensor_cal_shutter_cap_us`) is the whole frame
+  period up to 90 fps and 90 % of it above: in a dim scene the sensor's
+  frame is the shutter plus ~22 lines, which at a full 10 ms cap holds
+  a 100 fps mode at 98.94 Hz whatever is requested, out of the trim's and
+  the phase lock's reach. Bench record: `docs/findings/2026-10-19-100fps.md`.
 
 ## 4. Measuring it — rigs and gotchas
 

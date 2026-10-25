@@ -72,9 +72,11 @@ static void sensor_cal_apply(Star6eRunnerContext *ctx, SensorCalAction act)
 		__ATOMIC_RELAXED);
 	switch (act) {
 	case SENSOR_CAL_LOCKED:
-		printf("[sensor] cal: locked, request %u mfps measured %.3f Hz "
-			"after %d round(s)\n", (unsigned)mfps, hz,
-			sensor_cal_rounds(&g_sensor_cal));
+		printf("[sensor] cal: locked%s, request %u mfps measured %.3f Hz "
+			"after %d round(s)\n",
+			g_sensor_cal.max_mfps && mfps >= g_sensor_cal.max_mfps ?
+				" at the mode's ceiling" : "",
+			(unsigned)mfps, hz, sensor_cal_rounds(&g_sensor_cal));
 		break;
 	case SENSOR_CAL_REQUEST:
 	case SENSOR_CAL_GAVE_UP:
@@ -259,12 +261,15 @@ static void sensor_steer_step(Star6eRunnerContext *ctx)
 	const int32_t req = __atomic_load_n(&g_sensor_off_req, __ATOMIC_RELAXED);
 	const SensorSteer st = sensor_steer_plan(sensor_cal_state(&g_sensor_cal),
 		sensor_cal_request_mfps(&g_sensor_cal), req,
-		g_sensor_applied_mfps, g_steer_refused_mfps);
+		g_sensor_applied_mfps, g_steer_refused_mfps,
+		ctx->ps.sensor.mode.maxFps * 1000);
 	MI_S32 ret;
 
 	if (st.clamped && !g_steer_clamp_logged) {
-		printf("[sensor] steer: offset %d mfps outside +-%d, clamped\n",
-			(int)req, SENSOR_STEER_RANGE_MFPS);
+		printf("[sensor] steer: offset %d mfps clamped to %d "
+			"(range +-%d, mode ceiling %u mfps)\n",
+			(int)req, (int)st.offset_mfps, SENSOR_STEER_RANGE_MFPS,
+			(unsigned)(ctx->ps.sensor.mode.maxFps * 1000));
 		fflush(stdout);
 	}
 	g_steer_clamp_logged = st.clamped;
@@ -508,7 +513,8 @@ void *star6e_runtime_encoder_loop(void *opaque)
 				if (ctx->ps.sensor.fps) {
 					sensor_cal_init(&g_sensor_cal,
 						ctx->ps.sensor.fps,
-						ctx->ps.sensor.fps * 1000);
+						ctx->ps.sensor.fps * 1000,
+						ctx->ps.sensor.mode.maxFps * 1000);
 					g_sensor_applied_mfps =
 						ctx->ps.sensor.fps * 1000;
 					sensor_cal_arm(&g_sensor_cal);

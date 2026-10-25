@@ -247,7 +247,67 @@ TEST(stats_json_has_mode_and_nulls) {
   const std::string j = stats_json(s);
   CHECK(j.find("\"mode\":\"spotter\"") != std::string::npos);
   CHECK(j.find("\"rtt_ms\":null") != std::string::npos);
+  CHECK(j.find("\"uplink_pct\":null") != std::string::npos);
+  CHECK(j.find("\"uplink\":\"none\"") != std::string::npos);
   CHECK(j.find('\n') == std::string::npos);
+}
+
+// Uplink delivery (UplinkDelivery): fed only RCFs that left and the
+// drone's Telem, on the tick clock. With every RCF heard the window reads
+// 100 % even though DISC beacons went out too -- they are sends, not RCFs.
+TEST(gs_uplink_counts_only_rcfs) {
+  Io io;
+  io.on_au = [](Au&&) {};
+  io.send = [](const std::vector<uint8_t>&) {};
+  auto c = cfg();
+  WebGs g(c, Mode::Gs, 136, 40, {}, 0, io);
+  uint64_t t = 1'000'000;
+  for (int i = 0; i < 50; ++i) g.tick(t += 10000);    // beacons only
+  CHECK(g.stats().uplink == "none");
+  CHECK(!g.stats().uplink_pct);
+  g.inject_disc_ack_for_replay(t);
+  uint16_t tlm_seq = 0;
+  uint64_t next_telem = t + 1'000'000;
+  for (auto& b : gen_bodies(760, 16.0, 0)) {          // ~12 s of video
+    b.mono_us += t;
+    g.on_rx(b);
+    g.tick(b.mono_us);
+    if (b.mono_us >= next_telem) {
+      mabur::rc::Telem tm;
+      tm.tlm_seq = ++tlm_seq;
+      tm.state = 2;
+      tm.rcf_rx = static_cast<uint32_t>(g.stats().rcf_sent);   // every RCF heard
+      g.on_rx(rc_body(mabur::rc::pack_telem(tm), b.mono_us));
+      next_telem += 1'000'000;
+    }
+  }
+  const Stats st = g.stats();
+  CHECK(st.sends > st.rcf_sent);
+  REQUIRE(st.uplink_pct);
+  CHECK(*st.uplink_pct == 100);
+  CHECK(st.uplink == "ok");
+  const std::string j = stats_json(st);
+  CHECK(j.find("\"uplink_pct\":100") != std::string::npos);
+  CHECK(j.find("\"uplink\":\"ok\"") != std::string::npos);
+}
+
+// A spotter sends nothing and is never fed: no claim, whatever it hears.
+TEST(spotter_uplink_stays_none) {
+  Io io;
+  io.on_au = [](Au&&) {};
+  io.send = [](const std::vector<uint8_t>&) {};
+  WebGs g(cfg(), Mode::Spotter, 136, 40, {}, 0, io);
+  uint64_t t = 1'000'000;
+  for (uint16_t i = 1; i <= 12; ++i) {
+    mabur::rc::Telem tm;
+    tm.tlm_seq = i;
+    tm.state = 2;
+    tm.rcf_rx = 20u * i;
+    g.on_rx(rc_body(mabur::rc::pack_telem(tm), t += 1'000'000));
+    g.tick(t);
+  }
+  CHECK(g.stats().uplink == "none");
+  CHECK(!g.stats().uplink_pct);
 }
 
 TEST(cap_to_complete_from_telem_offset) {

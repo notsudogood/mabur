@@ -173,17 +173,23 @@ Bench record: `docs/findings/2026-10-10-slice-salvage.md`.
   (a whole AU's `put_packet`, START, each append, LAST). Why: read from the
   busy render loop, the doorbell was picked up late (ring wake p99 5.8 ms
   vs 0.83 ms on its own thread), which ate most of the streamed-decode
-  gain. The main thread keeps frame *output* (`get_frame`/release), the
-  presenter, the regulator, OSD compose, the raw DVR and `lat`, plus the
-  watchdog; it learns of submits, delivered bytes and figures through a
-  bounded note queue (`FeedNote`, `kSubmit` before the MPP call so `lat`
-  sees submit before decode, `kDelivery` after, with the AU's bytes moved
-  in for the DVR — beyond 256 queued notes a note keeps its meta and drops
-  its bytes, counted `notes_dropped`). A flush and the watchdog "park" the
-  feed between ring events (outside every decoder call, the only place MPP
-  reset/destroy/create is safe): main releases the frames the presenter,
-  regulator and recorder hold and resets or recreates MPP while the feed is
-  parked, then resumes it. A flush park is taken by the feed thread itself
+  gain. Frame *output* (`get_frame`/release) is the decode-output thread's
+  (`DecodePump`), the presenter and the regulator the release thread's
+  (docs/phase-lock.md "Threads"); the housekeeping (main) thread keeps OSD
+  compose, the raw DVR and the watchdog. Submits, delivered bytes and
+  figures cross through two note queues (`FeedNote`, routed by `Kind`):
+  `kSubmit` leaves before the MPP call so `lat` sees submit before decode,
+  taken by the decode-output thread ahead of each frame through
+  `take_submit_notes`
+  (no cap — a submit note carries no bytes); `kDelivery` leaves after, with
+  the AU's bytes moved in for the DVR, through `take_notes` — beyond 256
+  queued delivery notes a note keeps its meta and drops its bytes, counted
+  `notes_dropped`; delivery notes go to housekeeping. A flush and the
+  watchdog "park" the feed between ring events (outside every decoder call,
+  the only place MPP reset/destroy/create is safe), and the decode-output
+  and release threads too: main returns the frames the presenter, regulator
+  and recorder hold and resets or recreates MPP while all three are parked,
+  then resumes them. A flush park is taken by the feed thread itself
   (`park_for_flush`); a watchdog park that does not happen within 2 s exits
   the player for respawn (the feed is wedged beyond this process).
 - **Clean shutdown.** On SIGTERM no new picture starts (`StreamFeeder::stop_new()`):
@@ -307,10 +313,6 @@ From the 2026-10-10 sweep of every 1080p count (findings record above):
   doorbell — not worth building.
 - The decode watchdog's park/recreate path has not yet run on hardware: no
   decode watchdog fired in any Part 2 bench.
-- An output thread blocking in `decode_get_frame` (design option E, not
-  built) would cut main's ≤2 ms frame-pickup delay from `dec` in both the
-  stream-on and stream-off arms — a further absolute −0.5 to −1 ms, not a
-  change to Δdec.
 - `parks=` on the `stream:` line mixes flush parks and watchdog parks (one
   counter, `FeedLoop::parks_`). Split it if watchdog parks ever need
   counting on their own.

@@ -569,6 +569,27 @@ TEST(drone_section_null_then_rates) {
   CHECK(cap.last()["drone"]["tlm_age_ms"] == 600);
 }
 
+// drone.rcf carries UplinkDelivery's view: the windowed delivery % and
+// the state the OSD colours it by, spelled by to_string(UplinkState).
+TEST(drone_rcf_carries_uplink_delivery) {
+  Capture cap;
+  StatsExporter ex(1, 500, cap.fn());
+  StatsInput in = base_input();
+  mabur::rc::Telem t;
+  t.tlm_seq = 1; t.state = 2; t.rcf_rx = 100;
+  in.telem = t; in.telem_rx_ms = 1400;
+  in.uplink = UplinkView{UplinkState::kLow, 72};
+  ex.poll(1500, in);
+  json j = cap.last();
+  CHECK(j["drone"]["rcf"]["delivery_pct"] == 72);
+  CHECK(j["drone"]["rcf"]["uplink"] == "low");
+  in.uplink = UplinkView{UplinkState::kWait, std::nullopt};
+  ex.poll(2500, in);
+  j = cap.last();
+  CHECK(j["drone"]["rcf"]["delivery_pct"].is_null());
+  CHECK(j["drone"]["rcf"]["uplink"] == "wait");
+}
+
 // Keys dropped with the telem diet (RC_VERSION 13) must not come
 // back as zeros: every one of them is gone from the drone block, and the
 // removed flag bits (radio_rx_ok / probing / air_shed) with them.

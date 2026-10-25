@@ -156,7 +156,7 @@ point the drone starts its own count over.
 
 ```toml
 [link.nack]          # absent = off
-enable    = false
+enable    = true       # the bundle ships it on
 lookback  = 256      # symbols behind newest the erasure view scans; 8..4096, must be < fec.seq_horizon
 repeat_ms = 16       # 1..1000
 max_tries = 2        # 0..16; 0 = observe only
@@ -476,9 +476,9 @@ Any RC_VERSION bump is a flag day: `maburd` and `maburgs` must both run it (a
 mismatched pair has no control link), so swap the two back to back. On each
 end the binary goes in before a config that carries `[nack]` /
 `[link.nack]` — a build without those keys fails boot on them (strict
-keys). Turning the feature off is config-only on the GS (`[link.nack]
-enable = false`, the shipped default); a drone that is never asked never
-re-sends.
+keys). The bundle ships `[link.nack] enable = true`; turning the feature
+off is config-only on the GS (`enable = false`) — a drone that is never
+asked never re-sends.
 
 ## Demand refresh
 

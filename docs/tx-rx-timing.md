@@ -58,7 +58,7 @@ GS → drone (the uplink: a low duty cycle, but every send is a blast):
 |---|---|---|
 | RCF (rate-control feedback) | every `link.feedback_ms`: code default 100, bundle 50 | slotted (§3.2); about 180 µs on air incl. preamble |
 | DISC keepalive | `beacon_keepalive_ms` 1000 | slotted like any RCF |
-| T_NACK (base selective repeat) | at most one per poll, when `link.nack.enable` (bundle: off) | **not slotted**: `send_control_frame` directly, mid-burst (`docs/fec-nack.md` "Packing and send") |
+| T_NACK (base selective repeat) | at most one per poll, when `link.nack.enable` (bundle: on) | **not slotted**: `send_control_frame` directly, mid-burst (`docs/fec-nack.md` "Packing and send") |
 | T_CAL_CMD | `maburcal` sessions only | not slotted; gated by the calibration radio-silence plan |
 
 Every uplink send is also gated by `ChannelCore::may_send` and by the

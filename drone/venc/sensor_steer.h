@@ -28,9 +28,11 @@ typedef struct {
 /* st/trim_mfps: the trim's state and current request. off_mfps: the GS's
  * offset. applied_mfps: the request now on the sensor. refused_mfps: a
  * request the sensor refused (0 = none); it is not retried until another
- * request succeeds. */
+ * request succeeds. max_mfps: the sensor mode's ceiling (0 = none); the
+ * request is clamped to it. */
 SensorSteer sensor_steer_plan(SensorCalState st, uint32_t trim_mfps,
-	int32_t off_mfps, uint32_t applied_mfps, uint32_t refused_mfps);
+	int32_t off_mfps, uint32_t applied_mfps, uint32_t refused_mfps,
+	uint32_t max_mfps);
 
 #ifdef __cplusplus
 }

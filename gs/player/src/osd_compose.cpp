@@ -43,26 +43,84 @@ void OsdComposer::set_gs(std::unique_ptr<GsLayer> b0, std::unique_ptr<GsLayer> b
   gs_laid_out_ = false;
 }
 
-void OsdComposer::set_burn_sink(BurnSink s) {
-  burn_ = std::move(s);
+void OsdComposer::realloc_burn_canvas(int w, int h) {
+  if (w > 0 && h > 0) {
+    burn_px_.assign((size_t)w * h, 0u);
+    burn_canvas_ = Surface{burn_px_.data(), w, h, w};
+  } else {
+    burn_px_.clear();
+    burn_canvas_ = Surface{};
+  }
   burn_shadow_ = ShadowGrid{};
   if (gs_[2]) gs_[2]->invalidate();
+  burn_gs_cards_ = -1;
+  burn_blank_ = false;
+}
+
+void OsdComposer::set_burn_sink(BurnSink s) {
+  burn_ = std::move(s);
   // Blank the canvas too: pixels from the previous recording outside the
   // fresh restate's rects would otherwise linger in it, and a later rect
   // that happens to cover them would quantize stale content into the new
-  // recording's map.
-  std::fill(burn_px_.begin(), burn_px_.end(), 0u);
-  burn_gs_cards_ = -1;
+  // recording's map. The canvas keeps its size -- only the lineage resets.
+  realloc_burn_canvas(burn_canvas_.width, burn_canvas_.height);
+}
+
+bool OsdComposer::set_burn_size(int w, int h, std::string* err) {
+  bool ok = true;
+  if (w == 0 && h == 0) {
+    burn_w_ = burn_h_ = 0;
+    // Clearing goes back to following the screen: re-lay gs_[2] out at the
+    // size the screen itself was last laid out at, if gs_layout() has ever
+    // run, so a later recording with no size still gets a correctly
+    // laid-out GS layer instead of one pinned to the stale burn size.
+    if (gs_[2] && gs_screen_w_ > 0 && gs_screen_h_ > 0)
+      ok = gs_[2]->layout(gs_screen_w_, gs_screen_h_, err);
+    if (!ok) drop_gs();
+  } else if (gs_[2]) {
+    if (gs_[2]->layout(w, h, err)) {
+      burn_w_ = w;
+      burn_h_ = h;
+    } else {
+      // The GS bar does not fit the record size: the recording is refused
+      // (false, burn size cleared), the screen overlay is not. gs_[2] goes
+      // back to the screen layout gs_layout() last made, so all three stay
+      // laid out together. With gs_layout() never run (or not run since
+      // set_gs()), gs_laid_out_ is false and gs_[2] stays un-laid like its
+      // siblings until gs_layout() lays out all three.
+      ok = false;
+      burn_w_ = burn_h_ = 0;
+      if (gs_laid_out_ && !gs_[2]->layout(gs_screen_w_, gs_screen_h_, nullptr)) drop_gs();
+    }
+  } else {
+    burn_w_ = w;
+    burn_h_ = h;
+  }
+  realloc_burn_canvas(burn_w_ ? burn_w_ : screen_w_, burn_h_ ? burn_h_ : screen_h_);
+  return ok;
+}
+
+void OsdComposer::drop_gs() {
+  // All three or none, same rule as gs_layout(): a run with gs_[2] alone
+  // dropped would leave gs_[0]/gs_[1] laid out against a sibling that no
+  // longer agrees with them on existing at all.
+  for (auto& o : gs_) o.reset();
+  gs_laid_out_ = false;
 }
 
 bool OsdComposer::gs_layout(int screen_w, int screen_h, std::string* err) {
   if (!gs_[0]) return false;
-  for (auto& ov : gs_) {
-    if (!ov->layout(screen_w, screen_h, err)) {
+  gs_screen_w_ = screen_w;
+  gs_screen_h_ = screen_h;
+  const int burn_w = burn_w_ ? burn_w_ : screen_w;
+  const int burn_h = burn_h_ ? burn_h_ : screen_h;
+  for (size_t i = 0; i < 3; ++i) {
+    const int w = (i == 2) ? burn_w : screen_w;
+    const int h = (i == 2) ? burn_h : screen_h;
+    if (!gs_[i]->layout(w, h, err)) {
       // All three or none: a run with two of them laid out would compose a
       // buffer against a shadow that was never given any geometry.
-      for (auto& o : gs_) o.reset();
-      gs_laid_out_ = false;
+      drop_gs();
       return false;
     }
   }
@@ -80,7 +138,7 @@ bool OsdComposer::wants(const OsdComposeIn& in) const {
     // blank, so nothing is composed, so nothing is published, and the front
     // buffer shows the frozen flight OSD past osd.stale_ms forever. Exactly
     // the configuration shipping today (MSP-only, no second publisher).
-    // Settles after one composition: compose() sets screen_blank_.
+    // Settles after one composition: compose_screen() sets screen_blank_.
     if (have_screen_ && in.msp_stale && !screen_blank_) return true;
   }
   // Deliberately NOT a trigger: "the other buffer's MSP grid is a screen
@@ -90,10 +148,14 @@ bool OsdComposer::wants(const OsdComposeIn& in) const {
   return false;
 }
 
-OsdComposeOut OsdComposer::compose(int idx, const Surface& s, const OsdComposeIn& in) {
+OsdComposeOut OsdComposer::compose_screen(int idx, const Surface& s, const OsdComposeIn& in) {
   idx &= 1;
   OsdComposeOut out;
   if (!s.pixels || s.width <= 0 || s.height <= 0) return out;
+  // What the burn canvas falls back to sizing itself from when no burn
+  // size is set -- see compose_burn().
+  screen_w_ = s.width;
+  screen_h_ = s.height;
 
   const bool gs_on = gs_live() && in.snap != nullptr;
   const bool msp_on = raster_ != nullptr && in.screen != nullptr;
@@ -203,94 +265,122 @@ OsdComposeOut OsdComposer::compose(int idx, const Surface& s, const OsdComposeIn
     }
   }
 
-  // ---------------- burned DVR ----------------
-  // Composed into the burn CANVAS -- the composer's own cached mirror --
-  // never read back out of `s`: the DRM buffers are write-combine mappings
-  // and quantize reading one was the burned-recording latency regression
-  // (see osd_compose.h). The canvas runs the SAME algorithm as the display
-  // path above, against the burn's own lineages (burn_shadow_, gs_[2]), so
-  // it renders the same picture the screen shows: MSP first, GS repainted
-  // over any cell that hit a field box, vacated card rows erased and the
-  // grid repaired underneath them.
-  if (burn_) {
-    // (Re)size the canvas to THIS surface. A resize orphans the burn
-    // lineages (their geometry followed the old size), so they reset and
-    // the next feeds below restate everything -- same shape as a fresh
-    // set_burn_sink().
-    if (!burn_canvas_.pixels || burn_canvas_.width != s.width ||
-        burn_canvas_.height != s.height) {
-      burn_px_.assign((size_t)s.width * s.height, 0u);
-      burn_canvas_ = Surface{burn_px_.data(), s.width, s.height, s.width};
-      burn_shadow_ = ShadowGrid{};
-      if (gs_[2]) gs_[2]->invalidate();
-      burn_gs_cards_ = -1;
-    }
-    burn_rects_.clear();
-    burn_msp_write_.clear();
-    bool burn_msp_drew = false;
-    if (msp_on && have_screen_) {
-      if (grid_blank) {
-        // On the TRANSITION, not per buffer: the canvas follows the screen,
-        // so one clear on the episode's first composition is the whole
-        // blank. clear() blanks exactly the grid the shadow records and
-        // invalidates it; last_grid_ is that rect, pushed through
-        // burn_msp_write_ so the GS reclaim below restores any field boxes
-        // the grid overlapped.
-        if (!screen_blank_) {
-          raster_->clear(burn_canvas_, &burn_shadow_);
-          if (last_grid_.w > 0 && last_grid_.h > 0) burn_msp_write_.push_back(last_grid_);
-        }
-      } else {
-        raster_->draw(*in.screen, burn_canvas_, &burn_shadow_, &burn_msp_write_);
-        burn_msp_drew = true;
-      }
-    }
-    if (gs_on) {
-      const int cards = (int)std::min<size_t>(in.snap->cards.size(), (size_t)kMaxCards);
-      const bool burn_geom_changed = cards != burn_gs_cards_;
-      burn_gs_cards_ = cards;
-      // GS wins the collision in the canvas exactly as on screen: repaint
-      // every field box an MSP-written cell (or the blank's grid rect)
-      // touched. The repaint emits its boxes into burn_rects_ -- they are
-      // quantize work whether or not update() below touches them again.
-      if (!burn_msp_write_.empty())
-        gs_[2]->repaint_intersecting(burn_msp_write_.data(), burn_msp_write_.size(),
-                                     burn_canvas_, &burn_rects_);
-      burn_gs_rects_.clear();
-      gs_[2]->update(*in.snap, in.gs_stale, in.gs_ps, burn_canvas_, &burn_gs_rects_);
-      // A changed card count erased boxes straight through to the canvas's
-      // MSP glyphs, same hole the display path repairs above: forget those
-      // cells, redraw them, and let GS win back whatever the repair spilled
-      // onto -- cell rects are bigger than the boxes that prompted them.
-      if (burn_geom_changed && burn_msp_drew) {
-        for (const DirtyRect& r : burn_gs_rects_) forget_cells(burn_shadow_, *in.screen, r);
-        const size_t repair_at = burn_msp_write_.size();
-        raster_->draw(*in.screen, burn_canvas_, &burn_shadow_, &burn_msp_write_);
-        if (burn_msp_write_.size() > repair_at)
-          gs_[2]->repaint_intersecting(burn_msp_write_.data() + repair_at,
-                                       burn_msp_write_.size() - repair_at, burn_canvas_,
-                                       &burn_rects_);
-      }
-      for (const DirtyRect& r : burn_gs_rects_) burn_rects_.push_back(r);
-    }
-    for (const DirtyRect& r : burn_msp_write_) burn_rects_.push_back(r);
-    // One call, one batch. Rect COUNT is worth a thought and not a worry:
-    // the worst card-count transition produces ~106 rects against
-    // BurnRecorder's 128 cap, and exceeding the cap does not cost a
-    // quantize() on this loop -- it sets osd_full_pending, which moves a
-    // ~2 MB map copy onto the recorder thread. The 25 ms path needs
-    // rects == nullptr, which this never passes. Two things do accumulate
-    // toward the cap though: successive set_osd() calls before the recorder
-    // takes them, and OsdRaster::draw() on an adversarial screen
-    // (alternating columns is legal MSP and yields 483 rects on its own).
-    if (!burn_rects_.empty()) burn_(burn_canvas_, burn_rects_.data(), burn_rects_.size());
-  }
-
   // One announcement per episode, on the transition rather than on a latch:
   // the composition that reaches the screen is the one worth logging.
   out.announce_blank = grid_blank && !screen_blank_;
   screen_blank_ = grid_blank;
   out.published = true;
+  return out;
+}
+
+// Composed into the burn CANVAS -- the composer's own cached mirror --
+// never read back out of a DRM buffer: those are write-combine mappings
+// and quantize reading one costs milliseconds per OSD update on the pump
+// loop (see osd_compose.h). The canvas runs the SAME algorithm as the display
+// path in compose_screen(), against the burn's own lineages (burn_shadow_,
+// gs_[2]), so it renders the same picture the screen shows: MSP first, GS
+// repainted over any cell that hit a field box, vacated card rows erased
+// and the grid repaired underneath them. Independent of compose_screen():
+// it has its own size (burn_w_/burn_h_, falling back to screen_w_/
+// screen_h_) and its own blank latch (burn_blank_), and touches none of
+// compose_screen()'s per-buffer state.
+void OsdComposer::compose_burn(const OsdComposeIn& in) {
+  if (!burn_) return;
+
+  const bool gs_on = gs_live() && in.snap != nullptr;
+  const bool msp_on = raster_ != nullptr && in.screen != nullptr;
+  // Shared with compose_screen(): a property of the input (a complete MSP
+  // screen arrived), not of either half, so a burn composed before any
+  // screen composition still knows one has.
+  if (msp_on && in.msp_fresh) have_screen_ = true;
+
+  // The canvas's own size: the burn size when one is set, else the last
+  // screen surface compose_screen() saw. Neither known yet -- no burn size
+  // and no screen ever composed -- and there is nothing to size the
+  // canvas from.
+  const int target_w = burn_w_ ? burn_w_ : screen_w_;
+  const int target_h = burn_h_ ? burn_h_ : screen_h_;
+  if (target_w <= 0 || target_h <= 0) return;
+
+  // A resize orphans the burn lineages (their geometry followed the old
+  // size), so they reset and the feeds below restate everything -- same
+  // shape as a fresh set_burn_sink().
+  if (!burn_canvas_.pixels || burn_canvas_.width != target_w ||
+      burn_canvas_.height != target_h)
+    realloc_burn_canvas(target_w, target_h);
+
+  const bool grid_blank = msp_on && have_screen_ && in.msp_stale;
+
+  burn_rects_.clear();
+  burn_msp_write_.clear();
+  bool burn_msp_drew = false;
+  if (msp_on && have_screen_) {
+    if (grid_blank) {
+      // On the TRANSITION, not per iteration: one clear on the episode's
+      // first composition is the whole blank. burn_blank_ is the burn's
+      // OWN latch -- not screen_blank_, which may flip on an iteration
+      // compose_burn() never sees, or stay put on one compose_screen()
+      // never sees. The grid rect has to be read off burn_shadow_ BEFORE
+      // clear(), which resets it -- afterwards there is no record of
+      // where the grid was -- and pushed through burn_msp_write_ so the
+      // GS reclaim below restores any field boxes the grid overlapped.
+      if (!burn_blank_) {
+        const DirtyRect grid = grid_of(burn_shadow_.layout);
+        raster_->clear(burn_canvas_, &burn_shadow_);
+        if (grid.w > 0 && grid.h > 0) burn_msp_write_.push_back(grid);
+      }
+    } else {
+      raster_->draw(*in.screen, burn_canvas_, &burn_shadow_, &burn_msp_write_);
+      burn_msp_drew = true;
+    }
+  }
+  if (gs_on) {
+    const int cards = (int)std::min<size_t>(in.snap->cards.size(), (size_t)kMaxCards);
+    const bool burn_geom_changed = cards != burn_gs_cards_;
+    burn_gs_cards_ = cards;
+    // GS wins the collision in the canvas exactly as on screen: repaint
+    // every field box an MSP-written cell (or the blank's grid rect)
+    // touched. The repaint emits its boxes into burn_rects_ -- they are
+    // quantize work whether or not update() below touches them again.
+    if (!burn_msp_write_.empty())
+      gs_[2]->repaint_intersecting(burn_msp_write_.data(), burn_msp_write_.size(),
+                                   burn_canvas_, &burn_rects_);
+    burn_gs_rects_.clear();
+    gs_[2]->update(*in.snap, in.gs_stale, in.gs_ps, burn_canvas_, &burn_gs_rects_);
+    // A changed card count erased boxes straight through to the canvas's
+    // MSP glyphs, same hole the display path repairs in compose_screen():
+    // forget those cells, redraw them, and let GS win back whatever the
+    // repair spilled onto -- cell rects are bigger than the boxes that
+    // prompted them.
+    if (burn_geom_changed && burn_msp_drew) {
+      for (const DirtyRect& r : burn_gs_rects_) forget_cells(burn_shadow_, *in.screen, r);
+      const size_t repair_at = burn_msp_write_.size();
+      raster_->draw(*in.screen, burn_canvas_, &burn_shadow_, &burn_msp_write_);
+      if (burn_msp_write_.size() > repair_at)
+        gs_[2]->repaint_intersecting(burn_msp_write_.data() + repair_at,
+                                     burn_msp_write_.size() - repair_at, burn_canvas_,
+                                     &burn_rects_);
+    }
+    for (const DirtyRect& r : burn_gs_rects_) burn_rects_.push_back(r);
+  }
+  for (const DirtyRect& r : burn_msp_write_) burn_rects_.push_back(r);
+  // One call, one batch. Rect COUNT is worth a thought and not a worry:
+  // the worst card-count transition produces ~106 rects against
+  // BurnRecorder's 128 cap, and exceeding the cap does not cost a
+  // quantize() on this loop -- it sets osd_full_pending, which moves a
+  // ~2 MB map copy onto the recorder thread. The 25 ms path needs
+  // rects == nullptr, which this never passes. Two things do accumulate
+  // toward the cap though: successive set_osd() calls before the recorder
+  // takes them, and OsdRaster::draw() on an adversarial screen
+  // (alternating columns is legal MSP and yields 483 rects on its own).
+  if (!burn_rects_.empty()) burn_(burn_canvas_, burn_rects_.data(), burn_rects_.size());
+
+  burn_blank_ = grid_blank;
+}
+
+OsdComposeOut OsdComposer::compose(int idx, const Surface& s, const OsdComposeIn& in) {
+  const OsdComposeOut out = compose_screen(idx, s, in);
+  compose_burn(in);
   return out;
 }
 

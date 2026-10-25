@@ -684,6 +684,10 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     json& rcf = d["rcf"];
     rcf["age_ms"] = t.rcf_age_ms;
     rcf["rx_pps"] = have_telem_rates_ ? json(telem_rcf_rx_pps_) : json(nullptr);
+    // Uplink delivery (UplinkDelivery): accepted / sent RCFs over a ~10 s
+    // window, and the state the OSD colours it by.
+    rcf["delivery_pct"] = in.uplink.pct ? json(*in.uplink.pct) : json(nullptr);
+    rcf["uplink"] = to_string(in.uplink.state);
     json& enc = d["enc"];
     enc["cmd_kbps"] = t.cmd_kbps;
     json& txq = d["txq"];

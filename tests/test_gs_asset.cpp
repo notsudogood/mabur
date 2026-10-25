@@ -152,7 +152,7 @@ TEST(asset_metrics_are_sane_at_every_baked_size) {
     CHECK(a->advance_x > 0);
     CHECK(a->glyph_w > a->advance_x);       // the 4 px pad on each side
     CHECK(a->baseline > 0 && a->baseline < a->glyph_h);
-    CHECK(a->n_glyphs == 112);              // ASCII + gen_gsfont's 5 + 12 icons
+    CHECK(a->n_glyphs == 113);              // ASCII + gen_gsfont's 5 + 13 icons
     std::printf("  px=%3d adv=%3d cell=%3dx%-3d baseline=%3d glyphs=%d\n", a->px,
                 a->advance_x, a->glyph_w, a->glyph_h, a->baseline, a->n_glyphs);
   }

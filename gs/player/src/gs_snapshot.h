@@ -35,6 +35,10 @@ struct GsCard {
 // it is given: the wire carries `ov` and both loss figures as fractions and
 // they arrive here already multiplied by 100. `air_pct` is a percent on the
 // wire and passes through untouched.
+// drone.rcf.uplink: maburgs' UplinkDelivery state, spelled as on the
+// sideport. kNone also covers an unknown spelling and an absent block.
+enum class GsUplink { kNone, kWait, kOk, kLow, kDead, kIdle, kStale };
+
 struct GsSnapshot {
   // link.channel: the GS radio's operating channel. Straight from the GS
   // config, not measured, so it never goes null on a bad window -- an
@@ -80,6 +84,12 @@ struct GsSnapshot {
   // the key is missing or mistyped, or it reads the sentinel -- the compact
   // bar's temp cell shows dashes for all of those.
   std::optional<int> soc_temp_c;
+  // drone.rcf.delivery_pct / drone.rcf.uplink: the share of the GS's RCFs
+  // the drone accepted over ~10 s, and the state the compact bar colours
+  // it by (gs/src/uplink_delivery.h). Empty / kNone when the drone block
+  // is null/absent or the keys are missing or mistyped.
+  std::optional<int> uplink_pct;
+  GsUplink uplink = GsUplink::kNone;
   // link.ctl.rung.mcs / .ov_base x 100, falling back to link.op.mcs /
   // .overhead_base x 100 when the ladder block is absent -- which is the
   // normal, permanent state of a static-pinned link (link.static_mcs >= 0

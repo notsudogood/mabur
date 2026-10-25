@@ -7,6 +7,7 @@
 
 #include "colortrans.h"  // CubicLut
 #include "osd_raster.h"  // Surface (host-buildable; pulls in no DRM headers)
+#include "present_sink.h"
 #include "video_backend.h"
 
 namespace maburplay {
@@ -28,21 +29,33 @@ namespace maburplay {
 //
 // drop_all() exists for the flush-ordering contract: MppBackend::flush()/
 // mpi->reset() with DmaFrames still held by the presenter is an unverified
-// interaction, so the call site (main.cpp) MUST invoke presenter->drop_all()
-// -- returning every held frame to the backend -- BEFORE calling
-// backend->flush(). See main.cpp's flush_before handling for the exact
-// ordering.
+// interaction, so every held frame MUST be released BEFORE backend->flush().
+// The release thread calls drop_all() when it parks, and main.cpp parks it
+// (park_output) ahead of every flush, decoder re-creation and shutdown.
+//
+// Threads. present(), poll_events(), drop_all(), commit_osd_if_pending(),
+// set_paced() and the rest of the PresentSink surface are called from one
+// thread, the release thread, which owns every frame slot. prime() is
+// called from the decode-output thread, concurrently with them: it touches
+// only the framebuffer cache, which carries its own lock (fb_cache.h). The
+// osd_* calls come from the housekeeping thread; the OSD hand-off between
+// it and the release thread is atomic (see the OSD section). init(), the
+// splash, the colortrans installers and set_flip_sink() run before frames
+// flow (or, on a hotplug reacquire, while the release thread is parked).
+// The diagnostics getters are read by housekeeping for its stats lines
+// while the release thread runs: their counters are atomics and
+// present_timing() takes the window under its own lock.
 //
 // Deliberately free of <xf86drm.h>/<xf86drmMode.h> here -- same rationale
 // as mpp_backend.h: this header only needs DmaFrame from video_backend.h.
 // All libdrm includes and KMS state live behind the Impl pimpl in
 // drm_presenter.cpp.
-class DrmPresenter {
+class DrmPresenter : public PresentSink {
  public:
   using ReleaseFn = std::function<void(const DmaFrame&)>;
 
   DrmPresenter();
-  ~DrmPresenter();
+  ~DrmPresenter() override;
   DrmPresenter(const DrmPresenter&) = delete;
   DrmPresenter& operator=(const DrmPresenter&) = delete;
 
@@ -73,19 +86,34 @@ class DrmPresenter {
   // returns whether it was actually queued for scanout (false = dropped,
   // already released back via ReleaseFn -- either backpressure or a
   // commit error; not fatal, caller just keeps going).
-  bool present(const DmaFrame& frame);
+  bool present(const DmaFrame& frame) override;
+
+  // Imports the frame's dma-buf and adds its framebuffer to the cache, so
+  // the present() of this frame finds it there instead of paying the
+  // import + AddFB2 (milliseconds on the GS) inside the release lead. Does
+  // not take ownership and holds nothing of the frame but the cache entry.
+  // Called from the decode-output thread right after it hands the frame
+  // over; safe to race present() of the same frame (the cache keeps one
+  // framebuffer). Never evicts: what is pinned on screen is release-thread
+  // state, so present() keeps the cache within its bound.
+  void prime(const DmaFrame& frame);
 
   // Drains any pending DRM page-flip completion event (nonblocking) and
   // retires the previously-on-screen frame's buffer once its successor is
-  // confirmed showing. Call once per main-loop iteration, alongside the
-  // ring pump.
-  void poll_events();
+  // confirmed showing. The release thread calls it on every wake, the
+  // event fd's included. It commits no OSD: commit_osd_if_pending() is the
+  // caller's separate decision.
+  void poll_events() override;
+
+  // The DRM device fd: readable when a page-flip event is waiting for
+  // poll_events(). -1 before init().
+  int event_fd() const override;
 
   // Releases every frame currently held (on-screen + queued, if any) back
   // through ReleaseFn right now, and leaves the plane blanked -- nothing
   // shows again until the next present(). See the flush-ordering contract
   // in the class comment.
-  void drop_all();
+  void drop_all() override;
 
   // Startup splash. splash_surface() hands back the CPU mapping of a
   // dedicated full-mode XRGB8888 dumb buffer that init() allocated on the
@@ -119,11 +147,30 @@ class DrmPresenter {
   // osd_publish(). The buffer is attached to the next commit and the pair
   // swaps once that commit is issued. Any commit carrying the OSD plane is
   // vsync-paced -- an async page flip may only change FB_ID on one plane.
+  //
+  // Across threads: the osd_* calls run on the housekeeping thread, the
+  // commits on the release thread. The published flag, the back index and
+  // the plane id are atomics, and a commit swaps the index BEFORE it clears
+  // the flag, so a drawer that sees osd_publish_pending() false also sees
+  // the new back index. Draw only while osd_publish_pending() is false: a
+  // published back buffer belongs to the release thread until its commit,
+  // and after a nonblocking video commit carried it, the buffer the swap
+  // made the back stays on screen until that commit's flip completes --
+  // osd_publish_pending() stays true until then.
   bool osd_available() const;
   Surface osd_back_surface();      // CPU-writable; pixels == nullptr if none
   int osd_back_index() const;      // 0/1 -- picks the caller's ShadowGrid
   void osd_publish();              // back buffer is ready; shown on next commit
   int osd_front_prime_fd() const;  // committed buffer's dmabuf fd (Phase 2)
+  // A published back buffer has not been committed yet, or the commit that
+  // carried it has not flipped (release thread or housekeeping).
+  bool osd_publish_pending() const override;
+  // The standalone OSD commit: the published back buffer shown on its own,
+  // when no video commit is coming to carry it. Runs only when the OSD is
+  // pending, no flip is in flight, the CRTC is up with no splash on it, and
+  // video and the last OSD commit have both been quiet for 100 ms. Blocking
+  // (at most one vsync). Release thread.
+  void commit_osd_if_pending() override;
 
   // OSD-attributed atomic-commit failures. Deliberately NOT folded into
   // commit_errors(), which is video health: an OSD the driver refuses must
@@ -142,16 +189,16 @@ class DrmPresenter {
   // frame just waited in the single-slot mailbox or displaced one already
   // parked there. Superset of busy_replaced(), which counts only the
   // displacement case.
-  uint64_t mailbox_engagements() const;
+  uint64_t mailbox_engagements() const override;
 
   // Paced mode (vsync servo active): a parked mailbox frame is a release
   // that missed its latch -- resubmitting it at flip completion can only
   // latch a period late and self-sustains a one-vsync-late chain (hw), so
   // in paced mode it is dropped instead; the regulator's
-  // next on-grid release realigns immediately. The main loop refreshes
-  // this each tick from the regulator's servo state; unpaced (false)
-  // keeps the original park-and-resubmit behavior.
-  void set_paced(bool paced);
+  // next on-grid release realigns immediately. The release thread
+  // refreshes this on every wake from the regulator's servo state; unpaced
+  // (false) keeps the original park-and-resubmit behavior.
+  void set_paced(bool paced) override;
   uint64_t mailbox_dropped_paced() const;
 
   // What the last present() did, for frame.log's t_commit/pbits columns:
@@ -164,11 +211,8 @@ class DrmPresenter {
     kCommitFailed = 0x08,   // the commit ioctl failed (frame released)
     kCommitModeset = 0x10,  // blocking ALLOW_MODESET commit
   };
-  struct CommitInfo {
-    uint64_t t_commit_us = 0;
-    uint8_t bits = 0;
-  };
-  CommitInfo last_commit() const;
+  // CommitInfo is PresentSink's; its bits are these.
+  CommitInfo last_commit() const override;
 
   // Where present()'s time goes, per stage, over the frames since the
   // last call (then cleared): framebuffer acquire (the cached dma-buf
@@ -181,13 +225,13 @@ class DrmPresenter {
   };
   PresentTiming present_timing();
 
-  // Vsync timestamp sink for LatTracker: called at the pending ->
-  // on_screen promotion inside on_flip() with the frame's pts and the
+  // The frame that just reached the glass: called at the pending ->
+  // on_screen promotion inside on_flip() with the frame itself and the
   // kernel-reported (or, absent DRM_CAP_TIMESTAMP_MONOTONIC, mono_us()
   // fallback) flip time. Watchdog force-completes (on_flip(false), no real
   // kernel event) do NOT call this -- those frames simply age out of
   // LatTracker's bounded map, same as any other frame that never flips.
-  using FlipSink = std::function<void(uint32_t pts_us, uint64_t flip_mono_us, bool exact)>;
+  using FlipSink = std::function<void(const DmaFrame& f, uint64_t flip_mono_us, bool exact)>;
   void set_flip_sink(FlipSink sink);
   // True once init() has confirmed the kernel reports real
   // CLOCK_MONOTONIC page-flip timestamps (DRM_CAP_TIMESTAMP_MONOTONIC).

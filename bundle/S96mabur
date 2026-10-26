@@ -59,10 +59,12 @@ same() {
 # under an older image (by hand, setch, maburcal) would hide every default
 # the new image changed -- and a key it lacks takes the code default, not
 # the bundle's. So once per image: an edited $CONF is copied to
-# $BACKUP_DIR/mabur.toml.oldN, the image's default replaces it, and the
-# radio's own TX-power calibration (maburcal's four [radio] lines) is
-# carried over when it is in use. Edits made on THIS image stay ($STAMP
-# matches the image). touch $KEEP to never refresh.
+# $BACKUP_DIR/mabur.toml.oldN, the image's default replaces it, and what
+# belongs to this drone's own radio is carried over: the TX-power
+# calibration (maburcal's four [radio] lines) when it is in use, and a
+# wide_igi_floor set by hand (the 40 MHz stall fix is per radio unit: one
+# 8812EU needs it, another never stalls). Edits made on THIS image stay
+# ($STAMP matches the image). touch $KEEP to never refresh.
 refresh_config() {
   [ -f "$IMAGE_CONF" ] || return 0              # no image copy (bench host): nothing to do
   if [ ! -f "$CONF" ]; then
@@ -83,14 +85,20 @@ refresh_config() {
   while [ -e "$BACKUP_DIR/mabur.toml.old$n" ]; do n=$((n + 1)); done
   old="$BACKUP_DIR/mabur.toml.old$n"
   cp "$CONF" "$old" || { echo "mabur config: cannot back up $CONF, kept as is"; return 0; }
-  carried=""
+  kept=""
+  : > "$CONF.carry"
   if grep -q '^[[:space:]]*power_mode[[:space:]]*=[[:space:]]*"offset"' "$old"; then
     grep -E '^[[:space:]]*(power_mode|rate_walls_rel|legacy_wall_rel|wall_margin_db)[[:space:]]*=' "$old" \
-      > "$CONF.carry"
-    carried=" (TX-power calibration kept)"
-  else
-    : > "$CONF.carry"
+      >> "$CONF.carry"
+    kept="TX-power calibration"
   fi
+  # A set floor: 0 (off) or 1..127. -1 is "the image's default", so the new
+  # image decides.
+  if grep -qE '^[[:space:]]*wide_igi_floor[[:space:]]*=[[:space:]]*[0-9]' "$old"; then
+    grep -E '^[[:space:]]*wide_igi_floor[[:space:]]*=' "$old" | head -1 >> "$CONF.carry"
+    kept="${kept:+$kept and }wide_igi_floor"
+  fi
+  carried=${kept:+ ($kept kept)}
   # Each carried line replaces the first line of the same key in the new file.
   awk 'FILENAME == ARGV[1] { k = $1; sub(/=.*/, "", k); keep[k] = $0; next }
        { k = $1; sub(/=.*/, "", k)

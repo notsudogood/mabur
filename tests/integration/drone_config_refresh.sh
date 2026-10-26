@@ -34,9 +34,24 @@ grep -q 'legacy_wall_rel = 58' "$T/mabur.toml" || fail "legacy wall not carried"
 grep -q 'channels = \[36, 108, 116, 132\]' "$T/mabur.toml" || fail "the rest is not the new default"
 [ "$(grep -c rate_walls_rel "$T/mabur.toml")" = 1 ] || fail "duplicated key"
 [ -e "$T/mabur.toml.old2" ] || fail "second backup missing"
-# 6. Opt-out: a new image leaves the edited file alone.
+# 6. A hand-set gain floor (per radio unit) carries; the image's -1 does not.
+sed -i 's/36, 108/36, 110/' "$T/rom.toml"
+printf 'wide_igi_floor = -1    # the image default\n' >> "$T/rom.toml"
+cp "$T/rom.toml" "$T/mabur.toml"; cp "$T/rom.toml" "$T/mabur.toml.image"
+sed -i 's/^wide_igi_floor *=.*/wide_igi_floor = 53/' "$T/mabur.toml"
+sed -i 's/36, 110/36, 111/' "$T/rom.toml"
+run
+grep -q '^wide_igi_floor = 53$' "$T/mabur.toml" || fail "hand-set floor not carried"
+grep -q 'channels = \[36, 111, 116, 132\]' "$T/mabur.toml" || fail "the rest is not the new default (floor)"
+[ "$(grep -c wide_igi_floor "$T/mabur.toml")" = 1 ] || fail "duplicated floor key"
+sed -i 's/36, 111/36, 112/' "$T/rom.toml"
+sed -i 's/^wide_igi_floor *=.*/wide_igi_floor = -1/' "$T/mabur.toml"
+sed -i 's/^channels = .*/channels = [157]/' "$T/mabur.toml"
+run
+grep -q '^wide_igi_floor = -1    # the image default$' "$T/mabur.toml" || fail "image-default floor was carried"
+# 7. Opt-out: a new image leaves the edited file alone.
 sed -i 's/channels = .*/channels = [157]/' "$T/mabur.toml"
-sed -i 's/36, 108/36, 112/' "$T/rom.toml"
+sed -i 's/36, 112/36, 113/' "$T/rom.toml"
 touch "$T/keep"
 run; grep -q 'channels = \[157\]' "$T/mabur.toml" || fail "keep file ignored"
 echo "drone config refresh: OK"

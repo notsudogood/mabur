@@ -101,8 +101,10 @@ image's default:
   `/etc/mabur.toml` that differs from the image's `/rom/etc/mabur.toml` and
   was not edited under this image (`/etc/mabur.toml.image` holds the default
   it was last refreshed from) is copied to `/root/mabur.toml.oldN` and
-  replaced, with maburcal's four `[radio]` calibration lines carried over
-  when `power_mode = "offset"`. `/etc/mabur.keep` opts out; each refresh is
+  replaced, with what belongs to this drone's own radio carried over:
+  maburcal's four `[radio]` calibration lines when `power_mode = "offset"`,
+  and `radio.wide_igi_floor` when it is set (0..127, not the image's -1),
+  because the 40 MHz stall fix is per radio unit. `/etc/mabur.keep` opts out; each refresh is
   one line in `/root/mabur-config.log`. `bundle/install.sh` stamps a bench
   drone's config as made on its image. Hand-installing a newer `mabur.toml`
   over an older image needs the same stamp

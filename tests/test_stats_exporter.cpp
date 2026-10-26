@@ -1399,4 +1399,30 @@ TEST(camera_keys_exported) {
   CHECK(j["camera_request"]["wish"] == 1 && j["camera_request"]["last"] == 2);
   CHECK(j["camera_request"]["result"] == "sent");
 }
+TEST(calibration_keys_exported) {
+  Capture cap;
+  StatsExporter ex(1, 500, cap.fn());
+  StatsInput in = base_input();
+  ex.poll(1000, in);
+  json j = cap.last();
+  CHECK(j["calibration"]["state"] == "idle" && j["calibration"]["pct"].is_null());
+  CHECK(j["calibration"]["start"] == "" && j["calibration"]["start_n"] == 0);
+  mabur::rc::Telem t;
+  t.tlm_seq = 1; t.state = 2;
+  t.flags = mabur::rc::kTelemCalibrated;
+  in.telem = t; in.telem_rx_ms = 1400;
+  in.cal_state = "sweep"; in.cal_pct = 40; in.cal_start = "ok started"; in.cal_start_n = 2;
+  in.cal_off = "sent";
+  ex.poll(1500, in);
+  j = cap.last();
+  CHECK(j["drone"]["cal"]["calibrated"] == true && j["drone"]["cal"]["refused_armed"] == false);
+  CHECK(j["calibration"]["state"] == "sweep" && j["calibration"]["pct"] == 40);
+  CHECK(j["calibration"]["start"] == "ok started" && j["calibration"]["start_n"] == 2);
+  CHECK(j["calibration"]["off"] == "sent");
+  t.tlm_seq = 2; t.flags = mabur::rc::kTelemArmRefused;
+  in.telem = t; in.telem_rx_ms = 2400;
+  ex.poll(2500, in);
+  j = cap.last();
+  CHECK(j["drone"]["cal"]["calibrated"] == false && j["drone"]["cal"]["refused_armed"] == true);
+}
 MTEST_MAIN

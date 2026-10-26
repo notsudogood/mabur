@@ -319,6 +319,23 @@ fields once per `drone.tlm_seq` (`flightreport.py` does).
   with a stale arm report, `unavailable`, `bad_config`, `rolled_back`,
   `switched`), `about`: the preset it is about (15 = none).
 
+- `cal = {calibrated, refused_armed}` — the drone flies a calibrated
+  TX-power shape (Telem flags bit5, its live `radio.power_mode` is
+  `"offset"`); it refused to start a calibration in the last 5 s because
+  its FC reports armed (bit2). `docs/calibration.md` "From the GS menu".
+
+Top-level `calibration = {state, pct, start, start_n, fail, off}` is the
+GS's calibration session for the menu's Settings tab: `state` as `maburcal
+status` spells it (`idle`, `await_ack`, `sweep`, `analyze`, `result`,
+`verify`, `done`, `failed`), `pct` the share of the planned cells measured
+(null before a plan), `start` CalControl's reply to the menu's last start
+(`ok started` / `err ...`) and `start_n` how many the menu has sent, `fail`
+the last run's failure reason, `off` the "remove calibration" request (`""`,
+`sent`, `removed`, `timeout`). maburgs logs `calibration start from the
+player -> <reply>` and `remove calibration: <result>`; maburd logs `maburd
+cal: start refused: the FC reports armed` and `maburd cal: calibration
+removed by the GS menu`.
+
 Top-level `camera_request = {wish, last, result}` is maburgs' own side of
 the same request (`gs/src/camera_request.h`): the preset it is asking for
 in every RCF (`null` = none), the preset the last settled request was for,

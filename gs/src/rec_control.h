@@ -108,6 +108,12 @@ class RecControl {
       have_phase_ = true;
       return false;
     }
+    // "cal start" / "cal off": the menu's Settings tab (calibrate, remove
+    // the calibration), queued for take_calibration().
+    if (s == "cal start" || s == "cal off") {
+      calibration_.push_back(s.substr(4));
+      return false;
+    }
     static const std::string kCamera = "camera ";
     if (s.size() > kCamera.size() && s.compare(0, kCamera.size(), kCamera) == 0) {
       const std::string v = s.substr(kCamera.size());
@@ -127,6 +133,13 @@ class RecControl {
     known_ = true;
     on_ = on;
     return changed;
+  }
+
+  // Calibration commands ("start" / "off") since the last call, in order.
+  std::vector<std::string> take_calibration() {
+    std::vector<std::string> out;
+    out.swap(calibration_);
+    return out;
   }
 
   // Camera preset requests received since the last call, in arrival order.
@@ -163,6 +176,7 @@ class RecControl {
   bool on_ = false;
   std::vector<std::string> refresh_;
   std::vector<uint8_t> camera_;
+  std::vector<std::string> calibration_;
   int16_t phase_ = 0;
   uint64_t phase_ms_ = 0;
   bool have_phase_ = false;

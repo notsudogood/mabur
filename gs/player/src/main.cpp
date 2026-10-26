@@ -1872,6 +1872,9 @@ int main(int argc, char** argv) {
   // The camera_request.result last seen; unset until the first datagram, so
   // an outcome maburgs settled before this player started is not announced.
   std::optional<std::string> cam_result_seen;
+  // The calibration state last seen on the sideport (unset until the first
+  // datagram, so nothing settled before this player started is announced).
+  std::optional<maburplay::GsMenuModel::CalSeen> cal_seen;
   // Both overlays' state for the composer, filled by the two intake blocks
   // and consumed by the single composition block after them.
   [[maybe_unused]] bool msp_ready = false;
@@ -1931,7 +1934,26 @@ int main(int argc, char** argv) {
                        static_cast<unsigned>(cam), mabur::cam::preset(cam)->label);
           menu_model->set_status("Camera: asked the drone to switch", mnow);
         }
-        if (!menu_model->take_settings_applied()) continue;
+        // Settings tab: a calibration start or removal also goes to maburgs
+        // (the run is its CalSession; the removal rides every RCF). Not
+        // together with a link change, whose maburgs restart would drop it.
+        const bool link_applied = menu_model->take_settings_applied();
+        using CalAction = maburplay::GsMenuModel::CalAction;
+        const CalAction cal_action = menu_model->take_cal_applied();
+        if (cal_action != CalAction::None) {
+          if (link_applied || cam != mabur::cam::kNoWish) {
+            std::fprintf(stderr, "maburplay: menu calibration action held back (applied with "
+                                 "other changes)\n");
+          } else {
+            const bool start = cal_action == CalAction::Start;
+            core_ctl.send_line(start ? "cal start" : "cal off");
+            std::fprintf(stderr, "maburplay: menu calibration %s requested\n",
+                         start ? "start" : "removal");
+            menu_model->set_status(start ? "Calibration: asking the drone" : "Calibration: removing",
+                                   mnow);
+          }
+        }
+        if (!link_applied) continue;
         const maburplay::GsMenuSettings& s = menu_model->current();
         maburgs::GsMenuChoice choice;
         choice.hop = s.hop;
@@ -2204,6 +2226,28 @@ int main(int argc, char** argv) {
         // into a new mode is exactly when the link is quiet).
         const maburplay::GsSnapshot& sn = gs_src->snapshot();
         if (!gs_stale) menu_model->set_camera(sn.cam_cur ? *sn.cam_cur : -1, sn.cam_now, sn.cam_switch);
+        {
+          const bool running = sn.cal_state != "" && sn.cal_state != "idle" &&
+                               sn.cal_state != "done" && sn.cal_state != "failed";
+          menu_model->set_calibration(sn.calibrated, running, sn.cal_pct ? *sn.cal_pct : -1);
+          maburplay::GsMenuModel::CalSeen now_seen;
+          now_seen.state = sn.cal_state;
+          now_seen.start = sn.cal_start;
+          now_seen.start_n = sn.cal_start_n;
+          now_seen.fail = sn.cal_fail;
+          now_seen.off = sn.cal_off;
+          now_seen.pct = sn.cal_pct;
+          now_seen.calibrated = sn.calibrated;
+          now_seen.refused_armed = sn.cal_refused_armed;
+          if (cal_seen) {
+            const std::string msg = maburplay::GsMenuModel::calibration_event_text(*cal_seen, now_seen);
+            if (!msg.empty()) {
+              std::fprintf(stderr, "maburplay: %s\n", msg.c_str());
+              menu_model->set_status(msg, now_ms);
+            }
+          }
+          cal_seen = now_seen;
+        }
         if (!cam_result_seen) cam_result_seen = sn.cam_result;
         if (sn.cam_result != *cam_result_seen) {
           cam_result_seen = sn.cam_result;

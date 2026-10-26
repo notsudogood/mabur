@@ -14,7 +14,10 @@
 //   [ Apply ] [ Close ]
 //   help line for the selection
 //
-//   Settings tab: one cell, Bandwidth < Wide >  (Left/Right/Centre change it)
+//   Settings tab: Bandwidth < Wide > (Centre changes it), Calibrate (measure
+//   this drone's TX-power walls, maburcal's run: ~2 min without video, only
+//   while disarmed) and Remove cal (back to the radio's stock TX power,
+//   live). Either calibration action is staged like any choice.
 //
 //   Camera tab: the presets of mabur/camera_presets.h. Grey = the one the
 //   drone runs, green dot = the one chosen, dim = this drone cannot (its
@@ -23,10 +26,12 @@
 //   FC is not armed.
 //
 // Up/Down move between rows (wrapping). Changes are staged until Apply,
-// which restarts the link (~5 s) for link settings and asks the drone for a
-// camera preset; Close, or kIdleMs without a press, drops them.
+// which restarts the link (~5 s) for link settings, asks the drone for a
+// camera preset, or starts / removes a calibration; Close, or kIdleMs
+// without a press, drops them.
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -96,6 +101,7 @@ class GsMenuModel {
         col_ = 0;
         pending_ = current_;
         pending_cam_ = mabur::cam::kNoWish;
+        pending_cal_ = CalAction::None;
         ++version_;
       }
       return Action::None;
@@ -140,6 +146,58 @@ class GsMenuModel {
     cam_now_ = now_mask;
     cam_switch_ = switch_mask;
     ++version_;
+  }
+
+  // The drone's calibration as the stats sideport reports it (drone.cal,
+  // calibration): whether it flies a calibrated TX-power shape (empty = not
+  // reported), whether a run is going and its measured share (-1 = none).
+  void set_calibration(std::optional<bool> calibrated, bool running, int pct) {
+    if (calibrated == calibrated_ && running == cal_running_ && pct == cal_pct_) return;
+    calibrated_ = calibrated;
+    cal_running_ = running;
+    cal_pct_ = pct;
+    ++version_;
+  }
+
+  enum class CalAction { None, Start, Remove };
+  CalAction take_cal_applied() {
+    const CalAction a = cal_applied_;
+    cal_applied_ = CalAction::None;
+    return a;
+  }
+  CalAction pending_cal() const { return pending_cal_; }
+
+  // What the sideport says about calibration, for calibration_event_text.
+  struct CalSeen {
+    std::string state, start, fail, off;
+    int start_n = 0;
+    std::optional<int> pct;
+    std::optional<bool> calibrated;
+    bool refused_armed = false;
+  };
+  // The status line for what changed between two sideport readings ("" for
+  // nothing worth showing): a refused or failed start, the run's progress
+  // in 10 % steps, its end, the "remove" request's outcome.
+  static std::string calibration_event_text(const CalSeen& was, const CalSeen& now) {
+    if (now.start_n != was.start_n && now.start.rfind("err ", 0) == 0)
+      return "Calibration not started: " + now.start.substr(4);
+    if (now.refused_armed && !was.refused_armed)
+      return "Calibration refused: the drone is armed - disarm first";
+    if (now.off != was.off) {
+      if (now.off == "removed") return "Calibration removed: stock TX power";
+      if (now.off == "timeout") return "Remove calibration: no answer from the drone";
+    }
+    if (now.state != was.state) {
+      if (now.state == "await_ack") return "Calibrating: about 2 min without video";
+      if (now.state == "done") return "Calibration done: video back in a few seconds";
+      if (now.state == "failed")
+        return "Calibration failed" + (now.fail.empty() ? std::string() : ": " + now.fail);
+    }
+    if (now.pct && (now.state == "sweep" || now.state == "verify") &&
+        (!was.pct || *now.pct / 10 != *was.pct / 10))
+      return "Calibrating: " + std::to_string(*now.pct) + " %";
+    if (was.calibrated == false && now.calibrated == true) return "Calibration in use";
+    return "";
   }
 
   // What the last Apply asked for, each consumed once: whether the link
@@ -223,8 +281,25 @@ class GsMenuModel {
       c.label = "Bandwidth";
       c.value = wide_ok_ ? (pending_.wide ? "< Wide >" : "< Normal >") : "Normal";
       c.dim = !wide_ok_;
-      c.focus = row_ == kRowFirst;
+      c.focus = row_ == kRowFirst && col_ == 0;
       v.cells.push_back(c);
+      GsMenuCell cal;
+      cal.label = "Calibrate";
+      cal.value = cal_running_ ? (cal_pct_ >= 0 ? "running " + std::to_string(cal_pct_) + " %"
+                                                : std::string("running"))
+                               : std::string("measure TX");
+      cal.dim = cal_running_;
+      cal.active = cal_running_;
+      cal.marked = pending_cal_ == CalAction::Start;
+      cal.focus = row_ == kRowFirst && col_ == 1;
+      v.cells.push_back(cal);
+      GsMenuCell rm;
+      rm.label = "Remove cal";
+      rm.value = !calibrated_ ? "no link" : (*calibrated_ ? "in use" : "not in use");
+      rm.dim = calibrated_ != true || cal_running_;
+      rm.marked = pending_cal_ == CalAction::Remove;
+      rm.focus = row_ == kRowFirst && col_ == 2;
+      v.cells.push_back(rm);
     } else {
       v.title = "Camera";
       v.cols = static_cast<int>(mabur::cam::kNumPresets);
@@ -245,7 +320,8 @@ class GsMenuModel {
         v.cells.push_back(c);
       }
     }
-    const bool changed = !(pending_ == current_) || pending_cam_ != mabur::cam::kNoWish;
+    const bool changed = !(pending_ == current_) || pending_cam_ != mabur::cam::kNoWish ||
+                         pending_cal_ != CalAction::None;
     GsMenuCell apply, close;
     apply.label = changed ? "Apply" : "No change";
     apply.dim = !changed;
@@ -272,6 +348,7 @@ class GsMenuModel {
   int row_cols_() const {
     if (row_ == buttons_row_()) return 2;
     if (on_presets_()) return static_cast<int>(mabur::cam::kNumPresets);
+    if (tab_ == Tab::Settings && row_ == kRowFirst) return 3;
     if (on_channels_()) {
       const int left = static_cast<int>(channels_.size()) - (row_ - kRowFirst - 1) * kCols;
       return left < kCols ? left : kCols;
@@ -305,9 +382,7 @@ class GsMenuModel {
       col_ = 0;
     } else if (tab_ == Tab::Channel && row_ == kRowFirst) {
       pending_.hop = !pending_.hop;
-    } else if (tab_ == Tab::Settings && row_ == kRowFirst) {
-      if (wide_ok_) pending_.wide = !pending_.wide;
-    } else if (on_presets_()) {
+    } else if (on_presets_() || (tab_ == Tab::Settings && row_ == kRowFirst)) {
       const int n = row_cols_();
       col_ = (col_ + n + dir) % n;
     } else {
@@ -321,15 +396,33 @@ class GsMenuModel {
       row_ = kRowFirst;
       enter_row_();
     } else if (row_ == buttons_row_()) {
-      if (col_ == 0 && (!(pending_ == current_) || pending_cam_ != mabur::cam::kNoWish)) {
+      if (col_ == 0 && (!(pending_ == current_) || pending_cam_ != mabur::cam::kNoWish ||
+                        pending_cal_ != CalAction::None)) {
         settings_applied_ = !(pending_ == current_);
         camera_applied_ = pending_cam_;
+        cal_applied_ = pending_cal_;
         current_ = pending_;
         pending_cam_ = mabur::cam::kNoWish;
+        pending_cal_ = CalAction::None;
         open_ = false;
         return Action::Apply;
       }
       open_ = false;   // Close, or Apply with nothing to apply
+    } else if (tab_ == Tab::Settings && row_ == kRowFirst) {
+      // Bandwidth toggles; a calibration action is chosen or, pressed again,
+      // cleared (one at a time). Calibrate while a run is going, or Remove
+      // on a drone that is not calibrated (or has not said), does nothing.
+      if (col_ == 0) {
+        if (wide_ok_) pending_.wide = !pending_.wide;
+      } else if (col_ == 1) {
+        pending_cal_ = pending_cal_ == CalAction::Start ? CalAction::None
+                       : cal_running_                  ? pending_cal_
+                                                       : CalAction::Start;
+      } else {
+        pending_cal_ = pending_cal_ == CalAction::Remove                 ? CalAction::None
+                       : (calibrated_ == true && !cal_running_)           ? CalAction::Remove
+                                                                          : pending_cal_;
+      }
     } else if (on_presets_()) {
       // A preset this drone can run (now or after a driver switch) becomes
       // the choice; the running one, or pressing the choice again, clears it.
@@ -370,11 +463,19 @@ class GsMenuModel {
   std::string help_(uint8_t live) const {
     const bool link_changed = !(pending_ == current_);
     const bool cam_changed = pending_cam_ != mabur::cam::kNoWish;
-    const bool changed = link_changed || cam_changed;
+    const bool cal_changed = pending_cal_ != CalAction::None;
+    const bool changed = link_changed || cam_changed || cal_changed;
     if (row_ == kRowTabs)
       return "Left/Right: Channel, Settings or Camera. Down or Centre: into the tab.";
     if (row_ == buttons_row_()) {
       if (col_ == 0) {
+        if (cal_changed && (link_changed || cam_changed))
+          return "Apply: link and camera changes first; apply the calibration again once video "
+                 "is back.";
+        if (pending_cal_ == CalAction::Start)
+          return "Apply: start calibrating (about 2 min without video; refused while armed).";
+        if (pending_cal_ == CalAction::Remove)
+          return "Apply: remove the calibration (stock TX power, live, no video gap).";
         if (link_changed && cam_changed)
           return "Apply: restart the link, then the drone switches camera (no picture for "
                  "about 30 s).";
@@ -400,8 +501,18 @@ class GsMenuModel {
       if (p->fps > 60) s += " Smoothest on a screen at that rate.";
       return s;
     }
+    if (tab_ == Tab::Settings && col_ == 1)
+      return cal_running_ ? "A calibration is running: no video until it ends."
+                          : "Calibrate: measure this drone's TX power limits (about 2 min without "
+                            "video). Disarmed, props off, link up. Replaces any calibration.";
+    if (tab_ == Tab::Settings && col_ == 2) {
+      if (!calibrated_) return "The drone has not reported its calibration (no link yet).";
+      return *calibrated_ ? "Remove cal: back to the radio's stock TX power, live. Calibrate again "
+                            "to measure it anew."
+                          : "This drone flies its radio's stock TX power: nothing to remove.";
+    }
     if (tab_ == Tab::Settings)
-      return wide_ok_ ? "Normal: 20 and 40 MHz, up to 25 Mbps. Wide: adds 80 MHz, up to 40 Mbps. "
+      return wide_ok_ ? "Normal: 20 and 40 MHz, up to 25 Mbps. Wide: adds 80 MHz, up to 45 Mbps. "
                         "Both switch width by themselves as the signal changes."
                       : "Bandwidth is fixed: radio.width in maburgs.toml must be 80 for Wide.";
     if (row_ == kRowFirst)
@@ -424,6 +535,11 @@ class GsMenuModel {
   int cam_cur_ = -1;            // the preset the drone runs (-1 = not reported)
   int cam_now_ = 0, cam_switch_ = 0;
   uint8_t pending_cam_ = mabur::cam::kNoWish;
+  std::optional<bool> calibrated_;
+  bool cal_running_ = false;
+  int cal_pct_ = -1;
+  CalAction pending_cal_ = CalAction::None;
+  CalAction cal_applied_ = CalAction::None;
   bool settings_applied_ = false;
   uint8_t camera_applied_ = mabur::cam::kNoWish;
   GsMenuSettings current_, pending_;

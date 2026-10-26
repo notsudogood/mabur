@@ -113,6 +113,22 @@ TEST(start_refuses_without_capability) {
   CHECK(err.find("CAP_CALIBRATE") != std::string::npos);
 }
 
+// The stats sideport's `calibration` block (the GS menu): state names as
+// `status` spells them, and the measured share of the plan.
+TEST(state_name_and_progress_pct) {
+  CalSession s(CalSessionCfg{});
+  CHECK(std::string(s.state_name()) == "idle");
+  CHECK(s.progress_pct() == -1);
+  CHECK(std::string(s.fail_reason()).empty());
+  s.set_peer(true, true);
+  std::string err;
+  REQUIRE(s.start(1, 0, &err));
+  CHECK(std::string(s.state_name()) == "await_ack");
+  CHECK(s.progress().find("state=await_ack") == 0);
+  const int pct = s.progress_pct();
+  CHECK(pct == -1 || pct == 0);
+}
+
 TEST(start_refuses_while_a_session_runs) {
   CalSession s(CalSessionCfg{});
   s.set_peer(true, true);

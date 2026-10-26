@@ -1,5 +1,6 @@
 #include <string>
 #include <vector>
+#include "cal_off_request.h"
 #include "camera_request.h"
 #include "mtest.h"
 #include "rec_control.h"
@@ -136,5 +137,32 @@ TEST(camera_request_times_out) {
   CHECK(r.wire(CameraRequest::kTimeoutMs) == 1);
   CHECK(r.wire(CameraRequest::kTimeoutMs + 1) == cam::kNoWish);
   CHECK(std::string(r.result()) == "timeout" && r.last() == 1);
+}
+TEST(rec_control_calibration_lines) {
+  RecControl c;
+  CHECK(!c.apply("cal start"));
+  CHECK(!c.apply("cal off\n"));
+  CHECK(!c.apply("cal"));
+  CHECK(!c.apply("cal now"));
+  const std::vector<std::string> got = c.take_calibration();
+  REQUIRE(got.size() == 2);
+  CHECK(got[0] == "start" && got[1] == "off");
+  CHECK(c.take_calibration().empty());
+  CHECK(c.wire() == 0);
+}
+
+TEST(cal_off_request_held_until_the_drone_is_uncalibrated) {
+  maburgs::CalOffRequest r;
+  CHECK(r.wire(0) == 0 && std::string(r.result()).empty());
+  r.request(1000);
+  CHECK(r.wire(1000) == 1 && std::string(r.result()) == "sent");
+  r.on_telem(true, 1500);                // still calibrated: held
+  CHECK(r.wire(1500) == 1);
+  r.on_telem(false, 2000);
+  CHECK(r.wire(2000) == 0 && std::string(r.result()) == "removed");
+  r.request(5000);
+  CHECK(r.wire(5000 + maburgs::CalOffRequest::kTimeoutMs) == 1);
+  CHECK(r.wire(5001 + maburgs::CalOffRequest::kTimeoutMs) == 0);
+  CHECK(std::string(r.result()) == "timeout");
 }
 MTEST_MAIN

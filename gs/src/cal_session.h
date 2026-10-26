@@ -111,6 +111,12 @@ class CalSession {
   const std::array<RateWall, 8>& walls() const { return final_walls_; }
 
   std::string progress() const;
+  // For the stats sideport (the GS menu's Settings tab): the state as the
+  // `status` command spells it, the share of the planned cells measured so
+  // far (-1 before a plan exists), and why the last run failed ("" if not).
+  const char* state_name() const;
+  int progress_pct() const;
+  const char* fail_reason() const { return fail_reason_; }
 
   // Operator or watchdog abort: drops straight back to Idle and reopens the
   // air immediately, from any state.

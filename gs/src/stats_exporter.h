@@ -346,6 +346,15 @@ struct StatsInput {
   // JSON "rtt": null.
   std::optional<StatsRttIn> rtt;
 
+  // Settings tab: the calibration session (CalSession) and the "remove"
+  // request (CalOffRequest), top-level `calibration`.
+  const char* cal_state = "idle";
+  int cal_pct = -1;
+  std::string cal_start;      // CalControl's reply to the menu's last "start"
+  uint32_t cal_start_n = 0;   // starts the menu has sent
+  const char* cal_fail = "";
+  const char* cal_off = "";
+
   // Camera tab: the request maburgs holds (CameraRequest).
   uint8_t cam_wish = 0xFF;
   uint8_t cam_last = 0xFF;

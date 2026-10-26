@@ -146,6 +146,19 @@ bool walls_in_range(const CalWrite& w, double margin_db, std::string* why);
 ApplyResult apply_calibration(const std::string& path, const CalWrite& w,
                                double margin_db, std::string* err);
 
+// The GS menu's "Remove calibration": radio.power_mode back to "none" (the
+// radio's stock TX power), the walls left in the file but inert, through
+// the same verify-then-publish steps as apply_calibration, the original
+// backed up to "<path>.pre-uncal". Ok without writing anything when
+// power_mode is not "offset". KeyNotFound when the file has no
+// `power_mode = "..."` line to rewrite.
+ApplyResult remove_calibration(const std::string& path, std::string* err);
+
+// `text` with its first `power_mode = "..."` line set to "none" (spacing
+// and trailing comment kept). *found: such a line exists; *was_offset: it
+// read "offset". Exposed for the tests.
+std::string unpatch_power_mode(const std::string& text, bool* found, bool* was_offset);
+
 // Test-only seam: same as apply_calibration, but writes deliberate garbage
 // to "<path>.new" instead of the patched config (bypassing patch_toml and
 // its required-key check entirely), so the verify-then-refuse path can be

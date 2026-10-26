@@ -56,3 +56,27 @@ both: maburgs restarts for the link setting, then the drone switches.
 The cells are filled from the stats sideport (`drone.camera`), so they read
 `not here` everywhere until the link is up, or with a drone image from
 before RC_VERSION 17 (which will not link anyway).
+
+## Settings tab: calibration
+
+Next to Bandwidth (which Centre now toggles: Left/Right move between the
+three cells) sit two calibration cells, for A/B testing maburcal from the
+goggles:
+
+| Cell | Centre stages it; Apply does it |
+|---|---|
+| Calibrate (`measure TX`, `running 40 %` while a run goes) | the same run as `maburcal start` on the GS: ~2 min without video, the drone must be linked and disarmed. Replaces any calibration the drone had |
+| Remove cal (`in use` / `not in use` / `no link`) | the drone goes back to its radio's stock TX power, live, with no restart and no video gap. Dim when the drone is not calibrated or has not said |
+
+One calibration action at a time; pressing the staged one again clears it.
+Applied together with a link change or a camera preset, the calibration
+action is held back (the link change restarts maburgs, which would drop
+it): apply it again once video is back.
+
+The status line follows the run: `Calibrating: about 2 min without video`,
+`Calibrating: 40 %` every 10 %, `Calibration done: video back in a few
+seconds`, `Calibration failed: <why>`, `Calibration not started: <why>`
+(not linked, a run already going), `Calibration refused: the drone is armed -
+disarm first`, `Calibration removed: stock TX power`, `Calibration in use`.
+
+How it works: `docs/calibration.md` "From the GS menu".

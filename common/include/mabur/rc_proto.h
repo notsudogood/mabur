@@ -63,7 +63,9 @@ constexpr uint16_t RC_MAGIC = 0x5243;  // "RC"
 // Bumped 15 -> 16: RCF gains snr_off (phase lock: the GS's sensor-rate
 // steering offset, level-triggered in every RCF).
 // Bumped 16 -> 17: RCF gains cam (the GS menu's camera preset request) and
-// Telem gains cam_cur/cam_now/cam_switch/cam_state (mabur/camera_presets.h).
+// cal_off (its "remove calibration" request); Telem gains cam_cur/cam_now/
+// cam_switch/cam_state (mabur/camera_presets.h) and flags bit5 calibrated /
+// bit2 arm_refused.
 constexpr uint8_t RC_VERSION = 17;
 
 // RCF probe_profile sentinel: the drone runs no probe stream.
@@ -101,6 +103,8 @@ constexpr size_t kTagLen = 8;
 
 constexpr uint8_t kAckKeyMismatch = 0x01;   // DiscAck::flags bit0
 constexpr uint8_t kTelemAuthReject = 0x02;  // Telem::flags bit1
+constexpr uint8_t kTelemArmRefused = 0x04;  // Telem::flags bit2
+constexpr uint8_t kTelemCalibrated = 0x20;  // Telem::flags bit5
 
 // Values hashed into a control frame's tag but never sent on the wire
 // (link pairing): the VRX/VTX nonces from the completed
@@ -171,6 +175,12 @@ struct Rcf {
   // the drone acts on a CHANGE to a preset it does not run, and only while
   // the FC is not armed (a switch reboots the drone).
   uint8_t cam = 0xFF;
+
+  // "Remove calibration" (the GS menu's Settings tab): 1 = the GS asks the
+  // drone to fly its radio's stock TX power (radio.power_mode = "none"),
+  // 0 = no request. Level-triggered in every RCF until the drone's Telem
+  // stops reporting kTelemCalibrated; acting on it is idempotent.
+  uint8_t cal_off = 0;
 };
 
 // VRX -> VTX discovery beacon (rendezvous), addressed to a VTX_ID.
@@ -232,7 +242,11 @@ struct Telem {
                       //      verification this telemetry period. One period around a
                       //      drone restart is the expected transient; sustained = bug or
                       //      two controllers.
-                      // bits 2, 5 unused.
+                      // bit2 arm_refused: the drone refused to START a calibration in the
+                      //      last 5 s because the FC reports armed (or a reporting FC went
+                      //      quiet) -- a run is ~2 min without video
+                      // bit5 calibrated: the drone flies a calibrated TX-power shape
+                      //      (radio.power_mode = "offset" in its live config)
   uint16_t rcf_age_ms = 0;  // saturating
   // link-rtt: seq of the RCF rcf_age_ms is aging against, so
   // the GS can subtract the send time of the RIGHT frame (repeats are 10 ms

@@ -329,6 +329,10 @@ bool write_file_atomic(const std::string& path, const std::string& content) {
 // will read. Verifying "<path>.new" BEFORE it is ever renamed onto `path`
 // removes the window instead of narrowing it: every crash point below
 // leaves either the untouched original or bytes already proven loadable.
+ApplyResult publish_verified(const std::string& path, const std::string& original,
+                             const std::string& content, const std::string& backup_suffix,
+                             std::string* err);
+
 ApplyResult apply_calibration_impl(const std::string& path, const CalWrite& w,
                                     double margin_db, std::string* err,
                                     const std::string* content_override) {
@@ -370,6 +374,16 @@ ApplyResult apply_calibration_impl(const std::string& path, const CalWrite& w,
     }
   }
 
+  return publish_verified(path, original, content, ".pre-cal", err);
+}
+
+// Steps 3-6 of apply_calibration, shared with remove_calibration: write
+// `content` to "<path>.new", verify it with load_config, back `original` up
+// to "<path><backup_suffix>", rename the candidate into place. `path` is
+// never replaced by anything not already proven loadable.
+ApplyResult publish_verified(const std::string& path, const std::string& original,
+                             const std::string& content, const std::string& backup_suffix,
+                             std::string* err) {
   // Step 3: write the candidate to a scratch file. Nothing at `path` has
   // moved yet -- this is not a publish, it's a place to point the real
   // loader at.
@@ -414,7 +428,7 @@ ApplyResult apply_calibration_impl(const std::string& path, const CalWrite& w,
   // downstream of this point can produce a `path` that fails to load.
   // Written via write_file_atomic so a failure partway through can't
   // destroy the PREVIOUS session's backup while leaving nothing usable.
-  const std::string backup_path = path + ".pre-cal";
+  const std::string backup_path = path + backup_suffix;
   if (!write_file_atomic(backup_path, original)) {
     remove_scratch(tmp);
     if (err) *err = "failed to write backup " + backup_path;
@@ -446,6 +460,53 @@ ApplyResult apply_calibration_impl(const std::string& path, const CalWrite& w,
 ApplyResult apply_calibration(const std::string& path, const CalWrite& w,
                                double margin_db, std::string* err) {
   return apply_calibration_impl(path, w, margin_db, err, nullptr);
+}
+
+std::string unpatch_power_mode(const std::string& text, bool* found, bool* was_offset) {
+  *found = false;
+  *was_offset = false;
+  std::string out;
+  size_t start = 0;
+  while (start <= text.size()) {
+    size_t end = text.find('\n', start);
+    const bool last = end == std::string::npos;
+    std::string line = text.substr(start, last ? std::string::npos : end - start);
+    size_t key_begin = 0, eq_pos = 0;
+    if (!*found && match_key(line, "power_mode", &key_begin, &eq_pos)) {
+      size_t v = eq_pos + 1;
+      while (v < line.size() && (line[v] == ' ' || line[v] == '\t')) ++v;
+      if (v < line.size() && line[v] == '"') {
+        const size_t close = line.find('"', v + 1);
+        if (close != std::string::npos) {
+          *found = true;
+          *was_offset = line.compare(v, close + 1 - v, "\"offset\"") == 0;
+          line = rewrite_line(line, key_begin, std::string("power_mode").size(), eq_pos,
+                               "\"none\"", close + 1);
+        }
+      }
+    }
+    out += line;
+    if (last) break;
+    out += '\n';
+    start = end + 1;
+  }
+  return out;
+}
+
+ApplyResult remove_calibration(const std::string& path, std::string* err) {
+  std::string original;
+  if (!read_file(path, &original)) {
+    if (err) *err = "failed to read " + path;
+    return ApplyResult::WriteFailed;
+  }
+  bool found = false, was_offset = false;
+  const std::string content = unpatch_power_mode(original, &found, &was_offset);
+  if (!found) {
+    if (err) *err = "radio.power_mode not found in " + path;
+    return ApplyResult::KeyNotFound;
+  }
+  if (!was_offset) return ApplyResult::Ok;  // already uncalibrated: no write
+  return publish_verified(path, original, content, ".pre-uncal", err);
 }
 
 ApplyResult apply_calibration_for_test_with_corrupt_writer(

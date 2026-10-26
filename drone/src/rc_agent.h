@@ -321,9 +321,14 @@ class RcAgent {
   // none), dropped to none when the link fails. CameraSwitch decides on it.
   uint8_t cam_wish() const { return cam_wish_; }
 
-  // The FC's arm state for a camera switch (camera_switch.h): NoFc with MSP
-  // off or no report ever, Armed/Disarmed while the last report is fresher
-  // than low_power.stale_ms, Stale once a reporting FC has gone quiet.
+  // The GS's "remove calibration" request from the last accepted RCF
+  // (Rcf::cal_off), dropped when the link fails. Any thread.
+  bool cal_off_wish() const { return cal_off_wish_.load(std::memory_order_relaxed); }
+
+  // The FC's arm state for a camera switch (camera_switch.h) or a
+  // calibration start: NoFc with MSP off or no report ever, Armed/Disarmed
+  // while the last report is fresher than low_power.stale_ms, Stale once a
+  // reporting FC has gone quiet. Any thread.
   ArmView arm_view(uint64_t now_ms) const;
 
   // Latched on a BOOT/RENDEZVOUS -> LINKED transition — the process-(re)start
@@ -466,6 +471,7 @@ class RcAgent {
   int rec_applied_ = -1;
   int16_t snr_off_sent_ = 0;  // last offset handed to the actuator
   uint8_t cam_wish_ = 0xFF;   // Rcf::cam, level; 0xFF = no camera request
+  std::atomic<bool> cal_off_wish_{false};  // Rcf::cal_off, level
   void intake_arm_state_(uint64_t now_ms);
 
   // GS-requested IDR. The last RCF

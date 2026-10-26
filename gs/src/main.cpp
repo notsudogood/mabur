@@ -27,6 +27,7 @@
 #include "au_log.h"
 #include "au_ring.h"
 #include "body_queue.h"
+#include "cal_off_request.h"
 #include "camera_request.h"
 #include "cal_control.h"
 #include "rec_control.h"
@@ -395,6 +396,9 @@ static int run_radio(const maburgs::Config& cfg) {
   // Camera tab: the player's preset request, carried in every RCF until the
   // drone's Telem settles it (camera_request.h).
   maburgs::CameraRequest cam_req;
+  maburgs::CalOffRequest cal_off_req;
+  std::string cal_menu_start;   // CalControl's reply to the menu's last "cal start"
+  uint32_t cal_menu_starts = 0; // how many the menu has sent (a repeat reply still counts)
   if (!rec_ctl.open(maburgs::kRecControlPort))
     std::fprintf(stderr,
                  "warning: record control port %d unusable; the VTX recorder "
@@ -1031,6 +1035,12 @@ static int run_radio(const maburgs::Config& cfg) {
                          t->rcf_age_ms, t->pts_at_build, us);
         uplink.on_telem(t->tlm_seq, t->rcf_rx, t->state, us / 1000);
         {
+          const char* before = cal_off_req.result();
+          cal_off_req.on_telem((t->flags & mabur::rc::kTelemCalibrated) != 0, us / 1000);
+          if (cal_off_req.result() != before)
+            std::fprintf(stderr, "maburgs: remove calibration: %s\n", cal_off_req.result());
+        }
+        {
           const char* before = cam_req.result();
           cam_req.on_telem(t->cam_cur, t->cam_state, us / 1000);
           if (cam_req.result() != before)
@@ -1397,6 +1407,26 @@ static int run_radio(const maburgs::Config& cfg) {
     const auto cal_state_before_poll = cal_session.state();
     cal_ctl.poll(cal_session);
     rec_ctl.poll(drained_ms);
+    // Settings tab: "start" goes through the same command handler as
+    // `maburcal start` (its checks: linked, CAP_CALIBRATE, not running);
+    // "off" is held in every RCF until the drone's Telem settles it.
+    for (const std::string& c : rec_ctl.take_calibration()) {
+      if (c == "start") {
+        maburgs::CalControl::apply("start", cal_session, &cal_menu_start);
+        ++cal_menu_starts;
+        std::fprintf(stderr, "maburgs: calibration start from the player -> %s\n",
+                     cal_menu_start.c_str());
+      } else if (c == "off") {
+        cal_off_req.request(drained_ms);
+        std::fprintf(stderr, "maburgs: remove calibration requested by the player\n");
+      }
+    }
+    {
+      const char* before = cal_off_req.result();
+      vrx.set_cal_off(cal_off_req.wire(drained_ms));
+      if (cal_off_req.result() != before)
+        std::fprintf(stderr, "maburgs: remove calibration: %s\n", cal_off_req.result());
+    }
     for (const uint8_t id : rec_ctl.take_camera()) {
       cam_req.request(id, drained_ms);
       const mabur::cam::Preset* p = mabur::cam::preset(id);
@@ -1927,6 +1957,13 @@ static int run_radio(const maburgs::Config& cfg) {
       sin.q_drop = queue.dropped();
       sin.telem = latest_telem.t;
       sin.telem_rx_ms = latest_telem.rx_ms;
+      sin.cal_state = cal_session.state_name();
+      sin.cal_pct = cal_session.progress_pct();
+      sin.cal_start = cal_menu_start;
+      sin.cal_start_n = cal_menu_starts;
+      sin.cal_fail = cal_session.state() == maburgs::CalSession::State::Failed
+                         ? cal_session.fail_reason() : "";
+      sin.cal_off = cal_off_req.result();
       sin.cam_wish = cam_req.wish();
       sin.cam_last = cam_req.last();
       sin.cam_result = cam_req.result();

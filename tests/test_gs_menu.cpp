@@ -92,10 +92,11 @@ TEST(menu_model_opens_edits_and_applies) {
   m.key(K::Right, 62);                  // Settings
   CHECK(m.tab() == GsMenuModel::Tab::Settings);
   v = m.view();
-  REQUIRE(v.cells.size() == 1);
+  REQUIRE(v.cells.size() == 3);
   CHECK(v.cells[0].label == "Bandwidth" && v.cells[0].value == "< Wide >" && v.title == "Settings");
+  CHECK(v.cells[1].label == "Calibrate" && v.cells[2].label == "Remove cal");
   m.key(K::Down, 70);
-  m.key(K::Left, 71);                   // wide -> normal
+  m.key(K::Center, 71);                 // wide -> normal
   CHECK(!m.pending().wide && m.view().cells[0].value == "< Normal >");
   m.key(K::Down, 80);                   // Apply
   v = m.view();
@@ -117,7 +118,7 @@ TEST(menu_model_closes_on_close_and_idle_and_wraps) {
   m.key(K::Center, 4);
   m.key(K::Right, 5);                    // Settings tab
   m.key(K::Down, 6);
-  m.key(K::Right, 7);                    // Bandwidth fixed at 20/40 configs
+  m.key(K::Center, 7);                   // Bandwidth fixed at 20/40 configs
   CHECK(!m.pending().wide && m.view().cells[0].dim);
   m.key(K::Down, 8);
   CHECK(m.key(K::Center, 9) == GsMenuModel::Action::None && !m.open());   // Apply, nothing to apply
@@ -213,5 +214,77 @@ TEST(menu_model_camera_result_lines) {
                         "rolled_back", "timeout"})
     CHECK(!GsMenuModel::camera_result_text(r).empty());
   CHECK(GsMenuModel::camera_result_text("armed").find("disarm") != std::string::npos);
+}
+// Settings tab: Calibrate and Remove cal are staged like any choice, one at
+// a time; Remove needs a drone that says it is calibrated; Apply hands the
+// action over once and leaves the link settings alone.
+TEST(menu_model_settings_calibrate_and_remove) {
+  using CA = GsMenuModel::CalAction;
+  GsMenuModel m({36}, true, maburplay::GsMenuSettings{true, 36, true});
+  m.set_calibration(std::nullopt, false, -1);
+  m.key(K::Center, 0);
+  m.key(K::Right, 1);                   // Settings
+  m.key(K::Down, 2);                    // the cell row, on Bandwidth
+  m.key(K::Right, 3);                   // Calibrate
+  auto v = m.view();
+  CHECK(v.cells[1].focus && v.cells[1].value == "measure TX");
+  CHECK(v.cells[2].dim && v.cells[2].value == "no link");
+  CHECK(v.help.find("2 min") != std::string::npos);
+  m.key(K::Center, 4);
+  CHECK(m.pending_cal() == CA::Start && m.view().cells[1].marked);
+  m.key(K::Right, 5);                   // Remove cal: drone has not reported
+  m.key(K::Center, 6);
+  CHECK(m.pending_cal() == CA::Start);  // unchanged
+  m.set_calibration(true, false, -1);
+  CHECK(m.view().cells[2].value == "in use" && !m.view().cells[2].dim);
+  m.key(K::Center, 7);                  // now it takes, replacing Calibrate
+  CHECK(m.pending_cal() == CA::Remove && !m.view().cells[1].marked);
+  m.key(K::Center, 8);                  // pressed again: cleared
+  CHECK(m.pending_cal() == CA::None);
+  m.key(K::Center, 9);
+  m.key(K::Down, 10);                   // Apply
+  CHECK(m.view().help.find("remove the calibration") != std::string::npos);
+  CHECK(m.key(K::Center, 11) == GsMenuModel::Action::Apply);
+  CHECK(!m.take_settings_applied());
+  CHECK(m.take_cal_applied() == CA::Remove && m.take_cal_applied() == CA::None);
+  // A run in progress: Calibrate shows it and cannot be staged again.
+  m.set_calibration(true, true, 40);
+  m.key(K::Center, 20);
+  m.key(K::Right, 21);
+  m.key(K::Down, 22);
+  m.key(K::Right, 23);
+  v = m.view();
+  CHECK(v.cells[1].value == "running 40 %" && v.cells[1].dim && v.cells[2].dim);
+  m.key(K::Center, 24);
+  CHECK(m.pending_cal() == CA::None);
+}
+
+TEST(menu_model_calibration_event_lines) {
+  using S = GsMenuModel::CalSeen;
+  S was, now;
+  CHECK(GsMenuModel::calibration_event_text(was, now).empty());
+  now.start = "err not linked"; now.start_n = 1;
+  CHECK(GsMenuModel::calibration_event_text(was, now) == "Calibration not started: not linked");
+  was = now; now.start_n = 2;            // the same refusal again still shows
+  CHECK(!GsMenuModel::calibration_event_text(was, now).empty());
+  was = S{}; now = S{}; now.refused_armed = true;
+  CHECK(GsMenuModel::calibration_event_text(was, now).find("armed") != std::string::npos);
+  was = S{}; now = S{}; now.state = "await_ack";
+  CHECK(GsMenuModel::calibration_event_text(was, now).find("2 min") != std::string::npos);
+  was = now; now.state = "sweep"; now.pct = 5;
+  CHECK(GsMenuModel::calibration_event_text(was, now) == "Calibrating: 5 %");
+  was = now; now.pct = 8;                // same 10 % step: quiet
+  CHECK(GsMenuModel::calibration_event_text(was, now).empty());
+  was = now; now.pct = 12;
+  CHECK(GsMenuModel::calibration_event_text(was, now) == "Calibrating: 12 %");
+  was = now; now.state = "failed"; now.fail = "calibration ack timeout";
+  CHECK(GsMenuModel::calibration_event_text(was, now) ==
+        "Calibration failed: calibration ack timeout");
+  was = S{}; now = S{}; now.off = "removed";
+  CHECK(GsMenuModel::calibration_event_text(was, now) == "Calibration removed: stock TX power");
+  was = S{}; was.calibrated = false; now = was; now.calibrated = true;
+  CHECK(GsMenuModel::calibration_event_text(was, now) == "Calibration in use");
+  was = S{}; now = S{}; now.calibrated = true;   // first report at link-up: quiet
+  CHECK(GsMenuModel::calibration_event_text(was, now).empty());
 }
 MTEST_MAIN

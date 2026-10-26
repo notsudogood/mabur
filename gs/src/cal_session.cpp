@@ -232,18 +232,33 @@ uint16_t CalSession::cell_corrupt(uint8_t rate, int idx) const {
   return it->second.corrupt;
 }
 
-std::string CalSession::progress() const {
-  const char* st = "?";
+const char* CalSession::state_name() const {
   switch (state_) {
-    case State::Idle: st = "idle"; break;
-    case State::AwaitAck: st = "await_ack"; break;
-    case State::Sweep: st = "sweep"; break;
-    case State::Analyze: st = "analyze"; break;
-    case State::Result: st = "result"; break;
-    case State::Verify: st = "verify"; break;
-    case State::Done: st = "done"; break;
-    case State::Failed: st = "failed"; break;
+    case State::Idle: return "idle";
+    case State::AwaitAck: return "await_ack";
+    case State::Sweep: return "sweep";
+    case State::Analyze: return "analyze";
+    case State::Result: return "result";
+    case State::Verify: return "verify";
+    case State::Done: return "done";
+    case State::Failed: return "failed";
   }
+  return "?";
+}
+
+int CalSession::progress_pct() const {
+  size_t filled = 0, planned = 0;
+  for (const auto& per_rate : cells_) {
+    for (const auto& [idx, c] : per_rate) {
+      ++planned;
+      if (c.received[0] > 0 || c.received[1] > 0 || c.corrupt > 0) ++filled;
+    }
+  }
+  return planned == 0 ? -1 : static_cast<int>(filled * 100 / planned);
+}
+
+std::string CalSession::progress() const {
+  const char* st = state_name();
   size_t filled = 0, planned = 0;
   for (const auto& per_rate : cells_) {
     for (const auto& [idx, c] : per_rate) {

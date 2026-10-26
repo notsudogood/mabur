@@ -35,6 +35,8 @@ struct TelemInputs {
   bool failsafe_shed = false;
   bool congestion_shed = false;  // RcAgent::congestion_shed() — flags bit4
   bool low_power = false;  // RcAgent::low_power() — flags bit7
+  bool calibrated = false;   // live radio.power_mode == "offset" — flags bit5 (rc::kTelemCalibrated)
+  bool arm_refused = false;  // a calibration start refused while armed, last 5 s — flags bit2
   // RcAgent::take_auth_reject() — flags bit1 (rc::kTelemAuthReject): a
   // control frame failed its tag since the last Telem.
   bool auth_reject = false;

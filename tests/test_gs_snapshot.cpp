@@ -645,4 +645,19 @@ TEST(camera_blocks_parse_and_default_empty) {
   REQUIRE(parse(R"({"drone": null})", &s));
   CHECK(!s.cam_cur && s.cam_now == 0 && s.cam_switch == 0 && !s.cam_wish && s.cam_result.empty());
 }
+TEST(calibration_blocks_parse_and_default_empty) {
+  GsSnapshot s;
+  REQUIRE(parse(R"({"drone": {"cal": {"calibrated": true, "refused_armed": false}},
+                    "calibration": {"state": "sweep", "pct": 40, "start": "ok started", "start_n": 3,
+                                    "fail": "", "off": "sent"}})", &s));
+  REQUIRE(s.calibrated); CHECK(*s.calibrated);
+  CHECK(!s.cal_refused_armed && s.cal_state == "sweep" && s.cal_start == "ok started");
+  REQUIRE(s.cal_pct); CHECK(*s.cal_pct == 40);
+  CHECK(s.cal_start_n == 3 && s.cal_off == "sent");
+  REQUIRE(parse(R"({"drone": {"cal": {"calibrated": false, "refused_armed": true}},
+                    "calibration": {"state": "idle", "pct": null}})", &s));
+  CHECK(s.calibrated == false && s.cal_refused_armed && !s.cal_pct);
+  REQUIRE(parse(R"({"drone": null})", &s));
+  CHECK(!s.calibrated && s.cal_state.empty() && s.cal_start_n == 0);
+}
 MTEST_MAIN

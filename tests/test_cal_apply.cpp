@@ -1,5 +1,6 @@
 #include "mtest.h"
 #include "cal_apply.h"
+#include "config.h"
 #include "scratch.h"
 #include "mabur/rc_proto.h"
 
@@ -246,4 +247,58 @@ TEST(apply_writes_once) {
   CHECK(write_count_for_test() == 1);
 }
 
+// ---- remove_calibration (the GS menu's "Remove calibration") ------------
+
+TEST(unpatch_sets_none_and_keeps_the_comment) {
+  bool found = false, was_offset = false;
+  const std::string calibrated = patch_toml(kSample, sample_write());
+  const std::string out = unpatch_power_mode(calibrated, &found, &was_offset);
+  CHECK(found && was_offset);
+  CHECK(out.find("power_mode = \"none\"      # set to offset to use rate_walls_rel") !=
+        std::string::npos);
+  CHECK(out.find("rate_walls_rel  = [60, 60, 60, 45, 22, 6, 9, 5]") != std::string::npos);
+  CHECK(out.find("# a comment that must survive") == 0);
+  unpatch_power_mode(kSample, &found, &was_offset);
+  CHECK(found && !was_offset);   // "none" already
+}
+
+TEST(remove_after_apply_restores_stock_power_and_keeps_the_walls) {
+  const std::string path = std::string(MABUR_TEST_SCRATCH_DIR) + "/calrm1.toml";
+  { std::ofstream f(path); f << kSample; }
+  std::string err;
+  REQUIRE(apply_calibration(path, sample_write(), 1.0, &err) == ApplyResult::Ok);
+  std::string calibrated;
+  { std::ifstream f(path); std::stringstream b; b << f.rdbuf(); calibrated = b.str(); }
+  CHECK(remove_calibration(path, &err) == ApplyResult::Ok);
+  std::stringstream n; { std::ifstream f(path); n << f.rdbuf(); }
+  CHECK(n.str().find("power_mode = \"none\"") != std::string::npos);
+  CHECK(n.str().find("legacy_wall_rel = 60") != std::string::npos);   // walls kept, inert
+  std::stringstream b; { std::ifstream f(path + ".pre-uncal"); b << f.rdbuf(); }
+  CHECK(b.str() == calibrated);                                      // the undo copy
+  std::stringstream pc; { std::ifstream f(path + ".pre-cal"); pc << f.rdbuf(); }
+  CHECK(pc.str() == kSample);                                        // untouched
+  const Config c = load_config(path, nullptr);
+  CHECK(c.radio.power_mode == "none");
+}
+
+TEST(remove_on_an_uncalibrated_file_writes_nothing) {
+  const std::string path = std::string(MABUR_TEST_SCRATCH_DIR) + "/calrm2.toml";
+  { std::ofstream f(path); f << kSample; }
+  std::remove((path + ".pre-uncal").c_str());
+  std::string err;
+  CHECK(remove_calibration(path, &err) == ApplyResult::Ok);
+  std::ifstream backup(path + ".pre-uncal");
+  CHECK(!backup.good());
+  std::stringstream n; { std::ifstream f(path); n << f.rdbuf(); }
+  CHECK(n.str() == kSample);
+}
+
+TEST(remove_refuses_a_file_without_power_mode) {
+  const std::string path = std::string(MABUR_TEST_SCRATCH_DIR) + "/calrm3.toml";
+  { std::ofstream f(path); f << "[radio]\nusb_vid = 3034\n"; }
+  std::string err;
+  CHECK(remove_calibration(path, &err) == ApplyResult::KeyNotFound);
+  CHECK(!err.empty());
+  CHECK(remove_calibration(path + ".missing", &err) == ApplyResult::WriteFailed);
+}
 MTEST_MAIN

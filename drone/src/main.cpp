@@ -1960,6 +1960,15 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
                static_cast<unsigned>(cfg.venc.core.fps),
                mabur::cam::preset(cam_cur) ? mabur::cam::preset(cam_cur)->label : "no preset",
                cam_now, cam_switch);
+  // TX-power calibration as the GS menu sees it (Telem flags bit5): the live
+  // config's power_mode, refreshed by restore_operating_power() after every
+  // session and every removal. cal_off_req: the agent thread's hand-off of
+  // the GS's "remove calibration" request to the TX writer thread, which
+  // owns every calibration write. arm_refused_ms: when that thread last
+  // refused to start a calibration because the FC reported armed.
+  std::atomic<bool> calibrated{cfg.radio.power_mode == "offset"};
+  std::atomic<bool> cal_off_req{false};
+  std::atomic<uint64_t> arm_refused_ms{0};
   vtx_rec.start_thread();
   // After venc_core_start: RcAgent's first tick (below) already commands a
   // bitrate through the verbs, so the ring/stats the debug endpoint reads
@@ -2940,6 +2949,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
                      "restoring with the bring-up config instead\n",
                      e.what());
       }
+      calibrated.store(live_cfg.radio.power_mode == "offset", std::memory_order_relaxed);
       // Threading: every device call below runs on the TX writer thread AFTER
       // cal_active was cleared, which is exactly the window the agent
       // thread's apply_deferred_retune() fires FastRetune in -- the deferral
@@ -2990,8 +3000,30 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     // Cal frames whose tag did not verify under the current session (link
     // pairing): dropped; Telem flags bit1 carries it.
     uint64_t cal_auth_rejects = 0;
+    uint64_t cal_off_tried_ms = 0;
     uint32_t last_qw_report_ms = static_cast<uint32_t>(now_steady_ms());
     while (!g_devourer_should_stop) {
+      // The GS menu's "Remove calibration": power_mode back to "none" in the
+      // file (cal_apply.h remove_calibration, verified before it is
+      // published), then the same live reprogram a session's end runs. No
+      // restart, no video gap. Never under a running session; a failed
+      // write is retried at most every 5 s while the GS keeps asking.
+      if (cal_off_req.exchange(false, std::memory_order_relaxed) && !cal_sweep.active() &&
+          calibrated.load(std::memory_order_relaxed)) {
+        const uint64_t t = now_steady_ms();
+        if (cal_off_tried_ms == 0 || t - cal_off_tried_ms >= 5000) {
+          cal_off_tried_ms = t;
+          std::string err;
+          if (remove_calibration(cfg_path, &err) == ApplyResult::Ok) {
+            std::fprintf(stderr, "maburd cal: calibration removed by the GS menu (%s.pre-uncal "
+                                 "holds the calibrated file); stock TX power now\n",
+                         cfg_path.c_str());
+            restore_operating_power();
+          } else {
+            std::fprintf(stderr, "maburd cal: remove calibration failed: %s\n", err.c_str());
+          }
+        }
+      }
       // Calibration control frames (cal_queue, fed by the RX callback):
       // dispatched here, not on the agent thread, so on_cmd/on_result share
       // pump()'s thread (cal_sweep.h constraint 1).
@@ -3006,6 +3038,21 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
         const uint64_t cal_now = now_steady_ms();
         if (cal_type == rc::T_CAL_CMD) {
           if (auto c = rc::parse_cal_cmd(cal_body.data(), cal_body.size())) {
+            // A run is ~2 min without video and is now one menu press away:
+            // never START one while the FC reports armed, or a reporting FC
+            // went quiet. No ack goes back, so the GS's session fails on its
+            // ack timeout; Telem flags bit2 says why. A phase of a run
+            // already going is never refused.
+            if (c->phase == cal::kPhaseCoarse && !cal_sweep.active()) {
+              const ArmView arm = agent.arm_view(cal_now);
+              if (arm == ArmView::Armed || arm == ArmView::Stale) {
+                if (cal_now - arm_refused_ms.load(std::memory_order_relaxed) >= 1000)
+                  std::fprintf(stderr, "maburd cal: start refused: the FC reports %s\n",
+                               arm == ArmView::Armed ? "armed" : "no fresh arm state");
+                arm_refused_ms.store(cal_now, std::memory_order_relaxed);
+                continue;
+              }
+            }
             cal_sweep.on_cmd(*c, cal_now, pwr);
             // The ack Telem is sent HERE -- synchronously, before this thread
             // ever calls cal_sweep.pump() for the phase this command just
@@ -3234,6 +3281,11 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
       ti.cam_now = cam_now;
       ti.cam_switch = cam_switch;
       ti.cam_state = cam_state;
+      ti.calibrated = calibrated.load(std::memory_order_relaxed);
+      {
+        const uint64_t refused = arm_refused_ms.load(std::memory_order_relaxed);
+        ti.arm_refused = refused != 0 && now_steady_ms() - refused < 5000;
+      }
       // have_feedback() false means no RCF has EVER been accepted (still
       // BOOT/RENDEZVOUS) — 0 would read as maximally fresh, the opposite of
       // the truth. Pass a value make_telem's saturate<uint16_t> clamps to
@@ -3341,6 +3393,11 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
         agent.tick(now, health);
         if (agent.take_link_established())
           link_up_discont.store(true, std::memory_order_relaxed);
+
+        // Settings tab: the GS's "remove calibration", handed to the TX
+        // writer thread (it owns every calibration write).
+        if (agent.cal_off_wish() && calibrated.load(std::memory_order_relaxed))
+          cal_off_req.store(true, std::memory_order_relaxed);
 
         // Camera tab: settle a switched boot, then decide on the GS's
         // request (camera_switch.h / camera_ctl.h).

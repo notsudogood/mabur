@@ -103,6 +103,21 @@ struct GsSnapshot {
   std::optional<int> cam_wish;
   std::optional<int> cam_last;
   std::string cam_result;
+  // Settings tab: drone.cal (whether the drone flies a calibrated TX-power
+  // shape; empty before any Telem; whether it refused a calibration start
+  // in the last 5 s because its FC reports armed) and the GS's own
+  // `calibration` block: the session state ("idle", "await_ack", "sweep",
+  // "analyze", "result", "verify", "done", "failed"), measured share of the
+  // plan, the reply to the menu's last start, the last failure and the
+  // "remove" request's result ("", "sent", "removed", "timeout").
+  std::optional<bool> calibrated;
+  bool cal_refused_armed = false;
+  std::string cal_state;
+  std::optional<int> cal_pct;
+  std::string cal_start;
+  int cal_start_n = 0;
+  std::string cal_fail;
+  std::string cal_off;
   // link.ctl.rung.mcs / .ov_base x 100, falling back to link.op.mcs /
   // .overhead_base x 100 when the ladder block is absent -- which is the
   // normal, permanent state of a static-pinned link (link.static_mcs >= 0

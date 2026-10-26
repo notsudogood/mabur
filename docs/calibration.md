@@ -101,6 +101,34 @@ table measured before this build. If high-MCS loss gets worse after a
 rerun, roll back with the `/etc/mabur.toml.pre-cal` backup (see *What gets
 written, and how to roll back*).
 
+## From the GS menu (Settings tab)
+
+The goggles' menu has **Calibrate** and **Remove cal** cells
+(`docs/gs-menu.md`), for A/B testing a calibration against the radio's
+stock power without a laptop.
+
+- **Calibrate** sends `cal start` to maburgs, which runs it through the
+  same command handler as `maburcal start` (`CalControl::apply`), so the
+  same checks refuse it: no link, no `CAP_CALIBRATE`, a run already going.
+  The run's progress reaches the goggles on the stats sideport
+  (`calibration.state` / `.pct`), and its cal.log is written as usual, so
+  `maburcal report` reads a menu run like any other.
+- **Remove cal** sends `cal off`; maburgs sets `Rcf::cal_off` in every RCF
+  until the drone's Telem stops reporting `calibrated` (flags bit5), or 20 s
+  pass. The drone sets `radio.power_mode = "none"` in `/etc/mabur.toml`
+  (`remove_calibration` in `drone/src/cal_apply.h`: the same
+  verify-then-publish steps as an apply, the calibrated file kept as
+  `/etc/mabur.toml.pre-uncal`, the walls left in the file but inert), then
+  runs the same live reprogram a session's end runs: the stock rate shape,
+  no restart, no video gap. Calibrate again to go back.
+
+**A run is refused while the FC reports armed** (or a reporting FC has gone
+quiet for `low_power.stale_ms`), whoever started it, menu or `maburcal`:
+the drone drops the coarse-phase command, so the GS's session fails on its
+ack timeout, and the drone's Telem flags bit2 tells the GS why for 5 s.
+With no FC connected the drone cannot tell and runs it. A phase of a run
+already going is never refused.
+
 ## Prerequisite: the pair must already be linked and flying video
 
 There is no other way to reach the drone. `T_CAL_CMD` rides the same

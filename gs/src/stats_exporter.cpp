@@ -590,6 +590,18 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
   // like `scan`: it is the GS's own state, present before any Telem.
   // `wish` null = none pending; `last` the preset the last settled request
   // was for; `result` "", "sent", "applying" or the settled outcome.
+  // Settings tab: the GS's calibration session -- its state as `maburcal
+  // status` spells it, the share of planned cells measured (null before a
+  // plan), the reply to the menu's last start ("ok started" / "err ...") and
+  // how many starts it has sent (so a repeated reply reads as new),
+  // the last failure, and the "remove calibration" request's result.
+  j["calibration"] = {{"state", in.cal_state ? in.cal_state : "idle"},
+                      {"pct", in.cal_pct < 0 ? json(nullptr) : json(in.cal_pct)},
+                      {"start", in.cal_start},
+                      {"start_n", in.cal_start_n},
+                      {"fail", in.cal_fail ? in.cal_fail : ""},
+                      {"off", in.cal_off ? in.cal_off : ""}};
+
   json& camreq = j["camera_request"];
   camreq["wish"] = in.cam_wish == 0xFF ? json(nullptr) : json(in.cam_wish);
   camreq["last"] = in.cam_last == 0xFF ? json(nullptr) : json(in.cam_last);
@@ -700,6 +712,11 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
                    {"switch", t.cam_switch},
                    {"state", mabur::cam::state_name(mabur::cam::state_of(t.cam_state))},
                    {"about", mabur::cam::state_preset(t.cam_state)}};
+    // Settings tab: whether the drone flies a calibrated TX-power shape
+    // (flags bit5), and whether it refused to start a calibration in the last
+    // 5 s because its FC reports armed (bit2).
+    d["cal"] = {{"calibrated", (t.flags & mabur::rc::kTelemCalibrated) != 0},
+                {"refused_armed", (t.flags & mabur::rc::kTelemArmRefused) != 0}};
     json& rcf = d["rcf"];
     rcf["age_ms"] = t.rcf_age_ms;
     rcf["rx_pps"] = have_telem_rates_ ? json(telem_rcf_rx_pps_) : json(nullptr);

@@ -71,6 +71,24 @@ TEST(low_power_flag_round_trips) {
   CHECK((mabur::make_telem(2, in).flags & 0x80) == 0);
 }
 
+// Settings tab: the drone's calibration state (bit5) and a calibration
+// start refused while armed (bit2) ride the flags byte.
+TEST(calibration_flags_round_trip) {
+  mabur::TelemInputs in;
+  in.calibrated = true;
+  auto t = mabur::make_telem(1, in);
+  CHECK((t.flags & mabur::rc::kTelemCalibrated) != 0);
+  CHECK((t.flags & mabur::rc::kTelemArmRefused) == 0);
+  in.calibrated = false;
+  in.arm_refused = true;
+  t = mabur::make_telem(2, in);
+  auto wire = mabur::rc::pack_telem(t);
+  auto back = mabur::rc::parse_telem(wire.data(), wire.size());
+  REQUIRE(back.has_value());
+  CHECK((back->flags & mabur::rc::kTelemArmRefused) != 0);
+  CHECK((back->flags & mabur::rc::kTelemCalibrated) == 0);
+}
+
 // Link pairing: a control frame that failed its tag
 // since the last Telem sets flags bit1, so the GS can show it.
 TEST(auth_reject_is_flags_bit1) {

@@ -94,6 +94,12 @@ bool parse_gs_snapshot(const char* data, size_t n, GsSnapshot* out) {
       out->cam_now = integer(*cam, "now").value_or(0);
       out->cam_switch = integer(*cam, "switch").value_or(0);
     }
+    if (const json* cal = obj(*drone, "cal")) {
+      auto c = cal->find("calibrated");
+      if (c != cal->end() && c->is_boolean()) out->calibrated = c->get<bool>();
+      auto r = cal->find("refused_armed");
+      out->cal_refused_armed = r != cal->end() && r->is_boolean() && r->get<bool>();
+    }
     if (const json* rcf = obj(*drone, "rcf")) {
       out->uplink_pct = integer(*rcf, "delivery_pct");
       auto u = rcf->find("uplink");
@@ -107,6 +113,18 @@ bool parse_gs_snapshot(const char* data, size_t n, GsSnapshot* out) {
           if (v == name) out->uplink = st;
       }
     }
+  }
+  if (const json* cal = obj(j, "calibration")) {
+    auto str = [&](const char* k, std::string* dst) {
+      auto it = cal->find(k);
+      if (it != cal->end() && it->is_string()) *dst = it->get<std::string>();
+    };
+    str("state", &out->cal_state);
+    str("start", &out->cal_start);
+    str("fail", &out->cal_fail);
+    str("off", &out->cal_off);
+    out->cal_pct = integer(*cal, "pct");
+    out->cal_start_n = integer(*cal, "start_n").value_or(0);
   }
   if (const json* cr = obj(j, "camera_request")) {
     out->cam_wish = integer(*cr, "wish");

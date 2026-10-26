@@ -173,11 +173,16 @@ void RcAgent::note_chain_break() {
 }
 
 ArmView RcAgent::arm_view(uint64_t now_ms) const {
-  if (!cfg_.msp.enable || !arm_reported_) return ArmView::NoFc;
-  const bool fresh = now_ms < last_arm_ms_ ||
-                     now_ms - last_arm_ms_ <= static_cast<uint64_t>(cfg_.low_power.stale_ms);
+  // Straight from the MSP thread's atomic report (never cleared once set),
+  // not the agent-thread unpacking in intake_arm_state_, so any thread may
+  // ask: the TX writer thread does, before it starts a calibration.
+  const uint64_t r = arm_report_.load(std::memory_order_relaxed);
+  if (!cfg_.msp.enable || r == 0) return ArmView::NoFc;
+  const uint64_t at_ms = (r >> 1) - 1;
+  const bool fresh = now_ms < at_ms ||
+                     now_ms - at_ms <= static_cast<uint64_t>(cfg_.low_power.stale_ms);
   if (!fresh) return ArmView::Stale;
-  return last_armed_ ? ArmView::Armed : ArmView::Disarmed;
+  return (r & 1u) != 0 ? ArmView::Armed : ArmView::Disarmed;
 }
 
 void RcAgent::note_arm_state(bool armed, uint64_t now_ms) {
@@ -763,6 +768,7 @@ void RcAgent::on_rc_frame(const uint8_t* body, size_t len, uint64_t now_ms) {
     // Camera preset request: level-triggered, decided on the agent thread's
     // tick by CameraSwitch (main.cpp), which acts once per change.
     cam_wish_ = r->cam;
+    cal_off_wish_.store(r->cal_off != 0, std::memory_order_relaxed);
 
     // GS-requested IDR: a CHANGED epoch is a request.
     // Marked seen on receipt -- pending stays set until tick() serves it, so
@@ -890,6 +896,7 @@ void RcAgent::tick(uint64_t now_ms, const RadioHealth& health) {
       apply_max_range(now_ms);
       state_ = State::FAILSAFE;
       cam_wish_ = 0xFF;  // a camera request needs a live GS behind it
+      cal_off_wish_.store(false, std::memory_order_relaxed);
       // Failsafe entry clears both sessions: a kept
       // pair would leave every RCF the GS sent during the fade replayable
       // for the life of the process. Recovery: the GS's next keep-alive

@@ -25,6 +25,7 @@ static Rcf rcf_from_json(const nlohmann::json& f) {
   r.idr_epoch = f.contains("idr_epoch") ? f["idr_epoch"].get<uint8_t>() : 0;
   r.snr_off = f.contains("snr_off") ? f["snr_off"].get<int16_t>() : 0;
   r.cam = f.contains("cam") ? f["cam"].get<uint8_t>() : 0xFF;
+  r.cal_off = f.contains("cal_off") ? f["cal_off"].get<uint8_t>() : 0;
   return r;
 }
 
@@ -56,7 +57,7 @@ TEST(rcf_tag_verifies_with_key_and_ctx_only) {
   Rcf r; r.seq = 7; r.profile = 0x24; r.fec_overhead_base = 0.5; r.fec_overhead_enh = 0.25;
   const TagCtx ctx{0xCAFEF00D, 0x12345678, 7};
   auto wire = pack_rcf(r, test_key(), ctx);
-  CHECK(wire.size() == 18 + kTagLen + 2);
+  CHECK(wire.size() == 19 + kTagLen + 2);
   REQUIRE(parse_rcf(wire.data(), wire.size()).has_value());   // structural parse ignores the tag
   CHECK(verify_control(wire.data(), wire.size(), test_key(), ctx));
   CHECK(!verify_control(wire.data(), wire.size(), kDefaultLinkKey, ctx));
@@ -139,7 +140,7 @@ TEST(verify_control_rejects_a_frame_shorter_than_structural_plus_tag_and_crc) {
   const TagCtx ctx{0xCAFEF00D, 0x12345678, 7};
   Rcf r; r.seq = 7;
   auto rcf = pack_rcf(r, test_key(), ctx);
-  CHECK(!verify_control(rcf.data(), 18 + kTagLen + 1, test_key(), ctx));
+  CHECK(!verify_control(rcf.data(), 19 + kTagLen + 1, test_key(), ctx));
   Disc d; d.vrx_nonce = 1;
   auto disc = pack_disc(d, test_key());
   CHECK(!verify_control(disc.data(), 17 + kTagLen + 1, test_key(), TagCtx{}));
@@ -175,15 +176,16 @@ TEST(rcf_matches_golden_wire) {
   //   std::fprintf(stderr, "%s\n", mtest::hex(wire).c_str());
   // Reverting any pack_rcf() layout change without updating these fails
   // here, which is the point -- the format cannot drift silently.
-  // Re-pinned for the RC_VERSION 16 -> 17 bump and the cam field
-  // (RCF head 17 -> 18, cam 0xFF = no request): version byte 2 and the head
-  // length both moved, re-deriving the tag + CRC over the changed body.
+  // Re-pinned for the RC_VERSION 16 -> 17 bump and the cam / cal_off fields
+  // (RCF head 17 -> 19, cam 0xFF and cal_off 0 = no request): version byte 2
+  // and the head length both moved, re-deriving the tag + CRC over the
+  // changed body. Cross-checked against tests/integration/mabur_rc.py.
   const std::vector<std::string> GOLDEN = {
-      "43521101000700243232ff000000000000ff8f4b3ba2d9606f4b6e67",
-      "4352110100ffff006464ff00000300c800ff4455f79426d27bec38a1",
+      "43521101000700243232ff000000000000ff00a219705747ef2e4d8180",
+      "4352110100ffff006464ff00000300c800ff00fd21fff9bfa48557755a",
       // Asym pair (base 1.0 / enh 0.5): ENH actually rides a different
       // literal overhead than BASE here, not a duplicated equal-pair scalar.
-      "43521101002a00086432060000025adbfffff4429816f315cf10d3f3",
+      "43521101002a00086432060000025adbffff0047e49afbf7fa131ffa36",
   };
   auto j = mtest::load_json(std::string(MABUR_VECTOR_DIR) + "/rc.json");
   REQUIRE(j["rcf"].size() == GOLDEN.size());
@@ -451,7 +453,7 @@ TEST(rcf_probe_profile_is_a_fixed_head_byte) {
   none.probe_profile = kNoProbeProfile;
   auto wire_none = mabur::rc::pack_rcf(none);
   CHECK(wire.size() == wire_none.size());   // fixed byte, no optional tail
-  CHECK(wire.size() == 18 + kTagLen + 2);    // head 18 + tag + crc
+  CHECK(wire.size() == 19 + kTagLen + 2);    // head 19 + tag + crc
   CHECK(wire[4] == 0);                       // flags byte carries nothing
   CHECK(wire[10] == r.probe_profile);
   CHECK(wire_none[10] == 0xFF);
@@ -508,26 +510,29 @@ TEST(version_mismatch_rejected_both_directions) {
   CHECK(!mabur::rc::parse_telem(tv12.data(), tv12.size()).has_value());
 }
 
-TEST(rcf_head_is_eighteen_bytes) {
+TEST(rcf_head_is_nineteen_bytes) {
   mabur::rc::Rcf r; r.seq = 7; r.profile = 0x24;
   r.fec_overhead_base = 0.42; r.fec_overhead_enh = 0.37; r.hop_ch = 149; r.hop_epoch = 3;
   r.rec = 0x05;
   r.idr_epoch = 0xA7;
   r.snr_off = -37;
   r.cam = 2;
+  r.cal_off = 1;
   auto body = mabur::rc::pack_rcf(r);
-  CHECK(body.size() == 18 + mabur::rc::kTagLen + 2);
+  CHECK(body.size() == 19 + mabur::rc::kTagLen + 2);
   CHECK(body[8] == 42); CHECK(body[9] == 37); CHECK(body[10] == mabur::rc::kNoProbeProfile);
   CHECK(body[11] == 149); CHECK(body[12] == 3); CHECK(body[13] == 5);
   CHECK(body[14] == 0xA7);
   CHECK(body[15] == 0xDB); CHECK(body[16] == 0xFF);  // snr_off -37, little-endian
   CHECK(body[17] == 2);                               // cam: preset 2 requested
+  CHECK(body[18] == 1);                               // cal_off: remove calibration
   auto back = mabur::rc::parse_rcf(body.data(), body.size());
   REQUIRE(back.has_value());
   CHECK(back->hop_ch == 149); CHECK(back->hop_epoch == 3); CHECK(back->rec == 5);
   CHECK(back->idr_epoch == 0xA7);
   CHECK(back->snr_off == -37);
   CHECK(back->cam == 2);
+  CHECK(back->cal_off == 1);
 }
 
 // The version check drops a foreign frame with no trace anywhere -- on a

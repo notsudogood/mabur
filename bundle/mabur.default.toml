@@ -27,11 +27,11 @@ fast_hop_at_80 = false # false = a hop at 80 MHz (or one changing the 40 MHz pai
                        # set, batched; true = the lean FastRetune hop d8-d10 used (backlog item 0)
 batched_tune = true    # batched channel set for width switches and full-set hops; false = one USB round
                        # trip per register (65-91 ms per switch)
-lean_width = false     # width switch writes only what the full set would change, falls back to the full
-                       # set when unsure (needs batched_tune; untested on air, so off)
+lean_width = true      # width switch writes only what the full set would change, falls back to the full
+                       # set when unsure (needs batched_tune); 7.8-8.5 ms with switch_rt_prio (bench)
 lean_verify = true     # with lean_width: read the changed registers back, full set on any difference
-switch_rt_prio = 0     # > 0: width switches and hops run at this SCHED_FIFO priority (above the encoder's
-                       # 50), with the RX thread; 0 = off (an experiment, d13)
+switch_rt_prio = 60    # > 0: width switches and hops run at this SCHED_FIFO priority (above the encoder's
+                       # 50), with the RX thread: 14-17 ms vs 79-135 (bench); 0 = off
 carrier_sense = "on"   # "on" = wait for a quiet channel before sending (the default). Bench switches for the
                        # 40 MHz stall: "off", "no_edcca" (ignore raw energy), "no_primary" (ignore 802.11
                        # preambles). Anything but "on" lets the drone talk over the ground station's uplink

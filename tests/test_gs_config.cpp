@@ -734,10 +734,10 @@ TEST(narrow10_section_is_on_by_default_and_parses) {
   // GS radio switches from this build.
   c = maburgs::load_config(write_tmp("[radio]\nnarrow_20 = true\nfast_hop_at_80 = true\nbatched_tune = false\n"));
   CHECK(c.radio.narrow_20 && c.radio.fast_hop_at_80 && !c.radio.batched_tune);
-  CHECK(!c.radio.lean_width && c.radio.lean_verify);   // lean width switch off, verify on
+  CHECK(c.radio.lean_width && c.radio.lean_verify);    // lean width switch on after gs15, verify on
   CHECK(c.radio.switch_rt_prio == 0);                  // switch boost off
-  c = maburgs::load_config(write_tmp("[radio]\nlean_width = true\nlean_verify = false\nswitch_rt_prio = 60\n"));
-  CHECK(c.radio.lean_width && !c.radio.lean_verify && c.radio.switch_rt_prio == 60);
+  c = maburgs::load_config(write_tmp("[radio]\nlean_width = false\nlean_verify = false\nswitch_rt_prio = 60\n"));
+  CHECK(!c.radio.lean_width && !c.radio.lean_verify && c.radio.switch_rt_prio == 60);
   // Ladder switches: both on by default since gs15, off when set to 0.
   c = maburgs::load_config(write_tmp("[radio]\n"));
   CHECK(c.link.ladder_cfg.fast_fall_pre == 0.5 && c.link.ladder_cfg.promote_lat_guard_ms == 100);

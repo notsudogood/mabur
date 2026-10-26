@@ -171,14 +171,18 @@ struct RadioCfg {
   bool batched_tune = true;
   // devourer's lean width switch (tuning.lean_width) on every card: a width
   // switch writes only what the full set would change, and falls back to
-  // the full set when unsure. Off: never run on air. Needs batched_tune.
-  bool lean_width = false;
+  // the full set when unsure. On by default after gs15: 11-13 ms per card
+  // switch against 25-36 (bench, 0 readback misses). The cards' 40 <-> 20
+  // switches have not run lean on a real chip. Needs batched_tune.
+  bool lean_width = true;
   // With lean_width: read back and fall back on any difference.
   bool lean_verify = true;
   // > 0: each card width switch and full-set hop runs its calling thread
   // and that card's RX thread at this SCHED_FIFO priority, then restores
   // both (mabur/rt_boost.h). The drone measured 14-17 ms with it against
-  // 79-135 without; the GS cards (25-36 ms) have not run it. 0 = off.
+  // 79-135 without; the GS cards (25-36 ms) have not run it. 0 = off, the
+  // default: the GS switches one card at a time, so a switch never deafens
+  // it, and 60 would outrank the player's frame-release thread (10).
   int switch_rt_prio = 0;
   // Log a warning at start for each channel of the set (or the pin) where
   // an RTL8812EU drone's radio stalls on its own spur (mabur/spur_channels.h:

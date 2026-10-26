@@ -36,9 +36,12 @@ struct RadioCfg {
   bool batched_tune = true;
   // devourer's lean width switch (tuning.lean_width): a width step writes
   // only what the full set would change, learned from this session's full
-  // sets, and falls back to the full set whenever it cannot be sure. Off
-  // by default: never run on air. Needs batched_tune.
-  bool lean_width = false;
+  // sets, and falls back to the full set whenever it cannot be sure. On by
+  // default after d16: with switch_rt_prio 7.8-8.5 ms per switch against
+  // 14-17 without (bench, 5 switches, 0 readback misses) and one flight
+  // without the 80 MHz switch spike (drone 1, 2026-10-26). 20 MHz and spur
+  // primaries have not run lean on a real chip. Needs batched_tune.
+  bool lean_width = true;
   // With lean_width: read the changed registers back and fall back to the
   // full set on any difference (tuning.lean_verify). Logs each mismatch.
   bool lean_verify = true;
@@ -60,9 +63,12 @@ struct RadioCfg {
   int wide_igi_floor = -1;
   // > 0: for each width switch and hop, the switching thread and the RX
   // thread run at SCHED_FIFO with this priority (above the encoder's 50),
-  // then return to their own (rt_boost.h). An experiment: d12 measured
-  // ~0.5 ms per USB transfer in flight against 27 us at bring-up. 0 = off.
-  int switch_rt_prio = 0;
+  // then return to their own (rt_boost.h). d12 measured ~0.5 ms per USB
+  // transfer in flight against 27 us at bring-up; with 60 a switch took
+  // 14-17 ms against 79-135 (bench). On by default after d16 (see
+  // lean_width); what the boost does to the frames around a switch has not
+  // been looked at. 0 = off.
+  int switch_rt_prio = 60;
   // MAC carrier sense on the downlink, applied once right after bring-up
   // (devourer SetCcaGates; it sticks across width switches and hops):
   //   "on"         -- both gates on, the shipped behaviour (see main.cpp

@@ -1612,8 +1612,8 @@ TEST(radio_width_step_keys_parse_and_validate) {
   CHECK(c.radio.width_step && c.radio.home_width == 20 && c.radio.width_hold_ms == 1000);
   CHECK(c.radio.fast_hop_at_80 && !c.radio.batched_tune && c.radio.narrow_rescue_ms == 0);
   CHECK(c.radio.lean_width && !c.radio.lean_verify && c.radio.switch_rt_prio == 60);
-  CHECK(Config{}.radio.switch_rt_prio == 0);   // off
-  CHECK(!Config{}.radio.lean_width && Config{}.radio.lean_verify);   // off, verify on
+  CHECK(Config{}.radio.switch_rt_prio == 60);   // on after d16
+  CHECK(Config{}.radio.lean_width && Config{}.radio.lean_verify);   // on after d16, verify on
   std::filesystem::remove(p);
   // width_step absent: on where it can run (d15), off where home_width > width.
   auto absent = [](const char* body) { return load_config(write_temp_toml(body).string()).radio.width_step; };

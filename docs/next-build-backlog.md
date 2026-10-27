@@ -85,7 +85,7 @@ default until a flight on 173 confirms run 2.
 | 80 MHz any primary, channels above 165, spur fast path, VHT power diffs, ch 149 at 80 | only primary 132 (the block's lowest) has run at 80 | untested |
 | fast fall | gs12 + d13 bench: a deep partial fade walked 8 -> 0 one rung per step at 28-70 % pre-FEC loss; `link.fast_fall_pre` (off) jumps to the rung that fits (docs/link-adaptation.md) | in gs13, off, untested |
 | 3 drone CPU headroom | operator: cpu0 ~83 % busy | open |
-| 6 8812CU fix | Wyvern drone only | parked |
+| 6 8812CU fix | Wyvern drone only | ported in d16, untested on a Wyvern |
 
 **gs10 + d11 (built 2026-10-20, none of it flown).** Every new behaviour has
 its own switch and logs what it does; the test doc lists the switches.
@@ -416,6 +416,10 @@ disarmed). The workaround is converting to constant 60 fps with ffmpeg
 before loading.
 
 ## 6. Gilang's RTL8812CU 40 MHz TX fix, for a Wyvern drone build (untested)
+
+**Ported in d16** (devourer bcf0b86, floor 0x35 on the 8812CU image by
+default). Still untested on a Wyvern: the flash and 40/80 MHz test steps
+are the operator's Wyvern test doc (2026-10-27).
 
 The Wyvern air unit's RTL8812CU (8822C die) stalls on 40 MHz injection.
 Gilang's fix is in gilankpam/devourer master (`7c10751`, `ccb45ce`,
@@ -753,6 +757,47 @@ Costs and limits:
 
 Operator is trying both by hand on gs8 first (after the W3/W4 runs).
 Built into gs10 as the bundle default (2026-10-20).
+
+## 16. Width/MCS choice beyond fixed rungs (agreed 2026-10-27, later)
+
+Today each rung's width is fixed (20 MHz at the bottom and middle, 40/80
+only at the top), and that shape came from measuring this exact trade.
+Equal-rate pairs, range bench 2026-09-24 (`docs/findings/2026-09-23-bw40-sweep.md`)
+and 2026-10-17 (`docs/findings/2026-10-17-bw80-bench.md`): 40/MCS1 vs
+20/MCS3 and 40/MCS2 vs 20/MCS4 a wash (+-1.5 dB); 40/MCS3 beats 20/MCS5 by
+1-1.6 dB; 40/MCS4 reaches as far as 20/MCS6; MCS4/80 reaches ~2-2.5 dB
+further than MCS5/40; 40/MCS0 reaches 4-6 dB less than 20/MCS0.
+Counterpart: one location, edge delivery wobbling +-5-10 % between cycles,
+and the 80 MHz result is one run inside the delivery noise floor.
+
+Where a smarter chooser could win is interference on part of a wide
+block (a neighbour network, a spur, the 40 MHz stall in one 20 MHz
+slice): there a narrow, higher-MCS rung can beat a wide, lower-MCS one.
+Raised by BlackFox (SNR targets as weights, noise-floor penalties) and
+the operator (test the alternative before switching). Three steps, each
+behind a switch, logged, defaulting to today's choice:
+
+1. **Data only.** flightreport tabulates, per rung, the SNR and EVM at
+   every probe outcome and promote/demote (width-normalised), so each
+   flight adds to our own SNR-target table. No link change.
+2. **A second candidate where widths compete.** E.g. a 20/MCS5 rung beside
+   40/MCS3, with the probe stream alternating between them: same probe
+   airtime (1-2.7 %), half the samples each, so a slower decision.
+3. **Steer away from wide rungs when the rest of the block is busy or
+   noisy**, from what the GS already measures per channel (scan energy,
+   the hop evidence bits), read per 20 MHz slice.
+
+Not part of it: the uplink stays fixed at MCS0/20 LDPC+STBC (command-sized
+frames gain nothing from a faster rate). The uplink risk is the drone's
+receiver following the downlink width (and the wide-TX gain floor), which
+the floor field tests measure. NACK rides the uplink, so it cannot cover a
+bad uplink.
+
+Counterpart: in clean air the measured gain is <= 1.5 dB at the mid
+rates, and steps 2-3 add decisions and probe time; they pay mainly in
+crowded air. The chip's SNR readout is coarse, differs per card and tops
+out near 31-34 dB on our bench, so it can gate a probe but not replace
+the probe's measured loss.
 
 ## Proposed, not yet agreed
 

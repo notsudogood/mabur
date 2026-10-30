@@ -128,6 +128,15 @@ Chronological; each line names the section below that carries the detail.
   (the GS's own CPU). Recordings from earlier builds have neither, and
   their `drone.sys.cpu_pct` is the only CPU figure: the average of the
   drone's cores, which can read ~50 % while one core is saturated.
+- Before 2026-10-30 (devourer a9a54fe) — an 8812EU that came back from a
+  10 MHz rung kept its MAC in the 10 MHz clock mode until the radio was
+  re-initialised. On the GS cards that read as path-B RSSI pinned at
+  -110 dBm and per-path SNR decaying to ~0 for the rest of the session
+  while frames decoded (flight 0008 from 872 s); the fade deltas, the ctl
+  log's `snr` and every `classes.*.snr*` are wrong after such a trip. The
+  drone's radio went through the same trip; what it did to its TX is
+  unmeasured. Check `link.op.bw` for a 10 before trusting SNR later in a
+  recording.
 
 ## 2026-09-23 — `link.pre_fec_loss` scale break, twice
 

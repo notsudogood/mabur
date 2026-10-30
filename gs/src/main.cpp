@@ -1708,9 +1708,10 @@ static int run_radio(const maburgs::Config& cfg) {
     // listening).
     if (const auto& e = vrx.ctl().last_event(); e.t_ms != last_ctl_event_ms) {
       last_ctl_event_ms = e.t_ms;
-      std::fprintf(stderr, "ctl: rung %d->%d reason=%s u=%.2f pre=%.3f transit=%.0fms\n",
+      std::fprintf(stderr, "ctl: rung %d->%d reason=%s u=%.2f pre=%.3f transit=%.0fms%s%s\n",
                    e.from, e.to, maburgs::to_string(e.reason), e.u,
-                   health.pre_fec_loss, health.transit_ms);
+                   health.pre_fec_loss, health.transit_ms, e.detail.empty() ? "" : " ",
+                   e.detail.c_str());
       if (ctl_log)
         ctl_log->event(e.t_ms, e.from, e.to, maburgs::to_string(e.reason),
                         e.u, e.snr_db, e.evm_db);

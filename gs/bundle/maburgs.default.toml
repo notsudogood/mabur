@@ -113,6 +113,13 @@ promote_lat_guard_ms   = 100    # right after a step up, if frames start taking 
                                 # down instead of waiting for loss; 0 = off. On since gs15: stepped down within
                                 # 100-150 ms on the stall channels, never fired wrongly in 4 walks; the slowest
                                 # good step up reached 75 ms (one bench), so the margin is thin
+fast_fall_resid        = 0      # the same skip, keyed on loss AFTER error correction: 0.2 = a step down taken
+                                # at >= 20 % of the video lost skips to a rung that fits. Off (0) by default.
+                                # fast_fall_pre never fired in flights 0007/0008 (its number restarts at every
+                                # step, so it read 0-2 % while 12-68 % was lost); replayed, this would have
+                                # jumped on the 2nd step of the worst dip. Untested in flight
+penalty_clear_on_climb = false  # true = climbing past a rung forgets its earlier failures (flight 0007: rung 4
+                                # got a 10 s block for a failure 150 s before). Untested in flight
 
 # A second loss check on the droppable enhance-layer frames, which show
 # trouble earlier than the base layer.
@@ -226,6 +233,28 @@ rssi_db    = 14.0          # RSSI drop that counts as a fade...
 snr_db     = 6.0           # ...together with this SNR drop...
 trigger_ms = 300           # ...sustained this long
 min_rung   = 2             # never predict-step below this rung
+mode       = "rssi_snr"    # "rssi_snr" = the rule above; "edge_per" = step down when the SNR is falling
+                           # (edge_dsnr_db below its recent level) AND already near the edge
+                           # (<= edge_snr_db) AND one GS card has started losing its own packets
+                           # (>= edge_card_loss_pct), on edge_min_bw MHz rungs only. Replayed on flights
+                           # 0007/0008: warned before 3 of 5 video freezes (rssi_snr: 1), fewer false
+                           # steps; 5 freezes is no proof and the warning is short (0.1-0.6 s). Untested in flight
+edge_dsnr_db       = 6.0
+edge_snr_db        = 22.0
+edge_card_loss_pct = 2.0
+edge_min_bw        = 80
+
+# Faster climb back after a dip: while the link is below the rung a dip took
+# it from and the signal (RSSI) is back within rssi_margin_db of where it
+# was, each step up needs clean_ms and clean_bodies instead of the usual
+# 1.5 s. A failed step up ends the fast pace. Flights 0007/0008 took 12-25 s
+# to climb back after the three big dips; this aims at ~5-8 s. Untested in flight.
+[link.recover]
+enable         = false
+clean_ms       = 750
+clean_bodies   = 45        # clean probes in a row (0.75 s at 60 fps)
+rssi_margin_db = 3.0
+window_ms      = 30000     # the fast pace lasts at most this long after the dip
 
 # Software NACK: ask the drone to re-send symbols FEC could not
 # recover. On since 2026-10-20 (gs10); needs the uplink, so it helps least

@@ -401,6 +401,69 @@ the probe per rung). A short blip that crosses the threshold costs more
 picture than one rung would. A hand over the antennas is a sharper fade than
 most flights.
 
+**It never fired in flight.** Flights 0007 and 0008 (2026-10-29, gs15, the
+concrete-block dips) counted 0 fast falls. Its input is the current rung's
+pre-FEC window, which restarts at every rung change; in a fast slide each
+rung lasts ~0.2 s, so it read 0-2 % at every step of the worst dip
+(0007 487 s, 8 -> 3 in five steps over 0.8 s) while 12-68 % of the video
+was lost after repair.
+
+## Fast fall on residual loss (`link.fast_fall_resid`, off)
+
+The same jump and the same goodput fit, keyed on the demote's residual
+(post-FEC) loss: the current-rung s1 residual, or the larger of s1 and s3
+for an s3 demote. Both keys can be on; the deeper target wins. A
+residual-keyed skip adds `fast_fall pre=.. resid=.. skipped=N` to the
+`ctl: rung` line.
+
+What the replay says (0007/0008, the residual each step actually saw):
+- At the steps of the five video freezes the residual was 1-46 %. At 20 %
+  it would have skipped one rung once (0007 487 s: 6 -> 4 instead of
+  6 -> 5 -> 4), saving one step, ~0.2 s. The fit is conservative: adjacent
+  rungs differ by ~25-35 % in goodput, so 15-30 % residual still lands one
+  rung down.
+- A blunter rule, "every loss-driven step after the first in a slide skips
+  one extra rung", would have cut the 3+-step slides by one or two steps
+  (0.2-1 s) but landed one rung lower than needed in 7 of the 12
+  multi-step slides, each a longer climb back. Not built.
+
+## Climbing past a rung forgets its failures (`link.penalty_clear_on_climb`, off)
+
+`fail_count_` (the k in `penalty_base_ms << (k - 1)`) resets only when a
+rung survives its whole probation (`probation_ms`, 3000). A climb that
+passes through a rung in under 3 s never survives it there, so an old
+failure stays on the books: 0007 at 496 s penalized rung 4 at k = 2 (10 s)
+for a failure 150 s earlier, which cost most of that dip's 24 s climb back.
+With the switch on, every promote clears the count of the rung it leaves
+and every rung below. Active penalties are not touched.
+
+## Climb back after a dip (`[link.recover]`, off)
+
+A loss-driven demote (residual, util, s3 residual, s3 util or fade) that
+is not a failed promote opens an episode: the rung it left, and the RSSI baseline before
+the dip (the fade EWMA's slow side, which falls at tau 20 s and so still
+holds the pre-dip level). A second dip inside the episode keeps the higher
+rung and restarts the clock. While the link is below that rung, the
+episode is younger than `window_ms` (30000), and the fast RSSI is back
+within `rssi_margin_db` (3) of the baseline, a promote needs `clean_ms`
+(750) of clean loss and a probe streak of `clean_bodies` (45, 0.75 s at
+60 fps) instead of `link.clean_ms` / `link.probe.clean_bodies`. Probation
+and the probe gate still apply. Reaching the rung ends the episode; a
+failed promote (anything that books a penalty) ends its fast pace.
+Recovery-paced promotes add `recover clean_ms=.. bodies=.. to_rung=..` to
+the `ctl: rung` line.
+
+RSSI, not SNR: the GS card's SNR reads several dB higher on a narrower rung
+for the same signal, so "SNR back" would trip on a 20 MHz rung while the
+signal is still down.
+
+Replay estimate (0007/0008): RSSI was back within 3 dB 0-1.8 s after each
+big dip's floor, and the climbs back took 25, 15 and 12 s; at this pace
+~5-8 s. Counterparts: that assumes every faster promote would have held,
+which nothing here shows; 45 clean probes reject ~6.5 % loss at 95 %
+against 90's ~3.3 %, so a marginal rung gets through more often; and a
+second dip during the climb restarts the episode, not the measurement.
+
 ## Promote latency guard (`link.promote_lat_guard_ms`, off)
 
 A promote to a rung the drone cannot drain shows on the GS first as
@@ -497,6 +560,49 @@ Three properties to know before reading a recording:
 3. **Not rung evidence.** Fade demotes are RF evidence, not evidence about
    the rung. They never book a probation failure or a penalty, and never
    count in the RungStore's `exits_bad`.
+
+**Edge rule (`link.fade.mode = "edge_per"`, off).** The default mode,
+`"rssi_snr"`, is the rule above. `"edge_per"` replaces it with three
+conditions, all held `trigger_ms`, on rungs at least `edge_min_bw` (80) MHz
+wide:
+- the SNR delta (the same `dsnr`) reaches `edge_dsnr_db` (6): it is
+  falling;
+- the SNR itself is at or under `edge_snr_db` (22): it is near the edge.
+  A fall from 38 to 30 dB costs nothing; 26 to 20 does;
+- the worse GS card's own packet loss, before the cards are combined,
+  reaches `edge_card_loss_pct` (2): `LinkHealth::card_loss_max`, each
+  card's hardware-sequence gaps over 200 ms. The combined stream stays
+  whole while one card struggles, so this is the first real symptom.
+
+RSSI is not read; its 14 dB threshold is what made `rssi_snr` late (0007
+487 s: the SNR delta crossed 6 dB at 485.3 s, the RSSI delta reached 14 dB
+at 487.7 s, after the loss). An SNR under 5 dB is treated as a broken
+reading, not a fade: an 8812EU left in its 10 MHz MAC clock read ~0 for a
+whole flight (devourer `src/jaguar3/CLAUDE.md`). Latched like the default
+mode; the latch re-arms when the SNR delta is measurably back under
+`edge_dsnr_db`. A fire adds `edge_per dsnr=.. snr=.. worst_card=..%` to the
+`ctl: rung` line; the E line reads `fade` either way.
+
+Replay, exactly as implemented (`edge_impl.py` over the ctl-log S lines and
+the 200 ms per-card `loss_pct` in flight.jsonl; 0007, 9.6 min, and 0008 to
+872 s, 4.8 min, before the SNR fault):
+
+| | freezes warned (lead) | false fires/min |
+|---|---|---|
+| `rssi_snr` (latched) | 0 of 5 | 0.94 / 1.47 |
+| `edge_per` | 3 of 5 (2.2, 0.1, 0.6 s) | 0.42 / 1.05 |
+
+A freeze is a loss episode with >= 20 % residual within 2 s of its first
+step; a false fire is one with no loss-driven step in the next 2.5 s.
+Counterparts: five freezes is no evidence of a rate; the 2.2 s lead at
+0007 459 s is probably the 455 s dip before it; the replay cannot show what
+an earlier step would have changed; and most loss at the top rung comes with
+no warning in any signal (rung 8 lost packets in 3-14 % of half-second
+windows at 28-38 dB SNR), so no predictor catches those. Per-card loss
+alone (worst card >= 10-20 %) warned of 1 of 5: it moves in the same 200 ms
+window as the combined loss, so it is a tie-breaker here, not a trigger. A
+card back from a scout dwell reads its whole absence as loss for a window;
+scouting is off on the 40/80 MHz rungs by default (`scout_fast_rungs`).
 
 **RF labels.** `rf_snr_db`, `rf_evm_db` and `rf_rssi_dbm` come from ONE
 card, as a coherent snapshot. That card's per-card pooled sid0+sid1 track

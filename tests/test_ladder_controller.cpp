@@ -1605,3 +1605,274 @@ TEST(lat_guard_only_during_probation) {
   CHECK(ctl.rung() == 3);
   CHECK(ctl.counters().demotes_latency == 0u);
 }
+
+// --- fade.mode = edge_per -------------------------------------------------
+// kLadder is all 20 MHz, so these open the width gate with edge_min_bw = 20.
+
+namespace {
+LadderCfg edge_cfg() {
+  LadderCfg cfg = make_cfg_noprobe();
+  cfg.fade.mode = FadeCfg::Mode::EdgePer;
+  cfg.fade.edge_min_bw = 20;
+  return cfg;
+}
+
+// Settles the SNR baseline at snr_db with no card losing, at neutral util.
+void edge_baseline(LadderController& ctl, double& t, double snr_db) {
+  for (const double end = t + 3200; t < end; t += 50) {
+    LinkHealth h = rf(0.3 * ctl.budget_base(), snr_db, -55.0);
+    h.card_loss_max = 0.0;
+    ctl.update(h, t);
+  }
+}
+
+int edge_fires(LadderController& ctl, double& t, double ms, double snr_db, double card_loss) {
+  int n = 0;
+  for (const double end = t + ms; t < end; t += 50) {
+    LinkHealth h = rf(0.3 * ctl.budget_base(), snr_db, -55.0);
+    h.card_loss_max = card_loss;
+    if (ctl.update(h, t) && ctl.last_event().reason == CtlReason::Fade) ++n;
+  }
+  return n;
+}
+}  // namespace
+
+TEST(edge_per_fires_when_falling_near_the_edge_with_a_card_losing) {
+  LadderController ctl(edge_cfg());
+  double t = 0;
+  promote_to(ctl, t, 5);
+  edge_baseline(ctl, t, 30.0);
+  // SNR 30 -> 20 (falling 10 dB, under 22), one card losing 5 %; RSSI flat.
+  CHECK(edge_fires(ctl, t, 2000, 20.0, 0.05) == 1);   // latched: once per fall
+  CHECK(ctl.rung() == 4);
+  CHECK(ctl.counters().demotes_fade == 1u);
+  CHECK(ctl.last_event().detail.rfind("edge_per ", 0) == 0);
+}
+
+TEST(edge_per_needs_all_three) {
+  {  // falling and near the edge, but no card losing
+    LadderController ctl(edge_cfg());
+    double t = 0;
+    promote_to(ctl, t, 5);
+    edge_baseline(ctl, t, 30.0);
+    CHECK(edge_fires(ctl, t, 2000, 20.0, 0.0) == 0);
+  }
+  {  // falling with a card losing, but far from the edge (40 -> 30)
+    LadderController ctl(edge_cfg());
+    double t = 0;
+    promote_to(ctl, t, 5);
+    edge_baseline(ctl, t, 40.0);
+    CHECK(edge_fires(ctl, t, 2000, 30.0, 0.05) == 0);
+  }
+  {  // near the edge with a card losing, but not falling (steady at 20)
+    LadderController ctl(edge_cfg());
+    double t = 0;
+    promote_to(ctl, t, 5);
+    edge_baseline(ctl, t, 20.0);
+    CHECK(edge_fires(ctl, t, 2000, 20.0, 0.05) == 0);
+  }
+}
+
+TEST(edge_per_stays_off_narrower_rungs) {
+  LadderCfg cfg = edge_cfg();
+  cfg.fade.edge_min_bw = 80;   // the bundle's value; kLadder is 20 MHz
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 5);
+  edge_baseline(ctl, t, 30.0);
+  CHECK(edge_fires(ctl, t, 2000, 20.0, 0.05) == 0);
+  CHECK(ctl.rung() == 5);
+}
+
+TEST(edge_per_ignores_an_impossible_snr) {
+  // An 8812EU left in its 10 MHz MAC clock read SNR ~0 while it decoded
+  // fine: a reading under 5 dB is broken, not a fade.
+  LadderController ctl(edge_cfg());
+  double t = 0;
+  promote_to(ctl, t, 5);
+  edge_baseline(ctl, t, 30.0);
+  CHECK(edge_fires(ctl, t, 2000, 0.5, 0.05) == 0);
+  CHECK(ctl.rung() == 5);
+}
+
+TEST(edge_per_rearms_once_the_snr_recovers) {
+  LadderController ctl(edge_cfg());
+  double t = 0;
+  promote_to(ctl, t, 5);
+  edge_baseline(ctl, t, 30.0);
+  CHECK(edge_fires(ctl, t, 2000, 20.0, 0.05) == 1);
+  edge_baseline(ctl, t, 30.0);   // back up: the delta falls under 6 dB
+  REQUIRE(ctl.fade_dsnr() < 6.0);
+  CHECK(edge_fires(ctl, t, 2000, 20.0, 0.05) == 1);
+  CHECK(ctl.counters().demotes_fade == 2u);
+}
+
+TEST(rssi_snr_mode_ignores_card_loss) {
+  // The default mode is unchanged: an SNR-only fall with a card losing
+  // never fires it.
+  LadderCfg cfg = make_cfg_noprobe();
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 5);
+  edge_baseline(ctl, t, 30.0);
+  CHECK(edge_fires(ctl, t, 2000, 20.0, 0.5) == 0);
+}
+
+// --- fast fall keyed on residual loss (link.fast_fall_resid) ----------------
+
+TEST(fast_fall_resid_lands_on_the_fit) {
+  LadderCfg cfg = make_cfg_noprobe();
+  cfg.fast_fall_resid = 0.2;
+  LadderController ctl(cfg);
+  CHECK(ctl.fall_target(5, 0.0, 0.1) == 4);    // under the threshold: one rung
+  CHECK(ctl.fall_target(5, 0.0, 0.5) == 2);    // 54.2 x 0.5 = 27.1 -> 26.0
+  CHECK(ctl.fall_target(5, 0.0, 0.7) == 1);    // 54.2 x 0.3 = 16.3 -> 9.75
+  cfg.fast_fall_pre = 0.5;
+  LadderController both(cfg);
+  CHECK(both.fall_target(5, 0.7, 0.5) == 1);   // the deeper target wins
+  CHECK(both.fall_target(5, 0.5, 0.7) == 1);
+}
+
+TEST(fast_fall_resid_on_a_residual_demote_logs_why) {
+  for (double ff : {0.0, 0.2}) {
+    LadderCfg cfg = make_cfg_noprobe();
+    cfg.fast_fall_resid = ff;
+    LadderController ctl(cfg);
+    double t = 0;
+    promote_to(ctl, t, 5);
+    LinkHealth h = ok(0.0);        // the pre-FEC window reads ~0 mid-slide
+    h.residual_loss = 0.6;
+    CHECK(ctl.update(h, t));
+    CHECK(ctl.rung() == (ff > 0 ? 1 : 4));   // 54.2 x 0.4 = 21.7 -> 9.75
+    CHECK(ctl.counters().fast_falls == (ff > 0 ? 1u : 0u));
+    CHECK(ctl.last_event().detail.rfind("fast_fall ", 0) == (ff > 0 ? 0u : std::string::npos));
+  }
+}
+
+// --- link.penalty_clear_on_climb --------------------------------------------
+
+TEST(climbing_past_a_rung_forgets_its_failures) {
+  for (bool clear : {false, true}) {
+    LadderCfg cfg = make_cfg_noprobe();
+    cfg.penalty_clear_on_climb = clear;
+    cfg.probation_ms = 8000;   // longer than clean_ms: a climb never survives it
+    LadderController ctl(cfg);
+    double t = 0;
+    promote_to(ctl, t, 1);
+    CHECK(ctl.update(ok(0.7 * ctl.budget_base()), t));   // fail rung 1: k = 1
+    REQUIRE(ctl.rung() == 0);
+    t += 50;
+    promote_to(ctl, t, 2);   // back past rung 1 before its probation could end
+    LinkHealth r = ok(0.0);
+    r.residual_loss = 0.01;
+    for (int i = 0; i < 2; ++i, t += 200) ctl.update(r, t);
+    REQUIRE(ctl.rung() == 0);
+    promote_to(ctl, t, 1);
+    const double fail_t = t;
+    CHECK(ctl.update(ok(0.7 * ctl.budget_base()), fail_t));
+    CHECK(penalty_ms_for(ctl, fail_t, 1) == (clear ? 1 : 2) * cfg.penalty_base_ms);
+  }
+}
+
+// --- link.recover --------------------------------------------------------
+
+namespace {
+// Time to climb from the current rung to `target` on clean loss at the
+// given RSSI (SNR flat).
+double climb_ms(LadderController& ctl, double& t, int target, double rssi) {
+  const double t0 = t;
+  for (; ctl.rung() < target && t < t0 + 60000; t += 50) ctl.update(rf(0.0, 30.0, rssi), t);
+  return t - t0;
+}
+LadderCfg recover_cfg(bool on) {
+  LadderCfg cfg = make_cfg_noprobe();
+  cfg.hold_after_down_ms = 0;   // the bundle's value
+  cfg.recover.enable = on;
+  return cfg;
+}
+// Up to rung 5 on a steady -55 dBm, then a dip at -75 dBm walks it down to 2.
+void dip_to_2(LadderController& ctl, double& t) {
+  promote_to(ctl, t, 5);
+  for (const double end = t + 4000; t < end; t += 50)
+    ctl.update(rf(0.3 * ctl.budget_base(), 30.0, -55.0), t);
+  LinkHealth h = rf(0.0, 18.0, -75.0);
+  h.residual_loss = 0.05;
+  for (int i = 0; i < 3; ++i, t += 200) ctl.update(h, t);
+  REQUIRE(ctl.rung() == 2);
+}
+}  // namespace
+
+TEST(recover_climbs_back_fast_once_rssi_returns) {
+  for (bool on : {false, true}) {
+    LadderController ctl(recover_cfg(on));
+    double t = 0;
+    dip_to_2(ctl, t);
+    const double ms = climb_ms(ctl, t, 5, -56.0);
+    CHECK(ctl.rung() == 5);
+    // Normal pace: clean_ms (5000) a rung. Recovery: 750 + the gates.
+    if (on) CHECK(ms < 3 * 1000.0); else CHECK(ms >= 3 * 5000.0);
+    if (on) CHECK(ctl.last_event().detail.rfind("recover ", 0) == 0);
+  }
+}
+
+TEST(recover_waits_for_the_signal) {
+  LadderController ctl(recover_cfg(true));
+  double t = 0;
+  dip_to_2(ctl, t);
+  // RSSI still 10 dB down: normal pace.
+  const double ms = climb_ms(ctl, t, 3, -65.0);
+  CHECK(ms >= 5000.0);
+  CHECK(ctl.last_event().detail.empty());
+}
+
+TEST(recover_stops_at_the_rung_the_dip_left) {
+  // A dip from rung 4 to 2: fast back to 4, normal pace above it.
+  LadderController ctl(recover_cfg(true));
+  double t = 0;
+  promote_to(ctl, t, 4);
+  for (const double end = t + 4000; t < end; t += 50)
+    ctl.update(rf(0.3 * ctl.budget_base(), 30.0, -55.0), t);
+  LinkHealth h = rf(0.0, 18.0, -75.0);
+  h.residual_loss = 0.05;
+  for (int i = 0; i < 2; ++i, t += 200) ctl.update(h, t);
+  REQUIRE(ctl.rung() == 2);
+  CHECK(climb_ms(ctl, t, 4, -55.0) < 2 * 1000.0);
+  CHECK(climb_ms(ctl, t, 5, -55.0) >= 5000.0);
+}
+
+TEST(recover_failed_promote_ends_the_fast_pace) {
+  LadderCfg cfg = recover_cfg(true);
+  LadderController ctl(cfg);
+  double t = 0;
+  dip_to_2(ctl, t);
+  climb_ms(ctl, t, 3, -55.0);
+  REQUIRE(ctl.rung() == 3);
+  CHECK(ctl.update(rf(0.7 * ctl.budget_base(), 30.0, -55.0), t));   // probation fail
+  REQUIRE(ctl.rung() == 2);
+  t += 50;
+  // Rung 3 is now penalized (penalty_base_ms); once that lapses, the climb
+  // is back at the normal pace.
+  const double ms = climb_ms(ctl, t, 3, -55.0);
+  CHECK(ms >= cfg.penalty_base_ms);
+  CHECK(ctl.last_event().detail.empty());
+}
+
+TEST(recover_failed_promote_opens_no_episode) {
+  // A promote that falls straight back is not a dip: no fast climb after it.
+  LadderCfg cfg = recover_cfg(true);
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 3);
+  for (const double end = t + 200; t < end; t += 50)   // still on probation
+    ctl.update(rf(0.3 * ctl.budget_base(), 30.0, -55.0), t);
+  REQUIRE(ctl.probation_ms_left(t) > 0);
+  LinkHealth h = rf(0.0, 30.0, -55.0);
+  h.residual_loss = 0.05;
+  CHECK(ctl.update(h, t));
+  REQUIRE(ctl.rung() == 2);
+  t += 50;
+  // Rung 3 is penalized; once that lapses the climb is the normal pace.
+  const double ms = climb_ms(ctl, t, 3, -55.0);
+  CHECK(ms >= cfg.penalty_base_ms);
+  CHECK(ctl.last_event().detail.empty());
+}

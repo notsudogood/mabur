@@ -102,6 +102,10 @@ class LinkHealthAssembler {
   ProbeTrack probe_track_;
   S1LossWindow probe_loss_;  // union, commanded profile
   std::vector<S1LossWindow> probe_card_loss_;
+  // Each card's own delivery from its hardware-sequence gaps (every drone
+  // frame, all streams), 200 ms -- the stats period the edge_per fade rule
+  // was replayed on. LinkHealth::card_loss_max is the worst of them.
+  std::vector<S1LossWindow> card_seq_loss_;
   uint8_t probe_cmd_last_ = mabur::rc::kNoProbeProfile;
   std::vector<ProbeFinalized> probe_rows_;
   // Measured-loss ladder feedback: stream 1 (base layer)'s cumulative

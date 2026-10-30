@@ -16,6 +16,7 @@ LinkHealthAssembler::LinkHealthAssembler(const LinkHealthCfg& cfg)
     : cfg_(cfg),
       probe_track_(ProbeTrackCfg{cfg.probe_bpb, 100, cfg.n_cards}),
       probe_card_loss_(static_cast<size_t>(cfg.n_cards)),
+      card_seq_loss_(static_cast<size_t>(cfg.n_cards), S1LossWindow(200)),
       prev_pool_frames_(static_cast<size_t>(cfg.n_cards), 0),
       label_card_inputs_(static_cast<size_t>(cfg.n_cards)) {}
 
@@ -272,6 +273,13 @@ LinkHealthAssembler::Tick LinkHealthAssembler::tick(double now_ms,
   health.rf_snr_db = rf_snr_db;
   health.rf_evm_db = rf_evm_db;
   health.rf_rssi_dbm = rf_rssi_dbm;
+  for (int i = 0; i < cfg_.n_cards; ++i) {
+    auto& w = card_seq_loss_[static_cast<size_t>(i)];
+    w.add(agg.card(i).seq_expected, agg.card(i).seq_received, now_ms);
+    const auto cs = w.sample(now_ms);
+    // NaN-safe max: the first valid card replaces the NaN.
+    if (cs.valid && !(cs.loss <= health.card_loss_max)) health.card_loss_max = cs.loss;
+  }
 
   // Last-tick views for the caller's sideport / ctl log / OSD readers.
   residual_ = residual;

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 
 #include "mabur/profile.h"
 
@@ -182,6 +183,32 @@ void LadderController::set_event(double now_ms, int from, int to,
   last_event_.u = u;
   last_event_.snr_db = snr;
   last_event_.evm_db = evm_now_;
+  last_event_.detail = std::move(pending_detail_);
+  pending_detail_.clear();
+}
+
+void LadderController::note_loss_demote(int from, double now_ms) {
+  if (!cfg_.recover.enable) return;
+  if (rec_rung_ >= 0 && now_ms < rec_until_ms_) {
+    // A second dip inside the episode: keep the higher target and the
+    // pre-dip baseline, restart the clock.
+    rec_rung_ = std::max(rec_rung_, from);
+    rec_until_ms_ = now_ms + cfg_.recover.window_ms;
+    return;
+  }
+  if (!fade_rssi_.has) return;  // no pre-dip level to come back to
+  rec_rung_ = from;
+  // The slow baseline falls at tau 20 s, so at the first loss-driven step it
+  // still holds the pre-dip level.
+  rec_rssi_dbm_ = fade_rssi_.slow;
+  rec_until_ms_ = now_ms + cfg_.recover.window_ms;
+  rec_spent_ = false;
+}
+
+bool LadderController::recover_pace(double now_ms) const {
+  return cfg_.recover.enable && rec_rung_ >= 0 && !rec_spent_ && idx_ < rec_rung_ &&
+         now_ms < rec_until_ms_ && fade_rssi_.has &&
+         fade_rssi_.fast >= rec_rssi_dbm_ - cfg_.recover.rssi_margin_db;
 }
 
 // A rung's probation is "survived" once the clock crosses probation_until_ms_
@@ -212,6 +239,9 @@ void LadderController::penalize_rung(int rung, double now_ms) {
   constexpr int kMaxShiftExp = 32;
   if (fail_count_[r] < kMaxShiftExp) ++fail_count_[r];
   const int k = fail_count_[r];
+  // A failed promote ends a recovery episode's fast pace: the link said it
+  // is not back yet, so the rest of the climb goes at the normal pace.
+  if (rec_rung_ >= 0) rec_spent_ = true;
   const long long shifted = static_cast<long long>(cfg_.penalty_base_ms) << (k - 1);
   const double dur = std::min(static_cast<double>(cfg_.penalty_max_ms),
                                static_cast<double>(shifted));
@@ -253,14 +283,31 @@ double rung_goodput_mbps(const Rung& r) {
 }
 }  // namespace
 
-int LadderController::fall_target(int from, double pre) const {
+int LadderController::fall_target(int from, double pre, double resid) const {
   if (from <= 0) return 0;
-  if (cfg_.fast_fall_pre <= 0.0 || pre < cfg_.fast_fall_pre) return from - 1;
-  const double fits = rung_goodput_mbps(cfg_.ladder[static_cast<size_t>(from)]) *
-                      (1.0 - std::min(pre, 1.0));
-  for (int r = from - 1; r > 0; --r)
-    if (rung_goodput_mbps(cfg_.ladder[static_cast<size_t>(r)]) <= fits) return r;
-  return 0;
+  auto fit = [&](double loss) {
+    const double fits = rung_goodput_mbps(cfg_.ladder[static_cast<size_t>(from)]) *
+                        (1.0 - std::min(loss, 1.0));
+    for (int r = from - 1; r > 0; --r)
+      if (rung_goodput_mbps(cfg_.ladder[static_cast<size_t>(r)]) <= fits) return r;
+    return 0;
+  };
+  int to = from - 1;
+  if (cfg_.fast_fall_pre > 0.0 && pre >= cfg_.fast_fall_pre) to = std::min(to, fit(pre));
+  if (cfg_.fast_fall_resid > 0.0 && resid >= cfg_.fast_fall_resid) to = std::min(to, fit(resid));
+  return to;
+}
+
+int LadderController::loss_fall(int from, double pre, double resid) {
+  const int to = fall_target(from, pre, resid);
+  if (to < from - 1) {
+    ++counters_.fast_falls;
+    char b[96];
+    std::snprintf(b, sizeof(b), "fast_fall pre=%.2f resid=%.2f skipped=%d", pre, resid,
+                  from - 1 - to);
+    pending_detail_ = b;
+  }
+  return to;
 }
 
 // Check order (a contract; the block numbers below follow it):
@@ -373,8 +420,8 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
       penalize_rung(from, now_ms);
       probation_active_ = false;
     }
-    idx_ = fall_target(from, h.pre_fec_loss);
-    if (idx_ < from - 1) ++counters_.fast_falls;
+    idx_ = loss_fall(from, h.pre_fec_loss, h.residual_loss);
+    if (!was_probation) note_loss_demote(from, now_ms);   // a failed promote is no dip
     last_down_ms_ = now_ms;
     last_change_ms_ = now_ms;
     reset_windows();
@@ -427,11 +474,31 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
   // before 5a (fade beats the confirm-window tiers). The EWMA feed itself
   // lives above block 4 — see the comment there.
   if (cfg_.fade.predict) {
+    const bool edge = cfg_.fade.mode == FadeCfg::Mode::EdgePer;
+    // EdgePer reads no RSSI. Its SNR also has to be physically possible on a
+    // rung that still decodes: under kEdgeSnrFloorDb is a broken reading (an
+    // 8812EU left in its 10 MHz MAC clock read ~0 for a whole flight), never
+    // a fade, and must not count as one.
+    constexpr double kEdgeSnrFloorDb = 5.0;
     const bool measurable =
-        !std::isnan(h.rf_rssi_dbm) && !std::isnan(h.rf_snr_db) &&
-        fade_rssi_.has && fade_snr_.has;
-    const bool over = measurable && fade_rssi_.delta() >= cfg_.fade.rssi_db &&
-                      fade_snr_.delta() >= cfg_.fade.snr_db;
+        edge ? (!std::isnan(h.rf_snr_db) && h.rf_snr_db >= kEdgeSnrFloorDb &&
+                !std::isnan(h.card_loss_max) && fade_snr_.has)
+             : (!std::isnan(h.rf_rssi_dbm) && !std::isnan(h.rf_snr_db) &&
+                fade_rssi_.has && fade_snr_.has);
+    const bool wide_enough = op().bw >= cfg_.fade.edge_min_bw;
+    const bool over =
+        measurable &&
+        (edge ? wide_enough && fade_snr_.delta() >= cfg_.fade.edge_dsnr_db &&
+                    h.rf_snr_db <= cfg_.fade.edge_snr_db &&
+                    h.card_loss_max * 100.0 >= cfg_.fade.edge_card_loss_pct
+              : fade_rssi_.delta() >= cfg_.fade.rssi_db &&
+                    fade_snr_.delta() >= cfg_.fade.snr_db);
+    // The latch's "fade over" test: EdgePer's event is the SNR fall, so it
+    // re-arms once the SNR delta is measurably back under its threshold.
+    const bool recovered =
+        measurable && (edge ? fade_snr_.delta() < cfg_.fade.edge_dsnr_db
+                            : fade_rssi_.delta() < cfg_.fade.rssi_db &&
+                                  fade_snr_.delta() < cfg_.fade.snr_db);
     // OBSERVED recovery — both deltas measurably back under threshold — is the
     // only thing that re-arms the latch, and it is deliberately NOT the !over
     // branch below. !over is also true on a NaN tick, and absence of evidence
@@ -440,10 +507,7 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
     // let the same ongoing fade fire a second demote trigger_ms later.
     // Breaking the pre-fire sustain run on !over errs toward NOT demoting;
     // clearing the post-fire latch there would invert that conservatism.
-    if (measurable && fade_rssi_.delta() < cfg_.fade.rssi_db &&
-        fade_snr_.delta() < cfg_.fade.snr_db) {
-      fade_latched_ = false;
-    }
+    if (recovered) fade_latched_ = false;
     if (!over) {
       fade_trig_start_ms_ = -1.0;
     } else {
@@ -460,6 +524,13 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
         mark_transition(now_ms);
         fade_until_ms_ = now_ms + cfg_.fade.hold_ms;  // enter the regime
         ++counters_.demotes_fade;
+        note_loss_demote(from, now_ms);
+        if (edge) {
+          char b[96];
+          std::snprintf(b, sizeof(b), "edge_per dsnr=%.1f snr=%.1f worst_card=%.1f%%",
+                        fade_snr_.delta(), h.rf_snr_db, h.card_loss_max * 100.0);
+          pending_detail_ = b;
+        }
         set_event(now_ms, from, idx_, CtlReason::Fade, u_, snr_now_);
         fade_trig_start_ms_ = -1.0;
         fade_latched_ = true;  // one fire per fade event
@@ -522,15 +593,17 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
   // u3 for s3 events.
   auto s3_demote_now = [&](CtlReason reason, uint64_t& counter) {
     const int from = idx_;
-    if (probation_active_ && idx_ == probation_rung_) {
+    const bool was_probation = probation_active_ && idx_ == probation_rung_;
+    if (was_probation) {
       ++counters_.probation_fails;
       penalize_rung(from, now_ms);
       probation_active_ = false;
     }
     // The enhance layer shows loss first, but the rung the base layer can
     // still carry is the question, so the deeper of the two losses decides.
-    idx_ = fall_target(from, std::max(h.pre_fec_loss, h.s3_pre_fec_loss));
-    if (idx_ < from - 1) ++counters_.fast_falls;
+    idx_ = loss_fall(from, std::max(h.pre_fec_loss, h.s3_pre_fec_loss),
+                     std::max(h.residual_loss, h.s3_residual_loss));
+    if (!was_probation) note_loss_demote(from, now_ms);
     last_down_ms_ = now_ms;
     last_change_ms_ = now_ms;
     reset_windows();
@@ -584,8 +657,8 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
     if (idx_ > 0 && now_ms - confirm_start_ms_ >= eff_confirm_ms(now_ms) &&
         now_ms - last_change_ms_ >= cfg_.min_between_changes_ms) {
       const int from = idx_;
-      idx_ = fall_target(from, h.pre_fec_loss);
-      if (idx_ < from - 1) ++counters_.fast_falls;
+      idx_ = loss_fall(from, h.pre_fec_loss, h.residual_loss);
+      note_loss_demote(from, now_ms);
       last_down_ms_ = now_ms;
       last_change_ms_ = now_ms;
       reset_windows();
@@ -624,8 +697,14 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
     if (clean_start_ms_ < 0.0) clean_start_ms_ = now_ms;
 
     const std::size_t next = static_cast<std::size_t>(idx_) + 1;
+    // link.recover: a faster pace while the link climbs back to the rung a
+    // dip took it from and RSSI says the signal is back (RecoverCfg).
+    const bool fast = recover_pace(now_ms);
+    const double eff_clean_ms = fast ? std::min(cfg_.clean_ms, cfg_.recover.clean_ms) : cfg_.clean_ms;
+    const uint64_t eff_bodies = static_cast<uint64_t>(
+        fast ? std::min(cfg_.probe.clean_bodies, cfg_.recover.clean_bodies) : cfg_.probe.clean_bodies);
     if (next < cfg_.ladder.size() &&
-        now_ms - clean_start_ms_ >= cfg_.clean_ms &&
+        now_ms - clean_start_ms_ >= eff_clean_ms &&
         now_ms - last_down_ms_ >= cfg_.hold_after_down_ms &&
         now_ms - last_change_ms_ >= cfg_.min_between_changes_ms &&
         !is_penalized(static_cast<int>(next), now_ms)) {
@@ -642,8 +721,7 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
       const ProbeGate g = probe_gate(now_ms);
       CtlReason reason = CtlReason::Promote;
       if (g.state != ProbeGateState::Off) {
-        if (g.state == ProbeGateState::Clean &&
-            g.streak_bodies >= static_cast<uint64_t>(cfg_.probe.clean_bodies)) {
+        if (g.state == ProbeGateState::Clean && g.streak_bodies >= eff_bodies) {
           reason = CtlReason::PromoteProbed;
         } else if (g.state == ProbeGateState::Clean) {
           return false;  // clean but streak too short: not a hold
@@ -654,6 +732,16 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
       }
       const int from = idx_;
       idx_ = static_cast<int>(next);
+      // Climbing past a rung: whatever it failed before is history.
+      if (cfg_.penalty_clear_on_climb)
+        for (int r = 0; r <= from; ++r) fail_count_[static_cast<std::size_t>(r)] = 0;
+      if (fast) {
+        char b[96];
+        std::snprintf(b, sizeof(b), "recover clean_ms=%.0f bodies=%llu to_rung=%d", eff_clean_ms,
+                      static_cast<unsigned long long>(eff_bodies), rec_rung_);
+        pending_detail_ = b;
+      }
+      if (rec_rung_ >= 0 && idx_ >= rec_rung_) rec_rung_ = -1;  // back where the dip began
       last_change_ms_ = now_ms;
       reset_windows();
       probation_active_ = true;

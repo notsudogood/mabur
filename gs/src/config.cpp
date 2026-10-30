@@ -419,7 +419,8 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
                 "ladder", "max_mcs", "down_util", "up_util", "confirm_ms",
                 "clean_ms", "probation_ms", "penalty_base_ms", "penalty_max_ms",
                 "hold_after_down_ms", "min_between_changes_ms", "feedback_timeout_ms",
-                "starved_confirm_ms", "fast_fall_pre", "promote_lat_guard_ms", "s3_demote", "s3_down_util",
+                "starved_confirm_ms", "fast_fall_pre", "fast_fall_resid", "penalty_clear_on_climb",
+                "recover", "promote_lat_guard_ms", "s3_demote", "s3_down_util",
                 "s3_settle_ms", "s3_min_syms",
                 "rung_stats", "fade", "probe",
                 "rcf_slot_hold_ms", "arrival_guard_syms",
@@ -527,6 +528,25 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
         static_cast<int>(get_int(r, "starved_confirm_ms", 300, 0, 600000, "link"));
     c.link.ladder_cfg.fast_fall_pre =
         get_num(r, "fast_fall_pre", c.link.ladder_cfg.fast_fall_pre, 0.0, 1.0, "link");
+    c.link.ladder_cfg.fast_fall_resid =
+        get_num(r, "fast_fall_resid", c.link.ladder_cfg.fast_fall_resid, 0.0, 1.0, "link");
+    c.link.ladder_cfg.penalty_clear_on_climb = get_bool(
+        r, "penalty_clear_on_climb", c.link.ladder_cfg.penalty_clear_on_climb, "link");
+    // Faster climb back after a dip (RecoverCfg). Optional, off when absent.
+    if (r.contains("recover")) {
+      const Value& rj = r["recover"];
+      check_keys(rj, "link.recover",
+                 {"enable", "clean_ms", "clean_bodies", "rssi_margin_db", "window_ms"});
+      auto& rc = c.link.ladder_cfg.recover;
+      rc.enable = get_bool(rj, "enable", rc.enable, "link.recover");
+      rc.clean_ms = static_cast<int>(get_int(rj, "clean_ms", rc.clean_ms, 0, 600000, "link.recover"));
+      rc.clean_bodies =
+          static_cast<int>(get_int(rj, "clean_bodies", rc.clean_bodies, 10, 100000, "link.recover"));
+      rc.rssi_margin_db = get_num(rj, "rssi_margin_db", rc.rssi_margin_db, 0.0, 40.0, "link.recover");
+      rc.window_ms = static_cast<int>(get_int(rj, "window_ms", rc.window_ms, 1000, 600000, "link.recover"));
+    } else {
+      note_default("link", "recover", "(section absent)");
+    }
     c.link.ladder_cfg.promote_lat_guard_ms = static_cast<int>(
         get_int(r, "promote_lat_guard_ms", c.link.ladder_cfg.promote_lat_guard_ms, 0, 2000, "link"));
 
@@ -575,7 +595,8 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
       const Value& fj = r["fade"];
       check_keys(fj, "link.fade",
                  {"cascade", "predict", "hold_ms", "confirm_ms", "rssi_db",
-                  "snr_db", "trigger_ms", "min_rung"});
+                  "snr_db", "trigger_ms", "min_rung", "mode", "edge_dsnr_db",
+                  "edge_snr_db", "edge_card_loss_pct", "edge_min_bw"});
       auto& fc = lc.fade;
       fc.cascade = get_bool(fj, "cascade", fc.cascade, "link.fade");
       fc.predict = get_bool(fj, "predict", fc.predict, "link.fade");
@@ -585,6 +606,18 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
       fc.snr_db = get_num(fj, "snr_db", 4.0, 0.5, 40.0, "link.fade");
       fc.trigger_ms = static_cast<int>(get_int(fj, "trigger_ms", 300, 50, 5000, "link.fade"));
       fc.min_rung = static_cast<int>(get_int(fj, "min_rung", 2, 0, 15, "link.fade"));
+      const std::string mode = get_str(fj, "mode", "rssi_snr", "link.fade");
+      if (mode == "rssi_snr")
+        fc.mode = FadeCfg::Mode::RssiSnr;
+      else if (mode == "edge_per")
+        fc.mode = FadeCfg::Mode::EdgePer;
+      else
+        fail("link.fade.mode", "\"" + mode + "\" (want \"rssi_snr\" or \"edge_per\")");
+      fc.edge_dsnr_db = get_num(fj, "edge_dsnr_db", fc.edge_dsnr_db, 0.5, 40.0, "link.fade");
+      fc.edge_snr_db = get_num(fj, "edge_snr_db", fc.edge_snr_db, 0.0, 60.0, "link.fade");
+      fc.edge_card_loss_pct =
+          get_num(fj, "edge_card_loss_pct", fc.edge_card_loss_pct, 0.0, 100.0, "link.fade");
+      fc.edge_min_bw = static_cast<int>(get_int(fj, "edge_min_bw", fc.edge_min_bw, 10, 80, "link.fade"));
     } else {
       note_default("link", "fade", "(section absent)");
     }

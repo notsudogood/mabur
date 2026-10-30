@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -61,6 +62,47 @@ struct FadeCfg {
   double snr_db = 4.0;   // baseline-minus-fast SNR drop to trigger
   int trigger_ms = 300;  // sustain requirement
   int min_rung = 2;      // no predictive fires below this rung
+  // Which rule block 4b runs while predict is on (link.fade.mode).
+  //   RssiSnr: the joint RSSI + SNR drop above (rssi_db, snr_db).
+  //   EdgePer: three conditions, all held trigger_ms: the SNR has fallen
+  //     edge_dsnr_db below its baseline (the same delta as snr_db reads),
+  //     it is already at or under edge_snr_db (near the rung's edge: a drop
+  //     from 38 to 30 dB costs nothing, 26 to 20 does), and the worse
+  //     card's own packet loss, before the cards are combined
+  //     (LinkHealth::card_loss_max), is at least edge_card_loss_pct. Only
+  //     on rungs at least edge_min_bw MHz wide. Replayed on two flights
+  //     (2026-10-30, logs 0007/0008): warned ahead of 3 of the 5 video
+  //     freezes against 1 for RssiSnr, with fewer false steps (0.7 and
+  //     2.3/min against 1.8 and 2.9) -- but 5 freezes is no proof, the
+  //     lead was mostly 0.1-0.6 s, and the replay cannot show what an
+  //     earlier step would have changed. RSSI is not read: its 14 dB
+  //     threshold is what made RssiSnr late.
+  enum class Mode { RssiSnr, EdgePer };
+  Mode mode = Mode::RssiSnr;
+  double edge_dsnr_db = 6.0;
+  double edge_snr_db = 22.0;
+  double edge_card_loss_pct = 2.0;
+  int edge_min_bw = 80;
+};
+
+// Faster climb back after a dip (link.recover). A loss-driven step down
+// that is not a failed promote opens an episode remembering the rung it left
+// and the RSSI baseline before the dip. While the link sits below that rung, the
+// episode is younger than window_ms, and RSSI is back within rssi_margin_db
+// of that baseline, the promote needs clean_ms of clean loss and a probe
+// streak of clean_bodies instead of the usual ones. A failed probation (or
+// a promote latency guard trip) ends the fast pace for the episode; so does
+// reaching the rung. RSSI, not SNR, because the SNR reads several dB higher
+// on a narrower rung for the same signal. Replay estimate (logs 0007/0008):
+// the three big dips climbed back in 25, 15 and 12 s; at 0.75 s a rung once
+// RSSI was back, ~5 s each -- an estimate that assumes every faster promote
+// would have held, which nothing here proves.
+struct RecoverCfg {
+  bool enable = false;
+  int clean_ms = 750;
+  int clean_bodies = 45;
+  double rssi_margin_db = 3.0;
+  int window_ms = 30000;
 };
 
 // --- always-on probe stream ---
@@ -111,6 +153,20 @@ struct LadderCfg {
   // steps at 28-70 % pre-FEC loss). The fade, probation, starved and
   // timeout paths are unchanged. 0 = off: one rung per demote.
   double fast_fall_pre = 0.0;
+  // The same jump keyed on loss AFTER repair (the demote's current-rung
+  // residual; s3 demotes use the larger of the two layers'). fast_fall_pre
+  // never fired in two flights (0007/0008): its pre-FEC window restarts at
+  // every rung change, and in a fast slide each rung lasts ~0.2 s, so it
+  // read 0-2 % at every step while 12-68 % was lost after repair. The
+  // target is the same goodput fit, with the residual as the loss. The two
+  // combine: the deeper target wins. 0 = off.
+  double fast_fall_resid = 0.0;
+  // Climbing past a rung clears its consecutive-failure count, and every
+  // rung's below it. Off, fail_count_ resets only when a rung survives its
+  // whole probation, which a quick climb never lets it do: log 0007 at
+  // 496 s penalized rung 4 at k=2 (10 s) for a failure 150 s earlier.
+  bool penalty_clear_on_climb = false;
+  RecoverCfg recover;
   // Promote latency guard. While a freshly promoted rung is on probation,
   // drone-to-GS transit (LinkHealth::transit_ms: the drone's queue wait plus
   // what the frame spent in its radio and on air, above the session's best)
@@ -190,6 +246,11 @@ struct LinkHealth {
   // Part B fade trigger's joint condition. NaN = unsampled, which leaves it
   // inert.
   double rf_rssi_dbm = std::numeric_limits<double>::quiet_NaN();
+  // The worse card's own packet loss (0..1) over the last ~200 ms, from its
+  // hardware-sequence gaps -- before the cards are combined, so one card
+  // starting to lose shows here while the combined stream is still whole.
+  // NaN = no card measured. Read only by FadeCfg::Mode::EdgePer.
+  double card_loss_max = std::numeric_limits<double>::quiet_NaN();
   // --- probe stream window, from ProbeTrack ---
   bool probe_valid = false;      // probe window had a sample
   double probe_loss = 0.0;       // union block loss over the window
@@ -257,6 +318,10 @@ struct CtlEvent {
   double u = 0;
   double snr_db = std::numeric_limits<double>::quiet_NaN();
   double evm_db = std::numeric_limits<double>::quiet_NaN();
+  // Why, beyond the reason, for the decisions behind a switch: an EdgePer
+  // fade fire's inputs, a residual-keyed fast fall, a recovery-paced
+  // promote. Empty otherwise. Operator log only.
+  std::string detail;
 };
 
 struct CtlCounters {
@@ -307,10 +372,12 @@ class LadderController {
   void blank_store(double until_ms);
 
   int rung() const { return idx_; }
-  // Where a loss-driven demote from `from` lands at pre-FEC loss `pre`:
-  // from - 1, or with fast_fall_pre on and reached, the highest rung below
-  // whose goodput fits goodput(from) x (1 - pre); 0 at the floor.
-  int fall_target(int from, double pre) const;
+  // Where a loss-driven demote from `from` lands at pre-FEC loss `pre` and
+  // residual (post-FEC) loss `resid`: from - 1, or with fast_fall_pre /
+  // fast_fall_resid on and reached, the highest rung below whose goodput
+  // fits goodput(from) x (1 - loss); the deeper of the two targets; 0 at
+  // the floor.
+  int fall_target(int from, double pre, double resid = 0.0) const;
   // The rung the last VALID feedback sample was measured on, stamped before
   // any decision block runs. rung() is live and has already stepped down by
   // the time a demote returns, so anything that pairs a rung with the loss
@@ -386,6 +453,15 @@ class LadderController {
   bool is_penalized(int rung, double now_ms) const;
   void set_event(double now_ms, int from, int to, CtlReason reason, double u,
                  double snr);
+  // fall_target() plus the event detail for a residual-keyed jump.
+  int loss_fall(int from, double pre, double resid);
+
+  // --- link.recover ---
+  // Every loss-driven demote except a failed promote: opens an episode, or
+  // extends the open one (its target rung stays the highest one it left).
+  void note_loss_demote(int from, double now_ms);
+  // Whether this promote may use the recovery pace (see RecoverCfg).
+  bool recover_pace(double now_ms) const;
 
   double probe_util_threshold() const;
   double s3_util_threshold() const;
@@ -481,6 +557,16 @@ class LadderController {
   // observed recovery — a measurable tick with both deltas back under
   // threshold — never by a NaN tick, which says nothing either way.
   bool fade_latched_ = false;
+
+  // link.recover episode: the rung the dip left (-1 = none open), the RSSI
+  // baseline before it, when it lapses, and whether a failed promote ended
+  // its fast pace.
+  int rec_rung_ = -1;
+  double rec_rssi_dbm_ = 0.0;
+  double rec_until_ms_ = -1e18;
+  bool rec_spent_ = false;
+  // Detail for the next set_event() (CtlEvent::detail), cleared by it.
+  std::string pending_detail_;
 
   bool probation_active_ = false;
   double probation_until_ms_ = -1e18;

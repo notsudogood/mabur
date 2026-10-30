@@ -56,6 +56,20 @@ TEST(lossy_video_reads_pre_fec_loss) {
   CHECK(k.health.pre_fec_loss > 0.05 && k.health.pre_fec_loss < 0.2);
 }
 
+// card_loss_max: the worse card's own hw-seq delivery over ~200 ms, NaN
+// before any card has a window.
+TEST(card_loss_max_reads_the_cards_own_seq_gaps) {
+  for (int drop : {0, 10}) {
+    Aggregator agg(layers(), 512, 1, 192);
+    LinkHealthAssembler a({1, 4, 14 + 332});
+    LinkHealthInputs in;
+    CHECK(std::isnan(a.tick(0.0, agg, in).health.card_loss_max));   // baseline only
+    const double t = feed_video(agg, 10, 10.0, 16.0, drop);
+    const double l = a.tick(t, agg, in).health.card_loss_max;
+    if (drop == 0) CHECK(l == 0.0); else CHECK(l > 0.0 && l < 0.5);
+  }
+}
+
 TEST(starved_when_no_packets_since_last_step_but_video_seen) {
   Aggregator agg(layers(), 512, 1, 192);
   LinkHealthAssembler a({1, 4, 14 + 332});

@@ -141,6 +141,40 @@ typedef i6_venc_pack  MI_VENC_Pack_t;
 typedef i6_venc_stat  MI_VENC_Stat_t;
 typedef i6_venc_strm  MI_VENC_Stream_t;
 
+/* Struct sizes the star6e MI libraries copy to or from the caller. A struct
+ * shorter than the copy makes the library read the caller's stack (a Set)
+ * or write past the caller's struct (a Get). The pointer-carrying structs
+ * are pinned on the 32-bit target only; the host compiles these headers
+ * for tests with 8-byte pointers. */
+#if defined(PLATFORM_STAR6E)
+_Static_assert(sizeof(MI_SYS_ChnPort_t) == 16,
+	"MI_SYS_ChnPort_t: libmi_sys.so Bind/UnBind/SetChnOutputPortDepth copy 16");
+/* libmi_vpe.so Create/Get/SetChannelAttr copy 192. Ours is 196: its
+ * lens-init block is 4 bytes wider than the SDK's, so the library takes
+ * our outer lensAdjOn word as chnPort. Callers zero the whole struct, and
+ * the library never reaches past byte 192. */
+_Static_assert(sizeof(void *) != 4 || sizeof(MI_VPE_ChannelAttr_t) == 196,
+	"MI_VPE_ChannelAttr_t layout changed - verify SDK match");
+_Static_assert(sizeof(void *) != 4 || sizeof(MI_VPE_ChannelParam_t) == 100,
+	"MI_VPE_ChannelParam_t: libmi_vpe.so SetChannelParam copies 100");
+_Static_assert(sizeof(MI_VPE_PortAttr_t) == 16,
+	"MI_VPE_PortAttr_t: libmi_vpe.so Set/GetPortMode copy 16");
+_Static_assert(sizeof(i6_common_rect) == 8,
+	"i6_common_rect: libmi_vpe.so SetPortCrop copies 8");
+_Static_assert(sizeof(void *) != 4 || sizeof(MI_VENC_ChnAttr_t) == 76,
+	"MI_VENC_ChnAttr_t: libmi_venc.so CreateChn/Get/SetChnAttr copy 76");
+_Static_assert(sizeof(MI_VENC_Stat_t) == 40,
+	"MI_VENC_Stat_t: libmi_venc.so Query copies 40");
+_Static_assert(sizeof(void *) != 4 || sizeof(MI_VENC_Pack_t) == 168,
+	"MI_VENC_Pack_t: libmi_venc.so GetStream strides packs by 168");
+_Static_assert(sizeof(MI_SNR_Res_t) == 52,
+	"MI_SNR_Res_t: libmi_sensor.so GetRes/GetCurRes copy 52");
+_Static_assert(sizeof(MI_SNR_PadInfo_t) == 52,
+	"MI_SNR_PadInfo_t: libmi_sensor.so GetPadInfo copies 52");
+_Static_assert(sizeof(MI_SNR_PlaneInfo_t) == 72,
+	"MI_SNR_PlaneInfo_t: libmi_sensor.so GetPlaneInfo copies 72");
+#endif
+
 /* SVC-T per-frame reference type (MI_VENC_H264eRefType_e, H265 aliases it):
  * E_MI_VENC_ENHANCE_P_NOTFORREF = 5 — the droppable top enhance-layer frame.
  * NOTE: the SigmaStar enum inserts E_MI_VENC_BASE_P_REFTOIDR at index 1, so
@@ -382,6 +416,8 @@ typedef struct {
   MI_S32  s32Qp;      /* QP value (absolute) or QP offset (delta) */
   MI_VENC_Rect_t stRect;
 } MI_VENC_RoiCfg_t;
+_Static_assert(sizeof(MI_VENC_RoiCfg_t) == 28,
+	"MI_VENC_RoiCfg_t: libmi_venc.so SetRoiCfg copies 28");
 
 #define RC_TEXTURE_THR_SIZE 1
 
@@ -470,7 +506,17 @@ typedef struct {
 		MI_VENC_ParamH265Avbr_t stParamH265Avbr;
 	};
 	void *pRcParam;
+	/* libmi_venc.so Get/SetRcParam copy 56 bytes, one word more than the
+	 * fields above: without it GetRcParam writes past the caller's struct
+	 * and SetRcParam reads past it. Where the SDK puts that word is not
+	 * known; callers only Get, edit the H.265 CBR fields and Set, so it
+	 * round-trips unchanged. */
+	MI_U32 u32SdkTail;
 } MI_VENC_RcParam_t;
+#if defined(PLATFORM_STAR6E)
+_Static_assert(sizeof(void *) != 4 || sizeof(MI_VENC_RcParam_t) == 56,
+	"MI_VENC_RcParam_t: libmi_venc.so Get/SetRcParam copy 56");
+#endif
 
 /* Rate control priority — determines whether the encoder RC engine prioritises
  * hitting the bitrate target or respecting per-frame size limits (MaxISize /

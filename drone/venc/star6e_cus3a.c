@@ -23,9 +23,16 @@ typedef struct {
 #define CUS3A_AE_GRID_Y  90
 #define CUS3A_AE_GRID_SZ (CUS3A_AE_GRID_X * CUS3A_AE_GRID_Y)
 
+/* MI_ISP_AE_GetAeHwAvgStats writes 46088 bytes: two u32 then four bytes
+ * per cell fits that exactly (the AWB block's shape with one more byte),
+ * not eight bytes per cell as here, so the verbose avg_y log line that
+ * reads it does not read the luma. The buffer is larger than the write,
+ * so nothing overruns. */
 typedef struct {
 	Cus3aAeSample nAvg[CUS3A_AE_GRID_SZ];
 } Cus3aAeHwStats;
+_Static_assert(sizeof(Cus3aAeHwStats) >= 46088,
+	"Cus3aAeHwStats must hold the 46088 bytes GetAeHwAvgStats writes");
 
 /* CusAEInfo_t — Star6E SDK layout (verified via hex dump).
  * First 3 u32s are reserved, then block dims, then shutter/gain. */
@@ -40,7 +47,13 @@ typedef struct {
 	uint32_t ShutterHDRShort;
 	uint32_t SensorGainHDRShort;
 	uint32_t IspGainHDRShort;
+	/* MI_ISP_CUS3A_GetAeStatus writes 65 bytes; the SDK struct continues
+	 * past the fields above. Without room for the rest the call writes 17
+	 * bytes past this struct on the caller's stack. */
+	uint8_t sdk_tail[17];
 } Cus3aAeInfo;
+_Static_assert(sizeof(Cus3aAeInfo) >= 65,
+	"Cus3aAeInfo must hold the 65 bytes CUS3A_GetAeStatus writes");
 
 #define CUS3A_ISP_STATE_NORMAL 0
 
@@ -56,6 +69,8 @@ typedef struct {
 	unsigned int maxSensorGain;
 	unsigned int maxIspGain;
 } Cus3aIspExposureLimit;
+_Static_assert(sizeof(Cus3aIspExposureLimit) == 32,
+	"MI_ISP_AE_Get/SetExposureLimit copy 32");
 
 
 /* ── Function pointer types (resolved via dlsym) ─────────────────────── */

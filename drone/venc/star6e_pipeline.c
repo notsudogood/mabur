@@ -176,6 +176,8 @@ static void star6e_pipeline_wait_isp_channel(void)
 	typedef int (*fn_get_para_init_t)(int, IspParaInitInfoType *);
 	fn_get_para_init_t fn;
 	void *handle;
+	_Static_assert(sizeof(IspParaInitInfoType) == 4,
+		"MI_ISP_IQ_GetParaInitStatus copies 4");
 	int elapsed_ms = 0;
 
 	handle = dlopen("libmi_isp.so", RTLD_LAZY | RTLD_GLOBAL);
@@ -272,6 +274,8 @@ typedef struct {
 	unsigned char bAWB;
 	unsigned char bAF;
 } Star6eCus3AEnable;
+_Static_assert(sizeof(Star6eCus3AEnable) == 3,
+	"Star6eCus3AEnable: MI_ISP_CUS3A_Enable copies 3");
 
 static void star6e_pipeline_post_load_cus3a(const IspRuntimeLib *lib,
 	void *ctx)

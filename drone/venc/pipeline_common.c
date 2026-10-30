@@ -81,6 +81,8 @@ typedef struct {
 	unsigned int maxSensorGain;
 	unsigned int maxIspGain;
 } PipelineIspExposureLimit;
+_Static_assert(sizeof(PipelineIspExposureLimit) == 32,
+	"MI_ISP_AE_Get/SetExposureLimit copy 32");
 
 /* On i6c (Maruko) ISP functions take (dev, channel, data*).
  * On i6 (Star6E) they take (channel, data*). */

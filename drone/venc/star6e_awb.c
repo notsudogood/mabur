@@ -34,6 +34,12 @@ typedef struct {
 	uint32_t B_gain;
 	uint32_t ColorTmp;
 } AwbCusResult;
+/* Sizes libmi_isp.so copies: CUS3A_GetAwbStatus 41, CUS3A_SetAwbParam 24,
+ * AWB_GetAwbHwAvgStats 34568. */
+_Static_assert(sizeof(void *) != 4 || sizeof(AwbCusInfo) == 41,
+	"AwbCusInfo: CUS3A_GetAwbStatus copies 41");
+_Static_assert(sizeof(AwbCusResult) == 24,
+	"AwbCusResult: CUS3A_SetAwbParam copies 24");
 
 typedef struct { uint8_t r, g, b; } AwbAvg;
 
@@ -44,6 +50,8 @@ typedef struct {
 	uint32_t nBlkY;
 	AwbAvg   nAvg[AWB_MAX_BLOCKS];
 } AwbHwStats;
+_Static_assert(sizeof(AwbHwStats) == 34568,
+	"AwbHwStats: AWB_GetAwbHwAvgStats copies 34568");
 
 /* Blocks outside this band are excluded from the average: near-saturated
  * blocks have clipped channels (their ratios are meaningless) and near-black

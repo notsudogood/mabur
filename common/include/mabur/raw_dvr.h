@@ -40,6 +40,15 @@ class RawDvr {
   // unless armed or recording.
   void feed(const uint8_t* au, size_t n, uint32_t pts_us, bool complete);
 
+  // Continues the recording in a new file at `path`: the open file keeps
+  // every AU up to the next IRAP, which then begins `path` -- no gap, each
+  // file starting at its own sync point. Before the first file opens it
+  // just retargets the pending one. Ignored when not recording. A caller
+  // that can should ask the drone for an IDR with it (IRAPs come only on
+  // request on the GDR link). A second roll() before the switch replaces
+  // the pending path. File-path recordings only (not start(sink)).
+  void roll(const std::string& path);
+
   // Flushes and closes an open file; Off afterwards. err() is kept so the
   // caller can report why a recording ended.
   void stop();
@@ -51,13 +60,22 @@ class RawDvr {
   uint64_t bytes() const { return opened_ ? mux_.bytes_written() : 0; }
   uint64_t samples() const { return opened_ ? mux_.samples() : 0; }
   uint64_t fragments() const { return opened_ ? mux_.fragments() : 0; }
+  // Files opened since start(): 1 once the first opens, +1 per roll()
+  // that switched. The caller pairs its own per-file state (the OSD
+  // sidecars) with it.
+  uint64_t files() const { return files_; }
 
  private:
+  // Opens `path` (or the held sink) at the current params; Error on failure.
+  bool open_(const std::string& path);
+
   HevcParams params_;
   DvrMux mux_;
   State state_ = State::Off;
   Err err_ = Err::None;
   std::string path_;
+  std::string next_path_;          // roll(): opens at the next IRAP
+  uint64_t files_ = 0;
   std::unique_ptr<DvrSink> sink_;  // start(sink) until the file opens
   bool opened_ = false;
   int width_ = 0, height_ = 0, fragment_ms_ = 1000;

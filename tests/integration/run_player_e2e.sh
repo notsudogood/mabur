@@ -149,6 +149,21 @@ assert s["stream_aborted"] == 0, s
 print(f"OK stats: {s}")
 EOF
 
+# The OSD sidecars ride every raw recording (dvr.osd_file, on by default).
+# Until 2026-10-30 the player armed them and never began them, so none was
+# ever written; this is the check that would have caught it.
+for ext in osd srt link.srt; do
+  ls "$TMP"/record-*."$ext" > /dev/null 2>&1 || {
+    echo "FAIL: no record-*.$ext next to the recording" >&2
+    exit 1
+  }
+done
+head -c 4 "$TMP"/record-*.osd | grep -q '^BTFL$' || {
+  echo "FAIL: the .osd header does not start with the BTFL tag" >&2
+  exit 1
+}
+echo "OK sidecars: .osd .srt .link.srt"
+
 # --- PART A: container-level gate on the fixture-chain DVR file -------
 # tests/fixtures/frame_stream.bin's NAL payloads (tools/genvectors/
 # gen_vectors.py's pat() filler) are correctly NAL-type-tagged (VPS/SPS/

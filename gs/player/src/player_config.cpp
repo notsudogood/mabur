@@ -121,8 +121,9 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
   if (j.contains("dvr")) {
     const Value& r = j["dvr"];
     check_keys(r, "dvr", {"autostart", "dir", "fragment_ms", "mode", "target", "burned",
-                          "osd_file", "osd_fc"});
+                          "osd_file", "osd_fc", "split_at_arm"});
     c.dvr.osd_file = get_bool(r, "osd_file", c.dvr.osd_file, "dvr");
+    c.dvr.split_at_arm = get_bool(r, "split_at_arm", c.dvr.split_at_arm, "dvr");
     c.dvr.osd_fc = get_str(r, "osd_fc", "BTFL", "dvr");
     if (c.dvr.osd_fc != "BTFL" && c.dvr.osd_fc != "INAV" && c.dvr.osd_fc != "ARDU")
       fail("dvr.osd_fc", "must be \"BTFL\", \"INAV\" or \"ARDU\"");

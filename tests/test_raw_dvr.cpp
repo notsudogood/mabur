@@ -311,4 +311,58 @@ TEST(start_while_recording_seals_previous_file) {
   CHECK(f.good() && f.tellg() > 0);     // a was flushed and closed
 }
 
+// roll(): the open file keeps every AU up to the next IDR, which begins the
+// new file -- no gap, both files starting on a sync point.
+TEST(roll_continues_in_a_new_file_at_the_next_idr) {
+  const std::string a = scratch("rawdvr_roll_a.mp4"), b = scratch("rawdvr_roll_b.mp4");
+  std::remove(a.c_str());
+  std::remove(b.c_str());
+  RawDvr d;
+  d.start(a, 0, 0);
+  feed(d, idr_au(1), 0);
+  feed(d, p_au(2), 16667);
+  CHECK(d.files() == 1);
+  d.roll(b);
+  feed(d, p_au(3), 33333);          // still into a: no sync point yet
+  feed(d, param_au(4), 50000);      // a GDR refresh start is no sync point either
+  CHECK(d.files() == 1);
+  CHECK(d.path() == a);
+  CHECK(!exists(b));
+  feed(d, idr_au(5), 66667);        // b begins here
+  CHECK(d.files() == 2);
+  CHECK(d.path() == b);
+  CHECK(d.samples() == 1);          // b's own count
+  feed(d, p_au(6), 83333);
+  d.stop();
+  CHECK(d.err() == RawDvr::Err::None);
+  std::ifstream fa(a, std::ios::binary | std::ios::ate), fb(b, std::ios::binary | std::ios::ate);
+  CHECK(fa.good() && fa.tellg() > 0);
+  CHECK(fb.good() && fb.tellg() > 0);
+}
+
+TEST(roll_before_the_first_file_retargets_it) {
+  const std::string a = scratch("rawdvr_roll_c.mp4"), b = scratch("rawdvr_roll_d.mp4");
+  std::remove(a.c_str());
+  std::remove(b.c_str());
+  RawDvr d;
+  d.start(a, 0, 0);
+  d.roll(b);
+  feed(d, idr_au(1), 0);
+  d.stop();
+  CHECK(!exists(a));
+  CHECK(exists(b));
+  CHECK(d.files() == 1);
+}
+
+TEST(roll_is_ignored_when_not_recording) {
+  const std::string b = scratch("rawdvr_roll_e.mp4");
+  std::remove(b.c_str());
+  RawDvr d;
+  d.roll(b);
+  feed(d, idr_au(1), 0);
+  CHECK(d.state() == RawDvr::State::Off);
+  CHECK(!exists(b));
+  CHECK(d.files() == 0);
+}
+
 MTEST_MAIN

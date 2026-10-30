@@ -765,6 +765,8 @@ int main(int argc, char** argv) {
   // the OSD fps cell.
   maburplay::RateMatch rate_match;
   uint64_t rate_match_mark_us = 0;
+  // Last fresh drone low-power report (dvr.split_at_arm's edge detector).
+  maburplay::RateMatch::LowPower last_low_power = maburplay::RateMatch::LowPower::kUnknown;
   maburplay::LatLog lat_log;
   // Per-frame rows of the same window as the lat: line (docs/observability.md
   // "frame.log"), written in the same idle-gated 1 Hz burst so a stalled
@@ -1389,11 +1391,49 @@ int main(int argc, char** argv) {
   const bool osd_rec_on = cfg.dvr.osd_file && !burned_mode;
   maburplay::OsdRecorder osd_rec({cfg.dvr.osd_fc, true});
   uint64_t osd_rec_mark_ms = 0;
+  // The sidecars follow the video file by file: osd_next_path is the file
+  // the recorder opens next (start, or a roll), osd_files_seen the
+  // dvr.files() count they have caught up with, and osd_t0_ms the arrival
+  // of the first IRAP fed since -- the AU that file begins on, so the
+  // .osd's time zero is that frame, not the moment this loop noticed.
+  std::string osd_next_path;
+  uint64_t osd_files_seen = 0;
+  uint64_t osd_t0_ms = 0;
   auto start_raw = [&]() {
     const std::string path = dvr_filename(cfg.dvr.dir);
     dvr.start(path, bcfg.width, bcfg.height, cfg.dvr.fragment_ms);
     ++rec_starts;
+    osd_next_path = path;
+    osd_files_seen = 0;
+    osd_t0_ms = 0;
     if (osd_rec_on) osd_rec.arm(path);
+  };
+  // dvr.split_at_arm: the drone runs 30 fps disarmed (low power) and full
+  // rate armed, and walksnail-osd-tool renders a whole file at the rate of
+  // its start, so a recording begun on the ground came out at 30 fps. A
+  // low-power edge continues the recording in a new file at the next
+  // keyframe (asked for here), so each file has one frame rate.
+  auto roll_raw = [&](const char* why) {
+    const std::string path = dvr_filename(cfg.dvr.dir);
+    dvr.roll(path);
+    osd_next_path = path;
+    osd_t0_ms = 0;
+    core_ctl.send_line("refresh dvr");
+    std::fprintf(stderr, "maburplay: rec: %s -- continuing in %s from the next keyframe\n", why,
+                 path.c_str());
+  };
+  // The OSD sidecars begin with each video file. Until 2026-10-30 nothing
+  // called begin(), so no .osd/.srt/.link.srt was ever written: the unit
+  // tests drive OsdRecorder directly and never saw that the player didn't.
+  // A rolled file's sidecars end here and the new one's begin.
+  auto follow_osd_files = [&]() {
+    if (!osd_rec_on || !rec_on || dvr.files() <= osd_files_seen) return;
+    osd_files_seen = dvr.files();
+    if (osd_rec.running()) osd_rec.stop();
+    if (!osd_rec.armed()) osd_rec.arm(osd_next_path);
+    osd_rec.begin(osd_t0_ms != 0 ? osd_t0_ms : mono_ms());
+    osd_t0_ms = 0;
+    osd_rec_mark_ms = mono_ms();
   };
   // Autostart: dvr.autostart armed rec_on before this point (see rec_on's
   // declaration above), but the actual start() call has to wait until here,
@@ -1508,8 +1548,12 @@ int main(int argc, char** argv) {
     // !burned_mode: in burned mode the BurnRecorder owns the recording. RawDvr
     // applies the raw path's rules itself (complete AUs only, file begins at a
     // parameter-set AU) and ignores AUs while not armed.
-    if (rec_on && !burned_mode && rec_gs && !n.au.empty())
+    if (rec_on && !burned_mode && rec_gs && !n.au.empty()) {
+      if (osd_rec_on && osd_t0_ms == 0 && n.decodable &&
+          mabur::au_is_irap(n.au.data(), n.au.size()))
+        osd_t0_ms = mono_ms();
       dvr.feed(n.au.data(), n.au.size(), n.meta.pts_us, n.decodable);
+    }
   };
   maburplay::FeedLoop* feed_ptr = nullptr;
 #ifdef MABUR_PLAYER_HW
@@ -1606,6 +1650,8 @@ int main(int argc, char** argv) {
   if (oneshot) {
     ring.oneshot_drain();
     dvr.stop(/*wait=*/true);   // the report below reads the sealed file's counts
+    follow_osd_files();        // the sidecars the main loop would have begun
+    osd_rec.stop();
     std::printf(
         "{\"delivered\":%llu,\"dropped_enhance_incomplete\":%llu,"
         "\"truncated_base\":%llu,\"salvaged_base\":%llu,\"salvaged_enhance\":%llu,"
@@ -2014,6 +2060,16 @@ int main(int argc, char** argv) {
       const auto lp = maburplay::low_power_report(
           gs_src != nullptr, gs_src && gs_src->have_any() && !gs_src->stale(now_ms),
           gs_src && gs_src->snapshot().low_power);
+      // A fresh low-power report that differs from the last fresh one is an
+      // arm/disarm edge; unknown (stale) reports neither split nor reset.
+      if (lp != maburplay::RateMatch::LowPower::kUnknown) {
+        if (cfg.dvr.split_at_arm && rec_on && rec_gs && !burned_mode && dvr.files() > 0 &&
+            last_low_power != maburplay::RateMatch::LowPower::kUnknown && lp != last_low_power)
+          roll_raw(lp == maburplay::RateMatch::LowPower::kNo
+                       ? "drone armed (full frame rate)"
+                       : "drone disarmed (low-power frame rate)");
+        last_low_power = lp;
+      }
       const double panel_hz =
           regulator.panel_period_us() > 0 ? 1e6 / regulator.panel_period_us() : 0.0;
       const double src_hz = pump.source_hz();
@@ -2167,6 +2223,7 @@ int main(int argc, char** argv) {
         }
       }
     }
+    follow_osd_files();
     // OSD sidecars (osd_recorder.h): one link-summary subtitle a second,
     // and the buffered OSD screens written out. Frame release runs on its
     // own thread, so an SD card write that stalls here cannot hold a frame

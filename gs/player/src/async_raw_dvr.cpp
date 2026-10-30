@@ -66,6 +66,14 @@ void AsyncRawDvr::feed(const uint8_t* au, size_t n, uint32_t pts_us, bool comple
   push_(std::move(it));
 }
 
+void AsyncRawDvr::roll(const std::string& path) {
+  if (!armed_) return;
+  Item it;
+  it.kind = Item::Roll;
+  it.path = path;
+  push_(std::move(it));
+}
+
 void AsyncRawDvr::stop(bool wait) {
   Item it;
   it.kind = Item::Stop;
@@ -97,6 +105,7 @@ void AsyncRawDvr::publish_(uint64_t gen) {
   bytes_.store(dvr_.bytes(), std::memory_order_release);
   samples_.store(dvr_.samples(), std::memory_order_release);
   fragments_.store(dvr_.fragments(), std::memory_order_release);
+  files_.store(dvr_.files(), std::memory_order_release);
   if (gen != 0) {
     {
       std::lock_guard<std::mutex> lk(mu_);
@@ -129,6 +138,9 @@ void AsyncRawDvr::run_() {
         break;
       case Item::Stop:
         dvr_.stop();
+        break;
+      case Item::Roll:
+        dvr_.roll(it.path);
         break;
     }
     queued_.fetch_sub(it.au.size(), std::memory_order_acq_rel);

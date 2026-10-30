@@ -23,6 +23,9 @@ struct DvrCfg {
   // .srt link summary, same folder and name, for walksnail-osd-tool.
   bool osd_file = true;
   std::string osd_fc = "BTFL";  // .osd header firmware tag: BTFL, INAV or ARDU
+  // Raw mode: continue in a new file when the drone arms or disarms (its
+  // frame rate changes there), so each file has one frame rate.
+  bool split_at_arm = true;
   struct BurnedCfg {
     int bitrate_kbps = 12000;
     // Record every N-th screen refresh: 1 = the panel's rate, 2 = half of

@@ -46,6 +46,9 @@ class AsyncRawDvr {
   // Copies the AU; incomplete AUs and AUs while not armed are dropped here,
   // before any copy.
   void feed(const uint8_t* au, size_t n, uint32_t pts_us, bool complete);
+  // mabur::RawDvr::roll(), in queue order: the next file begins at the
+  // next IRAP the writer sees after this call.
+  void roll(const std::string& path);
   // Asynchronous by default: the file is sealed by the writer. wait = true
   // returns once it has been (shutdown, and the --oneshot report that
   // reads the counts right after).
@@ -62,6 +65,8 @@ class AsyncRawDvr {
   uint64_t fragments() const {
     return start_pending_() ? 0 : fragments_.load(std::memory_order_acquire);
   }
+  // mabur::RawDvr::files(): 0 until this recording's first file opens.
+  uint64_t files() const { return start_pending_() ? 0 : files_.load(std::memory_order_acquire); }
   // Bytes copied but not yet handed to the RawDvr (observability).
   size_t queued_bytes() const { return queued_.load(std::memory_order_acquire); }
   // True once a recording was ended because the card fell behind; cleared
@@ -70,7 +75,7 @@ class AsyncRawDvr {
 
  private:
   struct Item {
-    enum Kind { Start, Feed, Stop } kind = Feed;
+    enum Kind { Start, Feed, Stop, Roll } kind = Feed;
     std::vector<uint8_t> au;
     uint32_t pts_us = 0;
     std::string path;
@@ -101,7 +106,7 @@ class AsyncRawDvr {
   std::atomic<int> state_{static_cast<int>(mabur::RawDvr::State::Off)};
   std::atomic<int> err_{static_cast<int>(mabur::RawDvr::Err::None)};
   std::atomic<bool> opened_{false};
-  std::atomic<uint64_t> bytes_{0}, samples_{0}, fragments_{0};
+  std::atomic<uint64_t> bytes_{0}, samples_{0}, fragments_{0}, files_{0};
   // writer side
   mabur::RawDvr dvr_;
   std::thread th_;

@@ -120,6 +120,27 @@ and Distance are 0.
 Both subtitle files open in any video player as a subtitle track; the
 `.link.srt` is the one with our link detail.
 
+**Never written before 2026-10-30.** Every build up to then armed the
+sidecar recorder and never started it, so no `.osd`, `.srt` or `.link.srt`
+was ever written (the unit tests drove the recorder directly; the player
+never called its start). Fixed: the sidecars now begin with each video
+file, and `tests/integration/run_player_e2e.sh` checks they appear next to
+a recording.
+
+**One frame rate per file (`split_at_arm`, on).** The drone runs 30 fps
+while disarmed (low power) and its full rate armed. walksnail-osd-tool
+renders a whole file at the rate of its start, so a recording begun on the
+ground came out at 30 fps. With `split_at_arm`, a fresh low-power report
+that changes (arm or disarm) continues the recording in a new file from the
+next keyframe, which the player asks the drone for: the old file keeps
+every frame up to that keyframe, so nothing is lost between them, and each
+file has its own `.osd`/`.srt`/`.link.srt` starting at its first frame.
+The drone reports its arm state about once a second, so the split lands
+1-2 s after the rate change: the last second or two of the ground file are
+already at full rate (harmless; the tool reads the start). A flight that
+never leaves low power (no FC link) never splits. Congestion sheds to
+30 fps do not split.
+
 **Not verified yet:** no file from this recorder has been through
 walksnail-osd-tool. The layout matches what that tool reads (and what
 msposd writes), and the unit tests pin it byte for byte, but the first real
@@ -132,6 +153,7 @@ the font page mapping; say which firmware and font you used.
 mode     = "raw"    # "raw" = video exactly as received; "burned" = re-encoded with the OSD drawn in
 osd_file = true     # raw: also save .osd and .srt next to the video
 osd_fc   = "BTFL"   # .osd firmware tag: "BTFL", "INAV" or "ARDU"
+split_at_arm = true # raw: new file (from the next keyframe) when the drone arms or disarms
 ```
 
 `osd_file` does nothing in burned mode (the OSD is already in the video).

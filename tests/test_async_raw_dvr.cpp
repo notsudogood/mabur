@@ -115,6 +115,26 @@ TEST(async_state_reads_consistently_through_the_queue) {
   d.stop(/*wait=*/true);
 }
 
+TEST(async_roll_switches_files_in_queue_order) {
+  const std::string a = scratch("async_roll_a.mp4"), b = scratch("async_roll_b.mp4");
+  std::remove(a.c_str());
+  std::remove(b.c_str());
+  AsyncRawDvr d;
+  d.start(a, 0, 0);
+  CHECK(d.files() == 0);
+  const auto k1 = idr_au(1), w = p_au(2), k2 = idr_au(3);
+  d.feed(k1.data(), k1.size(), 0, true);
+  d.feed(w.data(), w.size(), 16667, true);
+  d.roll(b);
+  d.feed(w.data(), w.size(), 33333, true);    // queued after the roll: still a's
+  d.feed(k2.data(), k2.size(), 50000, true);  // b begins
+  d.stop(/*wait=*/true);
+  CHECK(d.files() == 2);
+  CHECK(d.samples() == 1);
+  CHECK(!slurp(a).empty());
+  CHECK(!slurp(b).empty());
+}
+
 TEST(async_drops_unarmed_and_incomplete_aus_before_copying) {
   AsyncRawDvr d;
   const auto k = idr_au(1);

@@ -7,6 +7,15 @@ IMAGE_CONF=${MABUR_IMAGE_CONF:-/rom/etc/mabur.toml}
 STAMP=${MABUR_CONF_STAMP:-$CONF.image}
 KEEP=${MABUR_CONF_KEEP:-/etc/mabur.keep}
 BACKUP_DIR=${MABUR_CONF_BACKUP:-/root}
+# Clean-slate epoch. A release that must start every drone from the image's
+# default bumps CONFIG_EPOCH: the first start of an image whose epoch is not
+# the one $EPOCH_FILE recorded replaces $CONF with the image default and
+# carries NOTHING over (not the calibration, not the floor) and ignores (and
+# removes) $KEEP. The old file is backed up as for a refresh. Later images
+# with the same epoch refresh as below. 2026-10-30 = d17 (operator's call:
+# every config wiped on that flash).
+CONFIG_EPOCH=${MABUR_CONFIG_EPOCH:-2026-10-30}
+EPOCH_FILE=${MABUR_CONF_EPOCH:-/etc/mabur.epoch}
 PIDFILE=/var/run/mabur-loop.pid
 LOGPIDFILE=/var/run/mabur-logwatch.pid
 LOG=/tmp/mabur.log
@@ -65,8 +74,29 @@ same() {
 # wide_igi_floor set by hand (the 40 MHz stall fix is per radio unit: one
 # 8812EU needs it, another never stalls). Edits made on THIS image stay
 # ($STAMP matches the image). touch $KEEP to never refresh.
+wipe_config() {
+  what="replaced by the image default (clean slate $CONFIG_EPOCH, nothing carried over)"
+  if [ -f "$CONF" ] && ! same "$IMAGE_CONF" "$CONF"; then
+    n=1
+    while [ -e "$BACKUP_DIR/mabur.toml.old$n" ]; do n=$((n + 1)); done
+    old="$BACKUP_DIR/mabur.toml.old$n"
+    if cp "$CONF" "$old"; then what="$what; yours is $old"
+    else what="$what; NO backup (copy to $old failed)"; fi
+  fi
+  if [ -f "$KEEP" ]; then
+    mv "$KEEP" "$BACKUP_DIR/mabur.keep.old" && what="$what; $KEEP removed"
+  fi
+  cp "$IMAGE_CONF" "$CONF" && cp "$IMAGE_CONF" "$STAMP" && echo "$CONFIG_EPOCH" > "$EPOCH_FILE"
+  echo "mabur config: $CONF $what"
+  echo "$(date) $CONF $what" >> "$BACKUP_DIR/mabur-config.log"
+}
+
 refresh_config() {
   [ -f "$IMAGE_CONF" ] || return 0              # no image copy (bench host): nothing to do
+  if [ "$(cat "$EPOCH_FILE" 2>/dev/null)" != "$CONFIG_EPOCH" ]; then
+    wipe_config
+    return 0
+  fi
   if [ ! -f "$CONF" ]; then
     cp "$IMAGE_CONF" "$CONF" && cp "$IMAGE_CONF" "$STAMP"
     echo "mabur config: $CONF was missing, restored the image default"

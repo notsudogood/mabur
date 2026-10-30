@@ -116,6 +116,17 @@ image's default:
   `/etc/maburgs.menu` cleared with `maburgs.toml`, a line in
   `/config/config-reset.log`; `/config/keep-config` opts out.
 
+- **Clean-slate epoch** (both ends, from d17 / gs16): a release that must
+  start every unit from the image's defaults bumps `CONFIG_EPOCH` (drone:
+  `bundle/S96mabur`, recorded in `/etc/mabur.epoch`; GS: sbc-groundstations'
+  `S00config`, recorded in `/config/.config-epoch`). The first start of an
+  image whose epoch is not the recorded one replaces the files outright:
+  nothing carried over (the drone's calibration and floor included), the
+  menu's choice cleared, `/etc/mabur.keep` and `/config/keep-config`
+  ignored and removed. Old copies are kept as for a refresh. Never touched:
+  the link key, network settings, the GS's `wifi.toml`. Epoch 2026-10-30
+  (d17 / gs16) wipes every config on that flash, at the operator's request.
+
 Tests: `tests/integration/drone_config_refresh.sh` here, and
 `tests/config-refresh.test.sh` in sbc-groundstations. The code defaults
 also match the bundles now (`tests/bundle_parity.h`), so a key an old file

@@ -5,7 +5,8 @@
 set -eu
 S96=$(dirname "$0")/../../bundle/S96mabur
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
-export MABUR_CONF=$T/mabur.toml MABUR_IMAGE_CONF=$T/rom.toml MABUR_CONF_KEEP=$T/keep MABUR_CONF_BACKUP=$T
+export MABUR_CONF=$T/mabur.toml MABUR_IMAGE_CONF=$T/rom.toml MABUR_CONF_KEEP=$T/keep MABUR_CONF_BACKUP=$T \
+  MABUR_CONF_EPOCH=$T/epoch
 fail() { echo "FAIL: $*"; exit 1; }
 run() { sh "$S96" refresh; }
 
@@ -54,4 +55,19 @@ sed -i 's/channels = .*/channels = [157]/' "$T/mabur.toml"
 sed -i 's/36, 112/36, 113/' "$T/rom.toml"
 touch "$T/keep"
 run; grep -q 'channels = \[157\]' "$T/mabur.toml" || fail "keep file ignored"
+# 8. A clean-slate epoch (an older image's drone: no epoch recorded) wipes
+# everything: calibration, a hand-set floor and the keep file go too.
+cp "$T/rom.toml" "$T/mabur.toml"
+sed -i -e 's/power_mode = "none"/power_mode = "offset"/' -e 's/legacy_wall_rel = 63/legacy_wall_rel = 58/' \
+       -e 's/^wide_igi_floor *=.*/wide_igi_floor = 0/' -e 's/channels = .*/channels = [149]/' "$T/mabur.toml"
+rm -f "$T/epoch"
+n_before=$(ls "$T"/mabur.toml.old* | wc -l)
+run
+cmp -s "$T/rom.toml" "$T/mabur.toml" || fail "epoch wipe did not restore the exact image default"
+[ ! -e "$T/keep" ] && [ -e "$T/mabur.keep.old" ] || fail "keep file not removed by the epoch wipe"
+[ "$(ls "$T"/mabur.toml.old* | wc -l)" = $((n_before + 1)) ] || fail "epoch wipe made no backup"
+[ -s "$T/epoch" ] || fail "epoch not recorded"
+# ...once: an edit after it survives the next start on the same image.
+sed -i 's/channels = .*/channels = [100]/' "$T/mabur.toml"
+run; grep -q 'channels = \[100\]' "$T/mabur.toml" || fail "edit after the epoch wipe lost"
 echo "drone config refresh: OK"

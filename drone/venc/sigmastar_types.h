@@ -314,6 +314,15 @@ typedef struct {
     i6_common_input input;
     char bitswap;
     i6_common_sync sync;
+    /* The infinity6e libmi_vif.so copies 52 bytes from the caller's
+     * pointer in MI_VIF_SetDevAttr (and 52 back in GetDevAttr), one word
+     * more than the fields above.  The kernel reads that word as the
+     * multi-device map; without it the library reads 4 bytes of the
+     * caller's stack, and a non-zero value there is rejected ("workmode 3,
+     * multidevmap N, not support"): the ISP channel is never created and
+     * VIF->VPE fails with "layout type 2, bindmode 4 not sync err".
+     * Zero (single device) is what a REALTIME single-sensor link needs. */
+    unsigned int multiDevMap;
 } i6_vif_dev;
 
 typedef struct {

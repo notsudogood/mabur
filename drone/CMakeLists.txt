@@ -75,8 +75,12 @@ if(CMAKE_CROSSCOMPILING)
   # (waybeam documentation/VIF_VPE_SYNC_ERROR_POSTMORTEM.md) as
   # binary-layout-dependent UB from MI struct handling, where "any binary
   # layout change -- new variables, different optimization -- can trigger the
-  # latent bug". The known instance is fixed (i6e_vpe_chn/i6e_vpe_para
-  # typedefs, which this build does use -- verified sizeof 196/100), but
+  # latent bug". Two instances are fixed: the i6e_vpe_chn/i6e_vpe_para
+  # typedefs (verified sizeof 196/100) and i6_vif_dev, which was 4 bytes
+  # short of the 52 libmi_vif.so copies (star6e.h asserts both VIF sizes);
+  # the short VIF struct broke warm restarts whenever the stack word past it
+  # was non-zero. Any other MI struct that is short reads stack the same
+  # way, so a new failure of this class means auditing sizes first. But
   # running the SDK-facing code at an optimisation level nobody has flown it
   # at buys nothing. The encoder path is I/O-bound; waybeam does 1080p60 at
   # -Os on this chip.

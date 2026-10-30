@@ -115,6 +115,12 @@ typedef MI_VIF_OutputPortAttr_t MI_VIF_PortAttr_t;
 #else
 typedef i6_vif_dev   MI_VIF_DevAttr_t;
 typedef i6_vif_port  MI_VIF_PortAttr_t;
+/* Sizes libmi_vif.so copies in MI_VIF_SetDevAttr / SetChnPortAttr: a
+ * shorter struct makes the library read the caller's stack. */
+_Static_assert(sizeof(MI_VIF_DevAttr_t) == 52,
+	"MI_VIF_DevAttr_t layout changed - verify SDK match");
+_Static_assert(sizeof(MI_VIF_PortAttr_t) == 32,
+	"MI_VIF_PortAttr_t layout changed - verify SDK match");
 #endif
 
 /* infinity6e (Star6E) driver expects the larger i6e_ struct variants which

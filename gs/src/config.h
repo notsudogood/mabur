@@ -285,7 +285,11 @@ struct LinkCfg {
   //
   // The multi-rung drop (fast_fall_pre 0.5) and the promote latency guard
   // (promote_lat_guard_ms 100) are on in code and bundle alike since gs15;
-  // LadderCfg's own defaults stay off for the controller's unit tests.
+  // the edge_per fade rule, the residual-keyed drop (fast_fall_resid 0.2),
+  // penalty_clear_on_climb and link.recover since the build after gs15
+  // (operator's choice 2026-10-30, unflown), so a GS config written before
+  // those keys existed runs them too. LadderCfg's own defaults stay off for
+  // the controller's unit tests.
   LadderCfg ladder_cfg = [] {
     LadderCfg l{{{0, 2.0, 2.0},
                  {2, 1.0, 1.0},
@@ -295,6 +299,10 @@ struct LinkCfg {
                  {7, 0.2, 0.2}}};
     l.fast_fall_pre = 0.5;
     l.promote_lat_guard_ms = 100;
+    l.fade.mode = FadeCfg::Mode::EdgePer;
+    l.fast_fall_resid = 0.2;
+    l.penalty_clear_on_climb = true;
+    l.recover.enable = true;
     return l;
   }();
 

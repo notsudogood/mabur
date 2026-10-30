@@ -113,13 +113,13 @@ promote_lat_guard_ms   = 100    # right after a step up, if frames start taking 
                                 # down instead of waiting for loss; 0 = off. On since gs15: stepped down within
                                 # 100-150 ms on the stall channels, never fired wrongly in 4 walks; the slowest
                                 # good step up reached 75 ms (one bench), so the margin is thin
-fast_fall_resid        = 0      # the same skip, keyed on loss AFTER error correction: 0.2 = a step down taken
-                                # at >= 20 % of the video lost skips to a rung that fits. Off (0) by default.
-                                # fast_fall_pre never fired in flights 0007/0008 (its number restarts at every
-                                # step, so it read 0-2 % while 12-68 % was lost); replayed, this would have
-                                # jumped on the 2nd step of the worst dip. Untested in flight
-penalty_clear_on_climb = false  # true = climbing past a rung forgets its earlier failures (flight 0007: rung 4
-                                # got a 10 s block for a failure 150 s before). Untested in flight
+fast_fall_resid        = 0.2    # the same skip, keyed on loss AFTER error correction: a step down taken at
+                                # >= 20 % of the video lost skips to a rung that fits; 0 = off. fast_fall_pre
+                                # never fired in flights 0007/0008 (its number restarts at every step, so it
+                                # read 0-2 % while 12-68 % was lost); replayed, this would have skipped one
+                                # extra rung once. On since the build after gs15, unflown
+penalty_clear_on_climb = true   # climbing past a rung forgets its earlier failures (flight 0007: rung 4 got a
+                                # 10 s block for a failure 150 s before); false = the old memory. Unflown
 
 # A second loss check on the droppable enhance-layer frames, which show
 # trouble earlier than the base layer.
@@ -234,19 +234,20 @@ pin_mcs      = -1          # -1 = normal; 0..7 always probes this MCS (bench tes
 # Fade handling: step down early when the signal is fading, before loss hits.
 [link.fade]
 cascade    = true          # after a loss-driven step down, react faster for hold_ms
-predict    = true          # step down on a sudden RSSI + SNR drop
+predict    = true          # step down early on a fade (the rule is `mode` below)
 hold_ms    = 2500          # how long the faster reaction lasts
 confirm_ms = 100           # loss must persist this long to step down during it
 rssi_db    = 14.0          # RSSI drop that counts as a fade...
 snr_db     = 6.0           # ...together with this SNR drop...
 trigger_ms = 300           # ...sustained this long
 min_rung   = 2             # never predict-step below this rung
-mode       = "rssi_snr"    # "rssi_snr" = the rule above; "edge_per" = step down when the SNR is falling
-                           # (edge_dsnr_db below its recent level) AND already near the edge
-                           # (<= edge_snr_db) AND one GS card has started losing its own packets
-                           # (>= edge_card_loss_pct), on edge_min_bw MHz rungs only. Replayed on flights
-                           # 0007/0008: warned before 3 of 5 video freezes (rssi_snr: 1), fewer false
-                           # steps; 5 freezes is no proof and the warning is short (0.1-0.6 s). Untested in flight
+mode       = "edge_per"    # "edge_per" = step down when the SNR is falling (edge_dsnr_db below its recent
+                           # level) AND already near the edge (<= edge_snr_db) AND one GS card has started
+                           # losing its own packets (>= edge_card_loss_pct), on edge_min_bw MHz rungs only;
+                           # "rssi_snr" = the older rule above (rssi_db + snr_db). Replayed on flights
+                           # 0007/0008: warned before 3 of 5 video freezes (rssi_snr: 0), fewer false steps;
+                           # 5 freezes is no proof and the warning is short (0.1-0.6 s). On since the build
+                           # after gs15, unflown
 edge_dsnr_db       = 6.0
 edge_snr_db        = 22.0
 edge_card_loss_pct = 2.0
@@ -256,9 +257,10 @@ edge_min_bw        = 80
 # it from and the signal (RSSI) is back within rssi_margin_db of where it
 # was, each step up needs clean_ms and clean_bodies instead of the usual
 # 1.5 s. A failed step up ends the fast pace. Flights 0007/0008 took 12-25 s
-# to climb back after the three big dips; this aims at ~5-8 s. Untested in flight.
+# to climb back after the three big dips; this aims at ~5-8 s. On since the
+# build after gs15, unflown; enable = false = the normal pace throughout.
 [link.recover]
-enable         = false
+enable         = true
 clean_ms       = 750
 clean_bodies   = 45        # clean probes in a row (0.75 s at 60 fps)
 rssi_margin_db = 3.0

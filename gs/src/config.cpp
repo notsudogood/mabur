@@ -606,7 +606,8 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
       fc.snr_db = get_num(fj, "snr_db", 4.0, 0.5, 40.0, "link.fade");
       fc.trigger_ms = static_cast<int>(get_int(fj, "trigger_ms", 300, 50, 5000, "link.fade"));
       fc.min_rung = static_cast<int>(get_int(fj, "min_rung", 2, 0, 15, "link.fade"));
-      const std::string mode = get_str(fj, "mode", "rssi_snr", "link.fade");
+      const std::string mode = get_str(
+          fj, "mode", fc.mode == FadeCfg::Mode::EdgePer ? "edge_per" : "rssi_snr", "link.fade");
       if (mode == "rssi_snr")
         fc.mode = FadeCfg::Mode::RssiSnr;
       else if (mode == "edge_per")

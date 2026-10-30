@@ -1407,6 +1407,25 @@ TEST(debug_log_rejects_out_of_range_and_unknown_keys) {
 // radio.cards is the one permitted omission, and it is not laziness: its
 // ABSENCE is the auto-scan setting (a list pins cards and skips the probe),
 // so there is no value the bundle could write that means "scan the bus".
+// The link controls added 2026-10-30 ship ON in code as well as in the
+// bundle: a GS config written before their keys existed runs them too.
+TEST(link_controls_default_on_for_an_older_config) {
+  auto c = maburgs::load_config(write_tmp("[link.fade]\ncascade = true\npredict = true\n"));
+  const auto& l = c.link.ladder_cfg;
+  CHECK(l.fade.mode == maburgs::FadeCfg::Mode::EdgePer);
+  CHECK(l.fast_fall_resid == 0.2);
+  CHECK(l.penalty_clear_on_climb);
+  CHECK(l.recover.enable);
+  auto off = maburgs::load_config(write_tmp(
+      "[link]\nfast_fall_resid = 0\npenalty_clear_on_climb = false\n"
+      "[link.fade]\nmode = \"rssi_snr\"\n[link.recover]\nenable = false\n"));
+  const auto& o = off.link.ladder_cfg;
+  CHECK(o.fade.mode == maburgs::FadeCfg::Mode::RssiSnr);
+  CHECK(o.fast_fall_resid == 0.0);
+  CHECK(!o.penalty_clear_on_climb);
+  CHECK(!o.recover.enable);
+}
+
 TEST(bundle_default_sets_every_known_key_but_radio_cards) {
   std::vector<std::string> defaulted;
   maburgs::load_config(std::string(MABUR_GS_BUNDLE_DIR) + "/maburgs.default.toml",

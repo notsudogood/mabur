@@ -408,7 +408,14 @@ rung lasts ~0.2 s, so it read 0-2 % at every step of the worst dip
 (0007 487 s, 8 -> 3 in five steps over 0.8 s) while 12-68 % of the video
 was lost after repair.
 
-## Fast fall on residual loss (`link.fast_fall_resid`, off)
+## Fast fall on residual loss (`link.fast_fall_resid`, 0.2)
+
+The four link controls below (this one, `penalty_clear_on_climb`,
+`[link.recover]` and `link.fade.mode = "edge_per"`) are on in code and
+bundle alike from the build after gs15 (operator's choice 2026-10-30), so a
+GS config written before their keys existed runs them too. None has flown;
+each logs its decisions on the `ctl: rung` line and has its own key to turn
+it off.
 
 The same jump and the same goodput fit, keyed on the demote's residual
 (post-FEC) loss: the current-rung s1 residual, or the larger of s1 and s3
@@ -427,7 +434,7 @@ What the replay says (0007/0008, the residual each step actually saw):
   (0.2-1 s) but landed one rung lower than needed in 7 of the 12
   multi-step slides, each a longer climb back. Not built.
 
-## Climbing past a rung forgets its failures (`link.penalty_clear_on_climb`, off)
+## Climbing past a rung forgets its failures (`link.penalty_clear_on_climb`, on)
 
 `fail_count_` (the k in `penalty_base_ms << (k - 1)`) resets only when a
 rung survives its whole probation (`probation_ms`, 3000). A climb that
@@ -437,7 +444,7 @@ for a failure 150 s earlier, which cost most of that dip's 24 s climb back.
 With the switch on, every promote clears the count of the rung it leaves
 and every rung below. Active penalties are not touched.
 
-## Climb back after a dip (`[link.recover]`, off)
+## Climb back after a dip (`[link.recover]`, on)
 
 A loss-driven demote (residual, util, s3 residual, s3 util or fade) that
 is not a failed promote opens an episode: the rung it left, and the RSSI baseline before
@@ -561,8 +568,8 @@ Three properties to know before reading a recording:
    the rung. They never book a probation failure or a penalty, and never
    count in the RungStore's `exits_bad`.
 
-**Edge rule (`link.fade.mode = "edge_per"`, off).** The default mode,
-`"rssi_snr"`, is the rule above. `"edge_per"` replaces it with three
+**Edge rule (`link.fade.mode = "edge_per"`, the default).** `"rssi_snr"`
+is the rule above. `"edge_per"` replaces it with three
 conditions, all held `trigger_ms`, on rungs at least `edge_min_bw` (80) MHz
 wide:
 - the SNR delta (the same `dsnr`) reaches `edge_dsnr_db` (6): it is

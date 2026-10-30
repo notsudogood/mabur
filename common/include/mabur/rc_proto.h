@@ -64,8 +64,8 @@ constexpr uint16_t RC_MAGIC = 0x5243;  // "RC"
 // steering offset, level-triggered in every RCF).
 // Bumped 16 -> 17: RCF gains cam (the GS menu's camera preset request) and
 // cal_off (its "remove calibration" request); Telem gains cam_cur/cam_now/
-// cam_switch/cam_state (mabur/camera_presets.h) and flags bit5 calibrated /
-// bit2 arm_refused.
+// cam_switch/cam_state (mabur/camera_presets.h), cpu_core_pct[4] (per-core
+// CPU busy %) and flags bit5 calibrated / bit2 arm_refused.
 constexpr uint8_t RC_VERSION = 17;
 
 // RCF probe_profile sentinel: the drone runs no probe stream.
@@ -304,7 +304,15 @@ struct Telem {
   uint8_t cam_now = 0;
   uint8_t cam_switch = 0;
   uint8_t cam_state = 0;
+
+  // Per-core CPU busy percent (0..100) over the same telemetry tick as
+  // cpu_busy_x100, cores 0..3; kCpuCoreNone = no such core, offline, or no
+  // baseline yet. cpu_busy_x100 averages the cores, which hides one of
+  // them running flat out (the drone's cpu0 carries the FEC worker and the
+  // USB senders; cpu1 the video packer).
+  uint8_t cpu_core_pct[4] = {0xFF, 0xFF, 0xFF, 0xFF};
 };
+constexpr uint8_t kCpuCoreNone = 0xFF;
 
 // One rate's index range for a calibration phase. idx_step 4 is the coarse
 // scan; 1 is the full-resolution fine window.

@@ -122,6 +122,12 @@ Chronological; each line names the section below that carries the detail.
   timestamps and durations therefore measure the display (holds are whole
   grid periods), no longer the link: before this build they were the
   drone's pts of decoded frames, capped by `fps_cap`.
+- 2026-10-30 — per-core CPU: the RC_VERSION 17 Telem grows to 62 bytes
+  (`cpu_core_pct[4]` after the camera bytes), exported as
+  `drone.sys.cpu_core_pct`; `flight.jsonl` gains top-level `gs.sys`
+  (the GS's own CPU). Recordings from earlier builds have neither, and
+  their `drone.sys.cpu_pct` is the only CPU figure: the average of the
+  drone's cores, which can read ~50 % while one core is saturated.
 
 ## 2026-09-23 — `link.pre_fec_loss` scale break, twice
 

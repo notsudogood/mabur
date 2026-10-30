@@ -41,6 +41,13 @@ player's GS OSD (:8302), `tools/flightreport.py` (over `flight.jsonl`).
   `layer_delivery_pct`.
 - `scan = {state, rounds, pick}` (top level, not under `link`) — the boot
   channel scan, `docs/channel-select.md`.
+- `gs.sys = {cpu_pct, cpu_core_pct}` (top level) — the ground station's own
+  CPU: whole-chip busy % (one decimal) and per core (whole %, index = core
+  number, `null` offline or before a baseline), from `/proc/stat`, read by
+  maburgs once a second (the 5 Hz snapshots repeat the last read).
+  `cpu_pct` is null and `cpu_core_pct` `[]` for the first second. Covers
+  every process on the GS (maburgs, maburplay, the kernel), not maburgs
+  alone. `flightreport.py` prints a GS CPU section.
 
 #### Pre-FEC loss is late, not lost
 
@@ -307,8 +314,14 @@ fields once per `drone.tlm_seq` (`flightreport.py` does).
   crcfail = 0.
 - `uplink = {rssi_a, rssi_b, snr_a, snr_b}` — per drone antenna (the
   dead-antenna check); all `null` while the drone has heard no RC frame.
-- `sys.{soc_temp_c, cpu_pct}` (`cpu_pct` null on the first tick after a
-  maburd start).
+- `sys.{soc_temp_c, cpu_pct, cpu_core_pct}` — `cpu_pct` is the whole
+  chip's busy % (both SSC338Q cores averaged), null on the first tick after
+  a maburd start; `cpu_core_pct` (RC_VERSION 17 on) is the same tick per
+  core, index = core number (up to four), trimmed after the last core that
+  reported, `null` for an offline core, `[]` before the second tick. The
+  average hides one core running flat out: cpu0 carries the FEC worker and
+  the USB senders, cpu1 the video packer (`docs/next-build-backlog.md`
+  item 3). `flightreport.py` prints both in DRONE TX PATH.
 - `camera = {cur, now, switch, state, about}` — the GS menu's Camera tab
   (`docs/gs-menu.md`, presets in `common/include/mabur/camera_presets.h`).
   `cur`: the preset this boot runs (0 1080p 60, 1 1080p 90, 2 720p 100,

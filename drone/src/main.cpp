@@ -3233,7 +3233,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     // that declaration's comment for why a shared counter is load-bearing
     // there.
     uint64_t last_telem_ms = start;
-    mabur::CpuBusySampler cpu_busy;  // /proc/stat delta per telemetry tick
+    mabur::CpuStatSampler cpu_stat;  // /proc/stat delta per telemetry tick, whole chip + per core
 
     mabur::TickGate tick_gate(now_steady_ms(), cfg.link.tick_ms);
     // Peak 100 ms encoder rate for the stats line (peak_rate.h): fed every
@@ -3321,7 +3321,11 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
       ti.soc_temp_c = read_soc_temp_c();
       if (ti.soc_temp_c == -128)  // SigmaStar: no thermal_zone
         ti.soc_temp_c = read_soc_temp_c_sigmastar();
-      ti.cpu_pct = cpu_busy.sample();
+      {
+        mabur::CpuSample cs = cpu_stat.sample();
+        ti.cpu_pct = cs.total_pct;
+        ti.cpu_core_pct = std::move(cs.core_pct);
+      }
 #ifdef MABUR_HAVE_VENC
       // link-rtt t3: pts-domain clock at telem build. Stays 0 (the
       // wire's "unavailable" sentinel) on host builds and when

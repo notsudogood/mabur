@@ -94,6 +94,10 @@ rc::Telem make_telem(uint16_t tlm_seq, const TelemInputs& in) {
   t.cpu_busy_x100 =
       in.cpu_pct ? saturate<uint16_t>(std::lround(std::clamp(*in.cpu_pct, 0.0, 100.0) * 100.0))
                  : 65535;
+  for (size_t i = 0; i < 4 && i < in.cpu_core_pct.size(); ++i)
+    if (in.cpu_core_pct[i])
+      t.cpu_core_pct[i] =
+          static_cast<uint8_t>(std::lround(std::clamp(*in.cpu_core_pct[i], 0.0, 100.0)));
   t.rec_status = in.rec_status;
   return t;
 }
@@ -116,29 +120,6 @@ int read_soc_temp_c_sigmastar(const char* path) {
   std::fclose(f);
   if (n != 1) return -128;
   return deg;
-}
-
-std::optional<double> CpuBusySampler::sample(const char* path) {
-  FILE* f = std::fopen(path, "r");
-  if (!f) { have_ = false; return std::nullopt; }
-  // user nice system idle iowait irq softirq steal (guest columns are
-  // already folded into user/nice by the kernel).
-  unsigned long long c[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-  const int n = std::fscanf(f, "cpu %llu %llu %llu %llu %llu %llu %llu %llu",
-                            &c[0], &c[1], &c[2], &c[3], &c[4], &c[5], &c[6], &c[7]);
-  std::fclose(f);
-  if (n < 4) { have_ = false; return std::nullopt; }
-  uint64_t total = 0;
-  for (int i = 0; i < 8; ++i) total += c[i];
-  const uint64_t idle = c[3] + c[4];
-  const uint64_t busy = total - idle;
-  std::optional<double> out;
-  if (have_ && total > total_ && busy >= busy_)
-    out = 100.0 * static_cast<double>(busy - busy_) / static_cast<double>(total - total_);
-  have_ = true;
-  busy_ = busy;
-  total_ = total;
-  return out;
 }
 
 }  // namespace mabur

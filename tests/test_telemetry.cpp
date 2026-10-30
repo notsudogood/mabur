@@ -113,8 +113,9 @@ TEST(uplink_track_ema_and_thread_snapshot) {
 TEST(sys_readers_fail_soft) {
   CHECK(mabur::read_soc_temp_c("/nonexistent") == -128);
   CHECK(mabur::read_soc_temp_c_sigmastar("/nonexistent") == -128);
-  mabur::CpuBusySampler cpu;
-  CHECK(!cpu.sample("/nonexistent"));
+  mabur::CpuStatSampler cpu;
+  const mabur::CpuSample s = cpu.sample("/nonexistent");
+  CHECK(!s.total_pct && s.core_pct.empty());
 }
 
 // drone.sys.load was /proc/loadavg[0], which on the SigmaStar image counts
@@ -128,29 +129,30 @@ TEST(cpu_busy_is_a_proc_stat_delta_not_loadavg) {
     FILE* f = std::fopen(p, "w");
     std::fprintf(f, "%s\nintr 1 2 3\n", line); std::fclose(f);
   };
-  mabur::CpuBusySampler cpu;
+  mabur::CpuStatSampler sampler;
+  auto busy = [&] { return sampler.sample(p).total_pct; };
   // The live drone's two reads, 2 s apart: user+16, system+38, idle+329.
   write("cpu  8968 0 14081 126891 18 0 394 0 0 0");
-  CHECK(!cpu.sample(p));  // no baseline yet
+  CHECK(!busy());  // no baseline yet
   write("cpu  8984 0 14119 127220 18 0 394 0 0 0");
-  auto v = cpu.sample(p);
+  auto v = busy();
   REQUIRE(v);
   CHECK(std::abs(*v - 100.0 * 54.0 / 383.0) < 1e-9);  // 14.1 %, not 12.08
   // iowait counts as idle; irq/softirq/steal count as busy.
   write("cpu  8984 0 14119 127220 118 5 404 1 0 0");
-  v = cpu.sample(p);
+  v = busy();
   REQUIRE(v);
   CHECK(std::abs(*v - 100.0 * 16.0 / 116.0) < 1e-9);
   // No time passed: nothing to divide by -> unavailable, not NaN/garbage.
-  CHECK(!cpu.sample(p));
+  CHECK(!busy());
   // A vanished/garbled file drops the baseline: the next good read is a
   // fresh first sample, never a delta against stale counters.
   write("cpuX garbage");
-  CHECK(!cpu.sample(p));
+  CHECK(!busy());
   write("cpu  9000 0 14200 127500 118 5 404 1 0 0");
-  CHECK(!cpu.sample(p));
+  CHECK(!busy());
   write("cpu  9010 0 14210 127580 118 5 404 1 0 0");
-  v = cpu.sample(p);
+  v = busy();
   REQUIRE(v);
   CHECK(std::abs(*v - 100.0 * 20.0 / 100.0) < 1e-9);
   // Wire: unavailable is 65535, never 0 -- 0 is a real idle reading.
@@ -160,6 +162,73 @@ TEST(cpu_busy_is_a_proc_stat_delta_not_loadavg) {
   CHECK(mabur::make_telem(1, in).cpu_busy_x100 == 0);
   in.cpu_pct = 100.0;
   CHECK(mabur::make_telem(1, in).cpu_busy_x100 == 10000);
+}
+
+
+// The whole-chip figure averages the cores and hides one running flat out
+// (the drone's cpu0 carries the FEC worker and the USB senders), so the same
+// /proc/stat read yields one value per "cpuN" line too, and the drone's
+// telemetry carries the first four.
+TEST(cpu_stat_per_core) {
+  const char* p = "/tmp/mabur_test_stat_cores";
+  auto write = [&](const char* text) {
+    FILE* f = std::fopen(p, "w");
+    std::fprintf(f, "%sintr 1 2 3\nctxt 9\n", text); std::fclose(f);
+  };
+  mabur::CpuStatSampler s;
+  write("cpu  200 0 100 1700 0 0 0 0 0 0\n"
+        "cpu0 150 0 50 800 0 0 0 0 0 0\n"
+        "cpu1 50 0 50 900 0 0 0 0 0 0\n");
+  auto a = s.sample(p);
+  CHECK(!a.total_pct);
+  REQUIRE(a.core_pct.size() == 2);
+  CHECK(!a.core_pct[0] && !a.core_pct[1]);  // no baseline yet
+  // cpu0: +90 busy of +100 (90 %); cpu1: +10 of +100 (10 %); all: 100/200.
+  write("cpu  300 0 100 1800 0 0 0 0 0 0\n"
+        "cpu0 240 0 50 810 0 0 0 0 0 0\n"
+        "cpu1 60 0 50 990 0 0 0 0 0 0\n");
+  auto b = s.sample(p);
+  REQUIRE(b.total_pct);
+  CHECK(std::abs(*b.total_pct - 50.0) < 1e-9);
+  REQUIRE(b.core_pct.size() == 2);
+  REQUIRE(b.core_pct[0] && b.core_pct[1]);
+  CHECK(std::abs(*b.core_pct[0] - 90.0) < 1e-9);
+  CHECK(std::abs(*b.core_pct[1] - 10.0) < 1e-9);
+  // cpu1 goes offline (its line vanishes): index 1 is empty, cpu0 still a
+  // delta; when cpu1 comes back it starts from a fresh baseline instead of
+  // spanning the gap.
+  write("cpu  400 0 100 1900 0 0 0 0 0 0\n"
+        "cpu0 330 0 50 820 0 0 0 0 0 0\n");
+  auto c = s.sample(p);
+  REQUIRE(c.core_pct.size() == 1);
+  REQUIRE(c.core_pct[0]);
+  CHECK(std::abs(*c.core_pct[0] - 90.0) < 1e-9);
+  write("cpu  500 0 100 2000 0 0 0 0 0 0\n"
+        "cpu0 420 0 50 830 0 0 0 0 0 0\n"
+        "cpu1 70 0 50 1000 0 0 0 0 0 0\n");
+  auto d = s.sample(p);
+  REQUIRE(d.core_pct.size() == 2);
+  CHECK(d.core_pct[0].has_value());
+  CHECK(!d.core_pct[1]);
+  // A core missing in the middle (cpu1 offline, cpu2 online) leaves a gap.
+  mabur::CpuStatSampler g;
+  write("cpu  10 0 0 90 0 0 0 0 0 0\ncpu0 5 0 0 45 0 0 0 0 0 0\n"
+        "cpu2 5 0 0 45 0 0 0 0 0 0\n");
+  auto e = g.sample(p);
+  REQUIRE(e.core_pct.size() == 3);
+  CHECK(!e.core_pct[1]);
+
+  // Wire: cores 0..3, rounded whole percent, clamped; an empty core or one
+  // past the fourth goes out as kCpuCoreNone (0xFF), never 0.
+  mabur::TelemInputs in;
+  mabur::rc::Telem t0 = mabur::make_telem(1, in);
+  for (int i = 0; i < 4; ++i) CHECK(t0.cpu_core_pct[i] == mabur::rc::kCpuCoreNone);
+  in.cpu_core_pct = {83.4, std::nullopt, 0.0, 140.0, 55.0};
+  mabur::rc::Telem t1 = mabur::make_telem(1, in);
+  CHECK(t1.cpu_core_pct[0] == 83);
+  CHECK(t1.cpu_core_pct[1] == mabur::rc::kCpuCoreNone);
+  CHECK(t1.cpu_core_pct[2] == 0);
+  CHECK(t1.cpu_core_pct[3] == 100);
 }
 
 TEST(soc_temp_formats) {

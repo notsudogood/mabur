@@ -68,7 +68,7 @@ void put_tag(std::vector<uint8_t>& body, const LinkKey& key, const TagCtx& ctx) 
 constexpr size_t RCF_HEAD_LEN = 19;  // RC_VERSION 17: +cam (17), +cal_off (18)
 constexpr size_t DISC_LEN = 17;
 constexpr size_t DISC_ACK_LEN = 20;  // RC_VERSION 14: vtx_nonce(4) + flags(1) added (15)
-constexpr size_t TELEM_LEN = 58;  // RC_VERSION 17: +cam_cur/cam_now/cam_switch/cam_state (54)
+constexpr size_t TELEM_LEN = 62;  // RC_VERSION 17: +cam_cur/cam_now/cam_switch/cam_state (54), +cpu_core_pct[4] (58)
 
 // magic(2) | ver | type | flags | nonce(4) | phase | fpc(2) |
 // settle(2) | gap(2) | n_windows(1) | n * 4 bytes
@@ -337,6 +337,7 @@ std::vector<uint8_t> pack_telem(const Telem& t) {
   body.push_back(t.cam_now);
   body.push_back(t.cam_switch);
   body.push_back(t.cam_state);
+  for (uint8_t c : t.cpu_core_pct) body.push_back(c);
 
   put_crc(body);
   return body;
@@ -374,14 +375,14 @@ std::optional<Telem> parse_telem(const uint8_t* buf, size_t len) {
   t.rx_foreign = get16(buf, 43);
   t.rx_crcfail = get16(buf, 45);
   t.rec_status = buf[47];
-  const size_t o = TELEM_LEN - 10;
-  t.nack_rx = get16(buf, o);
-  t.retx_syms = get16(buf, o + 2);
-  t.retx_refused = get16(buf, o + 4);
-  t.cam_cur = buf[TELEM_LEN - 4];
-  t.cam_now = buf[TELEM_LEN - 3];
-  t.cam_switch = buf[TELEM_LEN - 2];
-  t.cam_state = buf[TELEM_LEN - 1];
+  t.nack_rx = get16(buf, 48);
+  t.retx_syms = get16(buf, 50);
+  t.retx_refused = get16(buf, 52);
+  t.cam_cur = buf[54];
+  t.cam_now = buf[55];
+  t.cam_switch = buf[56];
+  t.cam_state = buf[57];
+  for (size_t i = 0; i < 4; ++i) t.cpu_core_pct[i] = buf[58 + i];
   return t;
 }
 

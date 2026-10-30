@@ -595,6 +595,20 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
   // plan), the reply to the menu's last start ("ok started" / "err ...") and
   // how many starts it has sent (so a repeated reply reads as new),
   // the last failure, and the "remove calibration" request's result.
+  // The GS's own CPU, top-level like `scan`: busy % of the whole chip
+  // (one decimal) and per core (whole percent, index = core number, null for
+  // an offline core or one without a baseline yet). maburgs reads it once a
+  // second, so consecutive snapshots repeat a value.
+  {
+    json& gsys = j["gs"]["sys"];
+    gsys["cpu_pct"] = in.gs_cpu_pct ? json(std::round(*in.gs_cpu_pct * 10.0) / 10.0)
+                                    : json(nullptr);
+    json cores = json::array();
+    for (const auto& c : in.gs_cpu_core_pct)
+      cores.push_back(c ? json(static_cast<int>(std::lround(*c))) : json(nullptr));
+    gsys["cpu_core_pct"] = std::move(cores);
+  }
+
   j["calibration"] = {{"state", in.cal_state ? in.cal_state : "idle"},
                       {"pct", in.cal_pct < 0 ? json(nullptr) : json(in.cal_pct)},
                       {"start", in.cal_start},
@@ -765,6 +779,20 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
                 // 65535 = unavailable (first tick after a maburd start).
                 {"cpu_pct", t.cpu_busy_x100 == 65535 ? json(nullptr)
                                                      : json(t.cpu_busy_x100 / 100.0)}};
+    // Per core, cores 0..3 as the drone sent them, trimmed after the last
+    // core that reported; kCpuCoreNone inside the list (an offline core) is
+    // null. Empty array before the drone's second telemetry tick.
+    {
+      json cores = json::array();
+      int last = -1;
+      for (int i = 0; i < 4; ++i)
+        if (t.cpu_core_pct[i] != mabur::rc::kCpuCoreNone) last = i;
+      for (int i = 0; i <= last; ++i)
+        cores.push_back(t.cpu_core_pct[i] == mabur::rc::kCpuCoreNone
+                            ? json(nullptr)
+                            : json(static_cast<int>(t.cpu_core_pct[i])));
+      d["sys"]["cpu_core_pct"] = std::move(cores);
+    }
   } else {
     j["drone"] = nullptr;
   }

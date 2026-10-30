@@ -2111,7 +2111,8 @@ def drone_tx_samples(rows):
     on every record until the next one arrives) carrying the drone-side
     TX-path fields the telem diet kept for exactly this report:
     txq_wait_ms (per-period max), cumulative txq.drops / radio.usb_fail,
-    sys.cpu_pct, and the congestion/failsafe shed flags. Empty when the
+    sys.cpu_pct (whole chip) and sys.cpu_core_pct (per core, RC_VERSION 17
+    on), and the congestion/failsafe shed flags. Empty when the
     recording has no drone section."""
     out = []
     last_seq = None
@@ -2128,6 +2129,9 @@ def drone_tx_samples(rows):
             "drops": (d.get("txq") or {}).get("drops"),
             "usb": (d.get("radio") or {}).get("usb_fail"),
             "cpu": (d.get("sys") or {}).get("cpu_pct"),
+            # None, not [], when absent: the section's "anything here?" test
+            # treats any non-None field as data.
+            "cores": (d.get("sys") or {}).get("cpu_core_pct") or None,
             "cong": d.get("congestion_shed"),
             "fs": d.get("failsafe_shed"),
             "auth": d.get("auth_reject"),
@@ -2179,8 +2183,55 @@ def print_drone_tx_report(rows):
     cpu_s = (f"p50={_pct(cpus, .5):.1f} p90={_pct(cpus, .9):.1f} max={max(cpus):.1f}"
              if cpus else "n/a")
     print(f"  cpu %: {cpu_s}")
+    cores = _per_core([x["cores"] for x in s])
+    if cores:
+        print("  cpu % per core: " + "   ".join(
+            f"cpu{i} p50={_pct(v, .5):.0f} p90={_pct(v, .9):.0f} max={max(v):.0f}"
+            for i, v in cores))
     print(f"  congestion shed: {cong} periods   failsafe shed: {fs} periods"
           f"   auth reject: {auth} periods")
+
+
+def _per_core(lists):
+    """[(core, [values])] from a run of per-core lists (index = core; null =
+    offline or no baseline), keeping only cores that reported at least once."""
+    by = {}
+    for lst in lists:
+        for i, v in enumerate(lst or []):
+            if v is not None:
+                by.setdefault(i, []).append(v)
+    return sorted(by.items())
+
+
+def print_gs_cpu_report(rows):
+    """GS CPU: the ground station's own CPU (top-level gs.sys, maburgs reads
+    /proc/stat once a second): whole chip and per core. One sample per
+    second of the recording, since the 5 Hz records repeat the last read.
+    Silent on recordings that predate the block."""
+    seen = set()
+    tot, lists = [], []
+    for r in rows:
+        g = ((r.get("gs") or {}).get("sys")) or {}
+        if not g:
+            continue
+        sec = int(r.get("t_ms", 0) // 1000)
+        if sec in seen:
+            continue
+        seen.add(sec)
+        if g.get("cpu_pct") is not None:
+            tot.append(g["cpu_pct"])
+        lists.append(g.get("cpu_core_pct"))
+    cores = _per_core(lists)
+    if not tot and not cores:
+        return
+    print()
+    print(f"GS CPU (maburgs host, once per second): n={len(tot)}")
+    if tot:
+        print(f"  cpu %: p50={_pct(tot, .5):.1f} p90={_pct(tot, .9):.1f} max={max(tot):.1f}")
+    if cores:
+        print("  cpu % per core: " + "   ".join(
+            f"cpu{i} p50={_pct(v, .5):.0f} p90={_pct(v, .9):.0f} max={max(v):.0f}"
+            for i, v in cores))
 
 
 def print_nack_report(rows):
@@ -3120,6 +3171,7 @@ def main(path, aulog=None, probelog_path=None, scanlog_path=None):
     print_drone_rx_report(rows)
     print_listen_report(rows)
     print_drone_tx_report(rows)
+    print_gs_cpu_report(rows)
 
     # link.attrib.suppressed was removed from the sideport with
     # the packet-level delivery window it was defined against. Old
@@ -3163,6 +3215,7 @@ if __name__ == "__main__":
             print_slice_salvage_report(flight_rows)
             print_drone_rx_report(flight_rows)
             print_drone_tx_report(flight_rows)
+            print_gs_cpu_report(flight_rows)
             print_listen_report(flight_rows, s.lat)
         # CAMERA vs SCREEN rides on au.log and lat.log, whatever the primary.
         print_display_clock_report(s.au, s.lat)

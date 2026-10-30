@@ -3,7 +3,9 @@
 #include <cstdint>
 #include <mutex>
 #include <optional>
+#include <vector>
 
+#include "mabur/cpu_stat.h"
 #include "mabur/rc_proto.h"
 
 namespace mabur {
@@ -66,8 +68,11 @@ struct TelemInputs {
   uint64_t rx_own = 0, rx_foreign = 0, rx_crcfail = 0;
   UplinkTrack::Snap uplink;
   int soc_temp_c = -128;
-  // CpuBusySampler::sample() -- empty until two ticks have been read.
+  // CpuStatSampler::sample() -- empty until two ticks have been read.
   std::optional<double> cpu_pct;
+  // The same sample per core (index = core number); cores past the wire's
+  // four are dropped, an empty entry goes out as rc::kCpuCoreNone.
+  std::vector<std::optional<double>> cpu_core_pct;
   // VtxRecorder::status_byte(), straight pass-through.
   uint8_t rec_status = 0;
 };
@@ -84,21 +89,5 @@ int read_soc_temp_c(const char* path = "/sys/class/thermal/thermal_zone0/temp");
 // unreadable.
 int read_soc_temp_c_sigmastar(
     const char* path = "/sys/devices/system/cpu/cpufreq/temp_out");
-
-// CPU busy percent between consecutive sample() calls, from the aggregate
-// "cpu" line of /proc/stat: busy = total - idle - iowait. Empty on the
-// first call (no baseline yet) and whenever the file cannot be read or
-// parsed, in which case the baseline is dropped so the next good pair
-// starts fresh. Replaces loadavg, which on the SigmaStar image counts the
-// SDK's permanently parked D-state workers (~13, load-independent). One
-// instance per reader thread; not thread-safe by design.
-class CpuBusySampler {
- public:
-  std::optional<double> sample(const char* path = "/proc/stat");
-
- private:
-  bool have_ = false;
-  uint64_t busy_ = 0, total_ = 0;
-};
 
 }  // namespace mabur

@@ -387,7 +387,7 @@ TEST(telem_round_trip_and_golden) {
   // VTX recorder status: state 2 (Error) | err 5 (LowSpace) << 2.
   t.rec_status = 0x16;
   auto wire = mabur::rc::pack_telem(t);
-  CHECK(wire.size() == 58 + 2);
+  CHECK(wire.size() == 62 + 2);
   CHECK(mabur::rc::frame_type(wire.data(), wire.size()) == mabur::rc::T_TELEM);
   auto back = mabur::rc::parse_telem(wire.data(), wire.size());
   REQUIRE(back.has_value());
@@ -415,10 +415,11 @@ TEST(telem_round_trip_and_golden) {
         back->cam_state == 0);
   // Golden pin: byte-exact wire so the format can never drift silently.
   // Re-pinned for the RC_VERSION 16 -> 17 bump: the version byte, the four
-  // camera bytes at the tail (ff 00 00 00 at their defaults) and the CRC.
+  // camera bytes at the tail (ff 00 00 00 at their defaults), the four
+  // per-core CPU bytes after them (ff ff ff ff: no core reported) and the CRC.
   const std::string GOLDEN =
       "43521104090201022d0034127766554433221100a0860100282307000000d2040200"
-      "333415163d48000d000e000f0016000000000000ff000000ff6c";
+      "333415163d48000d000e000f0016000000000000ff000000ffffffff4c40";
   CHECK(mtest::hex(wire) == GOLDEN);
   // Corrupt/truncate rejection, mirroring the disc_ack tests:
   auto trunc = wire; trunc.pop_back();
@@ -669,11 +670,11 @@ TEST(cal_result_sentinel_is_minus_128_and_minus_1_is_a_real_wall) {
 TEST(telem_ack_is_the_cal_active_bit_alone) {
   // The anchor never leaves the drone: the calibration ack is flags bit6 and
   // nothing else (dropping the anchor shrank TELEM_LEN by one byte).
-  // TELEM_LEN is 58 at RC_VERSION 17.
+  // TELEM_LEN is 62 at RC_VERSION 17.
   mabur::rc::Telem t;
   t.flags = 0x40;
   auto b = mabur::rc::pack_telem(t);
-  CHECK(b.size() == 58 + 2);  // body + crc16
+  CHECK(b.size() == 62 + 2);  // body + crc16
   auto got = mabur::rc::parse_telem(b.data(), b.size());
   REQUIRE(got.has_value());
   CHECK((got->flags & 0x40) != 0);
@@ -686,13 +687,31 @@ TEST(telem_camera_bytes_round_trip) {
   t.cam_cur = 1; t.cam_now = 0x03; t.cam_switch = 0x0C; t.cam_state = 6;
   t.retx_refused = 0xBEEF;  // the field just before them stays where it was
   auto b = mabur::rc::pack_telem(t);
-  REQUIRE(b.size() == 58 + 2);
+  REQUIRE(b.size() == 62 + 2);
   CHECK(b[54] == 1 && b[55] == 0x03 && b[56] == 0x0C && b[57] == 6);
   auto got = mabur::rc::parse_telem(b.data(), b.size());
   REQUIRE(got.has_value());
   CHECK(got->cam_cur == 1 && got->cam_now == 0x03 && got->cam_switch == 0x0C &&
         got->cam_state == 6);
   CHECK(got->retx_refused == 0xBEEF);
+}
+
+TEST(telem_cpu_core_bytes_round_trip) {
+  // Four per-core CPU bytes after the camera bytes (58..61); the fields
+  // before them stay where they were.
+  mabur::rc::Telem t;
+  t.cam_state = 6;
+  t.cpu_core_pct[0] = 83; t.cpu_core_pct[1] = 37;  // cores 2 and 3 absent
+  auto b = mabur::rc::pack_telem(t);
+  REQUIRE(b.size() == 62 + 2);
+  CHECK(b[57] == 6);
+  CHECK(b[58] == 83 && b[59] == 37 && b[60] == 0xFF && b[61] == 0xFF);
+  auto got = mabur::rc::parse_telem(b.data(), b.size());
+  REQUIRE(got.has_value());
+  CHECK(got->cam_state == 6);
+  CHECK(got->cpu_core_pct[0] == 83 && got->cpu_core_pct[1] == 37);
+  CHECK(got->cpu_core_pct[2] == mabur::rc::kCpuCoreNone &&
+        got->cpu_core_pct[3] == mabur::rc::kCpuCoreNone);
 }
 
 TEST(nack_final_layout_round_trip_and_tag) {

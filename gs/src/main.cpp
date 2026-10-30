@@ -55,6 +55,7 @@
 #include "mabur/cal_wire.h"
 #include "mabur/channel_file.h"
 #include "mabur/channel_set.h"
+#include "mabur/cpu_stat.h"
 #include "mabur/probe_wire.h"
 #include "mabur/profile.h"
 #include "mabur/rc_proto.h"
@@ -506,6 +507,12 @@ static int run_radio(const maburgs::Config& cfg) {
   // that: the vector moves pointers, never UdpSink objects.
   std::vector<std::unique_ptr<maburgs::UdpSink>> stats_udp;
   std::optional<maburgs::StatsExporter> stats;
+  // The GS's own CPU (top-level `gs.sys` in the stats), read once a second
+  // from /proc/stat on the core thread -- a ~20-line file read -- and held
+  // between reads, so each 5 Hz snapshot carries the last whole-second figure.
+  mabur::CpuStatSampler gs_cpu_sampler;
+  mabur::CpuSample gs_cpu;
+  uint64_t gs_cpu_ms = 0;
   maburgs::LogWriter::Stream flight_jsonl = maburgs::LogWriter::kBadStream;
   if (debug.ok())
     flight_jsonl = log_writer->open(debug.dir(), "flight.jsonl", "",
@@ -1957,6 +1964,12 @@ static int run_radio(const maburgs::Config& cfg) {
       sin.q_drop = queue.dropped();
       sin.telem = latest_telem.t;
       sin.telem_rx_ms = latest_telem.rx_ms;
+      if (drained_ms >= gs_cpu_ms + 1000) {
+        gs_cpu = gs_cpu_sampler.sample();
+        gs_cpu_ms = drained_ms;
+      }
+      sin.gs_cpu_pct = gs_cpu.total_pct;
+      sin.gs_cpu_core_pct = gs_cpu.core_pct;
       sin.cal_state = cal_session.state_name();
       sin.cal_pct = cal_session.progress_pct();
       sin.cal_start = cal_menu_start;

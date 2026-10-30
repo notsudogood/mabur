@@ -526,6 +526,40 @@ TEST(stream_rows_ignore_telem_use_commanded_overhead) {
   CHECK(std::abs(j["link"]["streams"][1]["ov"].get<double>() - 0.5) < 1e-9);
 }
 
+// CPU: the drone's per-core list (drone.sys.cpu_core_pct, trimmed after the
+// last core that reported, an offline core inside it null) and the GS's own
+// CPU (top-level gs.sys), which is there before any drone telemetry.
+TEST(cpu_per_core_and_gs_cpu) {
+  Capture cap;
+  StatsExporter ex(1, 500, cap.fn());
+  StatsInput in = base_input();
+  ex.poll(1000, in);
+  json j = cap.last();
+  REQUIRE(j.contains("gs"));
+  CHECK(j["gs"]["sys"]["cpu_pct"].is_null());          // no baseline yet
+  CHECK(j["gs"]["sys"]["cpu_core_pct"] == json::array());
+  in.gs_cpu_pct = 41.26;
+  in.gs_cpu_core_pct = {55.6, std::nullopt, 20.0, 3.4};
+  mabur::rc::Telem t;
+  t.tlm_seq = 1; t.state = 2;
+  in.telem = t; in.telem_rx_ms = 1400;
+  ex.poll(1500, in);
+  j = cap.last();
+  CHECK(std::abs(j["gs"]["sys"]["cpu_pct"].get<double>() - 41.3) < 1e-9);
+  CHECK(j["gs"]["sys"]["cpu_core_pct"] == json::parse("[56, null, 20, 3]"));
+  CHECK(j["drone"]["sys"]["cpu_core_pct"] == json::array());  // none reported
+  t.tlm_seq = 2;
+  t.cpu_core_pct[0] = 83; t.cpu_core_pct[1] = 37;
+  in.telem = t; in.telem_rx_ms = 1900;
+  ex.poll(2000, in);
+  CHECK(cap.last()["drone"]["sys"]["cpu_core_pct"] == json::parse("[83, 37]"));
+  t.tlm_seq = 3;
+  t.cpu_core_pct[1] = mabur::rc::kCpuCoreNone; t.cpu_core_pct[2] = 40;
+  in.telem = t; in.telem_rx_ms = 2400;
+  ex.poll(2500, in);
+  CHECK(cap.last()["drone"]["sys"]["cpu_core_pct"] == json::parse("[83, null, 40]"));
+}
+
 TEST(drone_section_null_then_rates) {
   Capture cap;
   StatsExporter ex(1, 500, cap.fn());

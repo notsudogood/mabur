@@ -346,6 +346,12 @@ struct StatsInput {
   // JSON "rtt": null.
   std::optional<StatsRttIn> rtt;
 
+  // The GS's own CPU (mabur::CpuStatSampler, read once a second by
+  // maburgs), top-level `gs.sys`: whole-chip busy % and one entry per core.
+  // Empty = no baseline yet (the first second) or /proc/stat unreadable.
+  std::optional<double> gs_cpu_pct;
+  std::vector<std::optional<double>> gs_cpu_core_pct;
+
   // Settings tab: the calibration session (CalSession) and the "remove"
   // request (CalOffRequest), top-level `calibration`.
   const char* cal_state = "idle";

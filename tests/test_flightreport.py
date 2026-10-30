@@ -354,7 +354,8 @@ def test_drone_rx_section_absent_on_old_recordings():
     assert "DRONE RX" not in result.stdout
 
 
-def _mk_drone_tx_row(t_ms, tlm_seq, wait, drops, usb, cpu, cong, fs=False, auth=False):
+def _mk_drone_tx_row(t_ms, tlm_seq, wait, drops, usb, cpu, cong, fs=False, auth=False,
+                     cores=None):
     r = _mk_stream_row(t_ms, 2)
     r["drone"] = {"state": "linked", "tlm_seq": tlm_seq, "txq_wait_ms": wait,
                   "failsafe_shed": fs, "congestion_shed": cong,
@@ -362,6 +363,8 @@ def _mk_drone_tx_row(t_ms, tlm_seq, wait, drops, usb, cpu, cong, fs=False, auth=
                   "txq": {"drops": drops, "drop_pps": None},
                   "radio": {"usb_fail": usb},
                   "sys": {"soc_temp_c": 50, "cpu_pct": cpu}}
+    if cores is not None:
+        r["drone"]["sys"]["cpu_core_pct"] = cores
     return r
 
 
@@ -396,6 +399,66 @@ def test_drone_tx_path_section():
     assert re.search(r"congestion shed:\s*2 periods", sec), sec
     assert re.search(r"failsafe shed:\s*0 periods", sec), sec
     assert re.search(r"auth reject:\s*1 periods", sec), sec
+    # No per-core data in these rows (a pre-RC_VERSION-17 drone): no line.
+    assert "per core" not in sec, sec
+
+
+def test_drone_tx_path_per_core_cpu():
+    """RC_VERSION 17 drones add sys.cpu_core_pct: one value per core, null
+    for an offline core or a missing baseline. The whole-chip figure hides one
+    core running flat out, which is what this line is for."""
+    rows = [
+        _mk_drone_tx_row(0,    1, wait=3,  drops=0, usb=0, cpu=None, cong=False, cores=[]),
+        _mk_drone_tx_row(1000, 2, wait=4,  drops=0, usb=0, cpu=50.0, cong=False, cores=[80, 20]),
+        _mk_drone_tx_row(2000, 3, wait=9,  drops=0, usb=0, cpu=60.0, cong=False, cores=[95, 25]),
+        _mk_drone_tx_row(3000, 4, wait=5,  drops=0, usb=0, cpu=40.0, cong=False, cores=[60, None]),
+    ]
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "flight.jsonl"
+        p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        result = subprocess.run([sys.executable, "tools/flightreport.py", str(p)],
+                                capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    sec = result.stdout[result.stdout.find("DRONE TX PATH"):]
+    m = re.search(r"cpu % per core: (.*)", sec)
+    assert m, sec
+    assert re.search(r"cpu0 p50=80 p90=95 max=95", m.group(1)), m.group(1)
+    assert re.search(r"cpu1 p50=20 p90=25 max=25", m.group(1)), m.group(1)  # null skipped
+
+
+def test_gs_cpu_section():
+    """GS CPU (top-level gs.sys): maburgs reads its own /proc/stat once a
+    second, so the 5 Hz records repeat a value; the section samples once per
+    second. Silent on recordings without the block."""
+    rows = []
+    for k in range(10):  # 2 s at 5 Hz
+        r = _mk_stream_row(k * 200, 2)
+        sec = k // 5
+        r["gs"] = {"sys": {"cpu_pct": [30.0, 50.0][sec],
+                           "cpu_core_pct": [[40, 20, 30, 30], [70, None, 50, 40]][sec]}}
+        rows.append(r)
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "flight.jsonl"
+        p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        result = subprocess.run([sys.executable, "tools/flightreport.py", str(p)],
+                                capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    assert "GS CPU" in out, out
+    sec = out[out.find("GS CPU"):]
+    assert re.search(r"n=2\b", sec), sec
+    assert re.search(r"cpu %: p50=30\.0 p90=50\.0 max=50\.0", sec), sec
+    assert re.search(r"cpu0 p50=40 p90=70 max=70", sec), sec
+    assert re.search(r"cpu1 p50=20 p90=20 max=20", sec), sec  # null second skipped
+    # Old recordings: no gs block, no section.
+    rows = [_mk_stream_row(0, 2), _mk_stream_row(500, 2)]
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "flight.jsonl"
+        p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        result = subprocess.run([sys.executable, "tools/flightreport.py", str(p)],
+                                capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "GS CPU" not in result.stdout
 
 
 def test_drone_tx_path_section_absent_without_drone_telemetry():
@@ -2892,4 +2955,10 @@ if __name__ == "__main__":
     test_session_dir_mode_prints_salvage_from_flight_jsonl()
     test_drone_rx_section_once_per_telemetry_period()
     test_drone_rx_section_absent_on_old_recordings()
+    test_drone_tx_path_section()
+    test_drone_tx_path_section_absent_without_drone_telemetry()
+    test_drone_tx_path_per_core_cpu()
+    test_gs_cpu_section()
+    test_s_line_resid_cur_parsed_and_absent_is_nan()
+    test_s_line_fade_deltas_parsed_and_absent_nan()
     unittest.main()

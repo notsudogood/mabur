@@ -137,6 +137,15 @@ Chronological; each line names the section below that carries the detail.
   drone's radio went through the same trip; what it did to its TX is
   unmeasured. Check `link.op.bw` for a 10 before trusting SNR later in a
   recording.
+- After gs15/d16 (the build that carries the 2026-10-30 changes) — every
+  drone image arms devourer's wide-TX IGI floor (0x35) at 40/80 MHz by
+  default, the 8812EU included: the drone's 40/80 MHz uplink sensitivity
+  is lower than in earlier recordings of a drone that ran without it. The
+  GS bundle's MCS3/80 rung carries 0.5/0.25 FEC (was 0.4/0.1): compare
+  that rung's loss episodes across builds by `link.rungs` overheads, not by
+  rung number. GS raw recordings carry `.osd`/`.srt`/`.link.srt` sidecars
+  from this build on (none was ever written before) and split at arm and
+  disarm, so one flight can be two or three files.
 
 ## 2026-09-23 — `link.pre_fec_loss` scale break, twice
 

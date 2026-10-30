@@ -193,9 +193,17 @@ overhead_base = 0.5
 overhead_enh  = 0.25
 
 # 80 MHz top (2026-10-17). The drone caps each with [[encoder.rung]] in
-# mabur.toml: 25 Mbps at mcs 4 / 40, 35 at mcs 3 / 80, 50 at mcs 4 / 80.
-# Light repair data here: at 50 Mbps the drone's CPU is the limit, and these
-# rungs only fly on a strong link. Bench 2026-10-17: mcs 4 / 80 reached
+# mabur.toml: 25 Mbps at mcs 4 / 40, 35 at mcs 3 / 80, 45 at mcs 4 / 80.
+# Light repair data on mcs 4 / 80: at its cap the drone's CPU is the limit,
+# and it only flies on a strong link. mcs 3 / 80 carries more since
+# 2026-10-30 (was 0.4 / 0.1): it is the rung a fade lands on first, and in
+# flight 0007 it had 19 of the 52 base-layer FEC episodes. The 35 Mb/s cap
+# still binds there (117 Mb/s PHY), so the video rate is unchanged; the cost
+# is ~10 % more air and FEC work on the drone (cpu0, unmeasured) at that
+# rung. Expect little: replayed on 0007/0008, the extra repairs would have
+# covered the resends in 3 of the 16 resend-repaired episodes on this rung
+# (a few late frames fewer) and saved none of the 9 that lost frames --
+# those were bursts of 34-765 lost symbols against 4-13 extra repairs. Bench 2026-10-17: mcs 4 / 80 reached
 # ~2-2.5 dB further than mcs 5 / 40 (which these replace), but a GS card
 # tuned 80 hears the 20/40 rungs ~1-1.5 dB worse, so the cards widen only
 # while these fly. Unflown at the time of writing; delete both to go back
@@ -203,8 +211,8 @@ overhead_enh  = 0.25
 [[link.ladder]]
 mcs = 3
 bw  = 80
-overhead_base = 0.4
-overhead_enh  = 0.1
+overhead_base = 0.5
+overhead_enh  = 0.25
 
 [[link.ladder]]
 mcs = 4

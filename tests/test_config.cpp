@@ -1659,6 +1659,14 @@ TEST(wide_igi_floor_key_parses_and_validates) {
   }
 }
 
+// radio.igi_floor_auto (d18): on by default, a bool.
+TEST(igi_floor_auto_key_parses) {
+  CHECK(Config{}.radio.igi_floor_auto);
+  auto p = write_temp_toml("[radio]\nchannels = [36]\nigi_floor_auto = false\n");
+  CHECK(!load_config(p.string()).radio.igi_floor_auto);
+  std::filesystem::remove(p);
+}
+
 // radio.carrier_sense (bench switch for the 40 MHz stall) and
 // link.shed_max_level (the 30 fps tail): defaults are the shipped behaviour.
 TEST(carrier_sense_and_shed_max_level_parse_and_validate) {

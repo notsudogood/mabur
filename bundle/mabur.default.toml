@@ -44,12 +44,16 @@ spur_warn  = true      # warn at start for each member where this radio, if an 8
                        # spur (153 161 169 177, and 173 at 40/80); a warning only, it never refuses a channel
 spur_ext   = false     # notch the 5880 MHz spur too (177 at 20 MHz, the 173+177 pair at 40): not a vendor
                        # setting, untested on air (173 at 40 stalled without it)
-wide_igi_floor = -1    # receiver-gain floor at 40/80 MHz (devourer's 40 MHz stall fix): -1 = the image's
-                       # default, 0x35 = 53 on every drone image since 2026-10-30 (drone 1's 8812EU: 0 of 11
-                       # 40 MHz promotes stalled with it, 7 of 20 without), 0 = off, else 1..127. Costs ~1 dB
-                       # of uplink sensitivity per step at 40/80 (estimate). Field, one flight each: with the
-                       # radio resting at 40 (d17) the uplink failed ~10 dB earlier than in 0008 without it;
-                       # home_width = 20 keeps the floor off on the 20 MHz rungs.
+wide_igi_floor = -1    # receiver-gain floor at 40/80 MHz (devourer's 40 MHz stall fix): -1 = not set by hand
+                       # (igi_floor_auto decides), 0 = off, else 1..127 fixed. drone 1's 8812EU: 0 of 11 40 MHz
+                       # promotes stalled at 0x35 = 53, 7 of 20 with it off; drone 2 never stalled. Costs ~1 dB
+                       # of uplink sensitivity per step at 40/80 (estimate, unmeasured at a weak uplink);
+                       # home_width = 20 keeps it off on the 20 MHz rungs
+igi_floor_auto = true  # d18, with wide_igi_floor = -1: learn this drone's floor. Starts off (or where it was
+                       # saved), steps 0x24 -> 0x2c -> 0x35 on each 40/80 MHz stall (frames waiting, none sent,
+                       # 250 ms of the last 1 s) and saves it to /etc/mabur.igi_floor; never steps down (delete that file to
+                       # relearn). The stall that teaches it still happens once per step (the GS's latency guard
+                       # demotes it, as before). false = the image's fixed 0x35 (d17)
                        # Per radio unit: a value set here is kept when a new image refreshes this file
 power_mode = "none"      # "none" = card's default TX power; "offset" = use the calibrated walls below.
                          # "offset" now shapes the 80 MHz (VHT) rungs like the 20/40 ones

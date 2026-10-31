@@ -73,6 +73,15 @@ struct RadioCfg {
   // Cost: ~1 dB of idle-channel RX sensitivity per step at 40/80 MHz
   // (estimated, not measured).
   int wide_igi_floor = -1;
+  // d18: with wide_igi_floor = -1, learn the floor per unit instead of
+  // taking the image's 0x35 (igi_floor_learn.h): start where this unit last
+  // needed it (off on a unit with nothing saved), step 0x24 -> 0x2c -> 0x35
+  // on each 40/80 MHz stall seen (frames waiting and none sent for 250 ms
+  // of the last second),
+  // saved to mabur.igi_floor next to mabur.toml. Never steps down; delete
+  // that file to relearn. false = the image's default, as before d18.
+  // A hand-set wide_igi_floor (0..127) wins over both.
+  bool igi_floor_auto = true;
   // > 0: for each width switch and hop, the switching thread and the RX
   // thread run at SCHED_FIFO with this priority (above the encoder's 50),
   // then return to their own (rt_boost.h). d12 measured ~0.5 ms per USB

@@ -167,16 +167,34 @@ The second is devourer's **wide-TX IGI floor**
 switched on by the session's first 40 MHz frame and stays on while the card
 is tuned to 40 MHz. It exists because on a silent channel the receiver can
 settle where the secondary 20 MHz never reads idle, and the MAC then holds
-the first 40 MHz frame forever. The shipped ladder sends every rung at
-40 MHz, so on the drone the floor is on for the whole flight, and it costs
-the RCF uplink idle-channel sensitivity. `maburd` picks the value per image,
-from the one Jaguar3 chip that image compiles in:
+the first 40 MHz frame forever. It costs the RCF uplink idle-channel
+sensitivity while tuned 40/80 MHz (~1 dB per IGI step, estimated), which is
+why the drone rests at 20 MHz since d18 (`radio.home_width = 20`). The edge
+is per radio unit: drone 1's 8812EU stalled on 7 of 20 promotes onto
+40 MHz with no floor and 0 of 11 at `0x35`; drone 2's never stalled. How
+`maburd` picks the value, first match wins:
 
-- **8812EU**: `0` (no floor). The EU has flown the 40 MHz rungs without a
-  floor and never stalled. An EU unit that does stall loses the downlink
-  at its first 40 MHz frame, with the TX FIFO full; give that unit a floor.
-- **8812CU**: devourer's default, `0x35`. The stall was found on the 8822C,
-  and the default is the lowest value that has cleared every CU unit tested.
+- **`radio.wide_igi_floor` set by hand** (0..127): that value, fixed, and
+  carried across image refreshes.
+- **`radio.igi_floor_auto = true`** (d18 default): learned per unit
+  (`drone/src/igi_floor_learn.h`). It starts at the value in
+  `/etc/mabur.igi_floor` (off when there is none) and a watcher thread
+  steps it `0x24` → `0x2c` → `0x35` each time it sees a stall: tuned
+  40/80 MHz, frames waiting and devourer's TX submission count still, for
+  250 ms in total of the last second (so a unit that sends in bursts
+  between hangs counts too; 1 s settle after each step, and a width switch
+  or retune within 300 ms excuses the gap). How often a busy channel reads
+  as a stall is unmeasured; each false one costs that unit a step of
+  uplink sensitivity at 40/80 MHz until the file is deleted. Each step is applied live
+  (`IRtlRadio::SetWideTxIgiFloor`) and saved. It never steps down; delete
+  `/etc/mabur.igi_floor` to relearn. The stall that teaches a step still
+  happens, once per step; whether the raise releases the held frame is
+  unmeasured, and when it does not, the GS's latency guard demotes it as it
+  did before. The `stats:` line carries `igi=` and `igi_stall=`.
+- **`igi_floor_auto = false`**: the image default, devourer's `0x35` (d17).
+
+The learned file is not part of `mabur.toml`, so neither a refresh nor a
+clean-slate epoch touches it.
 
 The 8812CU is 2T2R, so STBC airs on two real chains; none of the 8822E
 constraints in devourer's 8822E quirks page

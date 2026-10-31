@@ -91,7 +91,7 @@ void parse_radio(const Value& j, RadioCfg& r) {
                         "home_width", "width_hold_ms", "fast_hop_at_80", "batched_tune",
                         "lean_width", "lean_verify", "switch_rt_prio", "narrow_rescue_ms",
                         "carrier_sense", "spur_warn", "spur_ext", "wide_igi_floor",
-                        "narrow_unlinked"},
+                        "igi_floor_auto", "narrow_unlinked"},
                    "radio");
   assign_if_present(j, "usb_vid", r.usb_vid, "radio");
   assign_if_present(j, "usb_pid", r.usb_pid, "radio");
@@ -114,6 +114,7 @@ void parse_radio(const Value& j, RadioCfg& r) {
   assign_if_present(j, "wide_igi_floor", r.wide_igi_floor, "radio");
   if (r.wide_igi_floor < -1 || r.wide_igi_floor > 127)
     fail("radio.wide_igi_floor", "must be -1 (the image's default), 0 (off) or 1..127");
+  assign_if_present(j, "igi_floor_auto", r.igi_floor_auto, "radio");
   assign_if_present(j, "switch_rt_prio", r.switch_rt_prio, "radio");
   if (r.switch_rt_prio < 0 || r.switch_rt_prio > 89)
     fail("radio.switch_rt_prio", "must be 0 (off) to 89 (SCHED_FIFO priority; the encoder runs at 50)");

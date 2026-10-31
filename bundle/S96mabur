@@ -72,7 +72,9 @@ same() {
 # belongs to this drone's own radio is carried over: the TX-power
 # calibration (maburcal's four [radio] lines) when it is in use, and a
 # wide_igi_floor set by hand (the 40 MHz stall fix is per radio unit: one
-# 8812EU needs it, another never stalls). Edits made on THIS image stay
+# 8812EU needs it, another never stalls). maburd's learned floor
+# (/etc/mabur.igi_floor, radio.igi_floor_auto) is its own file and is left
+# alone here, epoch or not. Edits made on THIS image stay
 # ($STAMP matches the image). touch $KEEP to never refresh.
 wipe_config() {
   what="replaced by the image default (clean slate $CONFIG_EPOCH, nothing carried over)"

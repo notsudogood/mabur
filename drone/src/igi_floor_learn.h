@@ -59,6 +59,9 @@
 #include <string>
 #include <utility>
 
+#include <fcntl.h>
+#include <unistd.h>
+
 namespace mabur {
 
 inline constexpr uint8_t kIgiFloorTop = 0x35;
@@ -205,18 +208,31 @@ inline std::optional<IgiSaved> igi_floor_load(const std::string& path) {
   return s;
 }
 
-// Writes `s` atomically (temp file + rename). false on any failure.
+// Writes `s` atomically (temp file + rename) and flushes it to flash before
+// returning: a step is learned from a real stall (a freeze the pilot saw),
+// so a power cut right after it must not make the drone learn it again.
+// false on any failure.
 inline bool igi_floor_save(const std::string& path, const IgiSaved& s) {
   const std::string tmp = path + ".tmp";
   std::FILE* f = std::fopen(tmp.c_str(), "w");
   if (!f) return false;
-  const bool ok = std::fprintf(f, "0x%02x%s%s\n", static_cast<unsigned>(s.floor),
-                               s.v40 ? " v40" : "", s.v80 ? " v80" : "") > 0;
+  bool ok = std::fprintf(f, "0x%02x%s%s\n", static_cast<unsigned>(s.floor),
+                         s.v40 ? " v40" : "", s.v80 ? " v80" : "") > 0;
+  ok = ok && std::fflush(f) == 0 && ::fsync(::fileno(f)) == 0;
   if (std::fclose(f) != 0 || !ok) {
     std::remove(tmp.c_str());
     return false;
   }
-  return std::rename(tmp.c_str(), path.c_str()) == 0;
+  if (std::rename(tmp.c_str(), path.c_str()) != 0) return false;
+  // The rename itself lives in the directory: flush that too (best effort).
+  const size_t slash = path.find_last_of('/');
+  const std::string dir = slash == std::string::npos ? "." : slash == 0 ? "/" : path.substr(0, slash);
+  const int dfd = ::open(dir.c_str(), O_RDONLY);
+  if (dfd >= 0) {
+    ::fsync(dfd);
+    ::close(dfd);
+  }
+  return true;
 }
 
 // "<dir of cfg_path>/mabur.igi_floor" ("mabur.igi_floor" for a bare name).

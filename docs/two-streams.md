@@ -29,13 +29,24 @@ wide-TX stall).
   PHY rate (216 vs 234 data subcarriers). Every real-world imperfection
   below costs 2SS, not 80 MHz.
 - **It needs two separable paths.** The GS card separates the streams only
-  if its two antennas hear the two drone antennas differently. In line of
-  sight at range, two antennas with the same polarisation see almost the
-  same path, and the second stream cannot be separated: the link would
-  fall off well before the 1SS rungs do. Crossed polarisation (one antenna
-  vertical, one horizontal, at both ends) keeps two paths even in line of
-  sight; a drone banking 90° swaps them, which the receiver handles, but
-  everything in between is untested here.
+  if its two antennas hear the two drone antennas differently. Drone 1 and
+  Janet fly RHCP, and the GS's omni and patch are RHCP too (operator,
+  2026-10-31): every antenna has the same polarisation. In line of sight
+  that leaves only the antennas' spacing to tell the paths apart, and a few
+  centimetres on the drone is far too little at range (line-of-sight MIMO
+  wants the two spacings' product near wavelength x distance / 2: about
+  26 m² at 1 km on 5.8 GHz). So with today's antennas two streams should
+  work only close in or with strong reflections, and fall off well before
+  the 1SS rungs. What could work in the air: one RHCP and one LHCP antenna
+  per radio, at both ends. Opposite hands stay apart however the drone
+  rolls or yaws (unlike a vertical/horizontal pair), and FPV circular
+  antennas keep the two hands ~15-20 dB apart on axis, less off axis
+  (unmeasured on ours). The cost: the 1SS STBC rungs below lose about the
+  3 dB the GS card now gets from both its antennas hearing both drone
+  antennas (estimate, line of sight), and a reflection, which flips the
+  hand, lands on the other antenna instead of being rejected. Both antennas
+  of a two-stream GS card must be the same type: an omni beside a patch
+  leaves one stream on the weak antenna wherever the patch points.
 - **The GS loses its array gain.** Today each card combines both antennas
   for one stream (~3 dB). With two streams both antennas go to separating
   them. The second card still gives packet-level diversity.
@@ -52,9 +63,15 @@ wide-TX stall).
 ## Bench plan (d19 drone, any GS)
 
 Drone 1, channel 36 (spur-free), daemons stopped at both ends as in
-`docs/bw80-research-2026-10-12.md`. Note each end's antenna polarisation
-in the log; run everything twice, same polarisation and crossed, if the
-antennas allow it. A single probe is worth ±3 points.
+`docs/bw80-research-2026-10-12.md`. A single probe is worth ±3 points.
+Run it twice:
+
+- **Today's antennas (all RHCP)** at short range: proves two-stream frames
+  air and decode, and finds the distance where they stop. Expected:
+  well short of MCS4/80.
+- **RHCP + LHCP** on the drone and on one GS card (same antenna type on
+  both of that card's ports): the real test. Run the 1SS STBC rungs on
+  this setup too, to measure what they lose.
 
 1. **Capacity**: `--nss 2 --bw 40 --mcs 3` and `--mcs 4` (HT MCS11/12),
    `--ldpc`, no `--stbc`, at `--bitrate 90M`, beside today's MCS4/40 and
@@ -70,7 +87,8 @@ antennas allow it. A single probe is worth ±3 points.
    MCS3/4 at 80 MHz; alternate the runs, several of each.
 
 **Go** only if MCS12/40 delivers what MCS4/80 does at the same distance
-on at least one antenna arrangement the drone can fly with. **No-go** if it
+on an antenna arrangement the drone can fly with, and the 1SS rungs on that
+arrangement still reach far enough. **No-go** if it
 needs the drone closer than MCS4/80 does: the 80 MHz rung is then the
 better top.
 

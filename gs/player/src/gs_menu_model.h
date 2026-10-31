@@ -20,6 +20,11 @@
 //   while disarmed) and Remove cal (back to the radio's stock TX power,
 //   live). Either calibration action is staged like any choice.
 //
+//   Playback tab (gs18): the newest recordings on the DVR card, two to a
+//   row. Pressing one plays it on the goggles in place of the live video
+//   (main.cpp, playback.h) -- only while the drone is disarmed or has no FC;
+//   arming, or Left, brings the live video back.
+//
 //   Camera tab: the presets of mabur/camera_presets.h. Grey = the one the
 //   drone runs, green dot = the one chosen, dim = this drone cannot (its
 //   image lacks the sensor mode). Applying one asks the drone to switch: it
@@ -81,10 +86,10 @@ class GsMenuModel {
  public:
   enum class Key { Up, Down, Left, Right, Center };
   enum class Action { None, Apply };
-  enum class Tab { Channel = 0, Settings = 1, Camera = 2 };
+  enum class Tab { Channel = 0, Settings = 1, Camera = 2, Playback = 3 };
   static constexpr uint64_t kIdleMs = 20000;
   static constexpr uint64_t kStatusMs = 4000;
-  static constexpr int kTabs = 3;
+  static constexpr int kTabs = 4;
   static constexpr int kCols = 4;   // channel cells per row
 
   // channels: radio.channels; wide_available: radio.width is 80 (Normal
@@ -270,6 +275,35 @@ class GsMenuModel {
     return "";
   }
 
+  // Playback tab (gs18). The list (main.cpp refreshes it on take_list_request,
+  // the tab's every opening): name and duration, newest first.
+  struct RecItem {
+    std::string name;
+    uint64_t duration_us = 0;
+  };
+  void set_recordings(const std::vector<RecItem>& r) {
+    recs_ = r;
+    ++version_;
+  }
+  // Whether a recording may play now, and why not ("" when it may).
+  void set_playback_allowed(bool ok, const std::string& why) {
+    if (ok == play_ok_ && why == play_why_) return;
+    play_ok_ = ok;
+    play_why_ = why;
+    ++version_;
+  }
+  bool take_list_request() {
+    const bool v = list_requested_;
+    list_requested_ = false;
+    return v;
+  }
+  // The recording pressed (index into the list), consumed once; -1 none.
+  int take_play_request() {
+    const int v = play_request_;
+    play_request_ = -1;
+    return v;
+  }
+
   // A one-line message shown (menu closed or open) for kStatusMs, or
   // dur_ms.
   void set_status(const std::string& s, uint64_t now_ms, uint64_t dur_ms = kStatusMs) {
@@ -347,7 +381,7 @@ class GsMenuModel {
     v.status = status_.empty() ? banner_ : status_;
     v.open = open_;
     if (!open_) return v;
-    const char* names[kTabs] = {"Channel", "Settings", "Camera"};
+    const char* names[kTabs] = {"Channel", "Settings", "Camera", "Playback"};
     for (int t = 0; t < kTabs; ++t) {
       GsMenuCell c;
       c.label = names[t];
@@ -399,6 +433,24 @@ class GsMenuModel {
       rm.marked = pending_cal_ == CalAction::Remove;
       rm.focus = row_ == kRowFirst && col_ == 2;
       v.cells.push_back(rm);
+    } else if (tab_ == Tab::Playback) {
+      v.title = "Playback";
+      v.cols = kRecCols;
+      if (recs_.empty()) {
+        GsMenuCell c;
+        c.label = "No recordings";
+        c.dim = true;
+        c.focus = row_ == kRowFirst;
+        v.cells.push_back(c);
+      }
+      for (size_t i = 0; i < recs_.size(); ++i) {
+        GsMenuCell c;
+        c.label = recs_[i].name;
+        c.value = clock_(recs_[i].duration_us);
+        c.dim = !play_ok_;
+        c.focus = on_recs_() && rec_index_() == static_cast<int>(i);
+        v.cells.push_back(c);
+      }
     } else {
       v.title = "Camera";
       v.cols = static_cast<int>(mabur::cam::kNumPresets);
@@ -445,7 +497,31 @@ class GsMenuModel {
 
   int channel_rows_() const { return static_cast<int>((channels_.size() + kCols - 1) / kCols); }
   // Rows of the open tab: the tab bar, its content, the buttons.
-  int rows_() const { return 1 + (tab_ == Tab::Channel ? 1 + channel_rows_() : 1) + 1; }
+  int rows_() const {
+    const int content = tab_ == Tab::Channel    ? 1 + channel_rows_()
+                        : tab_ == Tab::Playback ? rec_rows_()
+                                                : 1;
+    return 1 + content + 1;
+  }
+  static constexpr int kRecCols = 2;
+  int rec_rows_() const {
+    return recs_.empty() ? 1 : static_cast<int>((recs_.size() + kRecCols - 1) / kRecCols);
+  }
+  bool on_recs_() const {
+    return tab_ == Tab::Playback && row_ >= kRowFirst && row_ < buttons_row_();
+  }
+  int rec_index_() const { return (row_ - kRowFirst) * kRecCols + col_; }
+  static std::string clock_(uint64_t us) {
+    const uint64_t s = us / 1000000;
+    char b[24];
+    if (s >= 3600)
+      std::snprintf(b, sizeof(b), "%u:%02u:%02u", static_cast<unsigned>(s / 3600),
+                    static_cast<unsigned>(s / 60 % 60), static_cast<unsigned>(s % 60));
+    else
+      std::snprintf(b, sizeof(b), "%u:%02u", static_cast<unsigned>(s / 60),
+                    static_cast<unsigned>(s % 60));
+    return b;
+  }
   bool on_presets_() const { return tab_ == Tab::Camera && row_ == kRowFirst; }
   int buttons_row_() const { return rows_() - 1; }
   bool on_channels_() const {
@@ -466,6 +542,11 @@ class GsMenuModel {
     if (on_channels_()) {
       const int left = static_cast<int>(channels_.size()) - (row_ - kRowFirst - 1) * kCols;
       return left < kCols ? left : kCols;
+    }
+    if (on_recs_()) {
+      if (recs_.empty()) return 1;
+      const int left = static_cast<int>(recs_.size()) - (row_ - kRowFirst) * kRecCols;
+      return left < kRecCols ? left : kRecCols;
     }
     return 1;
   }
@@ -494,6 +575,7 @@ class GsMenuModel {
     if (row_ == kRowTabs) {
       tab_ = static_cast<Tab>((static_cast<int>(tab_) + kTabs + dir) % kTabs);
       col_ = 0;
+      if (tab_ == Tab::Playback) list_requested_ = true;
     } else if (tab_ == Tab::Channel && row_ == kRowFirst) {
       pending_.hop = !pending_.hop;
     } else if (on_presets_() || (tab_ == Tab::Settings && row_ == kRowFirst)) {
@@ -554,6 +636,19 @@ class GsMenuModel {
         pending_.channel = channels_[static_cast<size_t>(i)];
         pending_.hop = false;
       }
+    } else if (on_recs_()) {
+      // A recording plays at once (no Apply): the menu closes over it.
+      const int i = rec_index_();
+      if (i >= 0 && i < static_cast<int>(recs_.size())) {
+        if (play_ok_) {
+          play_request_ = i;
+          open_ = false;
+        } else {
+          status_ = "Playback refused: " + play_why_;
+          status_ms_ = last_key_ms_;
+          status_dur_ms_ = kStatusMs;
+        }
+      }
     } else {
       side_(+1);
     }
@@ -583,7 +678,7 @@ class GsMenuModel {
     const bool cal_changed = pending_cal_ != CalAction::None;
     const bool changed = link_changed || cam_changed || cal_changed;
     if (row_ == kRowTabs)
-      return "Left/Right: Channel, Settings or Camera. Down or Centre: into the tab.";
+      return "Left/Right: Channel, Settings, Camera or Playback. Down or Centre: into the tab.";
     if (row_ == buttons_row_() && tab_ == Tab::Channel && col_ == 1) {
       if (scan_state_ == "running") return "Scanning every channel with the spare card...";
       return "Scan: rate every channel's traffic with the spare card (about 5 s, the link stays "
@@ -608,6 +703,15 @@ class GsMenuModel {
                        : "Nothing changed yet.";
       }
       return changed ? "Close: drop the changes." : "Close the menu.";
+    }
+    if (tab_ == Tab::Playback) {
+      if (recs_.empty()) return "No recordings on the DVR card yet.";
+      const int i = rec_index_();
+      if (i < 0 || i >= static_cast<int>(recs_.size())) return "";
+      if (!play_ok_) return "Playback is off: " + play_why_ + ".";
+      return "Press to play " + recs_[static_cast<size_t>(i)].name + " (" +
+             clock_(recs_[static_cast<size_t>(i)].duration_us) +
+             ") here. Live video stops while it plays; Left or arming the drone brings it back.";
     }
     if (tab_ == Tab::Camera) {
       if (cam_now_ == 0 && cam_switch_ == 0)
@@ -686,6 +790,11 @@ class GsMenuModel {
   uint64_t status_ms_ = 0;
   uint64_t status_dur_ms_ = kStatusMs;
   std::string banner_;
+  std::vector<RecItem> recs_;
+  bool play_ok_ = false;
+  std::string play_why_ = "no word from the drone yet";
+  bool list_requested_ = false;
+  int play_request_ = -1;
   std::string scan_state_;
   int scan_age_s_ = -1;
   std::vector<ChannelRating> ratings_;

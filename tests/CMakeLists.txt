@@ -106,6 +106,7 @@ add_mtest(test_hevc_skip_slice test_hevc_skip_slice.cpp)
 add_executable(slicefill ${CMAKE_SOURCE_DIR}/tools/slices/slicefill.cpp)
 target_link_libraries(slicefill PRIVATE mabur_common)
 add_mtest(test_dvr_mux test_dvr_mux.cpp)
+add_mtest(test_dvr_demux test_dvr_demux.cpp)
 # Fixture paths for tools/bench/dvrcadence.py's own test (test_dvrcadence,
 # registered below): dvr_mux_writes_the_cadence_fixture writes them when
 # set, and is a no-op otherwise.
@@ -212,6 +213,7 @@ if(MABUR_BUILD_GS)
   add_mtest(test_fb_cache test_fb_cache.cpp LIBS mabur_player_core)
   add_mtest(test_rec_button test_rec_button.cpp LIBS mabur_player_core)
   add_mtest(test_gs_menu test_gs_menu.cpp LIBS mabur_player_core)
+  add_mtest(test_playback test_playback.cpp LIBS mabur_player_core)
   add_mtest(test_ring_client test_ring_client.cpp LIBS mabur_player_core pthread)
   add_mtest(test_stream_feeder test_stream_feeder.cpp LIBS mabur_player_core)
   add_mtest(test_au_split test_au_split.cpp)

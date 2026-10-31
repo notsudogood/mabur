@@ -11,6 +11,7 @@ add_library(mabur_player_core STATIC
   src/gs_font.cpp
   src/gs_draw.cpp
   src/gs_snapshot.cpp
+  src/playback.cpp
   src/gs_source.cpp
   src/gs_layer.cpp
   src/gs_compact.cpp

@@ -169,6 +169,36 @@ msposd writes), and the unit tests pin it byte for byte, but the first real
 recording is the test. If the glyphs come out wrong, the likely cause is
 the font page mapping; say which firmware and font you used.
 
+## Playing a recording on the goggles (gs18)
+
+The GS menu's **Playback** tab lists the newest eight `record-NNNN.mp4` on
+`dvr.dir`, highest index first (the GS clock is wrong at boot, so the index
+says which is newest), each with its duration; a file that does not read
+as a DvrMux recording is left out. Pressing one plays it at once in place
+of the live video: maburplay parks the live feed (as the decode watchdog
+does), flushes the decoder and hands it the file's AUs on the file's own
+timeline (`mabur/dvr_demux.h` reads them back, VPS/SPS/PPS from the hvcC
+in front of each key AU; `gs/player/src/playback.h` paces them 30 ms
+early). The decode pump, regulator and display run as for live video; the
+phase lock stands down, so the drone's camera is not steered by file
+frames. A line at the top shows the file, position and duration.
+
+The stick is the remote while it plays: Centre pauses and resumes, Left
+goes back to live. At the end of the file the last picture stays up half a
+second, then live video returns; leaving flushes again, resumes the feed
+and asks the drone for a key frame (`refresh playback`), so the live
+picture comes back within one IDR.
+
+Only while the drone is disarmed: refused, and stopped at once if it arms,
+while a d19 drone reports armed or a stale arm state, or an older drone is
+out of low power; a drone with no fresh telemetry (none linked) does not
+block it. Refused while the GS records; the record button is ignored while
+a recording plays. No seeking: the recordings carry no periodic key frame
+(`venc.gop_s = 0`, intra refresh), so only the start is a clean entry
+point. Untested on the GS hardware: the decoder's behaviour across the
+flush into and out of a file, and how the regulator places file frames
+whose pts no longer track their arrival.
+
 ## Config (`maburplay.toml`, `[dvr]`)
 
 ```toml

@@ -41,6 +41,8 @@
 #include "rec_button.h"
 #include "gs_menu.h"         // /etc/maburgs.menu, the menu's hand-off to maburgs
 #include "gs_menu_model.h"
+#include "playback.h"
+#include "mabur/dvr_demux.h"
 #include "menu_layer.h"
 #include "rec_control.h"  // maburgs::kRecControlPort
 #include "ring_client.h"
@@ -1948,6 +1950,87 @@ int main(int argc, char** argv) {
 #endif
   // The ring reader fell behind and skipped AUs that held references.
   uint64_t resyncs_seen = ring.resyncs();
+
+  // Playback tab (gs18, playback.h): while a recording plays, the live feed
+  // is parked -- this thread owns the decoder's input side, as for the
+  // watchdog -- and the file's AUs go to the decoder on the file's own
+  // timeline. The decode pump, regulator and release thread run as for
+  // live video. Only while the drone is disarmed (or has no FC) and the
+  // GS is not recording; an arm stops it at once.
+  struct PlaybackState {
+    bool active = false;
+    std::unique_ptr<mabur::DvrDemux> demux;
+    maburplay::PlaybackPacer pacer;
+    mabur::DvrDemux::Sample next;
+    bool have_next = false;
+    std::string name;
+    uint64_t dur_us = 0, line_ms = 0, end_us = 0;
+  } pb;
+  std::vector<maburplay::Recording> pb_list;
+  // With no stats sideport (osd.gs off) nothing reports the drone's arm
+  // state: playback is then not blocked on it.
+  bool pb_allowed = gs_src == nullptr;
+  std::string pb_why = gs_src ? "no word from the drone yet" : "";
+  if (menu_model) menu_model->set_playback_allowed(pb_allowed, pb_why);
+  // Back to live: the same flush as the watchdog's, then the feed resumes
+  // and asks the drone for a fresh key frame.
+  auto pb_stop = [&](const std::string& msg) {
+    if (!pb.active) return;
+#ifdef MABUR_PLAYER_HW
+    park_output("playback end");
+#endif
+    drop_holders();
+    feeder.on_flush();
+    backend->flush();
+#ifdef MABUR_PLAYER_HW
+    resume_output();
+#endif
+    router.disarm();
+    feed.resume();
+    core_ctl.send_line("refresh playback");
+    pb.active = false;
+    pb.demux.reset();
+    std::fprintf(stderr, "maburplay: playback ended (%s), back to live video\n", msg.c_str());
+    if (menu_model) {
+      menu_model->set_banner("");
+      menu_model->set_status(msg, mono_ms());
+    }
+  };
+  auto pb_start = [&](const maburplay::Recording& r) {
+    auto dm = std::make_unique<mabur::DvrDemux>();
+    mabur::DvrDemux::Sample first;
+    if (!dm->open(r.path) || !dm->next(&first)) {
+      if (menu_model) menu_model->set_status("Cannot play " + r.name, mono_ms());
+      return;
+    }
+    if (!feed.park(std::chrono::seconds(2))) {
+      std::fprintf(stderr, "maburplay: playback -- the feed thread did not park in 2 s; "
+                           "exiting for respawn\n");
+      std::fflush(stderr);
+      std::_Exit(1);
+    }
+    drain_notes();
+#ifdef MABUR_PLAYER_HW
+    park_output("playback start");
+#endif
+    drop_holders();
+    feeder.on_flush();
+    backend->flush();
+#ifdef MABUR_PLAYER_HW
+    resume_output();
+#endif
+    pb.active = true;
+    pb.demux = std::move(dm);
+    pb.next = std::move(first);
+    pb.have_next = true;
+    pb.name = r.name;
+    pb.dur_us = r.duration_us;
+    pb.end_us = 0;
+    pb.line_ms = 0;
+    pb.pacer.start(mono_us(), pb.next.pts_us);
+    std::fprintf(stderr, "maburplay: playback of %s (%s) started; live feed parked\n",
+                 r.path.c_str(), maburplay::clock_text(r.duration_us).c_str());
+  };
   while (!g_stop.load()) {
     // 2 ms ceiling, for the delivery notes and the record button; the feed
     // thread ends the wait earlier only when it parks for a flush or exits.
@@ -1971,7 +2054,29 @@ int main(int argc, char** argv) {
                          P{&menu_stick.center, K::Center, "centre"}}) {
         if (!p.b->is_open() || !p.b->poll(mnow)) continue;
         std::fprintf(stderr, "maburplay: menu key %s\n", p.name);
+        // While a recording plays the stick is its remote: Centre pauses
+        // and resumes, Left goes back to live; the menu stays shut.
+        if (pb.active) {
+          if (p.k == K::Center) {
+            if (pb.pacer.paused()) pb.pacer.resume(mono_us());
+            else pb.pacer.pause(mono_us());
+            pb.line_ms = 0;
+          } else if (p.k == K::Left) {
+            pb_stop("Back to live video");
+          }
+          continue;
+        }
         const maburplay::GsMenuModel::Action act = menu_model->key(p.k, mnow);
+        // Playback tab (gs18): the list on opening, a recording on a press.
+        if (menu_model->take_list_request()) {
+          pb_list = maburplay::list_recordings(cfg.dvr.dir);
+          std::vector<maburplay::GsMenuModel::RecItem> items;
+          for (const auto& r : pb_list) items.push_back({r.name, r.duration_us});
+          menu_model->set_recordings(items);
+        }
+        if (const int pi = menu_model->take_play_request();
+            pi >= 0 && pi < static_cast<int>(pb_list.size()))
+          pb_start(pb_list[static_cast<size_t>(pi)]);
         // Channel tab Scan (gs18): maburgs runs it on the spare card.
         if (menu_model->take_scan_request()) {
           core_ctl.send_line("scan");
@@ -2030,8 +2135,31 @@ int main(int argc, char** argv) {
       menu_model->tick(mnow);
       if (menu_model->version() != v0) gs_needs_render = true;
     }
+    // Playback (gs18): every AU due on the file's timeline goes to the
+    // decoder; the last picture stays up half a second, then live video.
+    if (pb.active) {
+      const uint64_t now = mono_us();
+      while (pb.have_next && pb.pacer.due(now, pb.next.pts_us)) {
+        backend->submit_au(pb.next.annexb.data(), pb.next.annexb.size(),
+                           static_cast<uint32_t>(pb.next.pts_us));
+        const uint32_t dur = pb.next.dur_us;
+        pb.have_next = pb.demux->next(&pb.next);
+        if (!pb.have_next) pb.end_us = now + dur + 500000;
+      }
+      if (!pb.have_next && !pb.pacer.paused() && now >= pb.end_us) {
+        pb_stop("Playback finished: back to live video");
+        gs_needs_render = true;
+      } else if (menu_model && mono_ms() >= pb.line_ms) {
+        pb.line_ms = mono_ms() + 500;
+        menu_model->set_banner(maburplay::playback_line(pb.name, pb.pacer.position_us(now),
+                                                        pb.dur_us, pb.pacer.paused()));
+        gs_needs_render = true;
+      }
+    }
     if ((rec_button.is_open() && rec_button.poll(mono_ms())) || g_rec_toggle.exchange(false)) {
-      if (rec_on) {
+      if (pb.active) {
+        std::fprintf(stderr, "maburplay: record button ignored while a recording plays\n");
+      } else if (rec_on) {
         rec_stop();
       } else {
         rec_start();
@@ -2102,7 +2230,8 @@ int main(int argc, char** argv) {
         phase_disconts_seen = regulator.discont_count();
         phase_lock->on_discontinuity(now);
       }
-      if (rate_match.mismatch()) {
+      if (rate_match.mismatch() || pb.active) {
+        // Playback (gs18): the frames are the file's, not the drone's.
         // Out of the steer's reach: no offsets at all, so maburgs' RCF
         // snr_off falls back to 0 and the drone runs on its trim. Reset to
         // Waiting so a later match acquires from scratch.
@@ -2326,7 +2455,7 @@ int main(int argc, char** argv) {
           f.clean_s = f.width == 80 ? sn.floor_clean80_s : sn.floor_clean40_s;
           f.need_s = sn.floor_need_s;
           const std::string banner = maburplay::GsMenuModel::floorcal_banner(f);
-          if (banner != menu_model->banner()) {
+          if (!pb.active && banner != menu_model->banner()) {
             // Log state changes, not every progress second.
             if (!floorcal_seen || floorcal_seen->state != f.state || floorcal_seen->floor != f.floor)
               std::fprintf(stderr, "maburplay: %s\n",
@@ -2341,6 +2470,23 @@ int main(int argc, char** argv) {
             }
           }
           floorcal_seen = f;
+        }
+        // Playback tab (gs18): may a recording play now? Not while the
+        // drone reports armed (a d19 floor block) or, from an older drone,
+        // while it is out of low power; not while the GS records. A drone
+        // with no fresh telemetry (none linked) does not block it.
+        if (!gs_stale) {
+          const bool fresh = sn.drone_tlm_age_ms && *sn.drone_tlm_age_ms < 3000;
+          std::string why;
+          if (rec_on) why = "recording is on - stop it first";
+          else if (fresh && sn.drone_arm == 2) why = "the drone is armed";
+          else if (fresh && sn.drone_arm == 3) why = "no arm state from the flight controller";
+          else if (fresh && sn.drone_arm < 0 && !sn.low_power)
+            why = "the drone is out of low power (armed?)";
+          pb_allowed = why.empty();
+          pb_why = why;
+          menu_model->set_playback_allowed(pb_allowed, pb_why);
+          if (pb.active && !pb_allowed && !rec_on) pb_stop("Playback stopped: " + why);
         }
         // Channel tab Scan (gs18): the bars, and a line per request outcome.
         if (!gs_stale) {

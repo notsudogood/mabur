@@ -69,7 +69,7 @@ TEST(menu_model_opens_edits_and_applies) {
   m.key(K::Center, 10);                 // opens on the tab bar, Channel tab
   CHECK(m.open() && m.tab() == GsMenuModel::Tab::Channel);
   auto v = m.view(132);
-  REQUIRE(v.tabs.size() == 3 && v.cells.size() == 4 && v.buttons.size() == 3);   // Apply, Scan, Close
+  REQUIRE(v.tabs.size() == 4 && v.cells.size() == 4 && v.buttons.size() == 3);   // Apply, Scan, Close
   CHECK(v.buttons[1].label == "Scan" && v.buttons[2].label == "Close");
   CHECK(v.tabs[0].focus && v.tabs[0].active && !v.tabs[1].active);
   CHECK(v.has_toggle && v.toggle_on && v.cells[3].active && !v.cells[0].active);   // 132 live
@@ -155,10 +155,11 @@ TEST(menu_model_camera_tab_requests_a_preset) {
   GsMenuModel m({36, 100}, false, maburplay::GsMenuSettings{false, 36, false});
   m.set_camera(0, 0b0011, 0b0100);      // runs 1080p 60; 90 now; 720p 100 after a driver switch
   m.key(K::Center, 0);
-  m.key(K::Left, 1);                    // wraps Channel -> Camera
+  m.key(K::Left, 1);                    // wraps Channel -> Playback
+  m.key(K::Left, 1);                    // -> Camera
   CHECK(m.tab() == GsMenuModel::Tab::Camera);
   auto v = m.view();
-  REQUIRE(v.tabs.size() == 3 && v.tabs[2].label == "Camera" && v.tabs[2].active);
+  REQUIRE(v.tabs.size() == 4 && v.tabs[2].label == "Camera" && v.tabs[2].active);
   REQUIRE(v.cells.size() == mabur::cam::kNumPresets && v.cols == 5 && v.title == "Camera");
   CHECK(v.cells[0].label == "1080p 60" && v.cells[0].active && v.cells[0].value == "full view");
   CHECK(!v.cells[1].dim && v.cells[2].value == "new driver" && !v.cells[2].dim);
@@ -199,6 +200,7 @@ TEST(menu_model_camera_tab_requests_a_preset) {
 TEST(menu_model_camera_tab_before_the_drone_reports) {
   GsMenuModel m({36}, false, maburplay::GsMenuSettings{false, 36, false});
   m.key(K::Center, 0);
+  m.key(K::Left, 1);
   m.key(K::Left, 1);
   m.key(K::Down, 2);
   auto v = m.view();
@@ -372,5 +374,31 @@ TEST(menu_model_channel_scan_button_and_bars) {
   CHECK(m.view(36).help.find("Last scan: busy (31 % busy)") != std::string::npos);
   CHECK(GsMenuModel::scan_result_text("armed") == "Scan refused: the drone is armed - disarm first");
   CHECK(GsMenuModel::scan_result_text("started").find("about 5 s") != std::string::npos);
+}
+// gs18 Playback tab: entering it asks for the list; recordings two to a
+// row; a press plays (consumed once) and closes the menu; while playback is
+// not allowed the cells are dim and a press says why. Revert (no tab): the
+// tab bar has three tabs and Left from Channel lands on Camera.
+TEST(menu_model_playback_tab_lists_and_plays) {
+  GsMenuModel m({36}, false, maburplay::GsMenuSettings{true, 36, false});
+  m.key(K::Center, 0);
+  m.key(K::Left, 1);                     // Channel -> Playback
+  CHECK(m.tab() == GsMenuModel::Tab::Playback && m.take_list_request() && !m.take_list_request());
+  auto v = m.view();
+  CHECK(v.title == "Playback" && v.cells.size() == 1 && v.cells[0].label == "No recordings");
+  m.set_recordings({{"record-0012", 296000000}, {"record-0011", 61000000}, {"record-0010", 5000000}});
+  m.set_playback_allowed(false, "the drone is armed");
+  v = m.view();
+  REQUIRE(v.cells.size() == 3);
+  CHECK(v.cols == 2 && v.cells[0].label == "record-0012" && v.cells[0].value == "4:56" && v.cells[0].dim);
+  m.key(K::Down, 2);                     // first row, record-0012
+  CHECK(m.view().cells[0].focus && m.view().help.find("Playback is off") == 0);
+  m.key(K::Center, 3);
+  CHECK(m.take_play_request() == -1 && m.view().status == "Playback refused: the drone is armed");
+  m.set_playback_allowed(true, "");
+  m.key(K::Down, 4);                     // second row: record-0010
+  CHECK(m.view().cells[2].focus);
+  m.key(K::Center, 5);
+  CHECK(!m.open() && m.take_play_request() == 2 && m.take_play_request() == -1);
 }
 MTEST_MAIN

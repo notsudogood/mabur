@@ -238,6 +238,30 @@ class GsMenuModel {
     return "";
   }
 
+  // The Camera tab's outcome as this player shows it (gs18): once per
+  // request it sent. sent() when the player asks maburgs for a preset;
+  // on_result() for each change of maburgs' camera_request.result returns
+  // the status line to show, "" for none. "applying" shows while the
+  // request is ours; a settled result shows once and ends it. A change with
+  // no request of ours outstanding never shows: on gs17 one bench showed
+  // "Camera: switched" over and over after a single switch until the GS was
+  // power-cycled (operator, 2026-10-31; the result kept changing, cause not
+  // found in the code -- the caller logs every change to catch it).
+  class CameraOutcome {
+   public:
+    void sent() { waiting_ = true; }
+    std::string on_result(const std::string& r) {
+      if (!waiting_) return "";
+      const std::string msg = camera_result_text(r);
+      if (!r.empty() && r != "sent" && r != "applying") waiting_ = false;
+      return msg;
+    }
+    bool waiting() const { return waiting_; }
+
+   private:
+    bool waiting_ = false;
+  };
+
   // Channel tab Scan (gs18): maburgs' chscan block. state "idle", "running"
   // or "done"; per member its rating (-1 = not measured: the link's own
   // channel, or no scan yet) and worst NHM busy % (< 0 = none); age of the

@@ -1921,6 +1921,7 @@ int main(int argc, char** argv) {
   // The camera_request.result last seen; unset until the first datagram, so
   // an outcome maburgs settled before this player started is not announced.
   std::optional<std::string> cam_result_seen;
+  maburplay::GsMenuModel::CameraOutcome cam_outcome;
   // The calibration state last seen on the sideport (unset until the first
   // datagram, so nothing settled before this player started is announced).
   std::optional<maburplay::GsMenuModel::CalSeen> cal_seen;
@@ -2094,6 +2095,7 @@ int main(int argc, char** argv) {
           std::fprintf(stderr, "maburplay: menu camera preset %u (%s) requested\n",
                        static_cast<unsigned>(cam), mabur::cam::preset(cam)->label);
           menu_model->set_status("Camera: asked the drone to switch", mnow);
+          cam_outcome.sent();
         }
         // Settings tab: a calibration start or removal also goes to maburgs
         // (the run is its CalSession; the removal rides every RCF). Not
@@ -2511,12 +2513,18 @@ int main(int argc, char** argv) {
         }
         if (!cam_result_seen) cam_result_seen = sn.cam_result;
         if (sn.cam_result != *cam_result_seen) {
+          // Every change is logged, shown or not, with the wish and the
+          // last preset: a result that keeps changing (gs17, 2026-10-31)
+          // then says where from.
+          std::fprintf(stderr,
+                       "maburplay: camera request: %s (was %s, wish %d, last %d, ours %s)\n",
+                       sn.cam_result.empty() ? "-" : sn.cam_result.c_str(),
+                       cam_result_seen->empty() ? "-" : cam_result_seen->c_str(),
+                       sn.cam_wish.value_or(-1), sn.cam_last.value_or(-1),
+                       cam_outcome.waiting() ? "yes" : "no");
           cam_result_seen = sn.cam_result;
-          const std::string msg = maburplay::GsMenuModel::camera_result_text(sn.cam_result);
-          if (!msg.empty()) {
-            std::fprintf(stderr, "maburplay: camera request: %s\n", sn.cam_result.c_str());
-            menu_model->set_status(msg, now_ms);
-          }
+          const std::string msg = cam_outcome.on_result(sn.cam_result);
+          if (!msg.empty()) menu_model->set_status(msg, now_ms);
         }
       }
       if (gs_stale != gs_stale_last) {

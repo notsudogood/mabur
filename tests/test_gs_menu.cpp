@@ -222,6 +222,27 @@ TEST(menu_model_camera_result_lines) {
     CHECK(!GsMenuModel::camera_result_text(r).empty());
   CHECK(GsMenuModel::camera_result_text("armed").find("disarm") != std::string::npos);
 }
+
+// gs18: a camera outcome shows once per request this player sent. On gs17
+// "Camera: switched" kept reappearing after one switch: a result flipping
+// with no request outstanding must stay off the screen. Revert (show on
+// every change): the second "switched" returns the text again.
+TEST(menu_model_camera_outcome_shows_once_per_request) {
+  GsMenuModel::CameraOutcome o;
+  CHECK(o.on_result("switched").empty());          // nothing asked yet
+  o.sent();
+  CHECK(o.on_result("sent").empty());
+  CHECK(o.on_result("applying") == "Camera: drone restarting into the new mode");
+  CHECK(o.waiting());
+  CHECK(o.on_result("switched") == "Camera: switched");
+  CHECK(!o.waiting());
+  CHECK(o.on_result("").empty());                  // the flip seen on gs17
+  CHECK(o.on_result("switched").empty());
+  CHECK(o.on_result("").empty());
+  o.sent();                                        // a new request: shown again
+  CHECK(o.on_result("rolled_back") == "Camera: no video in that mode - back on the old one");
+  CHECK(o.on_result("switched").empty());
+}
 // Settings tab: Calibrate and Remove cal are staged like any choice, one at
 // a time; Remove needs a drone that says it is calibrated; Apply hands the
 // action over once and leaves the link settings alone.

@@ -565,9 +565,12 @@ struct RealActuator : mabur::Actuator {
   // igi_floor_learn.h), which must not read width_mhz (agent-thread state):
   // the width the radio is tuned to, and when the last tune ended.
   std::atomic<uint8_t> width_live{0};
+  std::atomic<uint8_t> ch_live{0};
+  std::atomic<uint8_t> rung_w_live{0};   // the current rung's frame width (its widest layer)
   std::atomic<uint64_t> tuned_at_ms{0};
   void note_tuned_() {
     width_live.store(width_mhz, std::memory_order_relaxed);
+    ch_live.store(cur, std::memory_order_relaxed);
     tuned_at_ms.store(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                                 std::chrono::steady_clock::now().time_since_epoch())
                                                 .count()),
@@ -745,8 +748,8 @@ struct RealActuator : mabur::Actuator {
       rfc = read_rf_central_();
     }
     if (retune_waiting) retune_waiting->store(false, std::memory_order_release);
-    note_tuned_();
     cur = ch;
+    note_tuned_();
     std::fprintf(stderr, "maburd: retune %u -> %u (%s)\n", static_cast<unsigned>(from),
                  static_cast<unsigned>(ch), reason);
     std::fprintf(stderr,
@@ -833,6 +836,8 @@ struct RealActuator : mabur::Actuator {
   }
 
   void widen_for_op_(const AppliedOp& op) {
+    rung_w_live.store(static_cast<uint8_t>(std::max<int>(op.ladder[0].bw, op.ladder[1].bw)),
+                      std::memory_order_relaxed);
     const uint8_t need = op_width_need_(op);
     // 10 MHz: go at once (the GS has ordered the whole link narrow), and
     // leave at once for any other rung -- with or without width_step.
@@ -1636,7 +1641,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   // (devourer's 0x35), the d17 behaviour.
   const std::string igi_path = mabur::igi_floor_path(cfg_path);
   bool igi_learn = false;
-  uint8_t igi_start = 0;
+  mabur::IgiSaved igi_start;
   {
     const int image_floor = dev_cfg.tuning.wide_tx_igi_floor;
     int floor = image_floor;
@@ -1646,11 +1651,13 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
       floor = cfg.radio.wide_igi_floor;
       why = floor > 0 ? "radio.wide_igi_floor" : "radio.wide_igi_floor = 0";
     } else if (cfg.radio.igi_floor_auto) {
-      const std::optional<uint8_t> saved = mabur::igi_floor_load(igi_path);
-      floor = saved ? *saved : 0;
+      const std::optional<mabur::IgiSaved> saved = mabur::igi_floor_load(igi_path);
+      if (saved) igi_start = *saved;
+      floor = igi_start.floor;
       igi_learn = true;
-      igi_start = static_cast<uint8_t>(floor);
-      std::snprintf(learned_why, sizeof(learned_why), "learned, %s", saved ? igi_path.c_str() : "nothing saved yet");
+      std::snprintf(learned_why, sizeof(learned_why), "learned, %s%s%s",
+                    saved ? igi_path.c_str() : "nothing saved yet",
+                    igi_start.v40 ? ", 40 MHz verified" : "", igi_start.v80 ? ", 80 MHz verified" : "");
       why = learned_why;
     }
     dev_cfg.tuning.wide_tx_igi_floor = static_cast<uint8_t>(floor);
@@ -3240,66 +3247,106 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
     }
   });
 
-  // Agent thread: drains the RC queue every cfg.link.rc_drain_ms, ticks
-  // RcAgent on cfg.link.tick_ms, runs the watchdog, and handles SIGUSR1
-  // stats dumps.
   // radio.igi_floor_auto: the per-unit wide-TX IGI floor learner
   // (igi_floor_learn.h). Its own thread, not the agent loop, because a 40 MHz
   // stall can block the agent thread too: it sends Telem itself, and a width
   // switch waits on the stalled sender's tx_gate. Reads only atomics and
   // devourer's lock-free TX counter; SetWideTxIgiFloor takes devourer's
   // register lock, which no sender holds while blocked in a transfer.
+  // igi_wire_*: what the Telem floor block reports (rc::kTelemExtFloor),
+  // written here, read by the agent thread's send_telem.
   std::atomic<int> igi_floor_now{static_cast<int>(dev_cfg.tuning.wide_tx_igi_floor)};
   std::atomic<uint64_t> igi_stalls{0};
+  std::atomic<uint8_t> igi_wire_flags{static_cast<uint8_t>(
+      (igi_learn ? rc::kFloorLearning : 0) | (igi_start.v40 ? rc::kFloorV40 : 0) |
+      (igi_start.v80 ? rc::kFloorV80 : 0))};
+  std::atomic<uint64_t> igi_wire_clean_ms[2] = {{0}, {0}};
+  constexpr uint32_t kIgiVerifyMs = 10000;
   std::thread igi_thread;
   if (igi_learn) {
-    igi_thread = std::thread([&]() {
+    // The spike skip is the 8812EU's own (mabur/spur_channels.h); the CU has
+    // none known.
+    const bool is_8822e = [&] {
+      const auto caps = rtl_device->GetAdapterCaps();
+      return caps.chip_name && std::strcmp(caps.chip_name, "RTL8822E") == 0;
+    }();
+    igi_thread = std::thread([&, is_8822e]() {
       name_thread("mbr-igi");
-      mabur::IgiFloorLearner learner(igi_start);
+      mabur::IgiFloorLearner learner(igi_start, 250, 1000, 1000, kIgiVerifyMs);
       uint64_t top_seen = 0;
+      bool spike_logged = false;
       while (!g_devourer_should_stop) {
         std::this_thread::sleep_for(std::chrono::milliseconds(25));
-        const uint64_t now = now_steady_ms();
+        mabur::IgiPass p;
+        p.now_ms = now_steady_ms();
+        p.tuned_w = actuator.width_live.load(std::memory_order_relaxed);
+        p.rung_w = actuator.rung_w_live.load(std::memory_order_relaxed);
+        const uint8_t ch = actuator.ch_live.load(std::memory_order_relaxed);
+        const bool spike = is_8822e && p.tuned_w >= 40 &&
+                           mabur::e8822_span_has_spike(ch, static_cast<uint8_t>(p.tuned_w));
+        if (spike && !spike_logged)
+          std::fprintf(stderr,
+                       "maburd radio: ch %u at %d MHz holds an 8812EU spike: the IGI floor neither "
+                       "learns nor verifies there\n",
+                       static_cast<unsigned>(ch), p.tuned_w);
+        spike_logged = spike;
         // Excused: a width switch or retune in flight or ended < 300 ms
-        // ago (senders wait on the gate), and a calibration sweep.
-        const bool wide = actuator.width_live.load(std::memory_order_relaxed) >= 40 &&
-                          !retune_waiting.load(std::memory_order_relaxed) &&
-                          !cal_active.load(std::memory_order_relaxed) &&
-                          now - actuator.tuned_at_ms.load(std::memory_order_relaxed) >= 300;
-        const bool pending = txq.depth() > 0 || tx_pool.depth() > 0;
-        const uint64_t submitted = rtl_device->GetTxStats().submitted;
-        const std::optional<uint8_t> f = learner.tick(now, wide, pending, submitted);
+        // ago (senders wait on the gate), a calibration sweep, a spike.
+        p.excused = retune_waiting.load(std::memory_order_relaxed) ||
+                    cal_active.load(std::memory_order_relaxed) ||
+                    p.now_ms - actuator.tuned_at_ms.load(std::memory_order_relaxed) < 300 || spike;
+        p.pending = txq.depth() > 0 || tx_pool.depth() > 0;
+        p.submitted = rtl_device->GetTxStats().submitted;
+        const mabur::IgiEvent ev = learner.tick(p);
         igi_stalls.store(learner.stalls(), std::memory_order_relaxed);
-        if (!f) {
-          if (learner.top_stalls() != top_seen) {
-            top_seen = learner.top_stalls();
-            std::fprintf(stderr,
-                         "maburd radio: 40 MHz TX stall with the IGI floor already at 0x%02x (%llu "
-                         "so far): nothing higher is tried; the GS's latency guard handles it\n",
-                         static_cast<unsigned>(learner.floor()),
-                         static_cast<unsigned long long>(top_seen));
+        igi_wire_clean_ms[0].store(learner.clean_ms(40), std::memory_order_relaxed);
+        igi_wire_clean_ms[1].store(learner.clean_ms(80), std::memory_order_relaxed);
+        igi_wire_flags.store(static_cast<uint8_t>(
+                                 rc::kFloorLearning | (learner.verified(40) ? rc::kFloorV40 : 0) |
+                                 (learner.verified(80) ? rc::kFloorV80 : 0) |
+                                 (spike ? rc::kFloorSpike : 0) |
+                                 (learner.top_stalls() ? rc::kFloorTop : 0)),
+                             std::memory_order_relaxed);
+        if (learner.top_stalls() != top_seen) {
+          top_seen = learner.top_stalls();
+          std::fprintf(stderr,
+                       "maburd radio: 40 MHz TX stall with the IGI floor already at 0x%02x (%llu "
+                       "so far): nothing higher is tried; the GS's latency guard handles it\n",
+                       static_cast<unsigned>(learner.floor()),
+                       static_cast<unsigned long long>(top_seen));
+        }
+        if (!ev.raised && !ev.marks_changed) continue;
+        bool set = true;
+        if (ev.raised) {
+          set = false;
+          try {
+            set = rtl_device->SetWideTxIgiFloor(*ev.raised);
+          } catch (const std::exception& e) {
+            std::fprintf(stderr, "maburd radio: wide-TX IGI floor 0x%02x FAILED: %s\n",
+                         static_cast<unsigned>(*ev.raised), e.what());
           }
-          continue;
+          igi_floor_now.store(*ev.raised, std::memory_order_relaxed);
         }
-        bool set = false;
-        try {
-          set = rtl_device->SetWideTxIgiFloor(*f);
-        } catch (const std::exception& e) {
-          std::fprintf(stderr, "maburd radio: wide-TX IGI floor 0x%02x FAILED: %s\n",
-                       static_cast<unsigned>(*f), e.what());
-        }
-        const bool saved = mabur::igi_floor_save(igi_path, *f);
-        igi_floor_now.store(*f, std::memory_order_relaxed);
-        std::fprintf(stderr,
-                     "maburd radio: 40 MHz TX stall (sends blocked 250 ms of the last 1 s, %u MHz): "
-                     "wide-TX IGI floor -> 0x%02x (%s; %s %s)\n",
-                     static_cast<unsigned>(actuator.width_live.load(std::memory_order_relaxed)),
-                     static_cast<unsigned>(*f), set ? "applied" : "NOT applied",
-                     saved ? "saved to" : "could NOT save to", igi_path.c_str());
+        const bool saved = mabur::igi_floor_save(igi_path, learner.saved());
+        if (ev.raised)
+          std::fprintf(stderr,
+                       "maburd radio: 40 MHz TX stall (sends blocked 250 ms of the last 1 s, %d "
+                       "MHz): wide-TX IGI floor -> 0x%02x (%s; %s %s)\n",
+                       p.tuned_w, static_cast<unsigned>(*ev.raised), set ? "applied" : "NOT applied",
+                       saved ? "saved to" : "could NOT save to", igi_path.c_str());
+        else
+          std::fprintf(stderr, "maburd radio: IGI floor 0x%02x: 40 MHz %s, 80 MHz %s (%s %s)\n",
+                       static_cast<unsigned>(learner.floor()),
+                       learner.verified(40) ? "verified" : "not verified",
+                       learner.verified(80) ? "verified" : "not verified",
+                       saved ? "saved to" : "could NOT save to", igi_path.c_str());
       }
     });
   }
 
+  // Agent thread: drains the RC queue every cfg.link.rc_drain_ms, ticks
+  // RcAgent on cfg.link.tick_ms, runs the watchdog, and handles SIGUSR1
+  // stats dumps.
   std::thread agent_thread([&]() {
     name_thread("mbr-agent");
     const uint64_t grace_ms = 10000;
@@ -3421,6 +3468,16 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
       ti.pts_at_build_us = venc_cur_pts_us();
 #endif
 
+      // Floor block (rc::kTelemExtFloor): always sent, learning or not, so
+      // the GS knows whether a first-boot calibration applies.
+      ti.has_floor = true;
+      ti.floor_flags = rc::floor_flags_with_arm(igi_wire_flags.load(std::memory_order_relaxed),
+                                                static_cast<uint8_t>(agent.arm_view(now)));
+      ti.floor_val = static_cast<uint8_t>(igi_floor_now.load(std::memory_order_relaxed));
+      ti.floor_stalls = igi_stalls.load(std::memory_order_relaxed);
+      ti.floor_clean_ms[0] = igi_wire_clean_ms[0].load(std::memory_order_relaxed);
+      ti.floor_clean_ms[1] = igi_wire_clean_ms[1].load(std::memory_order_relaxed);
+      ti.floor_need_ms = kIgiVerifyMs;
       const rc::Telem telem_struct = make_telem(
           telem_wire_seq.fetch_add(1, std::memory_order_relaxed), ti);
       // Publish this real snapshot for the TX writer thread's calibration ack

@@ -1921,6 +1921,7 @@ int main(int argc, char** argv) {
   // The calibration state last seen on the sideport (unset until the first
   // datagram, so nothing settled before this player started is announced).
   std::optional<maburplay::GsMenuModel::CalSeen> cal_seen;
+  std::optional<maburplay::GsMenuModel::FloorCalSeen> floorcal_seen;
   // Both overlays' state for the composer, filled by the two intake blocks
   // and consumed by the single composition block after them.
   [[maybe_unused]] bool msp_ready = false;
@@ -2304,6 +2305,34 @@ int main(int argc, char** argv) {
             }
           }
           cal_seen = now_seen;
+        }
+        // First-boot floor calibration (gs/src/floor_cal.h): its progress
+        // stays up as a banner; a give-up is a status line for 15 s.
+        {
+          maburplay::GsMenuModel::FloorCalSeen f;
+          f.state = sn.floorcal_state;
+          f.why = sn.floorcal_why;
+          f.width = sn.floorcal_width;
+          f.floor = sn.floorcal_floor;
+          f.steps = sn.floorcal_steps;
+          f.clean_s = f.width == 80 ? sn.floor_clean80_s : sn.floor_clean40_s;
+          f.need_s = sn.floor_need_s;
+          const std::string banner = maburplay::GsMenuModel::floorcal_banner(f);
+          if (banner != menu_model->banner()) {
+            // Log state changes, not every progress second.
+            if (!floorcal_seen || floorcal_seen->state != f.state || floorcal_seen->floor != f.floor)
+              std::fprintf(stderr, "maburplay: %s\n",
+                           banner.empty() ? "first boot calibration: banner cleared" : banner.c_str());
+            menu_model->set_banner(banner);
+          }
+          if (floorcal_seen) {
+            const std::string msg = maburplay::GsMenuModel::floorcal_event(*floorcal_seen, f);
+            if (!msg.empty()) {
+              std::fprintf(stderr, "maburplay: %s\n", msg.c_str());
+              menu_model->set_status(msg, now_ms, 15000);
+            }
+          }
+          floorcal_seen = f;
         }
         if (!cam_result_seen) cam_result_seen = sn.cam_result;
         if (sn.cam_result != *cam_result_seen) {

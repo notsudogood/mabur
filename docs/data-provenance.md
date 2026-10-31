@@ -128,6 +128,14 @@ Chronological; each line names the section below that carries the detail.
   (the GS's own CPU). Recordings from earlier builds have neither, and
   their `drone.sys.cpu_pct` is the only CPU figure: the average of the
   drone's cores, which can read ~50 % while one core is saturated.
+- 2026-10-31 (d19 / gs18) — the Telem carries a floor block after its CRC
+  (`rc::kTelemExtFloor`, its own tag, length and CRC; the fixed 62 bytes
+  and RC_VERSION 17 unchanged, so d18/gs17 parsers ignore it), exported
+  as `drone.floor`; maburgs exports top-level `floorcal`. Recordings from
+  earlier builds have neither. From d19 a drone's IGI floor can change
+  mid-session (a learned step, d18 already) and its first 40/80 MHz
+  minutes on the ground may be a calibration holding a rung (`floorcal.state`
+  `test` / `unstick`): rung choice there is not the ladder's.
 - Before 2026-10-30 (devourer a9a54fe) — an 8812EU that came back from a
   10 MHz rung kept its MAC in the 10 MHz clock mode until the radio was
   re-initialised. On the GS cards that read as path-B RSSI pinned at

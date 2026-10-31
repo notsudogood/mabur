@@ -265,6 +265,10 @@ struct LinkCfg {
   // (HT, 20 MHz). Rendezvous/keep-alive/failsafe machinery is unaffected.
   // For bench debugging with a fixed operating point.
   int static_mcs = -1;
+  // gs18: first-boot floor calibration (floor_cal.h). A d19 drone that has
+  // not verified 40/80 MHz at its learned IGI floor gets those widths held
+  // for it while disarmed and linked, with the progress on screen.
+  bool floor_cal = true;
   // Actual-air overhead (airtime-balance-uep): literal, not a scaled cmd
   // value. Default 0.5 is the old cmd-value default (0.25) x2 -- see the
   // rule note in gs/src/config.cpp's load_config. Same-rate fixed pairs:

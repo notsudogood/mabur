@@ -714,6 +714,47 @@ TEST(telem_cpu_core_bytes_round_trip) {
         got->cpu_core_pct[3] == mabur::rc::kCpuCoreNone);
 }
 
+// d19 floor block: after the Telem's CRC, its own tag, length and CRC. A
+// Telem without it is byte-identical to before (the golden above); with it,
+// the fixed part's bytes and CRC do not move, so a d18/gs17 parser -- which
+// reads the fixed part and stops -- takes the same Telem. Revert (block
+// inside the fixed part): the first REQUIRE's size or the b[62..63] CRC moves.
+TEST(telem_floor_block_rides_after_the_crc) {
+  mabur::rc::Telem t;
+  t.cam_state = 6;
+  const auto plain = mabur::rc::pack_telem(t);
+  REQUIRE(plain.size() == 62 + 2);
+  t.has_floor = true;
+  t.floor_flags = mabur::rc::floor_flags_with_arm(
+      mabur::rc::kFloorLearning | mabur::rc::kFloorV40, 1);
+  t.floor_val = 0x24;
+  t.floor_stalls = 2;
+  t.floor_clean_s[0] = 10;
+  t.floor_clean_s[1] = 4;
+  t.floor_need_s = 10;
+  const auto b = mabur::rc::pack_telem(t);
+  REQUIRE(b.size() == 64 + 2 + 6 + 2);
+  for (size_t i = 0; i < 64; ++i) CHECK(b[i] == plain[i]);   // fixed part + CRC unchanged
+  CHECK(b[64] == mabur::rc::kTelemExtFloor && b[65] == 6);
+  auto got = mabur::rc::parse_telem(b.data(), b.size());
+  REQUIRE(got.has_value());
+  CHECK(got->cam_state == 6 && got->has_floor);
+  CHECK(got->floor_val == 0x24 && got->floor_stalls == 2 && got->floor_need_s == 10);
+  CHECK(got->floor_clean_s[0] == 10 && got->floor_clean_s[1] == 4);
+  CHECK((got->floor_flags & mabur::rc::kFloorV40) && !(got->floor_flags & mabur::rc::kFloorV80));
+  CHECK(mabur::rc::floor_arm_view(got->floor_flags) == 1);
+  // The old parser's view: the fixed part alone parses, no block.
+  auto old = mabur::rc::parse_telem(b.data(), 64);
+  REQUIRE(old.has_value());
+  CHECK(old->cam_state == 6 && !old->has_floor);
+  // A damaged block is dropped; the Telem still parses.
+  auto bad = b;
+  bad[67] ^= 0x10;
+  auto got2 = mabur::rc::parse_telem(bad.data(), bad.size());
+  REQUIRE(got2.has_value());
+  CHECK(!got2->has_floor && got2->cam_state == 6);
+}
+
 TEST(nack_final_layout_round_trip_and_tag) {
   using namespace mabur::rc;
   Nack n;

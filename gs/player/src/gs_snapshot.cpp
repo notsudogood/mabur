@@ -100,6 +100,12 @@ bool parse_gs_snapshot(const char* data, size_t n, GsSnapshot* out) {
       auto r = cal->find("refused_armed");
       out->cal_refused_armed = r != cal->end() && r->is_boolean() && r->get<bool>();
     }
+    if (const json* fl = obj(*drone, "floor")) {
+      out->floor_clean40_s = integer(*fl, "clean40_s").value_or(-1);
+      out->floor_clean80_s = integer(*fl, "clean80_s").value_or(-1);
+      out->floor_need_s = integer(*fl, "need_s").value_or(0);
+      out->drone_arm = integer(*fl, "arm").value_or(-1);
+    }
     if (const json* rcf = obj(*drone, "rcf")) {
       out->uplink_pct = integer(*rcf, "delivery_pct");
       auto u = rcf->find("uplink");
@@ -125,6 +131,17 @@ bool parse_gs_snapshot(const char* data, size_t n, GsSnapshot* out) {
     str("off", &out->cal_off);
     out->cal_pct = integer(*cal, "pct");
     out->cal_start_n = integer(*cal, "start_n").value_or(0);
+  }
+  if (const json* fc = obj(j, "floorcal")) {
+    auto str = [&](const char* k, std::string* dst) {
+      auto it = fc->find(k);
+      if (it != fc->end() && it->is_string()) *dst = it->get<std::string>();
+    };
+    str("state", &out->floorcal_state);
+    str("why", &out->floorcal_why);
+    out->floorcal_width = integer(*fc, "width").value_or(0);
+    out->floorcal_floor = integer(*fc, "floor").value_or(0);
+    out->floorcal_steps = integer(*fc, "steps").value_or(0);
   }
   if (const json* cr = obj(j, "camera_request")) {
     out->cam_wish = integer(*cr, "wish");

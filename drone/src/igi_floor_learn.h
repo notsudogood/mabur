@@ -16,6 +16,15 @@
 // above it is tried). It never comes down by itself: deleting the saved
 // value relearns from off.
 //
+// Verification (d19, first-boot calibration): verify_ms of clean sending at
+// 40 MHz, and separately at 80 MHz, with rung frames of that width and the
+// radio tuned to it, marks that width verified at the current floor; the
+// marks are saved with the floor. A stall at a width clears its mark and
+// its clean time; the other width keeps its own (the floor only rises, so
+// a width that was clean stays clean). The GS reads the marks from the
+// drone's telemetry and holds a 40 or 80 MHz rung, while the drone is
+// disarmed, until the width it flies is verified (gs/src/floor_cal.h).
+//
 // A stall, as maburd sees it: tuned 40/80 MHz, frames waiting to go out,
 // and devourer's TX submission count not moving. maburd sends with
 // no_cancel_multipkt, so a held frame blocks its sender rather than timing
@@ -61,49 +70,95 @@ inline uint8_t igi_floor_next(uint8_t cur) {
   return kIgiFloorTop;
 }
 
+// One watcher pass's view of the radio.
+struct IgiPass {
+  uint64_t now_ms = 0;
+  int tuned_w = 0;        // the width the radio is tuned to (MHz)
+  int rung_w = 0;         // the width of the current rung's frames (MHz)
+  bool excused = false;   // a pause TX is allowed (retune, switch, sweep, a spike in the span)
+  bool pending = false;   // frames waiting to go out
+  uint64_t submitted = 0; // devourer's running TX submission count
+};
+
+// What one pass changed: the floor rose, and/or a width's verified mark
+// was set or cleared (the caller saves the file on either).
+struct IgiEvent {
+  std::optional<uint8_t> raised;
+  bool marks_changed = false;
+};
+
+// The saved per-unit state: the floor and the widths verified at it.
+struct IgiSaved {
+  uint8_t floor = 0;
+  bool v40 = false, v80 = false;
+};
+
 class IgiFloorLearner {
  public:
-  IgiFloorLearner(uint8_t start, uint32_t stall_ms = 250, uint32_t window_ms = 1000,
-                  uint32_t settle_ms = 1000)
-      : floor_(start), stall_ms_(stall_ms), window_ms_(window_ms), settle_ms_(settle_ms) {}
+  explicit IgiFloorLearner(IgiSaved start, uint32_t stall_ms = 250, uint32_t window_ms = 1000,
+                           uint32_t settle_ms = 1000, uint32_t verify_ms = 10000)
+      : floor_(start.floor), stall_ms_(stall_ms), window_ms_(window_ms), settle_ms_(settle_ms),
+        verify_ms_(verify_ms) {
+    verified_[0] = start.v40;
+    verified_[1] = start.v80;
+  }
 
-  // One watcher pass. wide: tuned 40/80 MHz and nothing excuses a TX
-  // pause; pending: frames are waiting to go out; submitted: devourer's
-  // running TX submission count. Returns the new floor when it rises.
-  std::optional<uint8_t> tick(uint64_t now_ms, bool wide, bool pending, uint64_t submitted) {
-    const bool moved = !have_ || submitted != last_submitted_;
+  IgiEvent tick(const IgiPass& p) {
+    IgiEvent ev;
+    const bool moved = !have_ || p.submitted != last_submitted_;
     // Capped so a watcher that was itself descheduled does not count its
-    // own lateness as blocked time.
-    const uint64_t dt = have_ ? std::min<uint64_t>(now_ms - last_tick_ms_, kMaxPassMs) : 0;
+    // own lateness as blocked (or clean) time.
+    const uint64_t dt = have_ ? std::min<uint64_t>(p.now_ms - last_tick_ms_, kMaxPassMs) : 0;
     have_ = true;
-    last_submitted_ = submitted;
-    last_tick_ms_ = now_ms;
-    if (!wide || now_ms < settle_until_ms_) {
+    last_submitted_ = p.submitted;
+    last_tick_ms_ = p.now_ms;
+    const bool wide = p.tuned_w >= 40 && !p.excused;
+    if (!wide || p.now_ms < settle_until_ms_) {
       clear_();
-      return std::nullopt;
+      return ev;
+    }
+    const int slot = p.tuned_w >= 80 ? 1 : 0;
+    // Clean time: this width's frames going out, nothing held.
+    if (moved && p.rung_w == p.tuned_w) {
+      clean_ms_[slot] += dt;
+      if (!verified_[slot] && clean_ms_[slot] >= verify_ms_) {
+        verified_[slot] = true;
+        ev.marks_changed = true;
+      }
     }
     // Rolling window: the blocked passes that ended in the last window_ms.
-    if (pending && !moved && dt > 0) {
-      blocked_.push_back({now_ms, dt});
+    if (p.pending && !moved && dt > 0) {
+      blocked_.push_back({p.now_ms, dt});
       blocked_ms_ += dt;
     }
-    while (!blocked_.empty() && now_ms - blocked_.front().first >= window_ms_) {
+    while (!blocked_.empty() && p.now_ms - blocked_.front().first >= window_ms_) {
       blocked_ms_ -= blocked_.front().second;
       blocked_.pop_front();
     }
-    if (blocked_ms_ < stall_ms_) return std::nullopt;
+    if (blocked_ms_ < stall_ms_) return ev;
     ++stalls_;
     clear_();
-    settle_until_ms_ = now_ms + settle_ms_;
+    settle_until_ms_ = p.now_ms + settle_ms_;
+    clean_ms_[slot] = 0;
+    if (verified_[slot]) {
+      verified_[slot] = false;
+      ev.marks_changed = true;
+    }
     if (floor_ >= kIgiFloorTop) {
       top_stalls_ += 1;
-      return std::nullopt;
+      return ev;
     }
     floor_ = igi_floor_next(floor_);
-    return floor_;
+    ev.raised = floor_;
+    return ev;
   }
 
   uint8_t floor() const { return floor_; }
+  IgiSaved saved() const { return IgiSaved{floor_, verified_[0], verified_[1]}; }
+  bool verified(int width_mhz) const { return verified_[width_mhz >= 80 ? 1 : 0]; }
+  // Clean time toward the mark at 40 / 80 MHz since the last stall there.
+  uint64_t clean_ms(int width_mhz) const { return clean_ms_[width_mhz >= 80 ? 1 : 0]; }
+  uint32_t verify_ms() const { return verify_ms_; }
   // Stalls seen, and those seen with the floor already at the top step.
   uint64_t stalls() const { return stalls_; }
   uint64_t top_stalls() const { return top_stalls_; }
@@ -115,7 +170,7 @@ class IgiFloorLearner {
     blocked_ms_ = 0;
   }
   uint8_t floor_;
-  uint32_t stall_ms_, window_ms_, settle_ms_;
+  uint32_t stall_ms_, window_ms_, settle_ms_, verify_ms_;
   bool have_ = false;
   uint64_t last_submitted_ = 0;
   uint64_t last_tick_ms_ = 0;
@@ -124,29 +179,39 @@ class IgiFloorLearner {
   uint64_t settle_until_ms_ = 0;
   uint64_t stalls_ = 0;
   uint64_t top_stalls_ = 0;
+  bool verified_[2] = {false, false};
+  uint64_t clean_ms_[2] = {0, 0};
 };
 
-// The saved per-unit value: one number (decimal or 0x hex) in a small file
-// next to mabur.toml. Missing, unreadable or out of range = nothing learned.
-inline std::optional<uint8_t> igi_floor_load(const std::string& path) {
+// The saved per-unit state: one line, the floor (decimal or 0x hex) and
+// then "v40" / "v80" for the widths verified at it ("0x24 v40 v80"). A d18
+// file is the floor alone. Missing, unreadable or out of range = nothing
+// learned.
+inline std::optional<IgiSaved> igi_floor_load(const std::string& path) {
   std::FILE* f = std::fopen(path.c_str(), "r");
   if (!f) return std::nullopt;
-  char buf[32] = {0};
+  char buf[64] = {0};
   const size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
   std::fclose(f);
   buf[n] = 0;
   char* end = nullptr;
   const long v = std::strtol(buf, &end, 0);
   if (end == buf || v < 0 || v > 127) return std::nullopt;
-  return static_cast<uint8_t>(v);
+  IgiSaved s;
+  s.floor = static_cast<uint8_t>(v);
+  const std::string rest(end);
+  s.v40 = rest.find("v40") != std::string::npos;
+  s.v80 = rest.find("v80") != std::string::npos;
+  return s;
 }
 
-// Writes `v` atomically (temp file + rename). false on any failure.
-inline bool igi_floor_save(const std::string& path, uint8_t v) {
+// Writes `s` atomically (temp file + rename). false on any failure.
+inline bool igi_floor_save(const std::string& path, const IgiSaved& s) {
   const std::string tmp = path + ".tmp";
   std::FILE* f = std::fopen(tmp.c_str(), "w");
   if (!f) return false;
-  const bool ok = std::fprintf(f, "0x%02x\n", static_cast<unsigned>(v)) > 0;
+  const bool ok = std::fprintf(f, "0x%02x%s%s\n", static_cast<unsigned>(s.floor),
+                               s.v40 ? " v40" : "", s.v80 ? " v80" : "") > 0;
   if (std::fclose(f) != 0 || !ok) {
     std::remove(tmp.c_str());
     return false;

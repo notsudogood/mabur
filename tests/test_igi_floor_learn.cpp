@@ -15,28 +15,36 @@ TEST(steps_up_and_stops_at_the_top) {
   CHECK(igi_floor_next(0x50) == 0x35);
 }
 
-// Drives the learner with 25 ms watcher passes from t0 to t1; `sends` says
-// whether a submission happened in the pass ending at t. Returns the first
-// floor raised, with its time.
+// Drives the learner with 25 ms watcher passes from t0 to t1 at `tuned`
+// MHz with rung frames of the same width; `sends` says whether a submission
+// happened in the pass ending at t. Returns the first floor raised, with
+// its time.
 struct Run {
   std::optional<uint8_t> f;
   uint64_t at = 0;
 };
 template <class Sends>
 static Run drive(IgiFloorLearner& l, uint64_t t0, uint64_t t1, bool wide, bool pending,
-                 uint64_t& sub, Sends sends) {
+                 uint64_t& sub, Sends sends, int tuned = 40) {
   for (uint64_t t = t0; t < t1; t += 25) {
     if (sends(t)) ++sub;
-    const auto f = l.tick(t, wide, pending, sub);
-    if (f) return {f, t};
+    IgiPass p;
+    p.now_ms = t;
+    p.tuned_w = wide ? tuned : 20;
+    p.rung_w = p.tuned_w;
+    p.pending = pending;
+    p.submitted = sub;
+    const IgiEvent ev = l.tick(p);
+    if (ev.raised) return {ev.raised, t};
   }
   return {};
 }
+static IgiSaved off() { return IgiSaved{}; }
 
 // A full freeze at 40/80 MHz with frames waiting: one step after 250 ms
 // blocked. Revert (no stall test): no floor comes back.
 TEST(a_freeze_raises_the_floor_one_step) {
-  IgiFloorLearner l(0);
+  IgiFloorLearner l(off());
   uint64_t sub = 0;
   CHECK(!drive(l, 0, 1000, true, true, sub, [](uint64_t) { return true; }).f);   // healthy
   const Run r = drive(l, 1000, 3000, true, true, sub, [](uint64_t) { return false; });
@@ -50,12 +58,12 @@ TEST(a_freeze_raises_the_floor_one_step) {
 // A freeze starting late in a second is caught 250 ms in all the same
 // (rolling window).
 TEST(burst_between_hangs_is_a_stall) {
-  IgiFloorLearner l(0);
+  IgiFloorLearner l(off());
   uint64_t sub = 0;
   const Run r = drive(l, 0, 3000, true, true, sub, [](uint64_t t) { return (t / 25) % 2 == 0; });
   CHECK(r.f && *r.f == 0x24);
   CHECK(r.at <= 600);
-  IgiFloorLearner m(0);
+  IgiFloorLearner m(off());
   uint64_t s2 = 0;
   const Run q = drive(m, 0, 3000, true, true, s2, [](uint64_t t) { return t < 900; });
   CHECK(q.f && q.at >= 1100 && q.at <= 1150);
@@ -65,7 +73,7 @@ TEST(burst_between_hangs_is_a_stall) {
 // stall, however long. One blocked pass in four (a busy-ish sender) is not
 // either: 250 ms per 1 s window is the line.
 TEST(progress_idle_or_narrow_is_not_a_stall) {
-  IgiFloorLearner l(0);
+  IgiFloorLearner l(off());
   uint64_t sub = 0;
   auto never = [](uint64_t) { return false; };
   CHECK(!drive(l, 0, 5000, true, true, sub, [](uint64_t) { return true; }).f);
@@ -78,7 +86,7 @@ TEST(progress_idle_or_narrow_is_not_a_stall) {
 // After a step the settle second holds the next verdict; a freeze that
 // outlasts it steps again, and nothing goes past 0x35.
 TEST(settle_then_step_again_and_cap) {
-  IgiFloorLearner l(0);
+  IgiFloorLearner l(off());
   uint64_t sub = 0;
   auto never = [](uint64_t) { return false; };
   Run r = drive(l, 0, 5000, true, true, sub, never);
@@ -95,7 +103,7 @@ TEST(settle_then_step_again_and_cap) {
 
 // A unit that saved 0x2c starts there: its first stall goes to 0x35.
 TEST(starts_from_the_saved_value) {
-  IgiFloorLearner l(0x2c);
+  IgiFloorLearner l(IgiSaved{0x2c, false, false});
   uint64_t sub = 0;
   const Run r = drive(l, 0, 2000, true, true, sub, [](uint64_t) { return false; });
   CHECK(r.f && *r.f == 0x35);
@@ -103,11 +111,68 @@ TEST(starts_from_the_saved_value) {
 
 // A descheduled watcher (one 2 s pass) does not count its lateness.
 TEST(a_late_pass_counts_at_most_100_ms) {
-  IgiFloorLearner l(0);
-  CHECK(!l.tick(0, true, true, 5));
-  CHECK(!l.tick(2000, true, true, 5));   // 2 s late: counts 100 ms
-  CHECK(!l.tick(2025, true, true, 5));   // 125
+  IgiFloorLearner l(off());
+  IgiPass p;
+  p.tuned_w = p.rung_w = 40;
+  p.pending = true;
+  p.submitted = 5;
+  p.now_ms = 0;
+  CHECK(!l.tick(p).raised);
+  p.now_ms = 2000;  // 2 s late: counts 100 ms
+  CHECK(!l.tick(p).raised);
+  p.now_ms = 2025;  // 125
+  CHECK(!l.tick(p).raised);
   CHECK(l.stalls() == 0);
+}
+
+// d19 first-boot calibration: 10 s of clean sending at a width, with that
+// width's rung frames, marks it verified (once); 40 and 80 are separate.
+// Revert (no marks): verified(40) stays false.
+TEST(clean_time_verifies_each_width) {
+  IgiFloorLearner l(off(), 250, 1000, 1000, 10000);
+  uint64_t sub = 0;
+  bool changed = false;
+  for (uint64_t t = 0; t <= 10100; t += 25) {
+    IgiPass p;
+    p.now_ms = t;
+    p.tuned_w = p.rung_w = 40;
+    p.pending = true;
+    p.submitted = ++sub;
+    changed = l.tick(p).marks_changed || changed;
+  }
+  CHECK(changed && l.verified(40) && !l.verified(80));
+  CHECK(l.saved().v40 && !l.saved().v80);
+  // 80: rung frames at 20 in an 80 tune (the width hold) do not count.
+  for (uint64_t t = 10200; t <= 25000; t += 25) {
+    IgiPass p;
+    p.now_ms = t;
+    p.tuned_w = 80;
+    p.rung_w = 20;
+    p.submitted = ++sub;
+    l.tick(p);
+  }
+  CHECK(!l.verified(80) && l.clean_ms(80) == 0);
+}
+
+// A stall at a width clears that width's mark and clean time, not the
+// other's; an excused pass (a spike in the span) neither counts nor stalls.
+TEST(a_stall_clears_its_own_mark) {
+  IgiFloorLearner l(IgiSaved{0x24, true, true}, 250, 1000, 1000, 10000);
+  uint64_t sub = 0;
+  const Run r = drive(l, 0, 3000, true, true, sub, [](uint64_t) { return false; }, 80);
+  CHECK(r.f && *r.f == 0x2c);
+  CHECK(l.verified(40) && !l.verified(80));
+  IgiFloorLearner m(off());
+  for (uint64_t t = 0; t <= 20000; t += 25) {
+    IgiPass p;
+    p.now_ms = t;
+    p.tuned_w = p.rung_w = 40;
+    p.excused = true;
+    p.pending = true;
+    p.submitted = 0;
+    CHECK(!m.tick(p).raised);
+  }
+  CHECK(!m.verified(40) && m.stalls() == 0);
 }
 
 TEST(save_load_and_path) {
@@ -117,28 +182,27 @@ TEST(save_load_and_path) {
       (std::filesystem::temp_directory_path() / "mabur_igi_floor_test").string();
   std::remove(p.c_str());
   CHECK(!igi_floor_load(p));                       // nothing saved
-  CHECK(igi_floor_save(p, 0x2c));
-  const auto v = igi_floor_load(p);
-  CHECK(v && *v == 0x2c);
-  {
+  CHECK(igi_floor_save(p, IgiSaved{0x2c, true, false}));
+  auto v = igi_floor_load(p);
+  CHECK(v && v->floor == 0x2c && v->v40 && !v->v80);
+  CHECK(igi_floor_save(p, IgiSaved{0x35, true, true}));
+  v = igi_floor_load(p);
+  CHECK(v && v->floor == 0x35 && v->v40 && v->v80);
+  auto put = [&](const char* text) {
     std::FILE* f = std::fopen(p.c_str(), "w");
-    std::fputs("garbage\n", f);
+    std::fputs(text, f);
     std::fclose(f);
-  }
+  };
+  put("0x24\n");                                   // a d18 file: the floor alone
+  v = igi_floor_load(p);
+  CHECK(v && v->floor == 0x24 && !v->v40 && !v->v80);
+  put("garbage\n");
   CHECK(!igi_floor_load(p));                       // unreadable = nothing learned
-  {
-    std::FILE* f = std::fopen(p.c_str(), "w");
-    std::fputs("200\n", f);
-    std::fclose(f);
-  }
+  put("200\n");
   CHECK(!igi_floor_load(p));                       // out of range
-  {
-    std::FILE* f = std::fopen(p.c_str(), "w");
-    std::fputs("36\n", f);
-    std::fclose(f);
-  }
-  const auto d = igi_floor_load(p);
-  CHECK(d && *d == 36);                            // decimal works too
+  put("36\n");
+  v = igi_floor_load(p);
+  CHECK(v && v->floor == 36);                      // decimal works too
   std::remove(p.c_str());
 }
 

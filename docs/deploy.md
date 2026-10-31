@@ -196,6 +196,27 @@ is per radio unit: drone 1's 8812EU stalled on 7 of 20 promotes onto
 The learned file is not part of `mabur.toml`, so neither a refresh nor a
 clean-slate epoch touches it.
 
+**First-boot calibration** (d19 + gs18, `link.floor_cal` on the GS, on by
+default). The learner also marks 40 and 80 MHz *verified* after 10 s of
+clean sending at each with rung frames of that width (saved in the same
+file: `0x24 v40 v80`; a stall at a width clears its mark). The drone
+reports floor, stalls, marks and its FC's arm view in a block after the
+Telem's CRC, which d18/gs17 parsers ignore. While a drone is disarmed (or
+has no FC) and linked, a gs18 GS holds the ladder on its lowest 40 MHz rung
+until the drone marks 40, then on its lowest 80 MHz rung (only when the GS
+flies 80) until it marks 80; a stall on the way drops it to rung 0 for
+2.5 s, then the same width again. The goggles show it as a banner: `testing
+40 MHz (6/10 s clean)`, `stall caught, floor now 0x24`, `finished: floor
+0x24`. It pauses when the drone arms or the link drops, and waits on a
+channel whose span holds an 8812EU spike (the drone can neither learn nor
+verify there; `mabur/spur_channels.h` `e8822_span_has_spike`). It gives up
+for the GS session after a minute without a mark at one width, or on a
+stall at 0x35. Counterpart: each step is still learned from a real stall;
+the calibration only moves those stalls to the ground. Not measured: how
+long a real unit takes, and whether a held rung on a weak bench link
+produces "clean" seconds that do not hold in the air (clean means sent,
+not delivered).
+
 The 8812CU is 2T2R, so STBC airs on two real chains; none of the 8822E
 constraints in devourer's 8822E quirks page
 (`third_party/devourer/docs/8822e-quirks.md`: spur channels, single-path

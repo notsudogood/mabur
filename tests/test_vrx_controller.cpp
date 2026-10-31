@@ -180,6 +180,34 @@ TEST(profile_and_overhead_track_ladder_after_forced_demote) {
   CHECK(vrx.cur_op().overhead_base == vrx.ctl().op().overhead_base);
 }
 
+// First-boot floor calibration: a held rung is what every RCF commands,
+// with no probe, while the ladder waits; release hands it back to the
+// ladder at that rung. Revert (forced rung ignored): the profile is rung 0's.
+TEST(forced_rung_is_commanded_and_released) {
+  LadderCfg lcfg = default_ladder();
+  lcfg.ladder = {{0, 1.0, 1.0}, {3, 0.5, 0.5, 40}, {3, 0.25, 0.25, 80}};
+  lcfg.feedback_timeout_ms = 100000;
+  auto vrx = make(lcfg);
+  link(vrx, 0.0);
+  vrx.set_forced_rung(2, 0.0);
+  CHECK(vrx.forced_rung() == 2);
+  std::optional<VrxController::Out> out;
+  for (double now = 10; now < 2000; now += 10) {
+    vrx.on_video(now);
+    if (auto o = vrx.step(now, healthy()); o && !o->is_disc) out = o;
+  }
+  REQUIRE(out.has_value());
+  auto r = mabur::rc::parse_rcf(out->frame.data(), out->frame.size());
+  REQUIRE(r.has_value());
+  CHECK(r->profile == mabur::rc::encode_profile(mabur::rc::PhyMode::VHT, 3, 80));
+  CHECK(r->probe_profile == mabur::rc::kNoProbeProfile);
+  CHECK(vrx.ctl().rung() == 2);
+  vrx.set_forced_rung(-1, 2000.0);
+  CHECK(vrx.forced_rung() == -1 && vrx.ctl().rung() == 2);
+  vrx.set_forced_rung(9, 2010.0);                 // past the ladder: ignored
+  CHECK(vrx.forced_rung() == -1);
+}
+
 TEST(silence_beacons_fast_and_recovers) {
   auto vrx = make();
   link(vrx, 0.0);

@@ -68,6 +68,7 @@ void put_tag(std::vector<uint8_t>& body, const LinkKey& key, const TagCtx& ctx) 
 constexpr size_t RCF_HEAD_LEN = 19;  // RC_VERSION 17: +cam (17), +cal_off (18)
 constexpr size_t DISC_LEN = 17;
 constexpr size_t DISC_ACK_LEN = 20;  // RC_VERSION 14: vtx_nonce(4) + flags(1) added (15)
+constexpr uint8_t kTelemFloorLen = 6;  // the floor block's payload (d19)
 constexpr size_t TELEM_LEN = 62;  // RC_VERSION 17: +cam_cur/cam_now/cam_switch/cam_state (54), +cpu_core_pct[4] (58)
 
 // magic(2) | ver | type | flags | nonce(4) | phase | fpc(2) |
@@ -340,6 +341,21 @@ std::vector<uint8_t> pack_telem(const Telem& t) {
   for (uint8_t c : t.cpu_core_pct) body.push_back(c);
 
   put_crc(body);
+  if (t.has_floor) {
+    // Its own block after the CRC: tag, length, payload, its own CRC over
+    // tag..payload. A parser that stops at the fixed part never sees it.
+    std::vector<uint8_t> ext;
+    ext.push_back(kTelemExtFloor);
+    ext.push_back(kTelemFloorLen);
+    ext.push_back(t.floor_flags);
+    ext.push_back(t.floor_val);
+    ext.push_back(t.floor_stalls);
+    ext.push_back(t.floor_clean_s[0]);
+    ext.push_back(t.floor_clean_s[1]);
+    ext.push_back(t.floor_need_s);
+    put_crc(ext);
+    body.insert(body.end(), ext.begin(), ext.end());
+  }
   return body;
 }
 
@@ -383,6 +399,22 @@ std::optional<Telem> parse_telem(const uint8_t* buf, size_t len) {
   t.cam_switch = buf[56];
   t.cam_state = buf[57];
   for (size_t i = 0; i < 4; ++i) t.cpu_core_pct[i] = buf[58 + i];
+  // The floor block, when one follows the CRC and its own CRC holds; a
+  // longer block (a later drone) is read for the fields known here.
+  const size_t x = TELEM_LEN + 2;
+  if (len >= x + 2 + kTelemFloorLen + 2 && buf[x] == kTelemExtFloor &&
+      buf[x + 1] >= kTelemFloorLen && len >= x + 2 + buf[x + 1] + 2) {
+    const size_t n = 2 + static_cast<size_t>(buf[x + 1]);
+    if (get16(buf, x + n) == crc16_ccitt(buf + x, n)) {
+      t.has_floor = true;
+      t.floor_flags = buf[x + 2];
+      t.floor_val = buf[x + 3];
+      t.floor_stalls = buf[x + 4];
+      t.floor_clean_s[0] = buf[x + 5];
+      t.floor_clean_s[1] = buf[x + 6];
+      t.floor_need_s = buf[x + 7];
+    }
+  }
   return t;
 }
 

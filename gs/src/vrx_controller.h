@@ -102,6 +102,12 @@ class VrxController {
     hop_epoch_ = hop_epoch;
   }
   void restore_rung(int rung, double now_ms);
+  // First-boot floor calibration (floor_cal.h): hold the ladder on `rung`
+  // (-1 = release; the ladder carries on from there). While held the ladder
+  // is not ticked or updated, like the static pin, and no probe flies.
+  // Ignored in pin mode and under the 10 MHz rung.
+  void set_forced_rung(int rung, double now_ms);
+  int forced_rung() const { return forced_rung_; }
   // 10 MHz bottom rung (narrow_mode.h, ChannelCore): while on, every RCF
   // commands MCS0 at 10 MHz with these overheads and no probe, and the
   // ladder is frozen below its rung 0; turning it off resumes the ladder at
@@ -187,6 +193,7 @@ class VrxController {
   uint8_t cam_wish_ = 0xFF;
   uint8_t cal_off_ = 0;
   bool narrow_ = false;
+  int forced_rung_ = -1;
 };
 
 }  // namespace maburgs

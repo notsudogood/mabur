@@ -75,6 +75,14 @@ struct TelemInputs {
   std::vector<std::optional<double>> cpu_core_pct;
   // VtxRecorder::status_byte(), straight pass-through.
   uint8_t rec_status = 0;
+  // The floor block (rc::kTelemExtFloor, d19): the learned wide-TX IGI
+  // floor and its first-boot calibration. has_floor = false sends none.
+  bool has_floor = false;
+  uint8_t floor_flags = 0;   // rc::kFloor* bits, arm view included
+  uint8_t floor_val = 0;
+  uint64_t floor_stalls = 0;
+  uint64_t floor_clean_ms[2] = {0, 0};  // toward the 40 / 80 MHz marks
+  uint64_t floor_need_ms = 0;
 };
 
 rc::Telem make_telem(uint16_t tlm_seq, const TelemInputs& in);

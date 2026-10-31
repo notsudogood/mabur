@@ -660,4 +660,21 @@ TEST(calibration_blocks_parse_and_default_empty) {
   REQUIRE(parse(R"({"drone": null})", &s));
   CHECK(!s.calibrated && s.cal_state.empty() && s.cal_start_n == 0);
 }
+// gs18: maburgs' floorcal block and the drone's floor block (d19).
+TEST(floorcal_and_drone_floor_blocks) {
+  GsSnapshot s;
+  REQUIRE(parse(R"({"floorcal":{"state":"unstick","why":"","width":40,"floor":36,"steps":1},)"
+                R"("drone":{"floor":{"learning":true,"value":36,"stalls":1,"v40":false,)"
+                R"("v80":false,"spike":false,"top":false,"arm":1,"clean40_s":4,"clean80_s":0,)"
+                R"("need_s":10}}})",
+                &s));
+  CHECK(s.floorcal_state == "unstick" && s.floorcal_width == 40);
+  CHECK(s.floorcal_floor == 36 && s.floorcal_steps == 1);
+  CHECK(s.floor_clean40_s == 4 && s.floor_clean80_s == 0 && s.floor_need_s == 10);
+  CHECK(s.drone_arm == 1);
+  GsSnapshot none;
+  REQUIRE(parse(R"({"drone":{"floor":null}})", &none));
+  CHECK(none.floorcal_state.empty() && none.floor_clean40_s == -1 && none.drone_arm == -1);
+}
+
 MTEST_MAIN

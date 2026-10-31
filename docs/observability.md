@@ -359,6 +359,22 @@ and that request's result (`""`, `sent`, `applying`, then `switched`,
 commit and rollback); maburplay logs `menu camera preset N requested` and
 `camera request: <result>`.
 
+`drone.floor` (d19, null from an older drone) is the drone's learned
+wide-TX IGI floor from the Telem floor block: `learning`, `value`,
+`stalls` (this session), `v40` / `v80` (that width verified at the floor:
+10 s of clean sending there), `spike` (the tuned span holds an 8812EU
+spike, where it neither learns nor verifies), `top` (a stall at 0x35),
+`arm` (0 no FC, 1 disarmed, 2 armed, 3 stale), `clean40_s` / `clean80_s`
+(clean seconds toward each mark) and `need_s`. Top-level `floorcal =
+{state, why, width, floor, steps}` is the GS's first-boot calibration
+(`gs/src/floor_cal.h`): `state` `off` (disabled, not learning, older drone),
+`idle` (nothing to test), `test`, `unstick` (a 20 MHz rung after a caught
+stall), `paused` (`why` = `link`, `armed`, `arm_stale` or `spike`), `done`,
+`failed` (`why` = `timeout` or `top`; held for the GS session). maburgs logs
+`first-boot calibration: <state>` on every change; maburd logs each floor
+step and `IGI floor 0x..: 40 MHz verified, ...` when a mark changes;
+maburplay logs the banner text on each state change.
+
 ## Debug-log session directory
 
 maburgs writes a per-session directory when `debug_log.enable` is set

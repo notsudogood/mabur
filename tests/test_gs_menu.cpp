@@ -291,4 +291,58 @@ TEST(menu_model_calibration_event_lines) {
   was = S{}; now = S{}; now.calibrated = true;   // first report at link-up: quiet
   CHECK(GsMenuModel::calibration_event_text(was, now).empty());
 }
+// gs18 first-boot floor calibration: the banner follows maburgs' floorcal
+// state, stays up (no 4 s expiry) and a status line shows over it.
+TEST(menu_model_floorcal_banner_and_event) {
+  using F = GsMenuModel::FloorCalSeen;
+  F f;
+  f.state = "test";
+  f.width = 40;
+  f.clean_s = 6;
+  f.need_s = 10;
+  CHECK(GsMenuModel::floorcal_banner(f) ==
+        "First boot calibration: testing 40 MHz (6/10 s clean) - keep the drone disarmed");
+  f.state = "unstick";
+  f.floor = 0x24;
+  CHECK(GsMenuModel::floorcal_banner(f) ==
+        "First boot calibration: stall caught, floor now 0x24 - testing 40 MHz again");
+  f.state = "paused";
+  f.why = "armed";
+  CHECK(GsMenuModel::floorcal_banner(f) == "First boot calibration paused: the drone is armed");
+  F never = f;
+  never.width = 0;                       // paused before it ever ran: nothing to say
+  CHECK(GsMenuModel::floorcal_banner(never).empty());
+  f.state = "done";
+  CHECK(GsMenuModel::floorcal_banner(f) == "First boot calibration finished: floor 0x24");
+  f.floor = 0;
+  CHECK(GsMenuModel::floorcal_banner(f) == "First boot calibration finished: no floor needed");
+  f.state = "idle";
+  CHECK(GsMenuModel::floorcal_banner(f).empty());
+  F was, now;
+  was.state = "test";
+  was.width = 80;
+  now.state = "failed";
+  now.why = "timeout";
+  now.width = 80;
+  CHECK(GsMenuModel::floorcal_event(was, now) ==
+        "First boot calibration stopped: no clean 80 MHz in a minute (retries after a GS restart)");
+  CHECK(GsMenuModel::floorcal_event(now, now).empty());
+  now.why = "top";
+  now.floor = 0x35;
+  CHECK(GsMenuModel::floorcal_event(was, now) ==
+        "First boot calibration stopped: the drone still stalls at the highest floor (0x35)");
+
+  GsMenuModel m({36}, false, maburplay::GsMenuSettings{true, 36, false});
+  CHECK(!m.visible());
+  m.set_banner("First boot calibration: testing 40 MHz");
+  CHECK(m.visible() && m.view().status == "First boot calibration: testing 40 MHz");
+  m.tick(60000);                          // no expiry
+  CHECK(m.view().status == "First boot calibration: testing 40 MHz");
+  m.set_status("Camera: switched", 60000);
+  CHECK(m.view().status == "Camera: switched");
+  m.tick(64001);
+  CHECK(m.view().status == "First boot calibration: testing 40 MHz");
+  m.set_banner("");
+  CHECK(!m.visible());
+}
 MTEST_MAIN

@@ -621,6 +621,12 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
   camreq["last"] = in.cam_last == 0xFF ? json(nullptr) : json(in.cam_last);
   camreq["result"] = in.cam_result ? in.cam_result : "";
 
+  j["floorcal"] = {{"state", in.floorcal_state ? in.floorcal_state : "off"},
+                   {"why", in.floorcal_why ? in.floorcal_why : ""},
+                   {"width", in.floorcal_width},
+                   {"floor", in.floorcal_floor},
+                   {"steps", in.floorcal_steps}};
+
   // In-flight channel hop snapshot,
   // top-level like `scan`: it describes the hop feature's own state
   // machine, not a per-window link measurement.
@@ -731,6 +737,22 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
     // 5 s because its FC reports armed (bit2).
     d["cal"] = {{"calibrated", (t.flags & mabur::rc::kTelemCalibrated) != 0},
                 {"refused_armed", (t.flags & mabur::rc::kTelemArmRefused) != 0}};
+    // The learned wide-TX IGI floor (Telem floor block, d19); null from an
+    // older drone.
+    if (t.has_floor)
+      d["floor"] = {{"learning", (t.floor_flags & mabur::rc::kFloorLearning) != 0},
+                    {"value", t.floor_val},
+                    {"stalls", t.floor_stalls},
+                    {"v40", (t.floor_flags & mabur::rc::kFloorV40) != 0},
+                    {"v80", (t.floor_flags & mabur::rc::kFloorV80) != 0},
+                    {"spike", (t.floor_flags & mabur::rc::kFloorSpike) != 0},
+                    {"top", (t.floor_flags & mabur::rc::kFloorTop) != 0},
+                    {"arm", mabur::rc::floor_arm_view(t.floor_flags)},
+                    {"clean40_s", t.floor_clean_s[0]},
+                    {"clean80_s", t.floor_clean_s[1]},
+                    {"need_s", t.floor_need_s}};
+    else
+      d["floor"] = nullptr;
     json& rcf = d["rcf"];
     rcf["age_ms"] = t.rcf_age_ms;
     rcf["rx_pps"] = have_telem_rates_ ? json(telem_rcf_rx_pps_) : json(nullptr);

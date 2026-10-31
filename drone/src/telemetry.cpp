@@ -99,6 +99,15 @@ rc::Telem make_telem(uint16_t tlm_seq, const TelemInputs& in) {
       t.cpu_core_pct[i] =
           static_cast<uint8_t>(std::lround(std::clamp(*in.cpu_core_pct[i], 0.0, 100.0)));
   t.rec_status = in.rec_status;
+  if (in.has_floor) {
+    t.has_floor = true;
+    t.floor_flags = in.floor_flags;
+    t.floor_val = in.floor_val;
+    t.floor_stalls = saturate<uint8_t>(in.floor_stalls);
+    t.floor_clean_s[0] = saturate<uint8_t>(in.floor_clean_ms[0] / 1000);
+    t.floor_clean_s[1] = saturate<uint8_t>(in.floor_clean_ms[1] / 1000);
+    t.floor_need_s = saturate<uint8_t>(in.floor_need_ms / 1000);
+  }
   return t;
 }
 

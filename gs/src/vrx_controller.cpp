@@ -78,6 +78,8 @@ std::optional<VrxController::Out> VrxController::step(double now_ms,
                      cfg_.pin_overhead_base, cfg_.pin_overhead_enh, 0.0};
   } else if (narrow_) {
     // Below the ladder: the 10 MHz op stands, the ladder is not ticked.
+  } else if (forced_rung_ >= 0) {
+    // First-boot floor calibration holds a rung: the ladder waits.
   } else if (ctrl_.on_tick(now_ms)) {
     sync_op_();
   }
@@ -97,7 +99,7 @@ std::optional<VrxController::Out> VrxController::step(double now_ms,
   if (now_ms - last_fb_ms_ < cfg_.feedback_ms) return std::nullopt;
   last_fb_ms_ = now_ms;
 
-  if (cfg_.pin_mcs < 0 && !narrow_) {
+  if (cfg_.pin_mcs < 0 && !narrow_ && forced_rung_ < 0) {
     if (ctrl_.update(health, now_ms)) sync_op_();
   }
   mabur::rc::Rcf r = build_rcf();
@@ -145,8 +147,9 @@ mabur::rc::Rcf VrxController::build_rcf() {
     if (cfg_.probe_pin_mcs >= 0)
       r.probe_profile = mabur::rc::encode_profile(mode, static_cast<uint8_t>(cfg_.probe_pin_mcs),
                                                   static_cast<uint8_t>(cur_op_.bw));
-  } else if (narrow_) {
-    // Nothing can be probed: a 10 MHz radio neither sends nor hears 20 MHz.
+  } else if (narrow_ || forced_rung_ >= 0) {
+    // Nothing can be probed: a 10 MHz radio neither sends nor hears 20 MHz;
+    // a held calibration rung flies alone.
   } else if (const int pr = ctrl_.probe_rung(); pr >= 0) {
     // The PROBE rung's own width, not the current op's: sitting on 20/4
     // with 40/3 above, the probe must fly 40 MHz.
@@ -174,6 +177,17 @@ void VrxController::set_narrow(bool on, double ov_base, double ov_enh, double no
 void VrxController::restore_rung(int rung, double now_ms) {
   ctrl_.restore(rung, now_ms);
   sync_op_();
+}
+
+void VrxController::set_forced_rung(int rung, double now_ms) {
+  if (cfg_.pin_mcs >= 0 || narrow_) rung = -1;
+  if (rung >= static_cast<int>(cfg_.ladder.ladder.size())) rung = -1;
+  if (rung == forced_rung_) return;
+  forced_rung_ = rung;
+  if (rung >= 0) {
+    ctrl_.restore(rung, now_ms);
+    sync_op_();
+  }
 }
 
 void VrxController::note_cmd(const mabur::rc::Rcf& r) {

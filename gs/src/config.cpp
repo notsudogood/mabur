@@ -425,7 +425,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
                 "s3_settle_ms", "s3_min_syms",
                 "rung_stats", "fade", "probe",
                 "rcf_slot_hold_ms", "arrival_guard_syms",
-                "nack", "narrow10",
+                "nack", "narrow10", "floor_cal",
                 "key_file", "key"});
     c.link.key_file = get_str(r, "key_file", "/etc/mabur.key", "link");
     // Read by presence: link.key is an optional web-overlay key,
@@ -440,6 +440,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
     c.link.arrival_guard_syms = static_cast<int>(get_int(r, "arrival_guard_syms", 192, 16, 512, "link"));
     c.link.beacon_keepalive_ms = static_cast<int>(get_int(r, "beacon_keepalive_ms", 1000, 100, 60000, "link"));
     c.link.static_mcs = static_cast<int>(get_int(r, "static_mcs", -1, -1, 7, "link"));
+    c.link.floor_cal = get_bool(r, "floor_cal", c.link.floor_cal, "link");
     // Actual-air overhead (airtime-balance-uep): literal, not a scaled cmd
     // value -- old cmd default/range 0.25 [0.10, 1.0] x2 everywhere.
     // Same-rate fixed pairs: base/enh pair, same default/range.

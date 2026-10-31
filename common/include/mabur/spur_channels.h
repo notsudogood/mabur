@@ -17,6 +17,8 @@
 #include <string>
 #include <vector>
 
+#include "mabur/ht40.h"
+
 namespace mabur {
 
 // Why `ch` stalls an 8812EU at this link width, or nullopt. `width_mhz` is
@@ -55,5 +57,27 @@ inline std::vector<std::string> e8822_stall_warnings(const std::vector<uint8_t>&
       out.push_back("channel " + std::to_string(c) + ": " + *why);
   return out;
 }
+
+// Whether the span an 8812EU is tuned to (ch at width_mhz: the 20 MHz
+// channel, its 40 MHz pair or its 80 MHz block) holds one of the radio's
+// own spikes (5760 / 5800 / 5840 / 5880 MHz). A freeze there is the spike,
+// not the 40 MHz stall the learned IGI floor answers, so the learner
+// (drone/src/igi_floor_learn.h) neither steps nor verifies on it. Both
+// edges exclusive: 149 at 20 MHz (5735-5755) and 157 (5775-5795) are clean
+// on the bench with 5760 and 5800 just outside.
+constexpr bool e8822_span_has_spike(uint8_t ch, uint8_t width_mhz) {
+  const uint8_t c = tuned_central(ch, width_mhz);
+  if (c == 0) return false;
+  const int centre = 5000 + 5 * c;
+  const int half = width_mhz / 2;
+  for (int spike = 5760; spike <= 5880; spike += 40)
+    if (spike > centre - half && spike < centre + half) return true;
+  return false;
+}
+static_assert(!e8822_span_has_spike(149, 20) && !e8822_span_has_spike(157, 20), "clean 20s");
+static_assert(e8822_span_has_spike(153, 20) && e8822_span_has_spike(177, 20), "spike 20s");
+static_assert(e8822_span_has_spike(149, 40) && e8822_span_has_spike(173, 40), "spike pairs");
+static_assert(e8822_span_has_spike(157, 80) && e8822_span_has_spike(165, 80), "spike blocks");
+static_assert(!e8822_span_has_spike(132, 80) && !e8822_span_has_spike(36, 40), "clean blocks");
 
 }  // namespace mabur

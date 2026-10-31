@@ -40,6 +40,7 @@
 #include "drone_restart.h"
 #include "debug_session.h"
 #include "frame_file_source.h"
+#include "floor_cal.h"
 #include "frame_stream.h"
 #include "gap_timeout_policy.h"
 #include "hop_burst_gate.h"   // cal_cmd_clear
@@ -626,6 +627,25 @@ static int run_radio(const maburgs::Config& cfg) {
   // Declared ahead of the FrameStream below: ChannelCore needs it, and
   // the end-of-AU callback calls chan.note_au_end().
   maburgs::VrxController vrx(maburgs::vrx_cfg_from(cfg, start_ch));
+  // First-boot floor calibration (floor_cal.h): the lowest-MCS rung at 40
+  // and at 80 MHz of the effective ladder (none = that width is not flown
+  // here, so not tested), rung 0 for the unstick.
+  maburgs::FloorCal floor_cal = [&] {
+    maburgs::FloorCalCfg fc;
+    fc.enable = cfg.link.floor_cal && cfg.link.static_mcs < 0;
+    maburgs::FloorCalRungs r;
+    const auto& lad = cfg.link.ladder_cfg.ladder;
+    for (size_t i = 0; i < lad.size(); ++i) {
+      int* slot = lad[i].bw == 40 ? &r.r40 : lad[i].bw == 80 ? &r.r80 : nullptr;
+      if (slot && (*slot < 0 || lad[i].mcs < lad[static_cast<size_t>(*slot)].mcs))
+        *slot = static_cast<int>(i);
+    }
+    r.r20 = 0;
+    std::fprintf(stderr, "maburgs: first-boot floor calibration %s (40 MHz rung %d, 80 MHz rung %d)\n",
+                 fc.enable ? "on" : "off", r.r40, r.r80);
+    return maburgs::FloorCal(fc, r);
+  }();
+  maburgs::FloorCal::State floor_cal_logged = maburgs::FloorCal::State::Off;
 
   // scan.log (scanlog 6): the channel-selection record -- card caps, scout
   // dwells (boot-time AND in-flight), the pick, every link move, and the
@@ -1598,6 +1618,35 @@ static int run_radio(const maburgs::Config& cfg) {
                        f.evm_db[1], f.first_ms);
       }
 
+    // First-boot floor calibration: the drone's floor block from its last
+    // Telem (fresh within 3 s), then the rung to hold, if any.
+    {
+      maburgs::FloorView fv;
+      const uint64_t tnow = static_cast<uint64_t>(now_ms);
+      if (latest_telem.t && latest_telem.t->has_floor && latest_telem.rx_ms + 3000 > tnow) {
+        const auto& t = *latest_telem.t;
+        fv.have = true;
+        fv.learning = (t.floor_flags & mabur::rc::kFloorLearning) != 0;
+        fv.v40 = (t.floor_flags & mabur::rc::kFloorV40) != 0;
+        fv.v80 = (t.floor_flags & mabur::rc::kFloorV80) != 0;
+        fv.spike = (t.floor_flags & mabur::rc::kFloorSpike) != 0;
+        fv.top = (t.floor_flags & mabur::rc::kFloorTop) != 0;
+        fv.floor = t.floor_val;
+        fv.stalls = t.floor_stalls;
+        fv.arm = mabur::rc::floor_arm_view(t.floor_flags);
+      }
+      const bool linked = vrx.link_state() == maburgs::VrxState::SESSION;
+      vrx.set_forced_rung(floor_cal.tick(tnow, linked, fv), now_ms);
+      if (floor_cal.state() != floor_cal_logged) {
+        floor_cal_logged = floor_cal.state();
+        std::fprintf(stderr, "maburgs: first-boot calibration: %s%s%s (width %d, floor 0x%02x, "
+                             "%d stall(s) caught)\n",
+                     maburgs::FloorCal::name(floor_cal.state()), *floor_cal.why() ? " - " : "",
+                     floor_cal.why(), floor_cal.width(), static_cast<unsigned>(floor_cal.floor()),
+                     floor_cal.steps());
+      }
+    }
+
     if (auto out = vrx.step(now_ms, health)) {
       // Window boundary (window == RCF period): the starvation gate's
       // packet snapshot and the RF staleness snapshot, link_health.cpp.
@@ -1981,6 +2030,11 @@ static int run_radio(const maburgs::Config& cfg) {
       sin.cam_wish = cam_req.wish();
       sin.cam_last = cam_req.last();
       sin.cam_result = cam_req.result();
+      sin.floorcal_state = maburgs::FloorCal::name(floor_cal.state());
+      sin.floorcal_why = floor_cal.why();
+      sin.floorcal_width = floor_cal.width();
+      sin.floorcal_floor = floor_cal.floor();
+      sin.floorcal_steps = floor_cal.steps();
       sin.rcf_slot = {rcf_slot.released_au(), rcf_slot.released_timeout(),
                       rcf_slot.passthru(), rcf_slot.released_probe(),
                       rcf_slot.tail_ub_ms()};

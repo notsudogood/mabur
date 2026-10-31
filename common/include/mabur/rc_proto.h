@@ -106,6 +106,24 @@ constexpr uint8_t kTelemAuthReject = 0x02;  // Telem::flags bit1
 constexpr uint8_t kTelemArmRefused = 0x04;  // Telem::flags bit2
 constexpr uint8_t kTelemCalibrated = 0x20;  // Telem::flags bit5
 
+// Telem floor block (d19): the learned wide-TX IGI floor and its first-boot
+// calibration (drone/src/igi_floor_learn.h, gs/src/floor_cal.h). It rides
+// AFTER the Telem's CRC, as its own tagged block with its own CRC, so a
+// d18/gs17 parser (which reads the fixed part and stops) ignores it and the
+// pair needs no RC_VERSION change. Telem::floor_flags bits:
+constexpr uint8_t kTelemExtFloor = 0xE1;     // the block's tag byte
+constexpr uint8_t kFloorLearning = 0x01;     // radio.igi_floor_auto is learning this session
+constexpr uint8_t kFloorV40 = 0x02;          // 40 MHz verified at the current floor
+constexpr uint8_t kFloorV80 = 0x04;          // 80 MHz verified at the current floor
+constexpr uint8_t kFloorSpike = 0x08;        // the tuned span holds an 8812EU spike: not learning there
+constexpr uint8_t kFloorTop = 0x80;          // a stall was seen with the floor at its top step
+// Bits 4-5: the drone's arm view (drone/src/camera_switch.h ArmView:
+// 0 no FC, 1 disarmed, 2 armed, 3 stale).
+constexpr uint8_t floor_arm_view(uint8_t flags) { return static_cast<uint8_t>((flags >> 4) & 3); }
+constexpr uint8_t floor_flags_with_arm(uint8_t flags, uint8_t arm) {
+  return static_cast<uint8_t>((flags & ~0x30) | ((arm & 3) << 4));
+}
+
 // Values hashed into a control frame's tag but never sent on the wire
 // (link pairing): the VRX/VTX nonces from the completed
 // rendezvous plus a 32-bit sequence (RCF's seq, widened; 0 for DISC/CAL
@@ -311,6 +329,15 @@ struct Telem {
   // them running flat out (the drone's cpu0 carries the FEC worker and the
   // USB senders; cpu1 the video packer).
   uint8_t cpu_core_pct[4] = {0xFF, 0xFF, 0xFF, 0xFF};
+
+  // Floor block (kTelemExtFloor above), sent only when has_floor; without
+  // it the frame is byte-identical to an RC_VERSION 17 Telem.
+  bool has_floor = false;
+  uint8_t floor_flags = 0;    // kFloor* bits + the arm view
+  uint8_t floor_val = 0;      // the wide-TX IGI floor in force (0 = off)
+  uint8_t floor_stalls = 0;   // stalls this session, saturating
+  uint8_t floor_clean_s[2] = {0, 0};  // clean seconds toward the 40 / 80 MHz mark, saturating
+  uint8_t floor_need_s = 0;   // seconds a mark needs
 };
 constexpr uint8_t kCpuCoreNone = 0xFF;
 

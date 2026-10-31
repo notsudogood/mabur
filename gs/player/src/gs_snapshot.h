@@ -118,6 +118,20 @@ struct GsSnapshot {
   int cal_start_n = 0;
   std::string cal_fail;
   std::string cal_off;
+  // First-boot floor calibration (gs18): maburgs' `floorcal` block (state
+  // "off", "idle", "test", "unstick", "paused", "done", "failed"; why it
+  // paused or stopped; the width under test, the drone's floor, stalls
+  // caught) and the drone's own floor block (drone.floor, d19: clean
+  // seconds toward each width's mark, the seconds a mark needs, the FC's
+  // arm view 0 no FC / 1 disarmed / 2 armed / 3 stale). Empty / -1 when
+  // absent.
+  std::string floorcal_state;
+  std::string floorcal_why;
+  int floorcal_width = 0;
+  int floorcal_floor = 0;
+  int floorcal_steps = 0;
+  int floor_clean40_s = -1, floor_clean80_s = -1, floor_need_s = 0;
+  int drone_arm = -1;
   // link.ctl.rung.mcs / .ov_base x 100, falling back to link.op.mcs /
   // .overhead_base x 100 when the ladder block is absent -- which is the
   // normal, permanent state of a static-pinned link (link.static_mcs >= 0

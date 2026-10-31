@@ -31,6 +31,7 @@
 // without a press, drops them.
 
 #include <cstdint>
+#include <cstdio>
 #include <optional>
 #include <string>
 #include <vector>
@@ -131,7 +132,7 @@ class GsMenuModel {
       open_ = false;
       ++version_;
     }
-    if (!status_.empty() && now_ms - status_ms_ >= kStatusMs) {
+    if (!status_.empty() && now_ms - status_ms_ >= status_dur_ms_) {
       status_.clear();
       ++version_;
     }
@@ -228,14 +229,70 @@ class GsMenuModel {
     return "";
   }
 
-  // A one-line message shown (menu closed or open) for kStatusMs.
-  void set_status(const std::string& s, uint64_t now_ms) {
+  // A one-line message shown (menu closed or open) for kStatusMs, or
+  // dur_ms.
+  void set_status(const std::string& s, uint64_t now_ms, uint64_t dur_ms = kStatusMs) {
     status_ = s;
     status_ms_ = now_ms;
+    status_dur_ms_ = dur_ms;
     ++version_;
   }
 
-  bool visible() const { return open_ || !status_.empty(); }
+  // A line that stays up (menu closed or open) until replaced or cleared
+  // with "": the first-boot floor calibration's progress. A status line
+  // shows instead while one is up.
+  void set_banner(const std::string& s) {
+    if (s == banner_) return;
+    banner_ = s;
+    ++version_;
+  }
+  const std::string& banner() const { return banner_; }
+
+  // First-boot floor calibration (maburgs' floorcal block + the drone's
+  // floor block, gs_snapshot.h), for the two texts below.
+  struct FloorCalSeen {
+    std::string state, why;
+    int width = 0, floor = 0, steps = 0;
+    int clean_s = -1, need_s = 0;   // toward the width under test's mark
+  };
+  // The banner while a calibration runs, has paused mid-way or has just
+  // finished; "" otherwise.
+  static std::string floorcal_banner(const FloorCalSeen& f) {
+    const std::string pre = "First boot calibration";
+    const std::string w = std::to_string(f.width) + " MHz";
+    if (f.state == "test") {
+      std::string s = pre + ": testing " + w;
+      if (f.clean_s >= 0 && f.need_s > 0)
+        s += " (" + std::to_string(f.clean_s < f.need_s ? f.clean_s : f.need_s) + "/" +
+             std::to_string(f.need_s) + " s clean)";
+      return s + " - keep the drone disarmed";
+    }
+    if (f.state == "unstick")
+      return pre + ": stall caught, floor now " + hex_(f.floor) + " - testing " + w + " again";
+    if (f.state == "paused" && f.width > 0) {
+      if (f.why == "armed") return pre + " paused: the drone is armed";
+      if (f.why == "arm_stale") return pre + " paused: no arm state from the flight controller";
+      if (f.why == "link") return pre + " paused: link lost";
+      if (f.why == "spike")
+        return pre + " waits: this channel has a radio spike - pick another channel";
+      return pre + " paused";
+    }
+    if (f.state == "done")
+      return pre + " finished: " + (f.floor > 0 ? "floor " + hex_(f.floor) : "no floor needed");
+    return "";
+  }
+  // The status line for a calibration that just gave up; "" otherwise.
+  static std::string floorcal_event(const FloorCalSeen& was, const FloorCalSeen& now) {
+    if (now.state != "failed" || was.state == "failed") return "";
+    if (now.why == "top")
+      return "First boot calibration stopped: the drone still stalls at the highest floor (" +
+             hex_(now.floor) + ")";
+    const int w = now.width > 0 ? now.width : was.width > 0 ? was.width : 40;
+    return "First boot calibration stopped: no clean " + std::to_string(w) +
+           " MHz in a minute (retries after a GS restart)";
+  }
+
+  bool visible() const { return open_ || !status_.empty() || !banner_.empty(); }
   bool open() const { return open_; }
   uint64_t version() const { return version_; }
   Tab tab() const { return tab_; }
@@ -246,7 +303,7 @@ class GsMenuModel {
   // sideport's link.channel; 0 = unknown), filled light grey.
   GsMenuView view(uint8_t live_channel = 0) const {
     GsMenuView v;
-    v.status = status_;
+    v.status = status_.empty() ? banner_ : status_;
     v.open = open_;
     if (!open_) return v;
     const char* names[kTabs] = {"Channel", "Settings", "Camera"};
@@ -550,6 +607,14 @@ class GsMenuModel {
   uint64_t last_key_ms_ = 0;
   std::string status_;
   uint64_t status_ms_ = 0;
+  uint64_t status_dur_ms_ = kStatusMs;
+  std::string banner_;
+
+  static std::string hex_(int v) {
+    char b[8];
+    std::snprintf(b, sizeof(b), "0x%02x", v & 0xff);
+    return b;
+  }
 };
 
 }  // namespace maburplay

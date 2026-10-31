@@ -366,6 +366,13 @@ struct StatsInput {
   uint8_t cam_last = 0xFF;
   const char* cam_result = "";
 
+  // First-boot floor calibration (floor_cal.h), top-level `floorcal`.
+  const char* floorcal_state = "off";
+  const char* floorcal_why = "";
+  int floorcal_width = 0;
+  int floorcal_floor = 0;
+  int floorcal_steps = 0;
+
   // Latest drone telemetry, if any this session: wire struct + GS arrival clock.
   std::optional<mabur::rc::Telem> telem;
   uint64_t telem_rx_ms = 0;   // GS monotonic arrival stamp

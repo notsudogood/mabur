@@ -103,12 +103,16 @@ TEST(files_appear_next_to_the_video_and_hold_every_screen) {
   CHECK(srt_s ==
         "1\n00:00:00,000 --> 00:00:01,000\nSignal:3 CH:132 FlightTime:1 SBat:0.0V GBat:0.0V "
         "Delay:38ms Bitrate:24.5Mbps Distance:0m\n\n");
-  auto link = slurp(dir + "/record-0007.link.srt");
-  const std::string link_s(link.begin(), link.end());
-  CHECK(link_s == "1\n00:00:00,000 --> 00:00:01,000\nMCS4/40MHz lat 38/54ms\n\n");
+  // gs17: the detail rides a .ass (header + one Dialogue per cue), never a
+  // second .srt (walksnail-osd-tool would pick that one up instead).
+  CHECK(slurp(dir + "/record-0007.link.srt").empty());
+  auto ass = slurp(dir + "/record-0007.ass");
+  const std::string ass_s(ass.begin(), ass.end());
+  CHECK(ass_s == OsdRecorder::ass_header() +
+                     "Dialogue: 0,0:00:00.00,0:00:01.00,Link,,0,0,0,,MCS4/40MHz lat 38/54ms\n");
   std::remove((dir + "/record-0007.osd").c_str());
   std::remove((dir + "/record-0007.srt").c_str());
-  std::remove((dir + "/record-0007.link.srt").c_str());
+  std::remove((dir + "/record-0007.ass").c_str());
   rmdir(dir.c_str());
 }
 
@@ -129,3 +133,20 @@ TEST(walksnail_line_matches_the_tools_format_and_clamps) {
 }
 
 MTEST_MAIN
+
+// gs17: the .ass detail file. Times are H:MM:SS.cc; text that would read as
+// an ASS override tag or break the line is made plain; the style sits
+// bottom-left above walksnail-osd-tool's SRT line. Revert (back to a
+// .link.srt): files_appear_next_to_the_video_and_hold_every_screen fails first.
+TEST(ass_event_times_and_escapes) {
+  CHECK(OsdRecorder::ass_event(0, 1000, "CH132 MCS4/80MHz") ==
+        "Dialogue: 0,0:00:00.00,0:00:01.00,Link,,0,0,0,,CH132 MCS4/80MHz\n");
+  CHECK(OsdRecorder::ass_event(3723456, 3724999, "a{b}c\\d\ne") ==
+        "Dialogue: 0,1:02:03.45,1:02:04.99,Link,,0,0,0,,a(b)c/d e\n");
+  const std::string h = OsdRecorder::ass_header();
+  CHECK(h.find("PlayResY: 1080") != std::string::npos);
+  CHECK(h.find("Style: Link,Arial,30,") != std::string::npos);
+  CHECK(h.find(",1,29,29,64,1\n") != std::string::npos);   // alignment 1, margins, encoding
+  CHECK(h.rfind("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n") ==
+        h.size() - std::string("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n").size());
+}

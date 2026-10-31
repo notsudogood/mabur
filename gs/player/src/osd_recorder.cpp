@@ -42,6 +42,49 @@ std::string OsdRecorder::srt_entry(uint64_t n, uint32_t t0_ms, uint32_t t1_ms,
   return std::to_string(n) + "\n" + ts(t0_ms) + " --> " + ts(t1_ms) + "\n" + line + "\n\n";
 }
 
+std::string OsdRecorder::ass_header() {
+  // 1920x1080 script resolution: players scale it to the video, so the
+  // place and size hold at 720p too. Colours are &HAABBGGRR, alpha 00 =
+  // opaque. Alignment 1 = bottom-left; MarginV 64 puts the line's bottom at
+  // y 1016, above walksnail-osd-tool's SRT line (drawn from y 95 % = 1026).
+  return "[Script Info]\n"
+         "ScriptType: v4.00+\n"
+         "PlayResX: 1920\n"
+         "PlayResY: 1080\n"
+         "WrapStyle: 2\n"
+         "ScaledBorderAndShadow: yes\n"
+         "\n"
+         "[V4+ Styles]\n"
+         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
+         "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
+         "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+         "Style: Link,Arial,30,&H00F0F0F0,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,"
+         "1,2,1,1,29,29,64,1\n"
+         "\n"
+         "[Events]\n"
+         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n";
+}
+
+std::string OsdRecorder::ass_event(uint32_t t0_ms, uint32_t t1_ms, const std::string& text) {
+  // ASS times are H:MM:SS.cc (centiseconds), truncated like the .srt's ms.
+  auto ts = [](uint32_t ms) {
+    char b[24];
+    const uint32_t cs = ms / 10u;
+    std::snprintf(b, sizeof(b), "%u:%02u:%02u.%02u", cs / 360000u, (cs / 6000u) % 60u,
+                  (cs / 100u) % 60u, cs % 100u);
+    return std::string(b);
+  };
+  std::string line;
+  for (char c : text) {
+    if (c == '\n' || c == '\r') line.push_back(' ');
+    else if (c == '{') line.push_back('(');
+    else if (c == '}') line.push_back(')');
+    else if (c == '\\') line.push_back('/');
+    else line.push_back(c);
+  }
+  return "Dialogue: 0," + ts(t0_ms) + "," + ts(t1_ms) + ",Link,,0,0,0,," + line + "\n";
+}
+
 std::string OsdRecorder::walksnail_line(int signal, int channel, uint32_t flight_s,
                                         uint32_t delay_ms, double mbps) {
   char b[160];
@@ -74,7 +117,7 @@ void OsdRecorder::arm(const std::string& video_path) {
   error_ = false;
   osd_path_ = sidecar_path(video_path, ".osd");
   srt_path_ = sidecar_path(video_path, ".srt");
-  link_srt_path_ = sidecar_path(video_path, ".link.srt");
+  ass_path_ = sidecar_path(video_path, ".ass");
   records_ = 0;
   sub_n_ = 0;
   last_sub_ms_ = 0;
@@ -93,8 +136,9 @@ void OsdRecorder::begin(uint64_t now_ms) {
   }
   if (cfg_.srt) {
     srt_ = std::fopen(srt_path_.c_str(), "w");
-    link_srt_ = std::fopen(link_srt_path_.c_str(), "w");
-    if (!srt_ || !link_srt_) error_ = true;
+    ass_ = std::fopen(ass_path_.c_str(), "w");
+    if (!srt_ || !ass_) error_ = true;
+    if (ass_) ass_buf_ += ass_header();
   }
 }
 
@@ -107,13 +151,13 @@ void OsdRecorder::screen(uint64_t now_ms, const mabur::MspScreen& s) {
 
 void OsdRecorder::subtitle(uint64_t now_ms, const std::string& walksnail,
                            const std::string& detail) {
-  if (!running_ || (!srt_ && !link_srt_)) return;
+  if (!running_ || (!srt_ && !ass_)) return;
   const uint64_t t = now_ms > t0_ms_ ? now_ms - t0_ms_ : 0;
   const uint32_t t1 = static_cast<uint32_t>(t);
   if (t1 <= last_sub_ms_ && sub_n_ > 0) return;
   ++sub_n_;
   if (srt_) srt_buf_ += srt_entry(sub_n_, last_sub_ms_, t1, walksnail);
-  if (link_srt_) link_srt_buf_ += srt_entry(sub_n_, last_sub_ms_, t1, detail);
+  if (ass_) ass_buf_ += ass_event(last_sub_ms_, t1, detail);
   last_sub_ms_ = t1;
 }
 
@@ -128,12 +172,10 @@ void OsdRecorder::flush() {
     std::fflush(srt_);
     srt_buf_.clear();
   }
-  if (link_srt_ && !link_srt_buf_.empty()) {
-    if (std::fwrite(link_srt_buf_.data(), 1, link_srt_buf_.size(), link_srt_) !=
-        link_srt_buf_.size())
-      error_ = true;
-    std::fflush(link_srt_);
-    link_srt_buf_.clear();
+  if (ass_ && !ass_buf_.empty()) {
+    if (std::fwrite(ass_buf_.data(), 1, ass_buf_.size(), ass_) != ass_buf_.size()) error_ = true;
+    std::fflush(ass_);
+    ass_buf_.clear();
   }
 }
 
@@ -141,13 +183,13 @@ void OsdRecorder::stop() {
   flush();
   if (osd_) std::fclose(osd_);
   if (srt_) std::fclose(srt_);
-  if (link_srt_) std::fclose(link_srt_);
+  if (ass_) std::fclose(ass_);
   osd_ = nullptr;
   srt_ = nullptr;
-  link_srt_ = nullptr;
+  ass_ = nullptr;
   osd_buf_.clear();
   srt_buf_.clear();
-  link_srt_buf_.clear();
+  ass_buf_.clear();
   armed_ = false;
   running_ = false;
 }

@@ -1423,7 +1423,7 @@ int main(int argc, char** argv) {
                  path.c_str());
   };
   // The OSD sidecars begin with each video file. Until 2026-10-30 nothing
-  // called begin(), so no .osd/.srt/.link.srt was ever written: the unit
+  // called begin(), so no .osd/.srt/.link.srt (.ass since gs17) was ever written: the unit
   // tests drive OsdRecorder directly and never saw that the player didn't.
   // A rolled file's sidecars end here and the new one's begin.
   auto follow_osd_files = [&]() {

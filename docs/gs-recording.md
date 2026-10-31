@@ -87,7 +87,7 @@ base name:
 | `record-NNNN.mp4` | the video as received (HEVC, fragmented MP4, 1 s fragments) |
 | `record-NNNN.osd` | the flight controller's OSD, Walksnail format |
 | `record-NNNN.srt` | one subtitle a second in Walksnail's own format, the only one walksnail-osd-tool reads: `Signal:N CH:N FlightTime:N SBat:0.0V GBat:0.0V Delay:Nms Bitrate:N.NMbps Distance:0m` |
-| `record-NNNN.link.srt` | the same cues with our detail: channel, MCS/width, RSSI, loss, VTX temp, latency |
+| `record-NNNN.ass` | the same cue times with our detail: channel, MCS/width, RSSI, loss, VTX temp, latency; small, bottom-left, just above the tool's SRT line (`.link.srt` before gs17) |
 
 The `.osd` starts when the video file gets its first frame (time zero is
 that frame), and records every complete DisplayPort screen. Format: a
@@ -100,7 +100,7 @@ byte. A smaller canvas (the usual 50 × 18) is padded with blanks.
 Both sidecars are buffered in memory and written once a second from the
 player's idle slot, never between a frame and its refresh: an SD write can
 stall for hundreds of ms. A power cut loses at most the last second of
-`.osd`/`.srt`/`.link.srt`, matching the video's 1 s fragments.
+`.osd`/`.srt`/`.ass`, matching the video's 1 s fragments.
 
 In the `.srt`, Signal is 0-4 bars from the best card's RSSI (4 at -60 dBm
 or better, one bar per 10 dB, 1 at -90), CH is our channel, FlightTime
@@ -112,13 +112,26 @@ and Distance are 0.
 
 1. Copy the files of a recording off the card, keeping them in one
    folder.
-2. Open the `.mp4` in walksnail-osd-tool (github.com/avsaase/walksnail-osd-tool).
-   It finds the `.osd` with the same name; otherwise, load it by hand.
+2. In walksnail-osd-tool (github.com/avsaase/walksnail-osd-tool), "Open
+   files" and pick only the `.mp4` and the font `.png`: the tool finds the
+   `.osd` and `.srt` with the same name. It takes the FIRST `.srt` among
+   the files opened together, so a gs16 recording's `record-NNNN.link.srt`
+   (which sorts before `record-NNNN.srt`) must not be in that selection:
+   loaded instead of the `.srt`, it matches no cue and the render carries
+   no SRT data (the SRT panel then shows a cut-off name, `record-`).
 3. Pick the font for your flight controller firmware (the `osd_fc` you
-   set, Betaflight by default) and render.
-
-Both subtitle files open in any video player as a subtitle track; the
-`.link.srt` is the one with our link detail.
+   set, Betaflight by default), tick the SRT fields you want (Latency,
+   Bitrate, Signal; not the batteries or Distance, which are 0), and
+   render. The tool's preview cannot show the SRT line: it draws it at
+   10/255 opacity on its empty preview layer. The render draws it on the
+   video frames, white, bottom-left.
+4. Our detail, `record-NNNN.ass`: VLC (Subtitle → Add Subtitle File) or
+   `mpv out.mp4 --sub-file=record-NNNN.ass` to view it, or burn it into
+   the rendered file (the times count from the same first frame):
+   `ffmpeg -i out.mp4 -vf ass=record-NNNN.ass -c:v libx264 -crf 18 -c:a copy out_link.mp4`.
+   Its style (`Link`) places it small, bottom-left, one line above the
+   tool's SRT line; edit the `Style:` line in the file to move or resize
+   it.
 
 **Never written before 2026-10-30.** Every build up to then armed the
 sidecar recorder and never started it, so no `.osd`, `.srt` or `.link.srt`

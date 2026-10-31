@@ -14,7 +14,7 @@ namespace maburplay {
 // OSD sidecars for a raw GS recording (2026-10-10): the flight controller's
 // OSD as a Walksnail-format `.osd` file, and a once-a-second link summary as
 // subtitles, all next to the video with the same name (record-0012.mp4,
-// record-0012.osd, record-0012.srt, record-0012.link.srt). A raw recording keeps the video exactly
+// record-0012.osd, record-0012.srt, record-0012.ass). A raw recording keeps the video exactly
 // as received -- no re-encode, so none of "burned" mode's decode and display
 // cost (flight 2026-10-10: burned recording put a spike >= 70 ms into 58% of
 // seconds, against 5% without) -- and tools made for Walksnail goggle
@@ -28,10 +28,17 @@ namespace maburplay {
 // (font page in the high byte), so the tool's font for that firmware
 // renders it. A grid of another size is cropped or padded with blanks (0).
 //
-// Two subtitle files, the same cues: `.srt` carries Walksnail's own line
-// (walksnail_line()), the only one walksnail-osd-tool parses -- it silently
-// skips anything else (backend/src/srt/frame.rs upstream) -- and
-// `.link.srt` our detailed one (MCS/width, RSSI, loss, VTX temp) for VLC.
+// Two subtitle files, the same cue times: `.srt` carries Walksnail's own
+// line (walksnail_line()), the only one walksnail-osd-tool parses -- it
+// silently skips anything else (backend/src/srt/frame.rs upstream) -- and
+// `.ass` our detailed one (MCS/width, RSSI, loss, VTX temp, latency) for
+// VLC, mpv or ffmpeg's `ass` filter. gs17 moved the detail from
+// `.link.srt` to `.ass`: the tool takes the FIRST `.srt` among the files
+// opened together, and `record-NNNN.link.srt` sorts before
+// `record-NNNN.srt`, so opening the folder's files at once loaded the
+// detail file, matched no cue and drew no SRT data (operator, 2026-10-31).
+// The .ass also fixes its own place: small, bottom-left, one line above
+// where the tool draws the Walksnail line (x 1.5 %, y 95 %).
 //
 // Writing: records and subtitles are buffered in memory and written only by
 // flush(), which the player calls from its once-a-second idle slot -- an SD
@@ -47,7 +54,7 @@ class OsdRecorder {
 
   struct Cfg {
     std::string fc = "BTFL";  // header firmware tag: BTFL, INAV or ARDU
-    bool srt = true;          // also write the .srt / .link.srt link summary
+    bool srt = true;          // also write the .srt / .ass link summary
   };
 
   explicit OsdRecorder(Cfg cfg) : cfg_(std::move(cfg)) {}
@@ -71,7 +78,7 @@ class OsdRecorder {
   // One OSD screen (call on every complete DisplayPort frame).
   void screen(uint64_t now_ms, const mabur::MspScreen& s);
   // One subtitle cue covering the time since the previous one (call ~1 Hz):
-  // `walksnail` goes to the .srt, `detail` to the .link.srt.
+  // `walksnail` goes to the .srt, `detail` to the .ass.
   void subtitle(uint64_t now_ms, const std::string& walksnail, const std::string& detail);
   // Writes what is buffered. The player's 1 Hz idle slot.
   void flush();
@@ -80,7 +87,7 @@ class OsdRecorder {
 
   const std::string& osd_path() const { return osd_path_; }
   const std::string& srt_path() const { return srt_path_; }
-  const std::string& link_srt_path() const { return link_srt_path_; }
+  const std::string& ass_path() const { return ass_path_; }
   uint64_t records() const { return records_; }
   bool error() const { return error_; }
 
@@ -88,6 +95,12 @@ class OsdRecorder {
   static std::vector<uint8_t> header(const std::string& fc);
   static void append_record(std::vector<uint8_t>& out, uint32_t t_ms, const mabur::MspScreen& s);
   static std::string srt_entry(uint64_t n, uint32_t t0_ms, uint32_t t1_ms, const std::string& text);
+  // The .ass file's header (script info at 1920x1080, one style "Link":
+  // 30 px light grey with a black outline, bottom-left, 29 px from the left
+  // and 64 px up) and one Dialogue line. Text is made safe for ASS: braces
+  // and backslashes (override tags) become ( ) /, line breaks spaces.
+  static std::string ass_header();
+  static std::string ass_event(uint32_t t0_ms, uint32_t t1_ms, const std::string& text);
   static std::string sidecar_path(const std::string& video_path, const char* ext);
   // Walksnail's subtitle line, exactly as walksnail-osd-tool parses it:
   // "Signal:N CH:N FlightTime:N SBat:N.NV GBat:N.NV Delay:Nms
@@ -104,17 +117,17 @@ class OsdRecorder {
   bool armed_ = false;
   bool running_ = false;
   bool error_ = false;
-  std::string osd_path_, srt_path_, link_srt_path_;
+  std::string osd_path_, srt_path_, ass_path_;
   std::FILE* osd_ = nullptr;
   std::FILE* srt_ = nullptr;
-  std::FILE* link_srt_ = nullptr;
+  std::FILE* ass_ = nullptr;
   uint64_t t0_ms_ = 0;
   uint32_t last_sub_ms_ = 0;
   uint64_t sub_n_ = 0;
   uint64_t records_ = 0;
   std::vector<uint8_t> osd_buf_;
   std::string srt_buf_;
-  std::string link_srt_buf_;
+  std::string ass_buf_;
 };
 
 }  // namespace maburplay

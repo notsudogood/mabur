@@ -91,6 +91,42 @@ TEST(dvr_name_survives_unreadable_dir) {
 
 // Width is a minimum, not a truncation: past 9999 the name grows a digit
 // rather than wrapping onto an existing file.
+// dvr.folders (gs18): record-NNNN/record-NNNN.mp4. The scan counts the
+// folders and older side-by-side files alike, so switching layouts keeps
+// one numbering. Revert (folder ignored by next): record-0008.mp4 flat.
+TEST(dvr_name_folder_mode_continues_one_numbering) {
+  const std::string dir = fresh_dir("folders");
+  ::rmdir((dir + "/record-0009").c_str());
+  ::rmdir((dir + "/record-0010").c_str());
+  touch(dir, "record-0007.mp4");                 // a flat file from before gs18
+  DvrNamer n;
+  CHECK(n.next(dir, true) == dir + "/record-0008/record-0008.mp4");
+  REQUIRE(::mkdir((dir + "/record-0009").c_str(), 0755) == 0);
+  DvrNamer fresh;                                // a new boot: only the card counts
+  CHECK(fresh.next(dir, true) == dir + "/record-0010/record-0010.mp4");
+  CHECK(fresh.next(dir, false) == dir + "/record-0011.mp4");
+  ::rmdir((dir + "/record-0009").c_str());
+}
+
+// The folder is made where the file is opened, and only when it is the
+// recording's own: a flat path never creates its dir, so a missing card
+// still fails at the open. Revert (mkdir of any parent): the flat case
+// creates /nonexistent-like dirs and the third CHECK fails.
+TEST(make_recording_dir_only_makes_the_recordings_own_folder) {
+  const std::string dir = fresh_dir("mkdir");
+  ::rmdir((dir + "/record-0004").c_str());
+  CHECK(mabur::make_recording_dir(dir + "/record-0004/record-0004.mp4"));
+  struct stat st {};
+  CHECK(::stat((dir + "/record-0004").c_str(), &st) == 0 && S_ISDIR(st.st_mode));
+  CHECK(mabur::make_recording_dir(dir + "/record-0004/record-0004.osd"));   // exists: fine
+  const std::string missing = dir + "/no-card";
+  ::rmdir(missing.c_str());
+  CHECK(mabur::make_recording_dir(missing + "/record-0005.mp4"));          // flat: nothing to do
+  CHECK(::stat(missing.c_str(), &st) != 0);                               // ...and nothing made
+  CHECK(!mabur::make_recording_dir("/nonexistent-dvr-dir/record-0001/record-0001.mp4"));
+  ::rmdir((dir + "/record-0004").c_str());
+}
+
 TEST(dvr_name_widens_past_four_digits) {
   const std::string dir = fresh_dir("wide");
   touch(dir, "record-9999.mp4");

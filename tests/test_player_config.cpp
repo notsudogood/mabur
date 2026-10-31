@@ -116,6 +116,14 @@ TEST(dvr_osd_file_keys) {
   CHECK(!c.dvr.osd_file && c.dvr.osd_fc == "ARDU");
 }
 
+// gs18: one folder per recording by default; false = side by side.
+TEST(dvr_folders_key) {
+  auto d = maburplay::load_config(write_tmp_play("backend = \"null\"\n"));
+  CHECK(d.dvr.folders);
+  auto c = maburplay::load_config(write_tmp_play("backend = \"null\"\n\n[dvr]\nfolders = false\n"));
+  CHECK(!c.dvr.folders);
+}
+
 TEST(dvr_burned_defaults) {
   auto c = maburplay::load_config(write_tmp_play("backend = \"null\"\n"));
   CHECK(c.dvr.burned.every == 1);

@@ -21,6 +21,7 @@ split_at_arm = false       # raw: true = start a new file (from the next keyfram
                            # before, or low_power.fps > 0): walksnail-osd-tool renders a whole file at the rate
                            # of its start. Off since gs17: a d18 drone keeps 60 fps, so one recording = one file
 target      = "gs"         # where the record button records: "gs" = here, "vtx" = the drone's SD card, "both"
+folders     = true         # one folder per recording (record-NNNN/ holds the .mp4, .osd, .srt, .ass); false = all side by side
 
 # Recording settings for mode = "burned".
 [dvr.burned]

@@ -28,6 +28,10 @@ struct DvrCfg {
   // rate in low power (low_power.fps = 0), so a recording is one file at one
   // rate. Turn it on for a drone whose low_power.fps lowers the rate.
   bool split_at_arm = false;
+  // One folder per recording (gs18): dir/record-NNNN/ holds record-NNNN.mp4
+  // and its .osd/.srt/.ass. false = all files side by side in dir, as
+  // before gs18. Either way the numbering carries on from the card.
+  bool folders = true;
   struct BurnedCfg {
     int bitrate_kbps = 12000;
     // Record every N-th screen refresh: 1 = the panel's rate, 2 = half of

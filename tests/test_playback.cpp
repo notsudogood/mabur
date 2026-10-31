@@ -49,6 +49,27 @@ TEST(list_recordings_newest_first_readable_only) {
   std::filesystem::remove_all(dir);
 }
 
+// dvr.folders (gs18): a record-NNNN/ folder lists like the flat file it
+// replaces, and the two layouts sort together. The mux makes the folder at
+// open (dvr_name.h make_recording_dir). Revert (flat only): 2 entries.
+TEST(list_recordings_reads_folders_and_flat_files) {
+  const auto dir = std::filesystem::temp_directory_path() / "mabur_pb_folders";
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  write_rec((dir / "record-0003.mp4").string(), 30);                     // before gs18
+  write_rec((dir / "record-0004" / "record-0004.mp4").string(), 60);     // the mux made the folder
+  write_rec((dir / "record-0005" / "record-0005.mp4").string(), 90);
+  std::filesystem::create_directories(dir / "record-0006");             // no video in it: skipped
+  std::filesystem::create_directories(dir / "record-notes");            // not ours
+  const auto all = list_recordings(dir.string());
+  REQUIRE(all.size() == 3);
+  CHECK(all[0].name == "record-0005" && all[1].name == "record-0004" && all[2].name == "record-0003");
+  CHECK(all[0].path == (dir / "record-0005" / "record-0005.mp4").string());
+  CHECK(all[2].path == (dir / "record-0003.mp4").string());
+  CHECK(all[1].bytes > 0);
+  std::filesystem::remove_all(dir);
+}
+
 // The file's timeline from the start, lead_us early; a pause stops it and
 // the resume shifts it by the paused time.
 TEST(pacer_follows_the_timeline_and_pauses) {

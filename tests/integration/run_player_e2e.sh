@@ -151,18 +151,24 @@ EOF
 
 # The OSD sidecars ride every raw recording (dvr.osd_file, on by default).
 # Until 2026-10-30 the player armed them and never began them, so none was
-# ever written; this is the check that would have caught it.
-for ext in osd srt ass; do
-  ls "$TMP"/record-*."$ext" > /dev/null 2>&1 || {
-    echo "FAIL: no record-*.$ext next to the recording" >&2
+# ever written; this is the check that would have caught it. Since gs18
+# (dvr.folders, on by default) the video and its sidecars share one
+# record-NNNN/ folder, and nothing of the recording is left beside it.
+for ext in mp4 osd srt ass; do
+  ls "$TMP"/record-*/record-*."$ext" > /dev/null 2>&1 || {
+    echo "FAIL: no record-*.$ext in the recording's folder" >&2
     exit 1
   }
 done
-head -c 4 "$TMP"/record-*.osd | grep -q '^BTFL$' || {
+if ls "$TMP"/record-*.mp4 > /dev/null 2>&1; then
+  echo "FAIL: a record-*.mp4 outside its folder (dvr.folders is on by default)" >&2
+  exit 1
+fi
+head -c 4 "$TMP"/record-*/record-*.osd | grep -q '^BTFL$' || {
   echo "FAIL: the .osd header does not start with the BTFL tag" >&2
   exit 1
 }
-echo "OK sidecars: .osd .srt .ass"
+echo "OK one folder: .mp4 .osd .srt .ass"
 
 # --- PART A: container-level gate on the fixture-chain DVR file -------
 # tests/fixtures/frame_stream.bin's NAL payloads (tools/genvectors/
@@ -192,7 +198,7 @@ set +e
 # noise filter below then reports as ffprobe diagnostics. Warm stores hide
 # this; CI does not have one.
 OUT_A=$(nix-shell -p ffmpeg --run \
-  "ffprobe -v error -count_packets -select_streams v -show_entries stream=codec_name,nb_read_packets -of csv=p=0 $TMP/record-*.mp4 2> '$TMP/ffprobeA.stderr'")
+  "ffprobe -v error -count_packets -select_streams v -show_entries stream=codec_name,nb_read_packets -of csv=p=0 $TMP/record-*/record-*.mp4 2> '$TMP/ffprobeA.stderr'")
 RC_A=$?
 set -e
 echo "ffprobe A: $OUT_A (rc=$RC_A)"

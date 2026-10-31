@@ -341,14 +341,15 @@ int run_gs_render(const std::string& snap_path, const std::string& out_path,
 }
 
 // DVR recording paths come from DvrNamer (dvr_name.h): dir/record-NNNN.mp4,
+// or dir/record-NNNN/record-NNNN.mp4 with dvr.folders (gs18),
 // indexed off the card rather than stamped with a clock the GS does not
 // have. Function-local so both call sites -- the raw path's sync-point open
 // and rec_start()'s burned start() -- share one high-water mark.
-std::string dvr_filename(const std::string& dir) {
+std::string dvr_filename(const std::string& dir, bool folders) {
   // Main-loop-thread only (the ring sink and rec_start's
   // start_burn_if_needed), so a plain static needs no synchronisation.
   static mabur::DvrNamer namer;
-  return namer.next(dir);
+  return namer.next(dir, folders);
 }
 
 // Parses player_config's "WIDTHxHEIGHT@RATE" screen_mode (mode_pick.h);
@@ -1256,7 +1257,7 @@ int main(int argc, char** argv) {
     bc.colortrans = cfg.colortrans.enable ? &ct : nullptr;
     // backend.get() is CHECKED, not retained (see burn_recorder.h): the
     // decode watchdog may destroy and recreate it mid-run.
-    if (rec->start(bc, dvr_filename(cfg.dvr.dir), backend.get())) burn = std::move(rec);
+    if (rec->start(bc, dvr_filename(cfg.dvr.dir, cfg.dvr.folders), backend.get())) burn = std::move(rec);
     if (!burn) return;
     ++rec_starts;
     // The burn canvas and the GS burn layer at the record size: the OSD
@@ -1402,7 +1403,7 @@ int main(int argc, char** argv) {
   uint64_t osd_files_seen = 0;
   uint64_t osd_t0_ms = 0;
   auto start_raw = [&]() {
-    const std::string path = dvr_filename(cfg.dvr.dir);
+    const std::string path = dvr_filename(cfg.dvr.dir, cfg.dvr.folders);
     dvr.start(path, bcfg.width, bcfg.height, cfg.dvr.fragment_ms);
     ++rec_starts;
     osd_next_path = path;
@@ -1416,7 +1417,7 @@ int main(int argc, char** argv) {
   // low-power edge continues the recording in a new file at the next
   // keyframe (asked for here), so each file has one frame rate.
   auto roll_raw = [&](const char* why) {
-    const std::string path = dvr_filename(cfg.dvr.dir);
+    const std::string path = dvr_filename(cfg.dvr.dir, cfg.dvr.folders);
     dvr.roll(path);
     osd_next_path = path;
     osd_t0_ms = 0;

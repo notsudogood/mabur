@@ -24,7 +24,8 @@ struct Recording {
   uint64_t bytes = 0;
 };
 
-// record-NNNN.mp4 in `dir`, newest (highest NNNN) first, at most `max`.
+// record-NNNN.mp4 in `dir`, or in its own record-NNNN/ folder there
+// (dvr.folders, gs18), newest (highest NNNN) first, at most `max`.
 // The GS clock is wrong at boot, so the index, not the file time, says
 // which is newest (mabur/dvr_name.h). Files DvrDemux cannot open are left
 // out.

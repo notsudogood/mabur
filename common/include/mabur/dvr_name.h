@@ -5,7 +5,10 @@
 
 namespace mabur {
 
-// Mints DVR recording paths: `<dir>/record-NNNN.mp4`, %04d, zero-based.
+// Mints DVR recording paths: `<dir>/record-NNNN.mp4`, %04d, zero-based,
+// or with `folder` (maburplay's dvr.folders, gs18)
+// `<dir>/record-NNNN/record-NNNN.mp4`: one folder per recording, holding
+// the video and its .osd/.srt/.ass sidecars under the same name.
 //
 // No timestamp, by design. The GS RTC is wrong at boot, so a stamped name
 // carries no information and sorts arbitrarily across boots -- the same
@@ -26,11 +29,25 @@ class DvrNamer {
  public:
   // Main-loop-thread only (the ring sink and rec_start's
   // start_burn_if_needed), so no synchronisation.
-  std::string next(const std::string& dir);
+  // The scan counts files and folders alike (both are `record-NNNN...`),
+  // so a card that holds both layouts keeps one numbering. The folder is
+  // NOT created here: make_recording_dir() does that where the file is
+  // opened, so a press that never reached a keyframe leaves no empty
+  // folder, and this stays a read on the main loop.
+  std::string next(const std::string& dir, bool folder = false);
 
  private:
   int last_issued_ = -1;
 };
+
+// Creates the folder `path` sits in when that folder is the recording's
+// own: named like the file without its extension (record-0012/record-0012.mp4
+// or .../record-0012.osd). Any other layout is left alone -- a flat
+// `<dir>/record-0012.mp4` never creates `<dir>`, so a missing card still
+// fails at the open, loudly, instead of recording into the root filesystem.
+// One level only, never the whole chain. False when the folder should
+// exist and does not afterwards.
+bool make_recording_dir(const std::string& path);
 
 }  // namespace mabur
 

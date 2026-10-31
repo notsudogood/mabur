@@ -1,4 +1,5 @@
 #include "mabur/dvr_mux.h"
+#include "mabur/dvr_name.h"
 
 #include <cstdio>
 #include <cstring>
@@ -80,6 +81,9 @@ void put_unity_matrix(BoxWriter& b) {
 }  // namespace
 
 std::unique_ptr<DvrSink> open_file_sink(const std::string& path) {
+  // dvr.folders: the recording's folder is made here, at the first frame,
+  // on the writer's thread (dvr_name.h); a no-op for a flat path.
+  make_recording_dir(path);
   FILE* f = std::fopen(path.c_str(), "wb");
   if (!f) return nullptr;
   return std::make_unique<FileSink>(f);

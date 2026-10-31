@@ -79,8 +79,14 @@ older image still says `mode = "burned"` until you change it.
 
 ## What lands on the card
 
-All in `[dvr] dir` (default `/media/dvr`), one set per recording, same
-base name:
+Since gs18 each recording has its own folder in `[dvr] dir` (default
+`/media/dvr`): `record-NNNN/` holds the four files below, all with the
+folder's name. `folders = false` puts them side by side in `dir` instead,
+as every image before gs18 did; the numbering carries on across both
+layouts, so a card with older flat files continues from them. The folder
+is made when the video gets its first frame, so a press that never reached
+a keyframe leaves nothing behind. A recording split in two
+(`split_at_arm`, a 3.9 GB roll) takes the next number and so a new folder.
 
 | file | what |
 |---|---|
@@ -110,8 +116,8 @@ and Distance are 0.
 
 ## Stitching the OSD back on
 
-1. Copy the files of a recording off the card, keeping them in one
-   folder.
+1. Copy the recording's folder off the card (before gs18: its four
+   files, into one folder of their own).
 2. In walksnail-osd-tool (github.com/avsaase/walksnail-osd-tool), "Open
    files" and pick only the `.mp4` and the font `.png`: the tool finds the
    `.osd` and `.srt` with the same name. It takes the FIRST `.srt` among
@@ -171,8 +177,9 @@ the font page mapping; say which firmware and font you used.
 
 ## Playing a recording on the goggles (gs18)
 
-The GS menu's **Playback** tab lists the newest eight `record-NNNN.mp4` on
-`dvr.dir`, highest index first (the GS clock is wrong at boot, so the index
+The GS menu's **Playback** tab lists the newest eight recordings on
+`dvr.dir` (`record-NNNN/record-NNNN.mp4`, or a flat `record-NNNN.mp4` from
+before gs18), highest index first (the GS clock is wrong at boot, so the index
 says which is newest), each with its duration; a file that does not read
 as a DvrMux recording is left out. Pressing one plays it at once in place
 of the live video: maburplay parks the live feed (as the decode watchdog
@@ -206,6 +213,7 @@ mode     = "raw"    # "raw" = video exactly as received; "burned" = re-encoded w
 osd_file = true     # raw: also save .osd and .srt next to the video
 osd_fc   = "BTFL"   # .osd firmware tag: "BTFL", "INAV" or "ARDU"
 split_at_arm = false # raw: true = new file (from the next keyframe) at arm/disarm; gs16 shipped true
+folders  = true     # gs18: one record-NNNN/ folder per recording; false = side by side in dir
 ```
 
 `osd_file` does nothing in burned mode (the OSD is already in the video).

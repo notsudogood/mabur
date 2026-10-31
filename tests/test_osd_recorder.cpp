@@ -116,6 +116,29 @@ TEST(files_appear_next_to_the_video_and_hold_every_screen) {
   rmdir(dir.c_str());
 }
 
+// dvr.folders (gs18): the sidecars go in the recording's own folder, and
+// begin() makes it when the video's writer thread has not yet. Revert (no
+// make_recording_dir in begin): fopen fails, error() and no .osd.
+TEST(sidecars_land_in_the_recordings_own_folder) {
+  char tmpl[] = "/tmp/osdrecXXXXXX";
+  REQUIRE(mkdtemp(tmpl) != nullptr);
+  const std::string dir = tmpl;
+  const std::string folder = dir + "/record-0008";
+  OsdRecorder r({"BTFL", true});
+  r.arm(folder + "/record-0008.mp4");
+  r.begin(1000);
+  REQUIRE(r.running());
+  CHECK(!r.error());
+  mabur::MspScreen s;
+  s.apply(draw(1, 1, 0, "HI"));
+  r.screen(1040, s);
+  r.stop();
+  CHECK(slurp(folder + "/record-0008.osd").size() == 40 + 2124);
+  for (const char* ext : {".osd", ".srt", ".ass"}) std::remove((folder + "/record-0008" + ext).c_str());
+  rmdir(folder.c_str());
+  rmdir(dir.c_str());
+}
+
 // walksnail-osd-tool parses exactly this shape (backend/src/srt/frame.rs:
 // "Signal:{u8} CH:{u8} FlightTime:{u32} SBat:{f32}V GBat:{f32}V
 // Delay:{u32}ms Bitrate:{f32}Mbps Distance:{u32}m") and skips anything else.

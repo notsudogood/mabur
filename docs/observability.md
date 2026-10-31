@@ -1026,8 +1026,9 @@ in whichever `dvr.mode` is configured:
   above) is the recording's stutter signal. The colour stage and the
   scaling: `docs/colortrans.md`.
 
-Files are `record-NNNN.mp4` under `dvr.dir`, indexed one past the highest
-`record-NNNN` already on the card (`common/include/mabur/dvr_name.h`) — no
+Files are `record-NNNN.mp4` under `dvr.dir` — since gs18 inside their own
+`record-NNNN/` folder with the sidecars (`dvr.folders`) — indexed one past
+the highest `record-NNNN` file or folder already on the card (`common/include/mabur/dvr_name.h`) — no
 timestamp, since the GS RTC is wrong at boot — so the index climbs across
 boots and never overwrites an earlier flight; files not matching the
 pattern are ignored. `dvr.autostart` picks whether the player boots

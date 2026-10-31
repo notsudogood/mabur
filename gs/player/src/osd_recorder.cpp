@@ -2,6 +2,8 @@
 
 #include <cstring>
 
+#include "mabur/dvr_name.h"
+
 namespace maburplay {
 
 std::vector<uint8_t> OsdRecorder::header(const std::string& fc) {
@@ -127,6 +129,9 @@ void OsdRecorder::begin(uint64_t now_ms) {
   if (!armed_ || running_) return;
   running_ = true;
   t0_ms_ = now_ms;
+  // dvr.folders: the video's writer thread makes the folder at its first
+  // frame, which can land after this; making it here too is harmless.
+  mabur::make_recording_dir(osd_path_);
   osd_ = std::fopen(osd_path_.c_str(), "wb");
   if (!osd_) {
     error_ = true;

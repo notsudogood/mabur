@@ -1511,6 +1511,14 @@ TEST(hop_confirm_extend_ms_key) {
   CHECK(maburgs::HopCfg{}.confirm_extend_ms == 3000);
 }
 
+// gs17: hop.fade_keeps_rung, on by default. Revert (drop the key from
+// check_keys / the parse): the false load throws "unknown key" or stays on.
+TEST(hop_fade_keeps_rung_key) {
+  CHECK(maburgs::HopCfg{}.fade_keeps_rung);
+  CHECK(maburgs::load_config(write_tmp("[hop]\nwindow_ms = 150\n")).hop.fade_keeps_rung);
+  CHECK(!maburgs::load_config(write_tmp("[hop]\nfade_keeps_rung = false\n")).hop.fade_keeps_rung);
+}
+
 // ---- link.key_file + link.key overlay (link pairing) ----
 
 TEST(link_key_file_missing_uses_default_and_says_so) {

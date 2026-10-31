@@ -136,6 +136,14 @@ struct HopCfg {
   // card (flight 2026-10-12: card 1 lost ~3x what card 0 did).
   bool scout_fast_rungs = false;
   double scout_better_margin_db = 3.0;
+  // A hop order puts the ladder back on the rung it flew before the trouble
+  // began (the verdict's ref_rung): right after an interferer, wrong in a
+  // fade. true = when the order's verdict carries range evidence (weak or
+  // fading), the ladder keeps its current rung instead of being raised to
+  // ref_rung (a lower ref_rung is still taken). Flight 0009: two orders in
+  // one fade raised rung 2 and 0 to MCS4/40 and the link starved at once.
+  // false = the restore as before gs17.
+  bool fade_keeps_rung = true;
   HopVerdictCfg verdict;
 };
 

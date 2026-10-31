@@ -11,6 +11,21 @@
 
 namespace maburgs {
 
+// Whether a hop order leaves the ladder on its current rung instead of
+// restoring the pre-onset `ref_rung` (HopAction::restore_rung). The restore
+// assumes the channel was the problem, so the rung that flew before it is
+// right on the new one. With range evidence in the order's verdict (weak:
+// below weak_rssi_dbm at low SNR; fading: the signal down fading_drop_db
+// on its pre-onset level) the distance is the problem and moves with the
+// link, so the restore would raise the rung into the fade: flight 0009,
+// t=94.1 s and 95.5 s, rung 2 and rung 0 -> MCS4/40, starved within
+// 0.6 s each time (evidence 0x1f and 0x57). Only a RAISE is skipped: a
+// lower ref_rung (or none, -1, which restores the bottom rung) is still
+// taken. `enabled` = hop.fade_keeps_rung.
+inline bool hop_order_keeps_rung(bool enabled, int ref_rung, int cur_rung, uint8_t evidence) {
+  return enabled && (evidence & (kEvWeak | kEvFading)) != 0 && ref_rung > cur_rung;
+}
+
 enum class HopState { Idle, Ordered, Verifying, Hold };
 
 struct HopTick {

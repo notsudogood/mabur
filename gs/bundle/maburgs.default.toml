@@ -374,6 +374,9 @@ backoff_ms           = 30000  # a channel that proved bad is avoided this long (
 one_card_repeats     = 5      # single card: send the hop order this many times before retuning
 scout_fast_rungs     = false  # false = no spare-card channel visits on the 40/80 MHz rungs while the link is healthy
 scout_better_margin_db = 3.0  # also none while the spare card hears this many dB SNR better than the other (0 = off)
+fade_keeps_rung      = true   # a hop ordered while the signal is weak or fading keeps the current rung instead of
+                              # jumping back to the one before the trouble (flight 0009: twice to MCS4/40 mid-fade,
+                              # starved at once); false = always jump back (before gs17). Unflown
 
 # What counts as a bad channel.
 [hop.verdict]

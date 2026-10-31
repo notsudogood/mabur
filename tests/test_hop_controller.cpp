@@ -646,3 +646,23 @@ TEST(relocate_counts_against_the_hop_cap) {
   HopTick k2 = T(1700, interfered(), 149, 136); k2.relocate = true;
   CHECK(h.tick(k2).kind == HopAction::Hold);   // one order this minute already
 }
+
+// gs17, flight 0009: a hop order with range evidence (weak / fading) keeps
+// the current rung instead of jumping back to the pre-onset ref_rung. The
+// two field orders: evidence 0x1f at rung 2 and 0x57 at rung 0, ref_rung 6.
+// Revert (always restore): the first two CHECKs fail.
+TEST(hop_order_keeps_the_rung_only_when_a_restore_would_raise_it_in_a_fade) {
+  CHECK(hop_order_keeps_rung(true, 6, 2, 0x1f));
+  CHECK(hop_order_keeps_rung(true, 6, 0, 0x57));
+  CHECK(hop_order_keeps_rung(true, 6, 2, kEvImpaired | kEvFading));
+  CHECK(hop_order_keeps_rung(true, 6, 2, kEvImpaired | kEvWeak));
+  // interference evidence only: the restore stands (the pre-gs17 behaviour)
+  CHECK(!hop_order_keeps_rung(true, 6, 2, kEvImpaired | kEvContended));
+  CHECK(!hop_order_keeps_rung(true, 6, 2, kEvImpaired | kEvBlocked | kEvStarved));
+  // a lower or equal ref_rung, or none (-1: the bottom rung), is still taken
+  CHECK(!hop_order_keeps_rung(true, 1, 3, kEvImpaired | kEvFading));
+  CHECK(!hop_order_keeps_rung(true, 3, 3, kEvImpaired | kEvFading));
+  CHECK(!hop_order_keeps_rung(true, -1, 3, kEvImpaired | kEvWeak));
+  // hop.fade_keeps_rung = false: always restore
+  CHECK(!hop_order_keeps_rung(false, 6, 2, 0x1f));
+}

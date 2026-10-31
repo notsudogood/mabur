@@ -339,7 +339,14 @@ void ChannelCore::apply_hop_action_(const HopAction& act, double now_ms) {
     case HopAction::Order:
       verdict_.forget_loss();   // the verify window judges the target on its own loss
       vrx_.set_hop(act.target, act.epoch);
-      vrx_.restore_rung(act.restore_rung, now_ms);
+      if (hop_order_keeps_rung(cfg_.hop.fade_keeps_rung, act.restore_rung, vrx_.ctl().rung(),
+                               last_verdict_out_.evidence)) {
+        sink_.log(logf_("maburgs hop: order to %u keeps rung %d, not %d (weak/fading, evidence 0x%02x)",
+                        static_cast<unsigned>(act.target), vrx_.ctl().rung(), act.restore_rung,
+                        static_cast<unsigned>(last_verdict_out_.evidence)));
+      } else {
+        vrx_.restore_rung(act.restore_rung, now_ms);
+      }
       vrx_.blank_store(now_ms + cfg_.hop.confirm_ms + 150.0);
       // Two-card: retune the lead now. One-card (lead < 0): the sole radio
       // stays on the OLD channel while the order rides one_card_repeats

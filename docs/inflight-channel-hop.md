@@ -597,6 +597,16 @@ The per-half boot scan is `ChannelScout`'s alone (`pair_pick.h`,
   spec explicitly expects, "a demote or two, each an IDR" — were written
   into the per-rung EWMA store against the interfered channel, which is
   exactly the pollution `blank_store` exists to prevent.
+- **Not in a fade (gs17, `hop.fade_keeps_rung`, default on).** The
+  restore assumes the channel was the problem. When the order's verdict
+  carries range evidence (`weak` or `fading`, §2), the distance is the
+  problem and moves with the link, so `ChannelCore::apply_hop_action_`
+  keeps the current rung instead of raising it to `ref_rung`
+  (`hop_order_keeps_rung`, `gs/src/hop_controller.h`; a lower `ref_rung`
+  is still taken) and logs `maburgs hop: order to N keeps rung R, not
+  REF`. Flight 0009: two orders in one range fade (evidence 0x1f, 0x57)
+  raised rung 2 and rung 0 to MCS4/40 and the link starved within 0.6 s
+  each time. Unflown with the guard; `false` restores as before.
 
   Three gates on (1), each load-bearing:
 

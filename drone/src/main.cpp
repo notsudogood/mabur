@@ -78,6 +78,7 @@
 #include "telemetry.h"
 #include "peak_rate.h"
 #include "vtx_recorder.h"
+#include "width_hold.h"
 #include "tick_gate.h"
 #include "tx_queue.h"
 #include "mabur/retx_ring.h"
@@ -547,6 +548,7 @@ struct RealActuator : mabur::Actuator {
   uint8_t max_width = 20;        // cfg.radio.width
   uint8_t home_width = 20;       // cfg.radio.home_width (stepping) or max_width
   uint32_t width_hold_ms = 3000;
+  bool narrow_unlinked = true;   // cfg.radio.narrow_unlinked (mabur/width_hold.h)
   bool fast_hop_at_80 = false;   // cfg.radio.fast_hop_at_80
   // radio.switch_rt_prio (mabur/rt_boost.h): > 0 raises this thread and the RX
   // thread (rx_thread: the one that runs StartRxLoop and reaps USB
@@ -847,7 +849,7 @@ struct RealActuator : mabur::Actuator {
   // From the agent loop: refresh the current op's need and narrow once the
   // wider width has gone unneeded for width_hold_ms. Nothing during a
   // calibration sweep (it owns the radio; its frames are HT20).
-  void width_tick(uint64_t now_ms, uint64_t last_rcf_ms) {
+  void width_tick(uint64_t now_ms, uint64_t last_rcf_ms, bool linked) {
     if (!dev) return;
     if (width_mhz == 10) {
       if (narrow_rescue_ms > 0 && now_ms > last_rcf_ms + narrow_rescue_ms) {
@@ -862,14 +864,10 @@ struct RealActuator : mabur::Actuator {
     if (!width_step || op_need_w == 0 || op_need_w == 10) return;
     if (cal_active && cal_active->load(std::memory_order_relaxed)) return;
     last_need_ms[width_slot_(op_need_w)] = now_ms;
-    uint8_t held = home_width;
-    for (int i = 2; i >= 0; --i)
-      if (last_need_ms[i] != 0 && now_ms - last_need_ms[i] < width_hold_ms) {
-        held = static_cast<uint8_t>(std::max<int>(held, i == 2 ? 80 : i == 1 ? 40 : 20));
-        break;
-      }
-    held = static_cast<uint8_t>(std::min<int>(std::max<int>(held, op_need_w), max_width));
-    if (held < width_mhz) set_width_now_(held, "hold over");
+    const uint8_t to = mabur::width_narrow_target(width_mhz, op_need_w, home_width, max_width,
+                                                  last_need_ms, now_ms, width_hold_ms, linked,
+                                                  narrow_unlinked);
+    if (to != 0) set_width_now_(to, linked || !narrow_unlinked ? "hold over" : "not linked");
   }
 
   // One width switch on the current primary, under tx_gate exclusive like
@@ -1794,6 +1792,7 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   actuator.width_step = cfg.radio.width_step && boot_width < cfg.radio.width;
   actuator.home_width = actuator.width_step ? cfg.radio.home_width : cfg.radio.width;
   actuator.width_hold_ms = static_cast<uint32_t>(cfg.radio.width_hold_ms);
+  actuator.narrow_unlinked = cfg.radio.narrow_unlinked;
   actuator.fast_hop_at_80 = cfg.radio.fast_hop_at_80;
   // This thread runs StartRxLoop below, so it is the RX thread the switch
   // boost raises (mabur/rt_boost.h).
@@ -3489,7 +3488,8 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
         }
 
         actuator.check_rf_central(now);
-        actuator.width_tick(now, agent.last_feedback_ms());
+        actuator.width_tick(now, agent.last_feedback_ms(),
+                            agent.state() == RcAgent::State::LINKED);
 
         bool want_stats = g_sigusr1_flag.exchange(false);
         if (want_stats || now - last_stats_ms >= 1000) {

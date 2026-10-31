@@ -1614,6 +1614,13 @@ TEST(radio_width_step_keys_parse_and_validate) {
   CHECK(c.radio.lean_width && !c.radio.lean_verify && c.radio.switch_rt_prio == 60);
   CHECK(Config{}.radio.switch_rt_prio == 60);   // on after d16
   CHECK(Config{}.radio.lean_width && Config{}.radio.lean_verify);   // on after d16, verify on
+  // d18: the radio rests at 20 (flight 0009) and narrows at once when not
+  // linked; both switchable.
+  CHECK(Config{}.radio.home_width == 20 && Config{}.radio.narrow_unlinked);
+  CHECK(!load_config(write_temp_toml("[radio]\nchannels = [36]\nwidth = 80\nnarrow_unlinked = false\n").string())
+             .radio.narrow_unlinked);
+  CHECK(load_config(write_temp_toml("[radio]\nchannels = [36]\nwidth = 80\nhome_width = 40\n").string())
+            .radio.home_width == 40);
   std::filesystem::remove(p);
   // width_step absent: on where it can run (d15), off where home_width > width.
   auto absent = [](const char* body) { return load_config(write_temp_toml(body).string()).radio.width_step; };

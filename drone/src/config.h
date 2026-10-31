@@ -23,10 +23,22 @@ struct RadioCfg {
   // this host, unmeasured). false = the radio stays at `width` for the
   // session, as d8-d10 did. On in code and bundle alike since d15 (the
   // bundle since d11); a file without the key gets it only where it can
-  // run (home_width <= width), so an old width = 20 file still loads.
+  // run and does something (home_width < width), so an old width = 20 file
+  // still loads.
   bool width_step = true;
-  uint8_t home_width = 40;
+  // 20 since d18 (40 d11-d17). 40 was chosen when the drone heard the GS's
+  // 20 MHz control frames ~1-1.5 dB better tuned at 40 than at 80 (measured
+  // on the GS cards). Since d17 devourer's wide-TX IGI floor (0x35, the
+  // 40 MHz stall fix) is on at every 40/80 MHz tune once the session has
+  // sent a wide frame, so a 40 MHz home kept it on at MCS0/20 too: flight
+  // 0009 lost the uplink ~10 dB earlier than 0008 and sat 35 s in
+  // failsafe. At 20 the floor is off whenever the link flies a 20 MHz rung.
+  uint8_t home_width = 20;
   int width_hold_ms = 3000;
+  // Not linked (FAILSAFE/RENDEZVOUS): narrow to the need at once instead of
+  // after width_hold_ms (mabur/width_hold.h). false = the hold applies
+  // whatever the link state (d17 and before).
+  bool narrow_unlinked = true;
   // Hops: false = at 80 MHz, or when the 40 MHz pair side changes, a hop is
   // the full channel set (FastSetChannel) -- the 80 MHz lean hop is the
   // prime suspect for backlog item 0. true = every hop is FastRetune.

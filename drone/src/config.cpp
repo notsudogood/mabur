@@ -90,7 +90,8 @@ void parse_radio(const Value& j, RadioCfg& r) {
                         "legacy_wall_rel", "wall_margin_db", "ldpc", "width_step",
                         "home_width", "width_hold_ms", "fast_hop_at_80", "batched_tune",
                         "lean_width", "lean_verify", "switch_rt_prio", "narrow_rescue_ms",
-                        "carrier_sense", "spur_warn", "spur_ext", "wide_igi_floor"},
+                        "carrier_sense", "spur_warn", "spur_ext", "wide_igi_floor",
+                        "narrow_unlinked"},
                    "radio");
   assign_if_present(j, "usb_vid", r.usb_vid, "radio");
   assign_if_present(j, "usb_pid", r.usb_pid, "radio");
@@ -98,11 +99,12 @@ void parse_radio(const Value& j, RadioCfg& r) {
   if (r.width != 20 && r.width != 40 && r.width != 80)
     fail("radio.width", "must be 20, 40 or 80 (80 = tuned VHT80, any 20 of the block the primary)");
   assign_if_present(j, "home_width", r.home_width, "radio");
-  // Absent: on wherever it can run. A d8-d10 file at width = 20 has no
-  // width_step key, and "on" there would fail the home_width check below.
-  if (!j.contains("width_step")) r.width_step = r.width_step && r.home_width <= r.width;
+  // Absent: on wherever it can run and does something. A d8-d10 file at
+  // width = 20 has no width_step key: nothing to step to there.
+  if (!j.contains("width_step")) r.width_step = r.width_step && r.home_width < r.width;
   assign_if_present(j, "width_step", r.width_step, "radio");
   assign_if_present(j, "width_hold_ms", r.width_hold_ms, "radio");
+  assign_if_present(j, "narrow_unlinked", r.narrow_unlinked, "radio");
   assign_if_present(j, "fast_hop_at_80", r.fast_hop_at_80, "radio");
   assign_if_present(j, "batched_tune", r.batched_tune, "radio");
   assign_if_present(j, "lean_width", r.lean_width, "radio");

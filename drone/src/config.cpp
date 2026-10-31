@@ -831,8 +831,8 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
   if (cfg.low_power.enable) {
     if (!cfg.msp.enable)
       fail("low_power.enable", "needs msp.enable (arm state comes from the FC over MSP)");
-    if (cfg.low_power.fps < 1 || cfg.low_power.fps > static_cast<int>(cfg.venc.core.fps))
-      fail("low_power.fps", "must be in [1, venc.fps]");
+    if (cfg.low_power.fps < 0 || cfg.low_power.fps > static_cast<int>(cfg.venc.core.fps))
+      fail("low_power.fps", "must be 0 (keep venc.fps) or in [1, venc.fps]");
     if (cfg.low_power.bitrate_kbps < cfg.encoder.bitrate_min_kbps ||
         cfg.low_power.bitrate_kbps > cfg.encoder.bitrate_max_kbps)
       fail("low_power.bitrate_kbps",

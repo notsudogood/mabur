@@ -1470,7 +1470,7 @@ TEST(low_power_defaults_are_disabled_and_parse) {
     auto cfg = load_config(path.string());
     CHECK(cfg.low_power.enable == false);
     CHECK(cfg.low_power.bitrate_kbps == 1000);
-    CHECK(cfg.low_power.fps == 15);
+    CHECK(cfg.low_power.fps == 0);   // d18: keep the camera's rate
     CHECK(cfg.low_power.stale_ms == 2000);
     std::filesystem::remove(path);
   }
@@ -1526,6 +1526,14 @@ TEST(low_power_fps_must_not_exceed_venc_fps) {
   std::string msg = what_of([&] { (void)load_config(path.string()); });
   CHECK(msg.find("low_power.fps") != std::string::npos);
   std::filesystem::remove(path);
+  // d18: 0 = keep venc.fps, valid at any camera rate; below 0 is not.
+  const char* base = "[msp]\nenable = true\n"
+                     "[encoder]\nbitrate_min_kbps = 1000\nbitrate_max_kbps = 16000\n"
+                     "[venc]\nsensor_bin = \"/etc/sensors/x.bin\"\nfps = 30\n"
+                     "[low_power]\nenable = true\n";
+  CHECK(load_config(write_temp_toml(std::string(base) + "fps = 0\n").string()).low_power.fps == 0);
+  CHECK(what_of([&] { (void)load_config(write_temp_toml(std::string(base) + "fps = -1\n").string()); })
+            .find("low_power.fps") != std::string::npos);
 }
 
 TEST(low_power_bitrate_must_sit_inside_the_encoder_clamp) {
@@ -1939,7 +1947,6 @@ TEST(code_defaults_match_the_bundle) {
       "venc.superframe_p_pct", "venc.intra_refresh_frames", "venc.slices",
       "venc.roi.enabled", "link.failsafe_ms", "msp.update_rate_hz",
       "ampdu.max_num", "ampdu.min_mcs_20", "ampdu.min_mcs_40", "air_clock.shed_ms",
-      "low_power.fps",
       // Per-card calibration: the unit's own numbers, not a default.
       "radio.rate_walls_rel",
       // Follows venc.size when unset (the text says so, not a value).

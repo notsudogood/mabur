@@ -2979,6 +2979,31 @@ TEST(low_power_enters_on_fresh_disarmed_fps_then_capped_bitrate) {
   CHECK(act.verbs.back() == "bitrate");
 }
 
+// LP-1b (d18). low_power.fps = 0 keeps the camera's rate: entering and
+// leaving low power never sends a different fps (the encoder's rebind was
+// the 100-150 ms pause at each disarm in flight 0010), only the bitrate cap.
+// Revert (min() with fps 0 unguarded): set_fps(0) is sent and the second
+// CHECK fails.
+TEST(low_power_fps_zero_keeps_the_rate_and_caps_only_the_bitrate) {
+  Config cfg = make_cfg();
+  cfg.low_power.fps = 0;
+  MockActuator act;
+  RcAgent agent(cfg, act);
+  link_up_mcs5(agent, act, cfg);
+  REQUIRE(!act.fps.empty());
+  CHECK(act.fps.back() == 60);
+  agent.note_arm_state(false, 150);
+  agent.tick(200, RadioHealth{});
+  REQUIRE(agent.low_power());
+  for (int f : act.fps) CHECK(f == 60);
+  CHECK(act.bitrates.back() == cfg.low_power.bitrate_kbps);
+  agent.note_arm_state(true, 300);
+  agent.tick(400, RadioHealth{});
+  CHECK(!agent.low_power());
+  for (int f : act.fps) CHECK(f == 60);
+  CHECK(act.bitrates.back() > cfg.low_power.bitrate_kbps);
+}
+
 // LP-2. ARMED exits low power and latches: a later DISARMED report never
 // re-enters, and sends nothing.
 // LP-2. ARMED exits low power; a later DISARMED report RE-ENTERS it. The

@@ -16,9 +16,10 @@ fragment_ms = 1000         # recording is saved in pieces this long, so a power 
 mode        = "raw"        # "raw" = video exactly as received; "burned" = re-encoded with the OSD drawn in (costs latency spikes)
 osd_file    = true         # raw: also save the OSD (.osd, for walksnail-osd-tool) and link summaries (.srt for walksnail-osd-tool, .link.srt with our detail) next to the video
 osd_fc      = "BTFL"       # flight controller firmware for the .osd file: "BTFL", "INAV" or "ARDU"
-split_at_arm = true        # raw: start a new file (from the next keyframe, no gap) when the drone arms or disarms.
-                           # Its frame rate changes there (30 fps disarmed in low power), and walksnail-osd-tool
-                           # renders a whole file at the rate of its start, so each file keeps one rate
+split_at_arm = false       # raw: true = start a new file (from the next keyframe, no gap) when the drone arms or
+                           # disarms. Needed only for a drone that drops its frame rate in low power (d17 and
+                           # before, or low_power.fps > 0): walksnail-osd-tool renders a whole file at the rate
+                           # of its start. Off since gs17: a d18 drone keeps 60 fps, so one recording = one file
 target      = "gs"         # where the record button records: "gs" = here, "vtx" = the drone's SD card, "both"
 
 # Recording settings for mode = "burned".

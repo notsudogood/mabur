@@ -219,9 +219,12 @@ void RcAgent::intake_arm_state_(uint64_t now_ms) {
   const bool want = cfg_.low_power.enable && fresh && !last_armed_;
   if (want == low_power_active_) return;
   low_power_active_ = want;
-  if (want)
+  if (want && cfg_.low_power.fps > 0)
     std::fprintf(stderr, "rc: low_power ENTER fps=%d cap=%d kbps\n",
                  cfg_.low_power.fps, cfg_.low_power.bitrate_kbps);
+  else if (want)
+    std::fprintf(stderr, "rc: low_power ENTER fps=unchanged cap=%d kbps\n",
+                 cfg_.low_power.bitrate_kbps);
   else
     // last_armed_, not armed_latched_: the latch never clears, so reading it
     // here would report "armed" for every staleness exit after the first arm.
@@ -495,7 +498,9 @@ void RcAgent::run_bitrate_policy(uint64_t now_ms, bool force) {
   for (const EncoderRungCfg& r : cfg_.encoder.rungs) fps_managed = fps_managed || r.fps > 0;
   if (fps_managed) {
     int target_fps = rung_fps > 0 ? rung_fps : static_cast<int>(cfg_.venc.core.fps);
-    if (low_power_active_) target_fps = std::min(target_fps, cfg_.low_power.fps);
+    // low_power.fps 0 = keep the camera's rate (no rebind at arm/disarm).
+    if (low_power_active_ && cfg_.low_power.fps > 0)
+      target_fps = std::min(target_fps, cfg_.low_power.fps);
     if (target_fps != commanded_fps_ && commanded_fps_ != 0)
       std::fprintf(stderr, "rc: encoder fps %d -> %d (mcs%d/%d%s)\n", commanded_fps_, target_fps,
                    applied_.ladder[0].mcs, applied_.ladder[0].bw,

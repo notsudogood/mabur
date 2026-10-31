@@ -178,11 +178,12 @@ overhead       = 1.0            # extra repair data (1.0 = +100 %)
 [low_power]
 # While disarmed: lower bitrate and frame rate to keep the VTX cool.
 # Needs the flight controller's arm state over [msp]. On in this bundle
-# (Gilang's ships it off); the phase lock pauses while it holds the camera
-# at a lower rate, and locks again once armed.
+# (Gilang's ships it off).
 enable       = true
 bitrate_kbps = 1000
-fps          = 30
+fps          = 0           # 0 = keep the camera's frame rate (60 on 1080p 60), only the bitrate drops: no
+                           # pause or keyframe at arm/disarm, one frame rate per recording (since d18; 30
+                           # before, which paused 100-150 ms at each disarm). 1..venc.fps = drop to that rate
 stale_ms     = 2000        # no arm-state report for this long = assume armed, full power
 
 [ampdu]

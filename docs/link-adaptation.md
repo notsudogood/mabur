@@ -775,6 +775,15 @@ While the FC reports DISARMED, `RcAgent` runs the encoder at
 it is turned on; the code defaults are 1000 kbps and 15 fps. An ARMED
 report returns full power.
 
+Since d18 the bundle and the code default `low_power.fps = 0`: keep the
+camera's own rate and drop only the bitrate. A lower rate rebinds the
+encoder at every arm and disarm (flight 0010: a 100-150 ms pause and a
+keyframe at each disarm) and changes a recording's frame rate mid-file.
+The probe gate below then sees the full AU rate while disarmed. Cost: the
+camera keeps encoding at full rate on the ground (warmer, unmeasured), and
+the thin stream after a crash is 60 small frames a second instead of 15-30
+larger ones at the same bitrate, unmeasured at range.
+
 The mode tracks the FC's **current** arm state both ways. It is not a
 one-shot pre-arm latch, so a DISARMED report re-enters it however many
 times the aircraft has armed before. Spike:

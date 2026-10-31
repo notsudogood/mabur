@@ -127,7 +127,16 @@ never called its start). Fixed: the sidecars now begin with each video
 file, and `tests/integration/run_player_e2e.sh` checks they appear next to
 a recording.
 
-**One frame rate per file (`split_at_arm`, on).** The drone runs 30 fps
+**Since gs17/d18 the split is off by default.** The d18 drone keeps its
+frame rate in low power (`low_power.fps = 0`: only the bitrate drops), so a
+recording is one file at one rate and there is nothing to split. Flight
+0010 (d17) showed what the rate change cost besides the split: a 100-150 ms
+pause and a keyframe at every disarm, from the encoder's rebind. Turn
+`split_at_arm` back on for a drone that still lowers its rate (d17 or
+earlier, or `low_power.fps` > 0). Walksnail-osd-tool rendered a d17
+recording's armed file at 60 fps with the OSD (operator, 2026-10-31).
+
+**One frame rate per file (`split_at_arm`, on in gs16).** The drone ran 30 fps
 while disarmed (low power) and its full rate armed. walksnail-osd-tool
 renders a whole file at the rate of its start, so a recording begun on the
 ground came out at 30 fps. With `split_at_arm`, a fresh low-power report
@@ -153,7 +162,7 @@ the font page mapping; say which firmware and font you used.
 mode     = "raw"    # "raw" = video exactly as received; "burned" = re-encoded with the OSD drawn in
 osd_file = true     # raw: also save .osd and .srt next to the video
 osd_fc   = "BTFL"   # .osd firmware tag: "BTFL", "INAV" or "ARDU"
-split_at_arm = true # raw: new file (from the next keyframe) when the drone arms or disarms
+split_at_arm = false # raw: true = new file (from the next keyframe) at arm/disarm; gs16 shipped true
 ```
 
 `osd_file` does nothing in burned mode (the OSD is already in the video).

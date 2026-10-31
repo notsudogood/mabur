@@ -352,10 +352,18 @@ struct AirClockCfg {
 // full power (fail open: a dead UART can never fly you at 1 Mb/s — and
 // equally, a crash that kills the FC gives full rate, not this mode). Struct
 // default is OFF; the bundle enables it.
+//
+// fps = 0 (code and bundle since d18; 15 code / 30 bundle before) keeps the
+// camera's own rate: only the bitrate drops. A lower rate makes every arm
+// and disarm rebind the encoder (flight 0010: a 100-150 ms pause at each
+// disarm, then a keyframe) and changes the recording's frame rate mid-file,
+// which is what maburplay's dvr.split_at_arm worked around. The camera keeps
+// encoding at full rate on the ground (warmer, unmeasured); the radio, the
+// larger heat source, still drops to bitrate_kbps.
 struct LowPowerCfg {
   bool enable = false;
   int bitrate_kbps = 1000;
-  int fps = 15;
+  int fps = 0;
   int stale_ms = 2000;
 };
 

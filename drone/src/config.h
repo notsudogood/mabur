@@ -62,7 +62,9 @@ struct RadioCfg {
   // 153, 161, 169, 177; 173 at 40/80). Warns only, never refuses.
   bool spur_warn = true;
   // devourer's 5880 MHz notch (tuning.spur_ext_8822e: 177@20 and the
-  // 173+177 pair). Not a vendor setting, untested on air.
+  // 173+177 pair) and, from devourer 464e8a4, the second spur of each upper
+  // 80 MHz block (5800 in 149-161, 5880 in 165-177). Not a vendor setting,
+  // untested on air.
   bool spur_ext = false;
   // devourer's wide-TX IGI floor (DeviceConfig::Tuning::wide_tx_igi_floor,
   // docs/experiments/8822c-ht40-tx-stall.md there): a raised receiver-gain

@@ -22,6 +22,11 @@ typedef struct {
  * wants more than 1920x1080 (the loader then requires venc.fps <= 30). */
 CameraMode camera_mode_for(uint32_t venc_fps, uint32_t rec_w, uint32_t rec_h);
 
+/* camera_mode_for, with venc.sensor_crop: crop != 0 and venc_fps <= 60
+ * pick the unbinned 2816x1584 crop instead of the binned full view (the 4K
+ * recording mode still wins; the loader refuses that pair). */
+CameraMode camera_mode_pick(uint32_t venc_fps, uint32_t rec_w, uint32_t rec_h, int crop);
+
 /* Index of the mode with want's size and ceiling in a driver's list, or -1. */
 int camera_mode_find(const CameraMode *list, int n, CameraMode want);
 

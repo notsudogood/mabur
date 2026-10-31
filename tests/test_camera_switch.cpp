@@ -38,29 +38,35 @@ std::string write_tmp(const std::string& text) {
 
 }  // namespace
 
-TEST(presets_are_the_four_the_menu_offers) {
-  REQUIRE(cam::kNumPresets == 4);
+TEST(presets_are_the_five_the_menu_offers) {
+  REQUIRE(cam::kNumPresets == 5);
   for (size_t i = 0; i < cam::kNumPresets; ++i) CHECK(cam::kPresets[i].id == i);
   CHECK(cam::preset_of(1920, 1080, 60) == 0);
   CHECK(cam::preset_of(1920, 1080, 90) == 1);
   CHECK(cam::preset_of(1280, 720, 100) == 2);
   CHECK(cam::preset_of(1152, 544, 120) == 3);
+  // d18: same size and rate as preset 0, told apart by venc.sensor_crop.
+  CHECK(cam::preset_of(1920, 1080, 60, true) == 4);
+  CHECK(cam::kPresets[4].crop && !cam::kPresets[0].crop && cam::kPresets[4].needs_star6e);
+  CHECK(cam::preset_of(1920, 1080, 90, true) == cam::kCustom);
   CHECK(cam::preset_of(1280, 720, 60) == cam::kCustom);
-  CHECK(cam::preset(4) == nullptr);
+  CHECK(cam::preset(5) == nullptr);
 }
 
 TEST(every_preset_fits_the_sensor_mode_its_fps_selects) {
   // The loader refuses a venc.size that does not keep the mode's aspect or
   // is larger (camera_mode_size_ok); a preset must never be one.
   for (const cam::Preset& p : cam::kPresets) {
-    const CameraMode m = camera_mode_for(p.fps, 0, 0);
+    const CameraMode m = camera_mode_pick(p.fps, 0, 0, p.crop);
     CHECK(camera_mode_size_ok(m, p.w, p.h));
   }
 }
 
-TEST(stock_driver_offers_the_1080p_presets_and_waybeams_all_four) {
+// Crop 60 needs waybeam's 2816x1584@60: the stock driver's 1440-class crop
+// (2560x1440@60) is not it, so the stock driver does not offer it.
+TEST(stock_driver_offers_the_1080p_presets_and_waybeams_all_five) {
   CHECK(camera_offered_mask(kStock, 4) == 0x03);
-  CHECK(camera_offered_mask(kStar6eImx415Modes, kNumStar6eImx415Modes) == 0x0F);
+  CHECK(camera_offered_mask(kStar6eImx415Modes, kNumStar6eImx415Modes) == 0x1F);
   CHECK(camera_offered_mask(nullptr, 0) == 0);
 }
 
@@ -133,6 +139,9 @@ TEST(every_preset_written_into_the_bundle_still_loads) {
     try {
       const Config c = load_config(path);
       CHECK(c.venc.core.width == p.w && c.venc.core.height == p.h && c.venc.core.fps == p.fps);
+      CHECK(c.venc.core.sensor_crop == p.crop);
+      CHECK(cam::preset_of(c.venc.core.width, c.venc.core.height, c.venc.core.fps,
+                           c.venc.core.sensor_crop) == p.id);
     } catch (const std::exception& e) {
       std::fprintf(stderr, "preset %u: %s\n", p.id, e.what());
       ok = false;
@@ -261,9 +270,9 @@ TEST(a_file_that_would_not_load_is_refused_and_nothing_changes) {
 TEST(switch_mask_needs_the_module_and_the_stock_driver_loaded) {
   const std::string stock = "mi_venc 1 0 - Live 0x0\nsensor_imx415_mipi 30000 0 - Live 0x0\n";
   const std::string star = "sensor_imx415_star6e 19400 0 - Live 0x0\n";
-  CHECK(cam_switch_mask(0x03, stock, true) == 0x0C);
+  CHECK(cam_switch_mask(0x03, stock, true) == 0x1C);   // 720p 100, 544p 120, Crop 60
   CHECK(cam_switch_mask(0x03, stock, false) == 0);
-  CHECK(cam_switch_mask(0x0F, star, true) == 0);
+  CHECK(cam_switch_mask(0x1F, star, true) == 0);
   CHECK(cam_switch_mask(0x01, "sensor_imx335_mipi 1 0 - Live\n", true) == 0);
 }
 

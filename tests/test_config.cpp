@@ -1659,6 +1659,23 @@ TEST(wide_igi_floor_key_parses_and_validates) {
   }
 }
 
+// venc.sensor_crop (d18): off by default; up to 60 fps only, never with a
+// 4K recording, and venc.size checked against the crop's 2816x1584.
+TEST(venc_sensor_crop_parses_and_validates) {
+  CHECK(!Config{}.venc.core.sensor_crop);
+  const std::string base = "[radio]\nchannels = [36]\n[venc]\nsensor_bin = \"/x.bin\"\n";
+  auto p = write_temp_toml(base + "size = \"1920x1080\"\nfps = 60\nsensor_crop = true\n");
+  CHECK(load_config(p.string()).venc.core.sensor_crop);
+  std::filesystem::remove(p);
+  auto b = write_temp_toml(base + "size = \"1920x1080\"\nfps = 90\nsensor_crop = true\n");
+  CHECK(what_of([&] { (void)load_config(b.string()); }).find("venc.sensor_crop") != std::string::npos);
+  std::filesystem::remove(b);
+  // 1728x816 is not 16:9: the crop cannot serve it at any rate.
+  auto w = write_temp_toml(base + "size = \"1728x816\"\nfps = 60\nsensor_crop = true\n");
+  CHECK(what_of([&] { (void)load_config(w.string()); }).find("venc.size") != std::string::npos);
+  std::filesystem::remove(w);
+}
+
 // radio.igi_floor_auto (d18): on by default, a bool.
 TEST(igi_floor_auto_key_parses) {
   CHECK(Config{}.radio.igi_floor_auto);

@@ -11,7 +11,7 @@ namespace mabur {
 uint8_t camera_offered_mask(const CameraMode* modes, int n) {
   uint8_t mask = 0;
   for (const cam::Preset& p : cam::kPresets) {
-    const CameraMode m = camera_mode_for(p.fps, 0, 0);
+    const CameraMode m = camera_mode_pick(p.fps, 0, 0, p.crop);
     if (camera_mode_find(modes, n, m) >= 0 && camera_mode_size_ok(m, p.w, p.h))
       mask = static_cast<uint8_t>(mask | (1u << p.id));
   }
@@ -182,13 +182,15 @@ std::string preset_config_text(const std::string& toml, const Config& cur, const
   const uint8_t slices = nearest_legal_slices(p.h, cur.venc.core.slices);
   std::string out =
       set_venc_mode_text(toml, p.w, p.h, p.fps, slices != cur.venc.core.slices ? slices : 0);
+  // Every preset sets venc.sensor_crop, so leaving Crop 60 turns it off.
+  out = set_toml_values(out, "venc", {{"sensor_crop", p.crop ? "true" : "false"}});
   // The SD recorder scales the same capture window, so its size must keep the
   // new picture's shape; a recording of another shape becomes the sensor
   // mode's own size (1728x816 for the wide 120 fps preset).
   const int rw = cur.record.width, rh = cur.record.height;
   if (cur.record.enable && rw > 0 &&
       static_cast<long>(rw) * p.h != static_cast<long>(p.w) * rh) {
-    const CameraMode m = camera_mode_for(p.fps, 0, 0);
+    const CameraMode m = camera_mode_pick(p.fps, 0, 0, p.crop);
     out = set_toml_values(out, "record",
                           {{"size", "\"" + std::to_string(m.w) + "x" + std::to_string(m.h) + "\""}});
   }

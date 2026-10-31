@@ -158,20 +158,24 @@ TEST(menu_model_camera_tab_requests_a_preset) {
   CHECK(m.tab() == GsMenuModel::Tab::Camera);
   auto v = m.view();
   REQUIRE(v.tabs.size() == 3 && v.tabs[2].label == "Camera" && v.tabs[2].active);
-  REQUIRE(v.cells.size() == mabur::cam::kNumPresets && v.cols == 4 && v.title == "Camera");
+  REQUIRE(v.cells.size() == mabur::cam::kNumPresets && v.cols == 5 && v.title == "Camera");
   CHECK(v.cells[0].label == "1080p 60" && v.cells[0].active && v.cells[0].value == "full view");
   CHECK(!v.cells[1].dim && v.cells[2].value == "new driver" && !v.cells[2].dim);
   CHECK(v.cells[3].dim && v.cells[3].value == "not here");
+  CHECK(v.cells[4].label == "Crop 60" && v.cells[4].dim && v.cells[4].value == "not here");
   CHECK(v.buttons[0].label == "No change");
   m.key(K::Down, 2);                    // the preset row, on the running preset
   CHECK(m.view().cells[0].focus);
   CHECK(m.view().help.find("runs this now") != std::string::npos);
   m.key(K::Center, 3);                  // the running one: nothing to ask
   CHECK(m.pending_camera() == mabur::cam::kNoWish);
-  m.key(K::Left, 4);                    // wraps to 544p 120: not on this drone
+  m.key(K::Left, 4);                    // wraps to Crop 60: not on this drone
   CHECK(m.view().help.find("Not on this drone") != std::string::npos);
+  CHECK(m.view().help.find("unbinned") != std::string::npos);   // its own description
   m.key(K::Center, 5);
   CHECK(m.pending_camera() == mabur::cam::kNoWish);
+  m.key(K::Left, 5);                    // 544p 120: not on this drone either
+  CHECK(m.view().help.find("Not on this drone") != std::string::npos);
   m.key(K::Left, 6);                    // 720p 100: needs the driver switch
   CHECK(m.view().help.find("driver") != std::string::npos);
   m.key(K::Center, 7);

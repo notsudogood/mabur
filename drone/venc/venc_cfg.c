@@ -43,6 +43,7 @@ void venc_cfg_defaults(VencCfg *cfg)
 	cfg->ref_enhance = 1;
 	cfg->ref_pred = true;
 	cfg->slices = 1; /* split off */
+	cfg->sensor_crop = false;
 	cfg->roi_enabled = true;
 	cfg->roi_steps = 2;
 	cfg->roi_center = 0.4;

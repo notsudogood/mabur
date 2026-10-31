@@ -1983,7 +1983,8 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   }
   const uint8_t cam_cur = mabur::cam::preset_of(static_cast<uint16_t>(cfg.venc.core.width),
                                                 static_cast<uint16_t>(cfg.venc.core.height),
-                                                static_cast<uint16_t>(cfg.venc.core.fps));
+                                                static_cast<uint16_t>(cfg.venc.core.fps),
+                                                cfg.venc.core.sensor_crop);
   std::fprintf(stderr,
                "camera: running %ux%u@%u (%s); presets offered 0x%02x, a driver switch adds 0x%02x\n",
                static_cast<unsigned>(cfg.venc.core.width), static_cast<unsigned>(cfg.venc.core.height),

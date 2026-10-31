@@ -8,11 +8,23 @@ static const CameraMode kFullView = {1920, 1080, 90};
 static const CameraMode kWide100 = {1728, 972, 100};
 static const CameraMode kWide120 = {1728, 816, 120};
 static const CameraMode k4K = {3840, 2160, 33};
+/* venc.sensor_crop, up to 60 fps: waybeam's unbinned crop (sensor window
+ * 2952x1656, output 2816x1584, 73 % of the full width: 1.36x zoom). The
+ * VPE scales it down, so a 1080p picture keeps more of the sensor's own
+ * detail than the binned full view, over a narrower view. */
+static const CameraMode kCrop60 = {2816, 1584, 60};
 
 CameraMode camera_mode_for(uint32_t venc_fps, uint32_t rec_w, uint32_t rec_h)
 {
+	return camera_mode_pick(venc_fps, rec_w, rec_h, 0);
+}
+
+CameraMode camera_mode_pick(uint32_t venc_fps, uint32_t rec_w, uint32_t rec_h, int crop)
+{
 	if (rec_w > 1920 || rec_h > 1080)
 		return k4K;
+	if (crop && venc_fps <= kCrop60.max_fps)
+		return kCrop60;
 	if (venc_fps > kWide100.max_fps)
 		return kWide120;
 	if (venc_fps > kFullView.max_fps)

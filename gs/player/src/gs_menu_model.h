@@ -493,7 +493,7 @@ class GsMenuModel {
       const mabur::cam::Preset* p = mabur::cam::preset(static_cast<uint8_t>(col_));
       if (!p) return "";
       const int bit = 1 << p->id;
-      std::string s = std::string(p->label) + ": " + p->view + ".";
+      std::string s = std::string(p->label) + ": " + (p->about ? p->about : p->view) + ".";
       if (col_ == cam_cur_) return s + " The drone runs this now.";
       if (!((cam_now_ | cam_switch_) & bit))
         return s + " Not on this drone: its image has no camera mode for it.";

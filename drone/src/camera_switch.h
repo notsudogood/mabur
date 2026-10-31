@@ -26,7 +26,7 @@ namespace mabur {
 // Stale: it answered once and has gone quiet -- unknown, so refused.
 enum class ArmView : uint8_t { NoFc, Disarmed, Armed, Stale };
 
-// Bit i set: preset i's sensor mode (camera_mode_for at its fps) is in
+// Bit i set: preset i's sensor mode (camera_mode_pick at its fps and crop) is in
 // `modes`, the loaded driver's list.
 uint8_t camera_offered_mask(const CameraMode* modes, int n);
 

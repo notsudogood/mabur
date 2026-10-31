@@ -18,7 +18,7 @@ tab" below). The waybeam driver enumerates five modes:
 | idx | mode | readout | sensor window | share of the view (w × h) | aspect |
 |---|---|---|---|---|---|
 | 0 | 3840x2160 @ ≤ 33 | all pixels, not binned | 3840x2160 | 100 % × 100 % | 16:9 |
-| 1 | 2816x1584 @ ≤ 60 | crop, not binned | 2952x1656 → 2816x1584 | — (unused) | 16:9 |
+| 1 | 2816x1584 @ ≤ 60 | crop, not binned | 2952x1656 → 2816x1584 | 73 % × 73 % (1.36x zoom), with `venc.sensor_crop` | 16:9 |
 | 2 | 1920x1080 @ ≤ 90 | 2x2 binned | 3840x2160 | 100 % × 100 % | 16:9 |
 | 3 | 1728x972 @ ≤ 100 | 2x2 binned crop | 3456x1944, centred | 90 % × 90 % (81 % of the area) | 16:9 |
 | 4 | 1728x816 @ ≤ 120 | 2x2 binned crop | 3456x1632, centred | 90 % × 76 % | 2.12:1 |
@@ -37,6 +37,37 @@ is running with `grep Cur /proc/mi_modules/mi_sensor/mi_sensor0`.
 | 91–100 | 1728x972 binned crop | 1.11x zoom |
 | 101–120 | 1728x816 binned crop | 1.11x wider, 1.32x taller zoom |
 | any, with `record.size` above 1920x1080 | 3840x2160 (the loader then requires `venc.fps` ≤ 30) | full |
+| 1–60 with `venc.sensor_crop = true` (d18) | 2816x1584 unbinned crop | 1.36x zoom |
+
+### The unbinned crop (`venc.sensor_crop`)
+
+Every mode up to 90 fps reads the sensor 2x2 binned: four photosites become
+one pixel before the ISP sees them, which halves the resolution the sensor
+delivers. Mode 1 is the one fast mode that is not binned: it reads every
+photosite of a centred 2952x1656 window (output 2816x1584) at up to 60 fps,
+and the VPE scales it down to `venc.size`. So a 1920x1080 picture is made
+from ~1.5x more real pixels per axis than the binned full view, over a
+narrower view (73 % of the width and height).
+
+What it costs, none of it measured on this drone yet:
+
+- **View**: 1.36x zoom against the full view (the GS menu cell says 1.4x).
+- **ISP rate**: 2816 × 1584 × 60 = 268 Mpix/s through the ISP, against
+  124 for the binned 1080p60 and 274 for the 4K mode at 33 fps. Nearest
+  thing run before is that 4K mode; this one has not been benched.
+- **Noise**: a binned pixel averages four photosites; an unbinned one does
+  not, so per-pixel noise is higher before the VPE's downscale averages
+  some of it back. The sensor tuning file (`venc.sensor_bin`) was made on
+  the binned mode. Expect a noisier picture in low light, unmeasured.
+- **Phase lock**: the mode's ceiling is its nominal 60 fps, so the steer
+  can only slow the sensor down (as with 1728x972 @ 100). A panel a hair
+  faster than 60 Hz leaves the lock out of range (fps cell in caution).
+- **Encoder**: the same 1920x1080 @ 60 as the full view (~117 % of rated).
+- **Driver**: waybeam's only. The stock driver's crop is 2560x1440 @ 60, which
+  the code does not use; on the stock driver the preset reads "new driver".
+
+The loader refuses it above 60 fps, with a `record.size` above 1920x1080,
+and with a `venc.size` that is not 16:9 or larger than 2816x1584.
 
 The full view stops at 90 fps because of the sensor, not the encoder: a
 frame is VMAX lines × the line time, full height binned needs VMAX ≥ 2250,
@@ -120,7 +151,7 @@ Details: `docs/colortrans.md` ("Known limitations").
 
 ## Camera tab (GS menu)
 
-The goggles' menu offers four presets (`common/include/mabur/camera_presets.h`):
+The goggles' menu offers five presets (`common/include/mabur/camera_presets.h`):
 
 | Preset | venc | Sensor mode | View | Driver |
 |---|---|---|---|---|
@@ -128,12 +159,15 @@ The goggles' menu offers four presets (`common/include/mabur/camera_presets.h`):
 | 1080p 90 | 1920x1080 @ 90 | 1920x1080 binned | full | either |
 | 720p 100 | 1280x720 @ 100 | 1728x972 binned crop | 1.1x zoom | waybeam's |
 | 544p 120 | 1152x544 @ 120 | 1728x816 binned crop | wide crop (2.12:1) | waybeam's |
+| Crop 60 (d18) | 1920x1080 @ 60, `sensor_crop = true` | 2816x1584 unbinned crop | 1.4x zoom | waybeam's |
 
 Encoder load against its rated macroblock rate: 1080p 60 ~117 %, 1080p 90
 ~176 % (never benched), 720p 100 86 % (its 1728x972 capture held 100 fps
-at 158 % on the bench), 544p 120 ~71 % (not run). 1440p is not offered: the
-IMX415's 1440-class modes are crops (~1.4x zoom), and 2560x1440 @ 60 would
-ask the encoder for ~2x its rated rate.
+at 158 % on the bench), 544p 120 ~71 % (not run), Crop 60 ~117 % like
+1080p 60 (its ISP side is unbenched, above). Encoding 1440p itself is not
+offered: 2560x1440 @ 60 would ask the encoder for ~2x its rated rate. Crop
+60 and 1080p 60 share size and rate; `venc.sensor_crop` tells them apart,
+and every preset writes it.
 
 A switch is a reboot: the encoder stays claimed until then. maburd
 (`drone/src/camera_switch.h`, `camera_ctl.h`):

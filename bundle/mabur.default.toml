@@ -136,6 +136,9 @@ sensor_bin = "/etc/sensors/imx415_greg_fpvXIX_colortrans.bin"  # camera sensor t
 size       = "1920x1080"
 fps        = 60            # 1..120: up to 90 the full-view 1920x1080 camera mode, 91-100 1728x972, 101-120 1728x816;
                            # size must keep that mode's aspect ratio and fit inside it (docs/camera-modes.md)
+sensor_crop = false        # true (up to 60 fps): the sensor's unbinned 2816x1584 crop scaled to `size` instead of
+                           # the binned full view: finer detail, 1.4x zoom (the GS Camera tab's "Crop 60"). Needs
+                           # waybeam's camera driver; 268 Mpix/s through the ISP vs 124 binned, unbenched
 gop_s      = 0             # seconds between refresh starts; 0 = none: the GS asks for an IDR when its picture is damaged
 qp_delta   = 4             # quality offset between keyframes and P-frames
 max_ipprop = 2             # keyframe may be at most this many times a P-frame's size

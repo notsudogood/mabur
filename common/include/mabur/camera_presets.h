@@ -12,13 +12,18 @@
 //   1080p 60 / 90   1920x1080 binned full view, either IMX415 driver
 //   720p 100        1728x972 binned crop (1.11x zoom), waybeam's driver only
 //   544p 120 wide   1728x816 binned crop (2.12:1), waybeam's driver only
+//   Crop 60         2816x1584 unbinned crop scaled to 1920x1080 (1.36x zoom,
+//                   venc.sensor_crop), waybeam's driver only (d18)
 //
-// 1440p is not a preset: the IMX415's 1440-class modes are crops (stock
-// 2560x1440@60, waybeam 2816x1584@60, ~1.4x zoom) and 2560x1440@60 asks the
-// H.265 engine for ~2x its rated macroblock rate, past the 158 % that
-// 1728x972@100 held on the bench (docs/findings/2026-10-19-waybeam-imx415-
-// 1728x972.md). Encoder load per preset, same yardstick: 1080p60 ~117 %,
-// 1080p90 ~176 % (above anything benched), 720p100 86 %, 544p120 ~71 %.
+// 1440p itself is not a preset: encoding the 1440-class crops at their own
+// size (stock 2560x1440@60, waybeam 2816x1584@60) asks the H.265 engine for
+// ~2x its rated macroblock rate, past the 158 % that 1728x972@100 held on
+// the bench (docs/findings/2026-10-19-waybeam-imx415-1728x972.md). Crop 60
+// encodes 1920x1080 like 1080p 60. Encoder load per preset, same yardstick:
+// 1080p60 and Crop 60 ~117 %, 1080p90 ~176 % (above anything benched),
+// 720p100 86 %, 544p120 ~71 %. Crop 60 moves the load to the ISP instead:
+// 2816x1584x60 = 268 Mpix/s against the binned 1080p60's 124 (the 4K
+// mode's 3840x2160x33 is 274), unbenched on this drone.
 //
 // Pure, header-only; the drone and the GS player both include it.
 #include <cstddef>
@@ -32,6 +37,10 @@ struct Preset {
   const char* view;   // the menu cell's second line
   uint16_t w, h, fps;
   bool needs_star6e;  // only waybeam's IMX415 driver has the sensor mode
+  bool crop = false;  // venc.sensor_crop: the unbinned crop, not the binned view
+  // The help line's description; nullptr = the view. The cell holds about
+  // eight characters at five cells a row, so a long name goes here.
+  const char* about = nullptr;
 };
 
 inline constexpr Preset kPresets[] = {
@@ -39,6 +48,9 @@ inline constexpr Preset kPresets[] = {
     {1, "1080p 90", "full view", 1920, 1080, 90, false},
     {2, "720p 100", "1.1x zoom", 1280, 720, 100, true},
     {3, "544p 120", "wide crop", 1152, 544, 120, true},
+    {4, "Crop 60", "1.4x zoom", 1920, 1080, 60, true, true,
+     "1080p 60 from the sensor's unbinned 2816x1584 crop, scaled down: finer detail than the "
+     "binned full view, 1.4x zoom"},
 };
 inline constexpr size_t kNumPresets = sizeof(kPresets) / sizeof(kPresets[0]);
 
@@ -75,10 +87,10 @@ inline const Preset* preset(uint8_t id) {
   return id < kNumPresets ? &kPresets[id] : nullptr;
 }
 
-// The preset a running size/fps is, or kCustom.
-inline uint8_t preset_of(uint16_t w, uint16_t h, uint16_t fps) {
+// The preset a running size/fps/venc.sensor_crop is, or kCustom.
+inline uint8_t preset_of(uint16_t w, uint16_t h, uint16_t fps, bool crop = false) {
   for (const Preset& p : kPresets)
-    if (p.w == w && p.h == h && p.fps == fps) return p.id;
+    if (p.w == w && p.h == h && p.fps == fps && p.crop == crop) return p.id;
   return kCustom;
 }
 

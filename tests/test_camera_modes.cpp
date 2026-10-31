@@ -28,6 +28,22 @@ TEST(mode_for_picks_by_fps) {
 
 TEST(mode_for_4k_record_wins) {
   CHECK(same(camera_mode_for(30, 3840, 2160), CameraMode{3840, 2160, 33}));
+  CHECK(same(camera_mode_pick(30, 3840, 2160, 1), CameraMode{3840, 2160, 33}));
+}
+
+// venc.sensor_crop (d18): up to 60 fps the unbinned 2816x1584 crop, which
+// a 1080p picture fits (16:9, smaller); above 60 the crop is ignored and
+// the loader refuses the pair. Revert (no crop branch): the first CHECK
+// gets the binned 1920x1080@90.
+TEST(mode_pick_crop_up_to_60) {
+  CHECK(same(camera_mode_pick(60, 1920, 1080, 1), CameraMode{2816, 1584, 60}));
+  CHECK(same(camera_mode_pick(30, 0, 0, 1), CameraMode{2816, 1584, 60}));
+  CHECK(same(camera_mode_pick(60, 1920, 1080, 0), CameraMode{1920, 1080, 90}));
+  CHECK(same(camera_mode_pick(90, 1920, 1080, 1), CameraMode{1920, 1080, 90}));
+  CHECK(camera_mode_size_ok(CameraMode{2816, 1584, 60}, 1920, 1080) == 1);
+  CHECK(camera_mode_size_ok(CameraMode{2816, 1584, 60}, 1280, 720) == 1);
+  CHECK(camera_mode_find(kWaybeam, 5, CameraMode{2816, 1584, 60}) == 1);
+  CHECK(camera_mode_find(kStock, 4, CameraMode{2816, 1584, 60}) == -1);
 }
 
 TEST(find_matches_geometry_and_max_fps) {

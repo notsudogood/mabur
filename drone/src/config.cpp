@@ -367,7 +367,7 @@ void parse_venc(const Value& j, VencSectionCfg& v) {
                      "intra_refresh_frames", "intra_refresh_qp",
                      "ref_base", "ref_enhance", "ref_pred", "slices",
                      "roi", "ae_fps", "awb_fps", "snapshot_quality",
-                     "debug_port"},
+                     "debug_port", "sensor_crop"},
                     "venc");
 
   // Real compiled defaults, for accurate reporting only. Every branch below
@@ -406,6 +406,10 @@ void parse_venc(const Value& j, VencSectionCfg& v) {
   } else {
     note_default("venc", "fps", to_text(kDef.core.fps));
   }
+
+  assign_if_present(j, "sensor_crop", v.core.sensor_crop, "venc");
+  if (v.core.sensor_crop && v.core.fps > 60)
+    fail("venc.sensor_crop", "the unbinned crop runs up to 60 fps: set venc.fps <= 60");
 
   if (j.contains("gop_s")) {
     assign_if_present(j, "gop_s", v.core.gop_s, "venc");
@@ -857,6 +861,8 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
     // (camera_mode_for in drone/venc/camera_modes.c), and that caps the link too.
     if ((rw > 1920 || rh > 1080) && cfg.venc.core.fps > 30)
       fail("record.size", "above 1920x1080 needs the 30 fps sensor mode: set venc.fps <= 30");
+    if ((rw > 1920 || rh > 1080) && cfg.venc.core.sensor_crop)
+      fail("record.size", "above 1920x1080 needs the 4K sensor mode, not venc.sensor_crop's crop");
   }
 
   // venc.fps (and a 4K recording) selects the sensor mode; the VPE only
@@ -864,8 +870,8 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
   // inside it (docs/camera-modes.md).
   {
     const bool rec = cfg.record.enable && cfg.record.width > 0;
-    const CameraMode m = camera_mode_for(cfg.venc.core.fps, rec ? cfg.record.width : 0,
-                                         rec ? cfg.record.height : 0);
+    const CameraMode m = camera_mode_pick(cfg.venc.core.fps, rec ? cfg.record.width : 0,
+                                          rec ? cfg.record.height : 0, cfg.venc.core.sensor_crop);
     if (!camera_mode_size_ok(m, cfg.venc.core.width, cfg.venc.core.height))
       fail("venc.size", to_text(cfg.venc.core.width) + "x" + to_text(cfg.venc.core.height) +
                             " does not fit the " + to_text(m.w) + "x" + to_text(m.h) +

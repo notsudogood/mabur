@@ -8,6 +8,10 @@ typedef struct {
   char sensor_bin[128];      /* venc.sensor_bin */
   uint16_t width, height;    /* venc.size "1920x1080" */
   uint16_t fps;              /* venc.fps */
+  bool sensor_crop;          /* venc.sensor_crop: up to 60 fps, read the
+                              * sensor's unbinned 2816x1584 crop (1.36x
+                              * zoom) instead of the binned full view;
+                              * waybeam's driver only (camera_modes.h) */
   double gop_s;              /* venc.gop_s: seconds between refresh starts; 0 = no periodic refresh (the GS asks for IDRs on demand) */
   int8_t qp_delta;           /* venc.qp_delta */
   uint8_t max_ipprop;        /* venc.max_ipprop: 0 (default) = leave the

@@ -172,7 +172,25 @@ ChannelSnapshot ChannelCore::snapshot(int tx_card) const {
   return s;
 }
 
+std::string ChannelCore::request_scan(int passes) {
+  if (!scout_ || scout_card_ < 0 || relay_search_only_) return "no_scout";
+  if (scout_card_down_) return "card_down";
+  // Hold the in-flight scout off first, then take its lock: a dwell of its
+  // in progress (it holds inflight_mu_ across the dwell) finishes before
+  // the scan can start, and a later one sees manual_scan_ under the lock.
+  manual_scan_.store(true);
+  const char* why = "";
+  bool ok = false;
+  {
+    std::lock_guard<std::mutex> ilk(inflight_mu_);
+    ok = scout_->request_scan(passes, &why);
+  }
+  if (!ok) manual_scan_.store(false);
+  return ok ? std::string() : std::string(why);
+}
+
 ChannelTickOut ChannelCore::tick(const ChannelTickIn& in) {
+  if (manual_scan_.load() && !(scout_ && scout_->scan_running())) manual_scan_.store(false);
   now_ms_cur_ = in.now_ms;
   now_ms_u_cur_ = static_cast<uint64_t>(in.now_ms);
   tx_card_now_.store(in.tx_card, std::memory_order_relaxed);
@@ -1058,7 +1076,7 @@ void ChannelCore::inflight_body_() {
   // >= 0): null on an all-relay roster, so this guard has no equivalent there.
   if (!inflight_ || !reactive_) return;
   if (!in_session_atomic_.load() || cal_running_atomic_.load() || hopping_atomic_.load() ||
-      scout_working_atomic_.load() || n_cards_ < 2)
+      scout_working_atomic_.load() || manual_scan_.load() || n_cards_ < 2)
     return;
   // One card is wider for a probe and is the only one that can hear it: a
   // dwell would punch holes in the probe and fail it.
@@ -1083,6 +1101,7 @@ void ChannelCore::inflight_body_() {
   }
   std::lock_guard<std::mutex> ilk(inflight_mu_);
   if (width_pending_.load()) return;   // a card width switch owns the busy marks
+  if (manual_scan_.load()) return;     // a menu Scan owns the scout card
   ScoutDwell d;
   HopVisit v;
   bool ok = false;

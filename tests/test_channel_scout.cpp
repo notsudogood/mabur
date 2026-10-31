@@ -3,6 +3,7 @@
 #include <vector>
 #include "mtest.h"
 #include "channel_scout.h"
+#include "channel_quality.h"
 using namespace maburgs;
 
 // Fake radio + fake clock: sleep() advances `now`, every call is recorded.
@@ -374,5 +375,74 @@ TEST(run_exits_on_stop_and_parks) {
   g.s.run();
   CHECK(g.s.done() && !g.s.working());
   CHECK(g.r.calls.back() == "retune_width 136/40");
+}
+// gs18 Channel tab Scan, pinned (the pick never measures), linked: two passes
+// over every half of the members' pairs, observe only, op's own pair never
+// tuned; the result has the busy channel worst and op unmeasured; it never
+// moves the proposal; then the card parks back on op at 40. Revert (no
+// manual scan): request_scan does not exist / run_once has nothing to do.
+TEST(manual_scan_rates_the_halves_skips_op_and_parks) {
+  Rig g(two(false));                       // pinned: search only
+  g.s.set_op(136);
+  g.s.set_search(false);                   // linked
+  g.r.cca_per_ms_on[144] = 4;              // 144 busy
+  const uint8_t before = g.s.proposal();
+  const char* why = "x";
+  REQUIRE(g.s.request_scan(2, &why) && std::string(why).empty());
+  CHECK(!g.s.request_scan(2, &why) && std::string(why) == "running");
+  int steps = 0;
+  while (g.s.scan_running() && steps++ < 20) g.s.run_once();
+  CHECK(!g.s.scan_running() && steps == 8);   // 4 halves x 2 passes, op's two counted, not visited
+  for (auto& c : g.r.calls) CHECK(c.find("retune 136") == std::string::npos &&
+                                  c.find("retune 132") == std::string::npos &&
+                                  c.find("retune_width 136") == std::string::npos &&
+                                  c.find("retune_width 132") == std::string::npos);
+  const ScanReport rep = g.s.scan_report();
+  CHECK(rep.state == ScanReport::State::Done);
+  uint32_t busy140 = 99, busy144 = 0;
+  bool op_measured = true;
+  for (const ScanCell& c : rep.cells) {
+    if (c.ch == 140) busy140 = c.busy;
+    if (c.ch == 144) busy144 = c.busy;
+    if (c.ch == 136) op_measured = c.measured;
+  }
+  CHECK(busy140 == 0 && busy144 >= 1000 && !op_measured);
+  CHECK(g.s.proposal() == before);
+  CHECK(!g.s.run_once());                  // nothing left: parks
+  CHECK(g.r.calls.back() == "retune_width 136/40" && !g.s.working());
+}
+
+// Refused: one card (it carries the link), searching (no link).
+TEST(manual_scan_refused_on_one_card_or_while_searching) {
+  ScoutCfg one = two(false);
+  one.one_card = true;
+  Rig g1(one);
+  const char* why = "";
+  CHECK(!g1.s.request_scan(2, &why) && std::string(why) == "one_card");
+  Rig g2(two(false));
+  g2.s.set_search(true);
+  CHECK(!g2.s.request_scan(2, &why) && std::string(why) == "searching");
+}
+// The bar per member: its worst measured half; NHM busy % decides when
+// present (5 / 20 %), the event score otherwise (30 / 150); a member with no
+// measured half (the link's own) is -1.
+TEST(member_quality_is_the_worst_half) {
+  ScanReport r;
+  auto cell = [](uint8_t ch, bool m, bool bv, double pct, uint32_t busy) {
+    ScanCell c;
+    c.ch = ch; c.measured = m; c.busy_valid = bv; c.busy_pct = pct; c.busy = busy;
+    return c;
+  };
+  r.cells = {cell(36, true, true, 1.0, 900),     // NHM decides: clean despite the score
+             cell(40, true, true, 7.5, 0),       // 36's pair half: some
+             cell(132, false, false, 0, 0),      // op
+             cell(136, false, false, 0, 0),
+             cell(149, true, false, 0, 200),     // no NHM: score -> busy
+             cell(153, true, true, 25.0, 0)};
+  const auto q = member_quality({36, 132, 149}, r);
+  REQUIRE(q.size() == 3);
+  CHECK(q[0].ch == 36 && q[0].q == 1 && q[0].busy_valid && q[0].busy_pct == 7.5);
+  CHECK(q[1].q == -1);
+  CHECK(q[2].q == 2 && q[2].busy_pct == 25.0);
 }
 MTEST_MAIN

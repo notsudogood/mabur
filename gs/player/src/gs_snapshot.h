@@ -125,6 +125,19 @@ struct GsSnapshot {
   // seconds toward each width's mark, the seconds a mark needs, the FC's
   // arm view 0 no FC / 1 disarmed / 2 armed / 3 stale). Empty / -1 when
   // absent.
+  // Channel tab Scan (gs18): maburgs' chscan block. state "idle" /
+  // "running" / "done", the last request's result ("started", "armed",
+  // "one_card", ...), requests seen, age of the last finished scan (-1 =
+  // none) and per member {channel, rating 0..2 or -1, worst busy % or -1}.
+  std::string chscan_state;
+  std::string chscan_result;
+  int chscan_req_n = 0;
+  int chscan_age_s = -1;
+  struct ChRating {
+    int ch = 0, q = -1;
+    double busy = -1;
+  };
+  std::vector<ChRating> chscan;
   std::string floorcal_state;
   std::string floorcal_why;
   int floorcal_width = 0;

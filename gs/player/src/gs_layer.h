@@ -30,6 +30,9 @@ constexpr uint32_t kStatusRec = 0xE5484Du;
 // because it means a fault, not a mode -- a caller must never pick one for
 // the other.
 constexpr uint32_t kStatusCritical = 0xE5484Du;
+// A channel the menu's Scan rated busy (gs_menu_model.h): a warning about
+// the air, not a link fault, so its own token.
+constexpr uint32_t kChannelBusy = 0xE5484Du;
 }  // namespace tok
 
 // Player-measured half of the OSD's inputs. maburgs cannot supply these:

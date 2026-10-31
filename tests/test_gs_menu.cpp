@@ -69,7 +69,8 @@ TEST(menu_model_opens_edits_and_applies) {
   m.key(K::Center, 10);                 // opens on the tab bar, Channel tab
   CHECK(m.open() && m.tab() == GsMenuModel::Tab::Channel);
   auto v = m.view(132);
-  REQUIRE(v.tabs.size() == 3 && v.cells.size() == 4 && v.buttons.size() == 2);
+  REQUIRE(v.tabs.size() == 3 && v.cells.size() == 4 && v.buttons.size() == 3);   // Apply, Scan, Close
+  CHECK(v.buttons[1].label == "Scan" && v.buttons[2].label == "Close");
   CHECK(v.tabs[0].focus && v.tabs[0].active && !v.tabs[1].active);
   CHECK(v.has_toggle && v.toggle_on && v.cells[3].active && !v.cells[0].active);   // 132 live
   CHECK(v.cells[0].label == "CH 36" && v.cells[0].value == "5170-5250");   // the 80 MHz block
@@ -112,8 +113,8 @@ TEST(menu_model_closes_on_close_and_idle_and_wraps) {
   m.key(K::Center, 0);
   m.key(K::Up, 1);                       // wraps from the tabs to the buttons
   CHECK(m.view().buttons[0].focus);
-  m.key(K::Right, 2);                    // Close
-  CHECK(m.view().buttons[1].focus);
+  m.key(K::Left, 2);                     // wraps to Close (Apply, Scan, Close on this tab)
+  CHECK(m.view().buttons[2].focus);
   CHECK(m.key(K::Center, 3) == GsMenuModel::Action::None && !m.open());
   m.key(K::Center, 4);
   m.key(K::Right, 5);                    // Settings tab
@@ -344,5 +345,32 @@ TEST(menu_model_floorcal_banner_and_event) {
   CHECK(m.view().status == "First boot calibration: testing 40 MHz");
   m.set_banner("");
   CHECK(!m.visible());
+}
+// gs18 Channel tab Scan: the button asks once and the menu stays open; while
+// a scan runs it reads "Scanning" and does nothing; the ratings become bars
+// on the cells (the link's own channel unrated) and the help names them.
+// Revert (no Scan): the second button is Close and the press closes the menu.
+TEST(menu_model_channel_scan_button_and_bars) {
+  GsMenuModel m({36, 100}, true, maburplay::GsMenuSettings{true, 36, true});
+  m.key(K::Center, 0);
+  m.key(K::Up, 1);                       // the buttons row, on Apply
+  m.key(K::Right, 2);                    // Scan
+  auto v = m.view(36);
+  CHECK(v.buttons[1].focus && v.help.find("Scan:") == 0);
+  m.key(K::Center, 3);
+  CHECK(m.open() && m.take_scan_request() && !m.take_scan_request());
+  m.set_channel_scan("running", {}, -1);
+  v = m.view(36);
+  CHECK(v.buttons[1].label == "Scanning" && v.buttons[1].dim);
+  m.key(K::Center, 4);
+  CHECK(!m.take_scan_request());         // nothing while one runs
+  m.set_channel_scan("done", {{36, -1, -1}, {100, 2, 31.4}}, 5);
+  v = m.view(36);
+  CHECK(v.cells[0].bar == -1 && v.cells[1].bar == 2);
+  m.key(K::Up, 5);                       // the channel row
+  m.key(K::Right, 6);                    // CH 100
+  CHECK(m.view(36).help.find("Last scan: busy (31 % busy)") != std::string::npos);
+  CHECK(GsMenuModel::scan_result_text("armed") == "Scan refused: the drone is armed - disarm first");
+  CHECK(GsMenuModel::scan_result_text("started").find("about 5 s") != std::string::npos);
 }
 MTEST_MAIN

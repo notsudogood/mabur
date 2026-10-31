@@ -10,8 +10,9 @@
 //
 //   [ Channel ] [ Settings ]                  tabs: Left/Right
 //   Channel                       Hop  (o-)   Left/Right/Centre toggle it
-//   CH 36  | CH 100 | CH 116 | CH 132         Centre flies there (Hop off)
-//   [ Apply ] [ Close ]
+//  |CH 36  |CH 100 |CH 116 |CH 132            Centre flies there (Hop off);
+//                                             the bar: the last Scan's rating
+//   [ Apply ] [ Scan ] [ Close ]              Scan: the Channel tab only
 //   help line for the selection
 //
 //   Settings tab: Bandwidth < Wide > (Centre changes it), Calibrate (measure
@@ -56,6 +57,9 @@ struct GsMenuSettings {
 struct GsMenuCell {
   std::string label, value;
   bool focus = false, active = false, marked = false, dim = false;
+  // Channel tab: the last Scan's rating, drawn as a bar at the cell's left
+  // edge: 0 clean (green), 1 some traffic (yellow), 2 busy (red); -1 none.
+  int bar = -1;
 };
 
 // Everything MenuLayer draws. `open` false = only `status`, if any.
@@ -229,6 +233,43 @@ class GsMenuModel {
     return "";
   }
 
+  // Channel tab Scan (gs18): maburgs' chscan block. state "idle", "running"
+  // or "done"; per member its rating (-1 = not measured: the link's own
+  // channel, or no scan yet) and worst NHM busy % (< 0 = none); age of the
+  // last finished scan in s (-1 = none).
+  struct ChannelRating {
+    uint8_t ch = 0;
+    int q = -1;
+    double busy_pct = -1;
+  };
+  void set_channel_scan(const std::string& state, const std::vector<ChannelRating>& r, int age_s) {
+    bool same = state == scan_state_ && age_s / 60 == scan_age_s_ / 60 && r.size() == ratings_.size();
+    for (size_t i = 0; same && i < r.size(); ++i)
+      same = r[i].ch == ratings_[i].ch && r[i].q == ratings_[i].q;
+    scan_state_ = state;
+    scan_age_s_ = age_s;
+    ratings_ = r;
+    if (!same) ++version_;
+  }
+  // The Scan button was pressed (consumed once): main.cpp sends "scan".
+  bool take_scan_request() {
+    const bool v = scan_requested_;
+    scan_requested_ = false;
+    return v;
+  }
+  // The status line for a chscan.result ("" for none worth showing).
+  static std::string scan_result_text(const std::string& r) {
+    if (r == "started") return "Scanning channels: about 5 s, the link stays up";
+    if (r == "armed") return "Scan refused: the drone is armed - disarm first";
+    if (r == "arm_stale") return "Scan refused: no arm state from the flight controller";
+    if (r == "one_card") return "Scan needs two receive cards";
+    if (r == "searching") return "Scan: no link to the drone yet";
+    if (r == "running") return "Scan already running";
+    if (r == "no_scout" || r == "card_down" || r == "nothing")
+      return "Scan not possible: no spare receive card";
+    return "";
+  }
+
   // A one-line message shown (menu closed or open) for kStatusMs, or
   // dur_ms.
   void set_status(const std::string& s, uint64_t now_ms, uint64_t dur_ms = kStatusMs) {
@@ -325,6 +366,7 @@ class GsMenuModel {
         GsMenuCell c;
         c.label = "CH " + std::to_string(static_cast<int>(channels_[i]));
         c.value = range_text_(channels_[i]);
+        if (const ChannelRating* r = rating_(channels_[i])) c.bar = r->q;
         c.active = live_channel != 0 && channels_[i] == live_channel;
         c.marked = !pending_.hop && channels_[i] == pending_.channel;
         c.focus = row_ == kRowFirst + 1 + static_cast<int>(i) / kCols &&
@@ -384,8 +426,16 @@ class GsMenuModel {
     apply.dim = !changed;
     apply.focus = row_ == buttons_row_() && col_ == 0;
     close.label = "Close";
-    close.focus = row_ == buttons_row_() && col_ == 1;
-    v.buttons = {apply, close};
+    close.focus = row_ == buttons_row_() && col_ == close_col_();
+    if (tab_ == Tab::Channel) {
+      GsMenuCell scan;
+      scan.label = scan_state_ == "running" ? "Scanning" : "Scan";
+      scan.dim = scan_state_ == "running";
+      scan.focus = row_ == buttons_row_() && col_ == 1;
+      v.buttons = {apply, scan, close};
+    } else {
+      v.buttons = {apply, close};
+    }
     v.help = help_(live_channel);
     return v;
   }
@@ -402,8 +452,15 @@ class GsMenuModel {
     return tab_ == Tab::Channel && row_ > kRowFirst && row_ < buttons_row_();
   }
   int channel_index_() const { return (row_ - kRowFirst - 1) * kCols + col_; }
+  // The buttons row: Apply, [Scan on the Channel tab,] Close.
+  int close_col_() const { return tab_ == Tab::Channel ? 2 : 1; }
+  const ChannelRating* rating_(uint8_t ch) const {
+    for (const ChannelRating& r : ratings_)
+      if (r.ch == ch) return &r;
+    return nullptr;
+  }
   int row_cols_() const {
-    if (row_ == buttons_row_()) return 2;
+    if (row_ == buttons_row_()) return close_col_() + 1;
     if (on_presets_()) return static_cast<int>(mabur::cam::kNumPresets);
     if (tab_ == Tab::Settings && row_ == kRowFirst) return 3;
     if (on_channels_()) {
@@ -452,6 +509,9 @@ class GsMenuModel {
     if (row_ == kRowTabs) {
       row_ = kRowFirst;
       enter_row_();
+    } else if (row_ == buttons_row_() && tab_ == Tab::Channel && col_ == 1) {
+      // Scan: the menu stays open so the bars fill in where you look.
+      if (scan_state_ != "running") scan_requested_ = true;
     } else if (row_ == buttons_row_()) {
       if (col_ == 0 && (!(pending_ == current_) || pending_cam_ != mabur::cam::kNoWish ||
                         pending_cal_ != CalAction::None)) {
@@ -524,6 +584,11 @@ class GsMenuModel {
     const bool changed = link_changed || cam_changed || cal_changed;
     if (row_ == kRowTabs)
       return "Left/Right: Channel, Settings or Camera. Down or Centre: into the tab.";
+    if (row_ == buttons_row_() && tab_ == Tab::Channel && col_ == 1) {
+      if (scan_state_ == "running") return "Scanning every channel with the spare card...";
+      return "Scan: rate every channel's traffic with the spare card (about 5 s, the link stays "
+             "up; not while armed). Green clean, yellow some, red busy.";
+    }
     if (row_ == buttons_row_()) {
       if (col_ == 0) {
         if (cal_changed && (link_changed || cam_changed))
@@ -583,7 +648,19 @@ class GsMenuModel {
                            ? channels_[static_cast<size_t>(i)] : 0;
     std::string s = "Press to fly on CH " + std::to_string(static_cast<int>(ch)) + " only";
     s += pending_.hop ? " (turns Hop off)." : ".";
-    if (live != 0) s += " Grey: the channel the link is on now.";
+    if (const ChannelRating* r = rating_(ch)) {
+      if (r->q >= 0) {
+        static const char* kWords[3] = {"clean", "some traffic", "busy"};
+        s += std::string(" Last scan: ") + kWords[r->q];
+        if (r->busy_pct >= 0) s += " (" + std::to_string(static_cast<int>(r->busy_pct + 0.5)) + " % busy)";
+        if (scan_age_s_ >= 60) s += ", " + std::to_string(scan_age_s_ / 60) + " min ago";
+        s += ".";
+      } else if (scan_state_ == "done" && ch == live) {
+        s += " Not scanned: the link is on it.";
+      }
+    } else if (live != 0) {
+      s += " Grey: the channel the link is on now.";
+    }
     return s;
   }
 
@@ -609,6 +686,10 @@ class GsMenuModel {
   uint64_t status_ms_ = 0;
   uint64_t status_dur_ms_ = kStatusMs;
   std::string banner_;
+  std::string scan_state_;
+  int scan_age_s_ = -1;
+  std::vector<ChannelRating> ratings_;
+  bool scan_requested_ = false;
 
   static std::string hex_(int v) {
     char b[8];

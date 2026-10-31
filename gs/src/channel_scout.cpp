@@ -53,7 +53,9 @@ ChannelScout::ChannelScout(ScoutCfg cfg, ScoutRadio& radio, NowFn now_ms, SleepF
       ranker_(dwell_channels(cfg_), cfg_.min_rounds, cfg_.pick_margin, cfg_.blocked_pct,
               cfg_.pick_busy_margin_pct),
       proposal_(cfg_.channels.empty() ? 0 : cfg_.channels.front()),
-      op_(cfg_.channels.empty() ? 0 : cfg_.channels.front()) {
+      op_(cfg_.channels.empty() ? 0 : cfg_.channels.front()),
+      manual_bins_(cfg_.link_width_mhz >= 40 ? scan_half_set(cfg_.channels) : cfg_.channels),
+      manual_ranker_(manual_bins_, 1) {
   prelude_done_.store(!(cfg_.one_card && cfg_.measure), std::memory_order_release);
   prelude_ack_.store(!(cfg_.one_card && cfg_.measure), std::memory_order_release);
 }
@@ -69,7 +71,57 @@ void ChannelScout::set_op(uint8_t ch) {
 }
 
 bool ChannelScout::has_work_() const {
-  return search_.load(std::memory_order_acquire) || measuring_();
+  return search_.load(std::memory_order_acquire) || measuring_() || manual_active_();
+}
+
+bool ChannelScout::request_scan(int passes, const char** why) {
+  const char* w = nullptr;
+  if (cfg_.one_card) w = "one_card";
+  else if (search_.load(std::memory_order_acquire)) w = "searching";
+  else if (manual_active_()) w = "running";
+  else if (manual_bins_.empty() || passes < 1) w = "nothing";
+  if (why) *why = w ? w : "";
+  if (w) return false;
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    manual_ranker_ = ChannelRanker(manual_bins_, 1);
+    manual_state_ = ScanReport::State::Running;
+  }
+  manual_idx_ = 0;
+  manual_left_.store(passes * static_cast<int>(manual_bins_.size()), std::memory_order_release);
+  return true;
+}
+
+ScanReport ChannelScout::scan_report() const {
+  std::lock_guard<std::mutex> lk(mu_);
+  ScanReport r;
+  r.state = manual_state_;
+  r.done_ms = manual_done_ms_;
+  for (const RankEntry& e : manual_ranker_.all()) {
+    ScanCell c;
+    c.ch = e.ch;
+    c.measured = e.visits > 0;
+    c.busy_valid = e.busy_valid;
+    c.busy_pct = e.worst_busy_pct;
+    c.busy = e.worst_busy;
+    r.cells.push_back(c);
+  }
+  return r;
+}
+
+// One manual-scan dwell: the next bin, observe only, op's own halves
+// skipped (counted, not visited). The last one marks the scan done.
+void ChannelScout::manual_step_() {
+  const uint8_t ch = manual_bins_[manual_idx_ % manual_bins_.size()];
+  ++manual_idx_;
+  const uint8_t op = op_.load(std::memory_order_acquire);
+  const bool op_half = ch == op || (cfg_.link_width_mhz >= 40 && ch == mabur::ht40_pair_other(op));
+  if (!op_half) dwell(ch, 0, /*burst=*/false, /*observe=*/true, /*manual=*/true);
+  if (manual_left_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+    std::lock_guard<std::mutex> lk(mu_);
+    manual_state_ = ScanReport::State::Done;
+    manual_done_ms_ = now_();
+  }
 }
 
 bool ChannelScout::measuring_() const {
@@ -174,6 +226,11 @@ bool ChannelScout::run_once() {
     return false;
   }
   working_.store(true, std::memory_order_release);
+  // The menu's Scan: while linked (a search takes the card first) on two cards.
+  if (manual_active_() && !search_.load(std::memory_order_acquire) && !cfg_.one_card) {
+    manual_step_();
+    return true;
+  }
   if (cfg_.one_card) {
     if (!prelude_done_.load(std::memory_order_acquire)) {
       if (measuring_() && now_() - t0_ < cfg_.one_card_ms)
@@ -200,7 +257,7 @@ bool ChannelScout::run_once() {
   return step_dwell_(/*burst_ok=*/true, measuring_());
 }
 
-bool ChannelScout::dwell(uint8_t ch, uint64_t round, bool burst, bool observe) {
+bool ChannelScout::dwell(uint8_t ch, uint64_t round, bool burst, bool observe, bool manual) {
   ScoutDwell d;
   auto& s = d.survey;
   s.seq = seq_++;
@@ -282,10 +339,10 @@ bool ChannelScout::dwell(uint8_t ch, uint64_t round, bool burst, bool observe) {
   rs.leak = static_cast<uint32_t>(std::lround(cfg_.leak_per_frame * static_cast<double>(dtx)));
   {
     std::lock_guard<std::mutex> lk(mu_);
-    if (e.fa_valid) ranker_.add(rs);
+    if (e.fa_valid) (manual ? manual_ranker_ : ranker_).add(rs);
     dwells_.push_back(d);
   }
-  publish_();
+  if (!manual) publish_();
   return e.fa_valid;
 }
 

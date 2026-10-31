@@ -69,6 +69,22 @@ struct ScoutDwell {
 // step is an op window (beaconing() on op for op_window_ms) then one dwell.
 // Time comes from the injected clock so tests run instantly. Every input
 // and output is an atomic; ranker_/dwells_ are under mu_.
+// The GS menu's Scan button (gs18): a manual scan's result per bin (a
+// member, and its 40 MHz pair's other half when the link flies 40+).
+struct ScanCell {
+  uint8_t ch = 0;
+  bool measured = false;
+  bool busy_valid = false;
+  double busy_pct = 0;     // worst NHM busy % over its visits
+  uint32_t busy = 0;       // worst event score (ChannelRanker::busy)
+};
+struct ScanReport {
+  enum class State { Idle, Running, Done };
+  State state = State::Idle;
+  int64_t done_ms = 0;            // when the last one finished
+  std::vector<ScanCell> cells;    // bins, config order
+};
+
 class ChannelScout {
  public:
   using NowFn = std::function<int64_t()>;
@@ -116,12 +132,22 @@ class ChannelScout {
   std::vector<ScoutDwell> take_dwells();
   bool done() const { return done_.load(std::memory_order_acquire); }
 
+  // Manual scan (the menu's Scan button): `passes` observe-only visits of
+  // every bin, never fed to the pick, op's own pair skipped (it carries the
+  // drone's video). Runs only while linked (search off) on a two-card GS:
+  // false otherwise ("one_card", "searching") or while one runs ("running").
+  bool request_scan(int passes, const char** why = nullptr);
+  ScanReport scan_report() const;
+  bool scan_running() const { return manual_active_(); }
+
  private:
   bool has_work_() const;
   bool measuring_() const;
   bool member_(uint8_t ch) const;
   int eff_min_rounds_() const;
   void park_();
+  bool manual_active_() const { return manual_left_.load(std::memory_order_acquire) > 0; }
+  void manual_step_();
   bool tune_(uint8_t ch);
   bool step_dwell_(bool burst_ok, bool observe);
   bool is_op_half_(uint8_t ch) const;
@@ -129,7 +155,7 @@ class ChannelScout {
   bool op_ranked_locked_(int mr) const;   // mu_ held
   // Retune, settle, [burst + gap,] [discard read, observe dwell_ms, read];
   // records the dwell (+ the sample when observed).
-  bool dwell(uint8_t ch, uint64_t round, bool burst, bool observe);
+  bool dwell(uint8_t ch, uint64_t round, bool burst, bool observe, bool manual = false);
   void publish_();
 
   ScoutCfg cfg_;
@@ -149,6 +175,14 @@ class ChannelScout {
       prelude_ack_{true}, done_{false};
   std::atomic<uint64_t> rounds_{0};
   bool need_width_ = true;   // run thread only: the next tune switches the card to 20 MHz
+  // Manual scan: bins (members + their pair halves at link width 40+),
+  // dwells left, the run thread's position, and the result (mu_).
+  std::vector<uint8_t> manual_bins_;
+  std::atomic<int> manual_left_{0};
+  size_t manual_idx_ = 0;
+  ChannelRanker manual_ranker_;
+  ScanReport::State manual_state_ = ScanReport::State::Idle;
+  int64_t manual_done_ms_ = 0;
   int64_t t0_ = -1;          // run thread only: first run_once() (one-card prelude start)
 };
 

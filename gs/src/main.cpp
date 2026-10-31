@@ -40,6 +40,7 @@
 #include "drone_restart.h"
 #include "debug_session.h"
 #include "frame_file_source.h"
+#include "channel_quality.h"
 #include "floor_cal.h"
 #include "frame_stream.h"
 #include "gap_timeout_policy.h"
@@ -646,6 +647,9 @@ static int run_radio(const maburgs::Config& cfg) {
     return maburgs::FloorCal(fc, r);
   }();
   maburgs::FloorCal::State floor_cal_logged = maburgs::FloorCal::State::Off;
+  // Channel tab Scan (gs18): the last request's outcome and how many came.
+  std::string chscan_result;
+  uint32_t chscan_req_n = 0;
 
   // scan.log (scanlog 6): the channel-selection record -- card caps, scout
   // dwells (boot-time AND in-flight), the pick, every link move, and the
@@ -1465,6 +1469,21 @@ static int run_radio(const maburgs::Config& cfg) {
       if (cam_req.result() != before)
         std::fprintf(stderr, "maburgs: camera request: %s\n", cam_req.result());
     }
+    // Channel tab Scan (gs18): refused while the drone reports armed or a
+    // stale arm state (a d19 drone's floor block); the scout card leaves the
+    // link for ~5 s. An older drone reports no arm view and is not refused.
+    if (rec_ctl.take_scan() > 0) {
+      std::string why;
+      if (latest_telem.t && latest_telem.t->has_floor && latest_telem.rx_ms + 3000 > drained_ms) {
+        const uint8_t arm = mabur::rc::floor_arm_view(latest_telem.t->floor_flags);
+        if (arm == 2) why = "armed";
+        else if (arm == 3) why = "arm_stale";
+      }
+      if (why.empty()) why = chan.request_scan(2);
+      chscan_result = why.empty() ? "started" : why;
+      ++chscan_req_n;
+      std::fprintf(stderr, "maburgs: channel scan from the player: %s\n", chscan_result.c_str());
+    }
     vrx.set_rec_wish(rec_ctl.wire());
     vrx.set_snr_off(rec_ctl.snr_off(drained_ms));
     for (const std::string& r : rec_ctl.take_refresh()) {
@@ -2030,6 +2049,20 @@ static int run_radio(const maburgs::Config& cfg) {
       sin.cam_wish = cam_req.wish();
       sin.cam_last = cam_req.last();
       sin.cam_result = cam_req.result();
+      {
+        const maburgs::ScanReport rep = chan.scan_report();
+        sin.chscan_state = rep.state == maburgs::ScanReport::State::Running ? "running"
+                           : rep.state == maburgs::ScanReport::State::Done  ? "done"
+                                                                           : "idle";
+        sin.chscan_result = chscan_result;
+        sin.chscan_req_n = chscan_req_n;
+        sin.chscan_age_s = rep.state == maburgs::ScanReport::State::Done
+                               ? static_cast<int>((static_cast<int64_t>(drained_ms) - rep.done_ms) / 1000)
+                               : -1;
+        sin.chscan.clear();
+        for (const maburgs::MemberQuality& m : maburgs::member_quality(cfg.radio.channels, rep))
+          sin.chscan.push_back({m.ch, m.q, m.busy_valid, m.busy_pct});
+      }
       sin.floorcal_state = maburgs::FloorCal::name(floor_cal.state());
       sin.floorcal_why = floor_cal.why();
       sin.floorcal_width = floor_cal.width();

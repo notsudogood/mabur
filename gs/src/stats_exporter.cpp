@@ -621,6 +621,18 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
   camreq["last"] = in.cam_last == 0xFF ? json(nullptr) : json(in.cam_last);
   camreq["result"] = in.cam_result ? in.cam_result : "";
 
+  {
+    json chs = json::array();
+    for (const auto& m : in.chscan)
+      chs.push_back({{"c", m.ch},
+                     {"q", m.q},
+                     {"busy", m.busy_valid ? json(std::round(m.busy_pct * 10.0) / 10.0) : json(nullptr)}});
+    j["chscan"] = {{"state", in.chscan_state ? in.chscan_state : "idle"},
+                   {"result", in.chscan_result},
+                   {"req_n", in.chscan_req_n},
+                   {"age_s", in.chscan_age_s < 0 ? json(nullptr) : json(in.chscan_age_s)},
+                   {"ch", chs}};
+  }
   j["floorcal"] = {{"state", in.floorcal_state ? in.floorcal_state : "off"},
                    {"why", in.floorcal_why ? in.floorcal_why : ""},
                    {"width", in.floorcal_width},

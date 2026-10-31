@@ -114,6 +114,11 @@ class RecControl {
       calibration_.push_back(s.substr(4));
       return false;
     }
+    // "scan": the menu's Scan button (gs18), counted for take_scan().
+    if (s == "scan") {
+      ++scan_;
+      return false;
+    }
     static const std::string kCamera = "camera ";
     if (s.size() > kCamera.size() && s.compare(0, kCamera.size(), kCamera) == 0) {
       const std::string v = s.substr(kCamera.size());
@@ -149,6 +154,13 @@ class RecControl {
     return out;
   }
 
+  // Scan requests received since the last call.
+  int take_scan() {
+    const int n = scan_;
+    scan_ = 0;
+    return n;
+  }
+
   // Refresh reasons received since the last call, in arrival order.
   std::vector<std::string> take_refresh() {
     std::vector<std::string> out;
@@ -177,6 +189,7 @@ class RecControl {
   std::vector<std::string> refresh_;
   std::vector<uint8_t> camera_;
   std::vector<std::string> calibration_;
+  int scan_ = 0;
   int16_t phase_ = 0;
   uint64_t phase_ms_ = 0;
   bool have_phase_ = false;

@@ -132,6 +132,24 @@ bool parse_gs_snapshot(const char* data, size_t n, GsSnapshot* out) {
     out->cal_pct = integer(*cal, "pct");
     out->cal_start_n = integer(*cal, "start_n").value_or(0);
   }
+  if (const json* cs = obj(j, "chscan")) {
+    auto st = cs->find("state");
+    if (st != cs->end() && st->is_string()) out->chscan_state = st->get<std::string>();
+    auto rs = cs->find("result");
+    if (rs != cs->end() && rs->is_string()) out->chscan_result = rs->get<std::string>();
+    out->chscan_req_n = integer(*cs, "req_n").value_or(0);
+    out->chscan_age_s = integer(*cs, "age_s").value_or(-1);
+    auto ch = cs->find("ch");
+    if (ch != cs->end() && ch->is_array())
+      for (const json& e : *ch) {
+        if (!e.is_object()) continue;
+        GsSnapshot::ChRating r;
+        r.ch = integer(e, "c").value_or(0);
+        r.q = integer(e, "q").value_or(-1);
+        r.busy = num(e, "busy").value_or(-1.0);
+        if (r.ch > 0 && r.ch < 256) out->chscan.push_back(r);
+      }
+  }
   if (const json* fc = obj(j, "floorcal")) {
     auto str = [&](const char* k, std::string* dst) {
       auto it = fc->find(k);

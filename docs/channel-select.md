@@ -464,6 +464,30 @@ onto `want` (above), and — in auto mode only — the reactive hop
 hop's candidate list is `radio.channels` and its exhaustion path holds
 rather than falling back anywhere — see that page's §1, §3, §5 and §7.
 
+## Manual scan: the menu's Scan button (gs18)
+
+The Channel tab's **Scan** button rates every member of the set, on demand:
+maburplay sends `scan` to maburgs (RecControl), which asks the scout card
+for two observe-only passes over the members' 20 MHz halves (each member
+and the other half of its 40 MHz pair at link width 40+, the members alone
+at 20): about 5 s at the shipped dwell. It never feeds the pick or moves the
+link. Op's own pair is not visited (it carries the drone's video), so the
+live channel stays unrated. The in-flight scout stands down for it: held off
+before the scan starts, any dwell of its in progress waited out (both use
+the spare card). Refused on a one-card GS (the card carries the link), while
+searching (no link), while one runs, and while a d19 drone reports armed or
+a stale arm state (an older drone reports no arm view and is not refused).
+
+Each member's rating is its worst measured half (`gs/src/channel_quality.h`):
+NHM busy % when the dwell has one, green < 5 %, yellow 5-20 %, red >= 20 %;
+otherwise the event score, green < 30, yellow 30-150, red >= 150 per 250 ms
+dwell. Both sets of thresholds are provisional, picked from one bench
+(`docs/findings/2026-10-04-channel-set-bench.md`: quiet halves 4-14 / 0-12 %,
+a co-located jammer's pair 32.8 % NHM busy while its leakage pushed the
+event score of the clean halves to 444-1286); no field calibration. The
+menu draws the rating as a bar at each channel cell's left edge and names it
+in the help line with the busy % and the scan's age.
+
 ## Observability
 
 - **`scan.log`** (`gs/src/scan_log.h`): marker `scanlog 6`. Header line:

@@ -165,4 +165,14 @@ TEST(cal_off_request_held_until_the_drone_is_uncalibrated) {
   CHECK(r.wire(5001 + maburgs::CalOffRequest::kTimeoutMs) == 0);
   CHECK(std::string(r.result()) == "timeout");
 }
+// gs18: "scan" (the Channel tab's Scan button) is counted, consumed once,
+// and never touches the VTX wish.
+TEST(rec_control_scan_is_counted_and_consumed) {
+  RecControl c;
+  CHECK(!c.apply("scan"));
+  CHECK(!c.apply("scan\n"));
+  CHECK(c.wire() == 0);
+  CHECK(c.take_scan() == 2 && c.take_scan() == 0);
+  CHECK(!c.apply("scanx") && c.take_scan() == 0);
+}
 MTEST_MAIN

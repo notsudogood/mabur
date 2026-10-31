@@ -1922,6 +1922,8 @@ int main(int argc, char** argv) {
   // datagram, so nothing settled before this player started is announced).
   std::optional<maburplay::GsMenuModel::CalSeen> cal_seen;
   std::optional<maburplay::GsMenuModel::FloorCalSeen> floorcal_seen;
+  int chscan_req_seen = -1;          // chscan.req_n last seen (-1: none yet)
+  std::string chscan_state_seen;
   // Both overlays' state for the composer, filled by the two intake blocks
   // and consumed by the single composition block after them.
   [[maybe_unused]] bool msp_ready = false;
@@ -1969,7 +1971,13 @@ int main(int argc, char** argv) {
                          P{&menu_stick.center, K::Center, "centre"}}) {
         if (!p.b->is_open() || !p.b->poll(mnow)) continue;
         std::fprintf(stderr, "maburplay: menu key %s\n", p.name);
-        if (menu_model->key(p.k, mnow) != maburplay::GsMenuModel::Action::Apply) continue;
+        const maburplay::GsMenuModel::Action act = menu_model->key(p.k, mnow);
+        // Channel tab Scan (gs18): maburgs runs it on the spare card.
+        if (menu_model->take_scan_request()) {
+          core_ctl.send_line("scan");
+          std::fprintf(stderr, "maburplay: menu channel scan requested\n");
+        }
+        if (act != maburplay::GsMenuModel::Action::Apply) continue;
         // A camera preset goes to maburgs, which holds it in every RCF until
         // the drone's telemetry settles it (gs/src/camera_request.h).
         const uint8_t cam = menu_model->take_camera_applied();
@@ -2333,6 +2341,26 @@ int main(int argc, char** argv) {
             }
           }
           floorcal_seen = f;
+        }
+        // Channel tab Scan (gs18): the bars, and a line per request outcome.
+        if (!gs_stale) {
+          std::vector<maburplay::GsMenuModel::ChannelRating> rs;
+          for (const auto& r : sn.chscan)
+            rs.push_back({static_cast<uint8_t>(r.ch), r.q, r.busy});
+          menu_model->set_channel_scan(sn.chscan_state, rs, sn.chscan_age_s);
+          if (sn.chscan_req_n != chscan_req_seen) {
+            if (chscan_req_seen >= 0) {
+              const std::string msg = maburplay::GsMenuModel::scan_result_text(sn.chscan_result);
+              if (!msg.empty()) menu_model->set_status(msg, now_ms);
+              std::fprintf(stderr, "maburplay: channel scan: %s\n", sn.chscan_result.c_str());
+            }
+            chscan_req_seen = sn.chscan_req_n;
+          }
+          if (chscan_state_seen == "running" && sn.chscan_state == "done") {
+            menu_model->set_status("Scan done: green clean, yellow some traffic, red busy", now_ms);
+            std::fprintf(stderr, "maburplay: channel scan done\n");
+          }
+          chscan_state_seen = sn.chscan_state;
         }
         if (!cam_result_seen) cam_result_seen = sn.cam_result;
         if (sn.cam_result != *cam_result_seen) {

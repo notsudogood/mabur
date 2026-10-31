@@ -366,6 +366,19 @@ struct StatsInput {
   uint8_t cam_last = 0xFF;
   const char* cam_result = "";
 
+  // Channel tab Scan (channel_quality.h), top-level `chscan`.
+  const char* chscan_state = "idle";
+  std::string chscan_result;
+  uint32_t chscan_req_n = 0;
+  int chscan_age_s = -1;
+  struct ChScanMember {
+    uint8_t ch = 0;
+    int q = -1;            // 0 clean, 1 some, 2 busy, -1 not measured
+    bool busy_valid = false;
+    double busy_pct = 0;
+  };
+  std::vector<ChScanMember> chscan;
+
   // First-boot floor calibration (floor_cal.h), top-level `floorcal`.
   const char* floorcal_state = "off";
   const char* floorcal_why = "";

@@ -172,6 +172,13 @@ class ChannelCore {
   bool sweep_pending() const { return sweep_.on; }
   uint64_t sweep_timeouts() const { return sweep_timeouts_; }
   bool scout_working() const { return scout_ && scout_->working(); }       // card reopen gate
+  // gs18, the menu's Scan button: a manual scan of the set on the scout card
+  // (ChannelScout::request_scan: two cards, linked). "" = started, else why
+  // not ("no_scout", "card_down", "one_card", "searching", "running",
+  // "nothing"). The in-flight scout stands down for it: it is held off
+  // before the scan starts and any dwell of its in progress is waited out.
+  std::string request_scan(int passes);
+  ScanReport scan_report() const { return scout_ ? scout_->scan_report() : ScanReport{}; }
   bool scout_owns_card(int card) const { return scout_owns_() && card == scout_card_; }  // TX snapshots
   uint64_t sampler_dropped() const { return sampler_ ? sampler_->dropped() : 0; }
   // The card's device-use lock (WindowSampler::hold_card): the card
@@ -332,6 +339,7 @@ class ChannelCore {
   std::vector<std::pair<int, ScoutDwell>> dwell_recs_;
   std::vector<HopVisit> dwell_visits_;
   std::mutex inflight_mu_;
+  std::atomic<bool> manual_scan_{false};   // a menu Scan is running: the in-flight scout waits
   bool inflight_started_ = false;
   std::thread scout_thread2_;
   bool shut_ = false;

@@ -91,6 +91,11 @@ void MenuLayer::draw_cell_(const Surface& s, const DirtyRect& r, const GsMenuCel
   const int gap = std::max(1, outline_ / 2);
   const DirtyRect in{r.x, r.y, r.w - gap, r.h - gap};
   fill_rect(s, in.x, in.y, in.w, in.h, c.active ? kActiveRgb : kCellRgb);
+  // The Scan rating: a bar down the cell's left edge, inside the text inset.
+  if (c.bar >= 0) {
+    const uint32_t bc = c.bar == 0 ? tok::kStatusOk : c.bar == 1 ? tok::kStatusCaution : tok::kChannelBusy;
+    fill_rect(s, in.x, in.y, std::max(4, pad_ / 3), in.h, bc);
+  }
   const uint32_t txt = c.dim ? tok::kTextLabel : kTextRgb;
   const int by = baseline_in(*atlas_, in);
   if (centred) {

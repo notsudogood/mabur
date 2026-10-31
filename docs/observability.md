@@ -359,6 +359,16 @@ and that request's result (`""`, `sent`, `applying`, then `switched`,
 commit and rollback); maburplay logs `menu camera preset N requested` and
 `camera request: <result>`.
 
+Top-level `chscan = {state, result, req_n, age_s, ch}` is the Channel tab's
+Scan (`docs/channel-select.md` "Manual scan"): `state` `idle` / `running` /
+`done`, `result` the last request's outcome (`started`, `armed`,
+`arm_stale`, `one_card`, `searching`, `running`, `no_scout`, `card_down`),
+`req_n` requests seen, `age_s` since the last scan finished (null: none),
+`ch` one `{c, q, busy}` per member (`q` 0 clean, 1 some, 2 busy, -1 not
+measured; `busy` the worst half's NHM busy %, null without one). maburgs
+logs `channel scan from the player: <result>`; maburplay logs `menu channel
+scan requested`, `channel scan: <result>` and `channel scan done`.
+
 `drone.floor` (d19, null from an older drone) is the drone's learned
 wide-TX IGI floor from the Telem floor block: `learning`, `value`,
 `stalls` (this session), `v40` / `v80` (that width verified at the floor:

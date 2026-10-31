@@ -191,3 +191,10 @@ waybeam's will not load, so a bad driver ends in a rollback, not a boot
 loop. Once a switch has loaded waybeam's driver it stays loaded for every
 preset (it has all four modes); delete `/etc/sensor_star6e` and reboot to
 go back to stock.
+
+The chosen preset survives power cycles (it lives in `/etc/mabur.toml`).
+Since d19 it also survives a new drone image: the config refresh carries
+the picture's lines over when the new image's maburd loads them
+(`docs/deploy.md`, "config refresh"); before d19 every new image went back
+to the default 1080p 60. `/etc/sensor_star6e` is its own file and was
+always kept.

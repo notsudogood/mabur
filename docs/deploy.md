@@ -104,7 +104,13 @@ image's default:
   replaced, with what belongs to this drone's own radio carried over:
   maburcal's four `[radio]` calibration lines when `power_mode = "offset"`,
   and `radio.wide_igi_floor` when it is set (0..127, not the image's -1),
-  because the 40 MHz stall fix is per radio unit. `/etc/mabur.keep` opts out; each refresh is
+  because the 40 MHz stall fix is per radio unit; and since d19 the camera
+  preset (`[venc]` `size`/`fps`/`slices`/`sensor_crop` and `[record]`
+  `size`) when its picture differs from the old image's default, kept only
+  if the new image's `maburd -c <file> --check-config` loads the result
+  (else the new default picture, said in the log line). The carry matches
+  key AND section, so `[venc] size` never lands on `[record] size`.
+  `/etc/mabur.keep` opts out; each refresh is
   one line in `/root/mabur-config.log`. `bundle/install.sh` stamps a bench
   drone's config as made on its image. Hand-installing a newer `mabur.toml`
   over an older image needs the same stamp

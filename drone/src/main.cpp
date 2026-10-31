@@ -3879,8 +3879,9 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
 
 void print_usage(const char* argv0) {
   std::fprintf(stderr,
-               "usage: %s -c <config.toml> [--dry-run --in <file> --out <file> [--rc-in <file>]]\n",
-               argv0);
+               "usage: %s -c <config.toml> [--dry-run --in <file> --out <file> [--rc-in <file>]]\n"
+               "       %s -c <config.toml> --check-config   (load it and exit: 0 = this image takes it)\n",
+               argv0, argv0);
 }
 
 }  // namespace
@@ -3888,6 +3889,7 @@ void print_usage(const char* argv0) {
 int main(int argc, char** argv) {
   std::string cfg_path;
   bool dry_run = false;
+  bool check_config = false;
   std::string in_path, out_path, rc_in_path;
   std::string msp_in_path, msp_out_path;
 
@@ -3897,6 +3899,8 @@ int main(int argc, char** argv) {
       cfg_path = argv[++i];
     } else if (a == "--dry-run") {
       dry_run = true;
+    } else if (a == "--check-config") {
+      check_config = true;
     } else if (a == "--in" && i + 1 < argc) {
       in_path = argv[++i];
     } else if (a == "--out" && i + 1 < argc) {
@@ -3929,6 +3933,13 @@ int main(int argc, char** argv) {
   } catch (const std::exception& e) {
     std::fprintf(stderr, "error: %s\n", e.what());
     return 1;
+  }
+  // --check-config: S96mabur's refresh asks this image whether it takes a
+  // config carried over from the last one (the camera preset) before it
+  // replaces the drone's file with it.
+  if (check_config) {
+    std::fprintf(stderr, "config ok: %s\n", cfg_path.c_str());
+    return 0;
   }
   if (!defaulted.empty()) {
     std::fprintf(stderr, "config: %zu key(s) defaulted:\n", defaulted.size());

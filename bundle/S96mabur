@@ -1,5 +1,5 @@
 #!/bin/sh
-DAEMON=/usr/bin/maburd
+DAEMON=${MABUR_DAEMON:-/usr/bin/maburd}
 CONF=${MABUR_CONF:-/etc/mabur.toml}
 # The image's own default (OpenIPC's read-only squashfs), the copy of it the
 # current $CONF was last refreshed from, and the opt-out.
@@ -72,7 +72,11 @@ same() {
 # belongs to this drone's own radio is carried over: the TX-power
 # calibration (maburcal's four [radio] lines) when it is in use, and a
 # wide_igi_floor set by hand (the 40 MHz stall fix is per radio unit: one
-# 8812EU needs it, another never stalls). maburd's learned floor
+# 8812EU needs it, another never stalls), and the camera preset (the GS
+# menu's Camera tab: [venc] size/fps/slices/sensor_crop and the [record]
+# size that follows the picture's shape) when it differs from the old
+# image's default -- kept only if the new maburd's --check-config takes it,
+# else the new image's default picture. maburd's learned floor
 # (/etc/mabur.igi_floor, radio.igi_floor_auto) is its own file and is left
 # alone here, epoch or not. Edits made on THIS image stay
 # ($STAMP matches the image). touch $KEEP to never refresh.
@@ -91,6 +95,34 @@ wipe_config() {
   cp "$IMAGE_CONF" "$CONF" && cp "$IMAGE_CONF" "$STAMP" && echo "$CONFIG_EPOCH" > "$EPOCH_FILE"
   echo "mabur config: $CONF $what"
   echo "$(date) $CONF $what" >> "$BACKUP_DIR/mabur-config.log"
+}
+
+# The lines of section [$2] whose key matches the ERE $3, as
+# "<section><TAB><line>" (the carry file's form; "*" = any section).
+sect_lines() {
+  awk -v want="$2" -v keys="^($3)\$" '
+    /^[[:space:]]*\[/ { s = $0; sub(/^[[:space:]]*\[+/, "", s); sub(/\].*/, "", s); cur = s; next }
+    { k = $0; sub(/^[[:space:]]*/, "", k); sub(/[[:space:]]*=.*/, "", k) }
+    cur == want && k ~ keys { print want "\t" $0 }' "$1"
+}
+# Their values alone (comment and spacing dropped), for comparing.
+sect_values() {
+  sect_lines "$@" | awk -F'\t' '{ v = $2; sub(/^[^=]*=/, "", v); sub(/#.*/, "", v); gsub(/[[:space:]]/, "", v); print v }'
+}
+# The image default ($IMAGE_CONF) with each carried line of $1 in place of
+# the first line of the same key in the same section ("*": any section),
+# into $CONF.new. A carried key the image lacks is dropped.
+merge_carry() {
+  awk 'FILENAME == ARGV[1] {
+         t = index($0, "\t"); sec = substr($0, 1, t - 1); line = substr($0, t + 1)
+         k = line; sub(/^[[:space:]]*/, "", k); sub(/[[:space:]]*=.*/, "", k)
+         keep[sec SUBSEP k] = line; next }
+       /^[[:space:]]*\[/ { s = $0; sub(/^[[:space:]]*\[+/, "", s); sub(/\].*/, "", s); cur = s }
+       { k = $0; sub(/^[[:space:]]*/, "", k); sub(/[[:space:]]*=.*/, "", k)
+         id = cur SUBSEP k; any = "*" SUBSEP k
+         if ((id in keep) && !(id in done)) { print keep[id]; done[id] = 1; next }
+         if ((any in keep) && !(any in done)) { print keep[any]; done[any] = 1; next }
+         print }' "$1" "$IMAGE_CONF" > "$CONF.new"
 }
 
 refresh_config() {
@@ -121,22 +153,32 @@ refresh_config() {
   : > "$CONF.carry"
   if grep -q '^[[:space:]]*power_mode[[:space:]]*=[[:space:]]*"offset"' "$old"; then
     grep -E '^[[:space:]]*(power_mode|rate_walls_rel|legacy_wall_rel|wall_margin_db)[[:space:]]*=' "$old" \
-      >> "$CONF.carry"
+      | awk '{ print "*\t" $0 }' >> "$CONF.carry"
     kept="TX-power calibration"
   fi
   # A set floor: 0 (off) or 1..127. -1 is "the image's default", so the new
   # image decides.
   if grep -qE '^[[:space:]]*wide_igi_floor[[:space:]]*=[[:space:]]*[0-9]' "$old"; then
-    grep -E '^[[:space:]]*wide_igi_floor[[:space:]]*=' "$old" | head -1 >> "$CONF.carry"
+    grep -E '^[[:space:]]*wide_igi_floor[[:space:]]*=' "$old" | head -1 | awk '{ print "*\t" $0 }' >> "$CONF.carry"
     kept="${kept:+$kept and }wide_igi_floor"
   fi
-  carried=${kept:+ ($kept kept)}
-  # Each carried line replaces the first line of the same key in the new file.
-  awk 'FILENAME == ARGV[1] { k = $1; sub(/=.*/, "", k); keep[k] = $0; next }
-       { k = $1; sub(/=.*/, "", k)
-         if ((k in keep) && !(k in done)) { print keep[k]; done[k] = 1; next }
-         print }' "$CONF.carry" "$IMAGE_CONF" > "$CONF.new" &&
-    mv "$CONF.new" "$CONF" && cp "$IMAGE_CONF" "$STAMP"
+  # The camera preset: carried when the picture differs from the old image's
+  # default, and only if the new image's maburd takes the result.
+  cam_keys='size|fps|sensor_crop'
+  note=""
+  if [ -f "$STAMP" ] && [ "$(sect_values "$old" venc "$cam_keys")" != "$(sect_values "$STAMP" venc "$cam_keys")" ]; then
+    cp "$CONF.carry" "$CONF.base"
+    { sect_lines "$old" venc 'size|fps|slices|sensor_crop'; sect_lines "$old" record 'size'; } >> "$CONF.carry"
+    if merge_carry "$CONF.carry" && { [ ! -x "$DAEMON" ] || "$DAEMON" -c "$CONF.new" --check-config >/dev/null 2>&1; }; then
+      kept="${kept:+$kept and }camera preset"
+    else
+      cp "$CONF.base" "$CONF.carry"
+      note="; camera preset NOT kept (this image refuses it), back to its default picture"
+    fi
+    rm -f "$CONF.base"
+  fi
+  carried="${kept:+ ($kept kept)}$note"
+  merge_carry "$CONF.carry" && mv "$CONF.new" "$CONF" && cp "$IMAGE_CONF" "$STAMP"
   rm -f "$CONF.carry" "$CONF.new"
   echo "mabur config: new image -- $CONF reset to its default$carried; yours is $old"
   echo "$(date) $CONF reset to the image default$carried; old copy $old" >> "$BACKUP_DIR/mabur-config.log"

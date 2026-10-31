@@ -70,4 +70,29 @@ cmp -s "$T/rom.toml" "$T/mabur.toml" || fail "epoch wipe did not restore the exa
 # ...once: an edit after it survives the next start on the same image.
 sed -i 's/channels = .*/channels = [100]/' "$T/mabur.toml"
 run; grep -q 'channels = \[100\]' "$T/mabur.toml" || fail "edit after the epoch wipe lost"
+# 9. The camera preset (the GS menu's Camera tab) carries section by
+# section: [venc] and [record] both have a size, and only the picture's own
+# lines move. The new image's maburd is asked first (--check-config).
+printf '[radio]\nchannels = [36]\n\n[venc]\nsize       = "1920x1080"   # the picture\nfps        = 60\nsensor_crop = false\nslices      = 4\n\n[record]\nfps          = 60\nsize         = "1920x1080"\n' > "$T/rom.toml"
+cp "$T/rom.toml" "$T/mabur.toml"; cp "$T/rom.toml" "$T/mabur.toml.image"; rm -f "$T/keep"
+sed -i -e 's/^size       = "1920x1080"   # the picture/size = "1280x720"/' -e 's/^fps        = 60/fps = 100/' \
+       -e 's/^slices      = 4/slices = 3/' -e 's/^size         = "1920x1080"/size = "1280x720"/' "$T/mabur.toml"
+printf '#!/bin/sh\necho "$@" >> %s/checked\nexit 0\n' "$T" > "$T/maburd-ok"; chmod +x "$T/maburd-ok"
+sed -i 's/channels = \[36\]/channels = [40]/' "$T/rom.toml"
+MABUR_DAEMON=$T/maburd-ok run
+printf '[radio]\nchannels = [40]\n\n[venc]\nsize = "1280x720"\nfps = 100\nsensor_crop = false\nslices = 3\n\n[record]\nfps          = 60\nsize = "1280x720"\n' > "$T/want"
+cmp -s "$T/want" "$T/mabur.toml" || { diff "$T/want" "$T/mabur.toml"; fail "camera preset not carried by section"; }
+grep -q -- '--check-config' "$T/checked" || fail "the new maburd was not asked"
+tail -1 "$T/mabur-config.log" | grep -q 'camera preset kept' || fail "no camera line in the log"
+# 10. A preset the new image refuses: its default picture, the rest as usual.
+sed -i 's/channels = \[40\]/channels = [44]/' "$T/rom.toml"
+printf '#!/bin/sh\nexit 1\n' > "$T/maburd-no"; chmod +x "$T/maburd-no"
+MABUR_DAEMON=$T/maburd-no run
+cmp -s "$T/rom.toml" "$T/mabur.toml" || { diff "$T/rom.toml" "$T/mabur.toml"; fail "refused preset not dropped"; }
+tail -1 "$T/mabur-config.log" | grep -q 'camera preset NOT kept' || fail "refusal not in the log"
+# 11. The old image's own picture is not a choice: the new default wins.
+sed -i -e 's/channels = \[44\]/channels = [48]/' -e 's/^fps        = 60/fps        = 90/' "$T/rom.toml"
+sed -i 's/channels = \[44\]/channels = [149]/' "$T/mabur.toml"
+MABUR_DAEMON=$T/maburd-ok run
+cmp -s "$T/rom.toml" "$T/mabur.toml" || { diff "$T/rom.toml" "$T/mabur.toml"; fail "default picture was carried"; }
 echo "drone config refresh: OK"

@@ -53,6 +53,10 @@ struct Args {
   // always VHT (HT has no 80 MHz); without --vht the 20/40 frames of an
   // 80-tuned run are HT, as the ladder's 20/40 rungs fly.
   bool vht = false;
+  // --nss 2: two spatial streams, one per antenna (HT MCS8-15 for --mcs
+  // 0-7, VHT NSS 2). The 2T2R 8812EU/CU drive both chains for these rates
+  // (devourer HalJaguar3 0x820); no STBC, which would need a third chain.
+  int nss = 1;
   uint64_t bitrate_bps = 8'000'000;
   int time_s = 0;  // 0 = until SIGINT
   FecParams fec;   // overhead/symbol_size/window/bpb defaults
@@ -122,7 +126,7 @@ struct Args {
 
 void usage(const char* argv0) {
   std::fprintf(stderr,
-    "usage: %s --channel N [--bw 20|40|80] --mcs 0..9 [--vht] --bitrate 8M [--time S]\n"
+    "usage: %s --channel N [--bw 20|40|80] --mcs 0..9 [--vht] [--nss 1|2] --bitrate 8M [--time S]\n"
     "  [--overhead 0.5] [--symbol-size 64] [--window 128] [--bpb 16]\n"
     "  [--size B] [--ldpc] [--stbc]\n"
     "  [--pwr-mode override|none|offset] [--pwr 0..63] [--pwr-offset-qdb Q]\n"
@@ -146,6 +150,7 @@ bool parse_args(int argc, char** argv, Args* a) {
     if (k == "--channel") { if (!next(&a->channel)) return false; }
     else if (k == "--bw") { if (!next(&a->bw) || (a->bw != 20 && a->bw != 40 && a->bw != 80)) return false; }
     else if (k == "--vht") { a->vht = true; }
+    else if (k == "--nss") { if (!next(&a->nss)) return false; }
     else if (k == "--mcs") { if (!next(&a->mcs)) return false; }
     else if (k == "--bitrate") {
       if (i + 1 >= argc) return false;
@@ -226,6 +231,14 @@ bool parse_args(int argc, char** argv, Args* a) {
   const int widest = a->frame_bw > 0 ? a->frame_bw : a->bw;
   const bool any_ht = !a->vht && (widest < 80 || a->frame_bw == -1);
   const int mcs_max = any_ht ? 7 : 9;
+  if (a->nss < 1 || a->nss > 2) {
+    std::fprintf(stderr, "error: --nss must be 1 or 2\n");
+    return false;
+  }
+  if (a->nss == 2 && a->stbc) {
+    std::fprintf(stderr, "error: --nss 2 with --stbc: two streams on two antennas leave none for STBC\n");
+    return false;
+  }
   if (a->mcs < 0 || a->mcs > mcs_max || a->mcs_mix > mcs_max) {
     std::fprintf(stderr, "error: --mcs/--mcs-mix must be 0..%d (%s frames)\n",
                  mcs_max, any_ht ? "HT" : "VHT");
@@ -309,14 +322,14 @@ int main(int argc, char** argv) {
   }
   install_devourer_signal_handlers();
 
-  // One frame's TxMode: VHT 1SS for 80 MHz frames (HT has no 80 MHz) and
-  // for every width under --vht, HT otherwise.
+  // One frame's TxMode: VHT for 80 MHz frames (HT has no 80 MHz) and for
+  // every width under --vht, HT otherwise; --nss streams either way.
   auto make_mode = [&](int bw, int mcs) {
     devourer::TxMode m;
     const bool vht = bw == 80 || a.vht;
     m.mode = vht ? devourer::TxMode::Mode::VHT : devourer::TxMode::Mode::HT;
-    if (vht) { m.vht_mcs = static_cast<uint8_t>(mcs); m.vht_nss = 1; }
-    else m.ht_mcs = static_cast<uint8_t>(mcs);
+    if (vht) { m.vht_mcs = static_cast<uint8_t>(mcs); m.vht_nss = static_cast<uint8_t>(a.nss); }
+    else m.ht_mcs = static_cast<uint8_t>(mcs + 8 * (a.nss - 1));   // --nss 2: MCS8-15
     m.bw_mhz = static_cast<uint8_t>(bw);
     m.ldpc = a.ldpc;
     m.stbc = a.stbc;
@@ -352,7 +365,10 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "  frame-bw %s (tuned %d)\n",
                  a.frame_bw < 0 ? "mix" : std::to_string(a.frame_bw).c_str(), a.bw);
   if (mode.mode == devourer::TxMode::Mode::VHT || a.bw == 80)
-    std::fprintf(stderr, "  VHT 1SS for %s frames\n", a.vht ? "all" : "80 MHz");
+    std::fprintf(stderr, "  VHT %dSS for %s frames\n", a.nss, a.vht ? "all" : "80 MHz");
+  if (a.nss == 2)
+    std::fprintf(stderr, "  2 spatial streams: HT MCS%d / VHT 2SS MCS%d (--mcs is the per-stream index)\n",
+                 a.mcs + 8, a.mcs);
 
   const double afac = air_factor(a.fec, a.size, radiotap.size());
   std::fprintf(stderr,

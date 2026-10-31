@@ -60,8 +60,9 @@ struct Args {
   // --rate-hist: tally (mac_seq parity, received HT MCS) for CRC-clean
   // canonical frames; printed as "H parity mcs count" at exit (stdout).
   // Also "B parity rate_code bw count": the raw descriptor rate code and
-  // PPDU width (0x0C+n = HT MCSn, 0x2C+n = VHT 1SS MCSn; bw 0/1/2 =
-  // 20/40/80 MHz), so an 80 MHz run proves what actually aired.
+  // PPDU width (0x0C+n = HT MCSn, n up to 15 for two streams; 0x2C+n =
+  // VHT 1SS MCSn, 0x36+n = VHT 2SS MCSn; bw 0/1/2 = 20/40/80 MHz), so a
+  // run proves what actually aired.
   bool rate_hist = false;
   // --range FILE: tally linkbench-tx --range-sweep frames per (cycle, bw,
   // mcs, rel) and append each finished cycle to FILE as

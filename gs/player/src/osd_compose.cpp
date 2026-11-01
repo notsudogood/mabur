@@ -139,7 +139,11 @@ bool OsdComposer::wants(const OsdComposeIn& in) const {
     // buffer shows the frozen flight OSD past osd.stale_ms forever. Exactly
     // the configuration shipping today (MSP-only, no second publisher).
     // Settles after one composition: compose_screen() sets screen_blank_.
-    if (have_screen_ && in.msp_stale && !screen_blank_) return true;
+    // The same for the playback hide (in.hide_live).
+    if (have_screen_ && (in.msp_stale || in.hide_live) && !screen_blank_) return true;
+    // Playback over, source live: the grid comes back now, not on the next
+    // screen the flight controller happens to send.
+    if (screen_hidden_ && !in.hide_live && !in.msp_stale) return true;
   }
   // Deliberately NOT a trigger: "the other buffer's MSP grid is a screen
   // behind". A buffer that is behind is also a buffer nothing is publishing,
@@ -165,7 +169,11 @@ OsdComposeOut OsdComposer::compose_screen(int idx, const Surface& s, const OsdCo
   // blank trigger and the burn feed are entitled to look at. Buffer idx may
   // already agree with it (blanked_[idx]) and still need publishing, which
   // is the case both N1 and N2 fell through.
-  const bool grid_blank = msp_on && have_screen_ && in.msp_stale;
+  // Blank while the source is quiet, and hidden while a recording plays;
+  // only the first is announced.
+  const bool stale_blank = msp_on && have_screen_ && in.msp_stale;
+  const bool hidden = msp_on && have_screen_ && in.hide_live;
+  const bool grid_blank = stale_blank || hidden;
 
   // ---------------- MSP layer ----------------
   // msp_write_ ends up holding what this composition wrote into buffer idx,
@@ -173,7 +181,7 @@ OsdComposeOut OsdComposer::compose_screen(int idx, const Surface& s, const OsdCo
   msp_write_.clear();
   bool msp_drew = false;  // the draw branch ran, so there is a grid on this buffer
   if (msp_on) {
-    if (have_screen_ && in.msp_stale) {
+    if (grid_blank) {
       if (!blanked_[idx]) {
         // The grid rect BEFORE clear(), which resets the shadow -- afterwards
         // there is no record of where the grid was.
@@ -239,7 +247,12 @@ OsdComposeOut OsdComposer::compose_screen(int idx, const Surface& s, const OsdCo
     // burn feed below relies on that: it quantizes rects this update may not
     // have touched. The rect list is wanted only when the card block moved,
     // for the repair below.
-    out.gs_drawn = gs_[idx]->update(*in.snap, in.gs_stale, in.gs_ps, s,
+    // The playback hide reaches the layer through its player state; only
+    // the display buffers' MenuLayer acts on it (compose_burn() never sets
+    // it, so a recording keeps the bar).
+    GsPlayerState ps = in.gs_ps;
+    ps.live_hidden = in.hide_live;
+    out.gs_drawn = gs_[idx]->update(*in.snap, in.gs_stale, ps, s,
                                     geom_changed ? &gs_rects_ : nullptr);
 
     // A changed card count is the only thing that moves a GS box after
@@ -267,7 +280,9 @@ OsdComposeOut OsdComposer::compose_screen(int idx, const Surface& s, const OsdCo
 
   // One announcement per episode, on the transition rather than on a latch:
   // the composition that reaches the screen is the one worth logging.
-  out.announce_blank = grid_blank && !screen_blank_;
+  out.announce_blank = stale_blank && !screen_stale_;
+  screen_stale_ = stale_blank;
+  screen_hidden_ = hidden;
   screen_blank_ = grid_blank;
   out.published = true;
   return out;

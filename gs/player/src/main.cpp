@@ -2019,6 +2019,7 @@ int main(int argc, char** argv) {
     feed.resume();
     core_ctl.send_line("refresh playback");
     pb.active = false;
+    gs_needs_render = true;   // the live bar comes back (osd_compose.h hide_live)
     pb.demux.reset();
     uint64_t err = 0, conc = 0;
     dec_counts(&err, &conc);
@@ -2058,6 +2059,7 @@ int main(int argc, char** argv) {
     resume_output();
 #endif
     pb.active = true;
+    gs_needs_render = true;   // the live bar goes (osd_compose.h hide_live)
     pb.demux = std::move(dm);
     pb.next = std::move(first);
     pb.have_next = true;
@@ -2825,6 +2827,9 @@ int main(int argc, char** argv) {
         in.gs_ps = gs_ps;
         in.gs_dirty = gs_needs_render;
       }
+      // Playing a recording: the screen drops the live overlay (flight
+      // grid and link bar) and keeps the menu's "Playing ..." banner.
+      in.hide_live = pb.active;
       const bool want = composer.wants(in);
       // The recording's overlay, at the record size, on its own trigger: the
       // same input the screen would compose, whether or not the screen can

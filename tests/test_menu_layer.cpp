@@ -142,4 +142,43 @@ TEST(menu_box_covers_the_playback_tab) {
   ml.update(snap, false, ps, s, &out);
   CHECK(!any_pixel(px, DirtyRect{0, 0, 1920, 1080}, 1920));
 }
+// gs19: during playback the live bar goes and only the box draws (operator,
+// 2026-11-01: "hide the live OSD during playback too"). The stub's bounds
+// stand in for the bar; a pixel planted there plays the bar's last frame.
+TEST(playback_clears_the_bar_and_keeps_the_banner) {
+  GsFont font;
+  std::string err;
+  REQUIRE(font.load(GSFONT_SCALED, &err));
+  auto model = std::make_shared<GsMenuModel>(std::vector<uint8_t>{36, 132}, true,
+                                             GsMenuSettings{true, 36, true});
+  auto stub = std::make_unique<StubLayer>();
+  StubLayer* sp = stub.get();
+  MenuLayer ml(std::move(stub), font, model);
+  REQUIRE(ml.layout(1920, 1080, &err));
+  std::vector<uint32_t> px(1920 * 1080, 0);
+  const Surface s{px.data(), 1920, 1080, 1920};
+  GsSnapshot snap;
+  GsPlayerState live, play;
+  play.live_hidden = true;
+  const DirtyRect bar{0, 1000, 1920, 80};
+  ml.update(snap, false, live, s, nullptr);
+  REQUIRE(sp->updates == 1);
+  px[static_cast<size_t>(1040) * 1920 + 960] = 0xFFFFFFFFu;   // the bar's last frame
+  model->set_banner("Playing record-0012  0:05 / 1:00");
+  std::vector<DirtyRect> out;
+  ml.update(snap, false, play, s, &out);
+  CHECK(sp->updates == 1);                    // the bar is not drawn
+  CHECK(!any_pixel(px, bar, 1920));           // and what it showed is gone
+  REQUIRE(!out.empty());
+  CHECK(any_pixel(px, DirtyRect{0, 0, 1920, 1000}, 1920));   // the banner is up
+  // Hidden: no repaint reaches the bar, and a second update clears nothing.
+  ml.repaint_intersecting(&bar, 1, s, nullptr);
+  CHECK(sp->repaints == 0);
+  out.clear();
+  CHECK(ml.update(snap, false, play, s, &out) == 0 && out.empty());
+  // Back to live: the bar updates again (invalidated: a whole repaint).
+  model->set_banner("");
+  ml.update(snap, false, live, s, nullptr);
+  CHECK(sp->updates == 2);
+}
 MTEST_MAIN

@@ -28,6 +28,11 @@ constexpr int kHelpLines = 2;
 
 int scaled(int v1080, int screen_h) { return std::max(1, v1080 * screen_h / 1080); }
 
+bool overlaps(const DirtyRect& a, const DirtyRect& b) {
+  return a.w > 0 && a.h > 0 && b.w > 0 && b.h > 0 && a.x < b.x + b.w && b.x < a.x + a.w &&
+         a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
 void outline(const Surface& s, const DirtyRect& r, int t, uint32_t rgb) {
   fill_rect(s, r.x, r.y, r.w, t, rgb);
   fill_rect(s, r.x, r.y + r.h - t, r.w, t, rgb);
@@ -89,6 +94,7 @@ bool MenuLayer::layout(int screen_w, int screen_h, std::string* err) {
                 (kHelpLines + 1) * line_ + pad_ - tabs_y_;
   box_ = DirtyRect{panel_x_ - pad_ / 2, tabs_y_, panel_w_ + pad_, std::min(h, screen_h - tabs_y_)};
   drawn_version_ = 0;
+  bar_hidden_ = false;
   return true;
 }
 
@@ -219,22 +225,48 @@ int MenuLayer::draw_box_(const Surface& s, std::vector<DirtyRect>* out) {
 
 int MenuLayer::update(const GsSnapshot& snap, bool stale, const GsPlayerState& ps,
                       const Surface& s, std::vector<DirtyRect>* out) {
-  int n = inner_->update(snap, stale, ps, s, out);
+  int n = 0;
+  // Playback (gs19): the bar is about the live link, not the recording, so
+  // it goes. Cleared once per buffer; while hidden the bar is left alone.
+  bool bar_touched_box = false;
+  if (ps.live_hidden) {
+    if (!bar_hidden_) {
+      const DirtyRect b = inner_->bounds();
+      if (b.w > 0 && b.h > 0) {
+        clear_region(s, b);
+        if (out) out->push_back(b);
+        ++n;
+        bar_touched_box = overlaps(b, box_);
+      }
+      bar_hidden_ = true;
+    }
+  } else {
+    if (bar_hidden_) {
+      inner_->invalidate();   // back to live: the whole bar, at once
+      bar_hidden_ = false;
+      bar_touched_box = overlaps(inner_->bounds(), box_);
+    }
+    n += inner_->update(snap, stale, ps, s, out);
+  }
   live_ch_ = snap.channel && *snap.channel > 0 && *snap.channel < 256
                  ? static_cast<uint8_t>(*snap.channel) : 0;
   const bool live_moved = model_->open() && live_ch_ != drawn_live_;
+  // A bar clear or repaint that reached a box on screen (a short panel):
+  // the box goes back over it.
+  if (bar_touched_box && drawn_visible_) drawn_version_ = 0;
   if (model_->version() != drawn_version_ || live_moved) {
     const bool was = drawn_visible_;
     n += draw_box_(s, out);
     // Closing cleared the box: give the bar back any field it covered.
-    if (was && !drawn_visible_) n += inner_->repaint_intersecting(&box_, 1, s, out);
+    if (was && !drawn_visible_ && !bar_hidden_)
+      n += inner_->repaint_intersecting(&box_, 1, s, out);
   }
   return n;
 }
 
 int MenuLayer::repaint_intersecting(const DirtyRect* rects, size_t n, const Surface& s,
                                     std::vector<DirtyRect>* out) {
-  int k = inner_->repaint_intersecting(rects, n, s, out);
+  int k = bar_hidden_ ? 0 : inner_->repaint_intersecting(rects, n, s, out);
   if (!drawn_visible_) return k;
   for (size_t i = 0; i < n; ++i) {
     const DirtyRect& r = rects[i];
@@ -250,6 +282,7 @@ int MenuLayer::repaint_intersecting(const DirtyRect* rects, size_t n, const Surf
 void MenuLayer::invalidate() {
   inner_->invalidate();
   drawn_version_ = 0;
+  bar_hidden_ = false;   // the surface is unknown: a hidden bar clears again
 }
 
 DirtyRect MenuLayer::bounds() const {

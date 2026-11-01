@@ -525,6 +525,63 @@ TEST(the_stale_blank_leaves_the_gs_overlay_intact_in_both_buffers) {
   CHECK(diff_px(r.buf[1].px, ref) == 0);
 }
 
+// gs19 -- playback hides the live overlay on the screen, not in the burn
+// ======================================================================
+
+// While a recording plays (hide_live) the flight grid leaves the screen
+// with no stale episode and no announcement, and comes back the moment
+// playback ends -- without waiting for the flight controller's next screen.
+TEST(playback_hides_the_flight_grid_and_brings_it_back) {
+  const mabur::MspScreen scr = full_screen('X');
+  const GsSnapshot sn = snap_cards(3);
+  const GsPlayerState ps = player(60.0);
+  Rig r;
+  for (int i = 0; i < 2; ++i) r.tick(make_in(&scr, true, false, &sn, ps, true));
+  REQUIRE(r.px(r.front, kProbeX, kProbeY) == glyph_px('X'));
+
+  OsdComposeIn play = make_in(&scr, false, false, &sn, ps, false);
+  play.hide_live = true;
+  int rounds = 0;
+  while (r.step(play)) {
+    CHECK(!r.last_announce);   // not a stale blank: nothing to log
+    r.commit();
+    REQUIRE(++rounds < 8);
+  }
+  CHECK(rounds == 1);
+  CHECK(r.px(r.front, kProbeX, kProbeY) == 0u);
+  // Fresh screens keep landing during playback and stay off the screen.
+  OsdComposeIn play_fresh = play;
+  play_fresh.msp_fresh = true;
+  for (int i = 0; i < 2; ++i) r.tick(play_fresh);
+  CHECK(r.px(r.front, kProbeX, kProbeY) == 0u);
+
+  // Playback ends, no new screen this iteration: the grid still returns.
+  const OsdComposeIn live = make_in(&scr, false, false, &sn, ps, false);
+  CHECK(r.tick(live));
+  CHECK(r.px(r.front, kProbeX, kProbeY) == glyph_px('X'));
+  CHECK(!r.comp.wants(live));   // and it settles
+}
+
+// The burned DVR keeps the live overlay through playback.
+TEST(playback_does_not_hide_the_grid_in_the_burn) {
+  const mabur::MspScreen scr = full_screen('X');
+  Rig r(true, false);
+  std::vector<uint32_t> last;
+  r.comp.set_burn_sink([&](const Surface& s, const DirtyRect*, size_t) {
+    last.assign(s.pixels, s.pixels + (size_t)s.width * s.height);
+  });
+  OsdComposeIn in;
+  in.screen = &scr;
+  in.msp_fresh = true;
+  r.comp.compose(0, r.buf[0].s, in);
+  REQUIRE(!last.empty());
+  REQUIRE(last[(size_t)kProbeY * W + kProbeX] == glyph_px('X'));
+  in.hide_live = true;
+  r.comp.compose(1, r.buf[1].s, in);
+  CHECK(r.px(1, kProbeX, kProbeY) == 0u);                        // screen: hidden
+  CHECK(last[(size_t)kProbeY * W + kProbeX] == glyph_px('X'));   // burn: kept
+}
+
 // ======================================================================
 // I1 -- a GS-only publish must not scan out a stale MSP grid
 // ======================================================================

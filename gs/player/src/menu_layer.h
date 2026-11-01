@@ -11,6 +11,9 @@
 // Known limit: the box clears what is under it, and an MSP (flight
 // controller) cell there is only redrawn when it changes. The menu is a
 // ground-side tool; the FC OSD under its box comes back cell by cell.
+//
+// During playback (GsPlayerState::live_hidden) the wrapped bar is cleared
+// and left alone, and only the box (the "Playing ..." banner) draws.
 
 #include <memory>
 
@@ -54,6 +57,10 @@ class MenuLayer final : public GsLayer {
   int title_h_ = 0, cell_h_ = 0, btn_h_ = 0, pad_ = 0, line_ = 0, outline_ = 2;
   uint64_t drawn_version_ = 0;   // 0 = nothing drawn on this buffer yet
   bool drawn_visible_ = false;
+  // This buffer's bar has been cleared for playback (GsPlayerState::
+  // live_hidden). While set the inner bar is neither updated nor repainted;
+  // clearing it invalidates the bar so the next update repaints it whole.
+  bool bar_hidden_ = false;
   uint8_t live_ch_ = 0, drawn_live_ = 0;
 };
 

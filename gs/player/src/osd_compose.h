@@ -26,6 +26,11 @@ struct OsdComposeIn {
   bool gs_stale = false;
   GsPlayerState gs_ps;
   bool gs_dirty = false;  // a GS input moved since the last composition
+
+  // A recording is playing (gs19): the SCREEN shows neither the flight
+  // controller's grid nor the live link bar, only the menu's banner. The
+  // burned DVR is untouched -- a recording keeps the live overlay.
+  bool hide_live = false;
 };
 
 struct OsdComposeOut {
@@ -175,6 +180,12 @@ class OsdComposer {
   // left the recording showing a grid the screen had dropped.
   bool blanked_[2] = {true, true};  // nothing drawn yet == already blank
   bool screen_blank_ = false;
+  // Why the published grid is blank, when it is: the source went quiet
+  // (screen_stale_, which is what gets announced) or a recording is playing
+  // (screen_hidden_, which owes a redraw the moment playback ends -- see
+  // wants()). Both can hold at once.
+  bool screen_stale_ = false;
+  bool screen_hidden_ = false;
   DirtyRect last_grid_{0, 0, 0, 0};  // where the grid was, for the blank feed
   bool have_screen_ = false;         // a complete MSP screen has ever arrived
   bool gs_laid_out_ = false;

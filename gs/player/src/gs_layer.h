@@ -106,6 +106,12 @@ struct GsPlayerState {
   // (fps/jit/mbps) and read as if it were typical. Shares lat_valid --
   // both come from the same window and the same anchor.
   int lat_p50_e2e_ms = 0;
+
+  // A recording is playing (gs19): the live link bar is off the screen and
+  // only the menu's box (the "Playing ..." banner) draws. Set by
+  // OsdComposer::compose_screen() from OsdComposeIn::hide_live, never by
+  // main, and never on the burned DVR's layer. Only MenuLayer reads it.
+  bool live_hidden = false;
 };
 
 // The recording dot. Shared: both styles draw the same indicator, so the

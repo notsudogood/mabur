@@ -29,6 +29,14 @@ class VideoBackend {
   virtual ~VideoBackend() = default;
   virtual bool init(const BackendCfg&, FrameSink) = 0;
   virtual void submit_au(const uint8_t* au, size_t n, uint32_t pts_us) = 0;
+  // One AU without waiting for room (the Playback tab, gs19): false = the
+  // decoder's input is full right now and the AU was NOT taken; offer it
+  // again later. Never drops a full-decoder AU, unlike submit_au() on a
+  // parked feed (MppBackend). Default: submit_au(), taken.
+  virtual bool try_submit_au(const uint8_t* au, size_t n, uint32_t pts_us) {
+    submit_au(au, n, pts_us);
+    return true;
+  }
   virtual void flush() = 0;                       // discont -> reset decoder
   virtual void release_frame(const DmaFrame&) = 0;
   virtual void poll() {}                          // drive async decoders

@@ -70,6 +70,32 @@ class PlaybackPacer {
   bool paused_ = false;
 };
 
+// Hands every sample due at now_us to `offer` (true = the decoder took
+// it) in file order, reading the one after with `read` (false = end of
+// file). A refusal keeps the sample for the next call: it is never dropped
+// (gs18 dropped one when the decoder was momentarily full and the picture
+// went green for 15 s; see MppBackend::try_submit_au).
+struct PumpResult {
+  size_t taken = 0;
+  bool full = false;    // the decoder refused a sample this call
+  bool ended = false;   // the last sample was taken this call
+};
+template <class Sample, class Offer, class Read>
+PumpResult pump_due(const PlaybackPacer& pacer, uint64_t now_us, Sample* next, bool* have_next,
+                    Offer offer, Read read) {
+  PumpResult r;
+  while (*have_next && pacer.due(now_us, next->pts_us)) {
+    if (!offer(*next)) {
+      r.full = true;
+      break;
+    }
+    ++r.taken;
+    *have_next = read(next);
+    if (!*have_next) r.ended = true;
+  }
+  return r;
+}
+
 // "m:ss" (or "h:mm:ss" from an hour).
 inline std::string clock_text(uint64_t us) {
   const uint64_t s = us / 1000000;

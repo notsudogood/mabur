@@ -35,6 +35,7 @@ class MppBackend : public VideoBackend, public StreamDecoder, public PollWait {
 
   bool init(const BackendCfg&, FrameSink) override;
   void submit_au(const uint8_t*, size_t, uint32_t) override;
+  bool try_submit_au(const uint8_t*, size_t, uint32_t) override;
   void flush() override;
   void release_frame(const DmaFrame&) override;
   void poll() override;

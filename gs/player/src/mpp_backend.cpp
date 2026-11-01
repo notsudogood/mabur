@@ -277,6 +277,30 @@ void MppBackend::submit_au(const uint8_t* au, size_t n, uint32_t pts_us) {
   mpp_packet_deinit(&pkt);
 }
 
+// Playback's submit (gs19): one put, no retry and no give-way. While a
+// recording plays the live feed is parked, which raises input_cancel, and
+// put_packet() then drops an AU at the first BUFFER_FULL -- a reference
+// frame lost, the picture green until the next refresh (operator video
+// 2026-11-01, record-0012 from 0:13 to 0:28; the desktop played it clean).
+// Here a full decoder hands the AU back for the caller to offer again.
+bool MppBackend::try_submit_au(const uint8_t* au, size_t n, uint32_t pts_us) {
+  if (!impl_ || !impl_->ctx || !au || n == 0) return true;
+  MppPacket pkt = nullptr;
+  if (mpp_packet_init(&pkt, const_cast<uint8_t*>(au), n) != MPP_OK) {
+    ++impl_->error_count;
+    return true;
+  }
+  mpp_packet_set_pts(pkt, impl_->ext_pts(pts_us));
+  const MPP_RET ret = impl_->mpi->decode_put_packet(impl_->ctx, pkt);
+  mpp_packet_deinit(&pkt);
+  if (ret == MPP_ERR_BUFFER_FULL) return false;
+  if (ret != MPP_OK) {
+    std::fprintf(stderr, "MppBackend: decode_put_packet failed ret=%d\n", ret);
+    ++impl_->error_count;
+  }
+  return true;
+}
+
 void MppBackend::flush() {
   if (!impl_ || !impl_->ctx) return;
   // Drops all in-flight decoder state; the ring client's flush_before

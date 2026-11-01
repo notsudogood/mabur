@@ -95,4 +95,45 @@ TEST(playback_line_and_clock) {
         "Paused record-0012  4:56 / 4:56  - centre: play, left: back to live");
 }
 
+
+// gs19: a decoder that is momentarily full refuses a sample; the pump keeps
+// it for the next call instead of dropping it. gs18's submit dropped it
+// (the live feed is parked during playback, and a parked feed's put gives
+// up at once): a reference frame lost, the picture green from 0:13 to 0:28
+// of record-0012 on the goggles while the desktop played the same file
+// clean. Revert (drop on refusal): samples go missing from `got`.
+TEST(pump_never_drops_a_refused_sample) {
+  struct S { uint64_t pts_us = 0; int i = 0; };
+  std::vector<S> file;
+  for (int i = 0; i < 120; ++i) file.push_back({static_cast<uint64_t>(i) * 16667u, i});
+  size_t pos = 0;
+  auto read = [&](S* s) {
+    if (pos >= file.size()) return false;
+    *s = file[pos++];
+    return true;
+  };
+  S next;
+  bool have = read(&next);
+  PlaybackPacer pacer(30000);
+  pacer.start(0, next.pts_us);
+  std::vector<int> got;
+  int calls = 0, refusals = 0;
+  auto offer = [&](const S& s) {
+    if (++calls % 3 == 0) {
+      ++refusals;
+      return false;   // decoder full this time
+    }
+    got.push_back(s.i);
+    return true;
+  };
+  bool ended = false;
+  for (uint64_t now = 0; now < 3000000 && !ended; now += 2000) {
+    const PumpResult r = pump_due(pacer, now, &next, &have, offer, read);
+    ended = r.ended;
+  }
+  CHECK(ended && !have);
+  CHECK(refusals > 0);
+  REQUIRE(got.size() == file.size());
+  for (size_t i = 0; i < got.size(); ++i) CHECK(got[i] == static_cast<int>(i));
+}
 MTEST_MAIN

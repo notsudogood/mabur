@@ -1985,7 +1985,7 @@ int main(int argc, char** argv) {
     // their growth is logged at the end, the evidence for a picture that
     // breaks up during playback (operator video 2026-11-01: green from
     // 0:13 to 0:28 of record-0012).
-    uint64_t err0 = 0, conc0 = 0, samples = 0;
+    uint64_t err0 = 0, conc0 = 0, samples = 0, full_waits = 0;
   } pb;
   auto dec_counts = [&](uint64_t* err, uint64_t* conc) {
     *err = *conc = 0;
@@ -2023,9 +2023,10 @@ int main(int argc, char** argv) {
     uint64_t err = 0, conc = 0;
     dec_counts(&err, &conc);
     std::fprintf(stderr,
-                 "maburplay: playback ended (%s) after %llu samples, decoder errors %llu, "
-                 "concealed frames %llu; back to live video\n",
+                 "maburplay: playback ended (%s) after %llu samples (decoder full %llu times, "
+                 "waited), decoder errors %llu, concealed frames %llu; back to live video\n",
                  msg.c_str(), static_cast<unsigned long long>(pb.samples),
+                 static_cast<unsigned long long>(pb.full_waits),
                  static_cast<unsigned long long>(err - pb.err0),
                  static_cast<unsigned long long>(conc - pb.conc0));
     if (menu_model) {
@@ -2065,6 +2066,7 @@ int main(int argc, char** argv) {
     pb.end_us = 0;
     pb.line_ms = 0;
     pb.samples = 0;
+    pb.full_waits = 0;
     dec_counts(&pb.err0, &pb.conc0);
     pb.pacer.start(mono_us(), pb.next.pts_us);
     std::fprintf(stderr, "maburplay: playback of %s (%s) started; live feed parked\n",
@@ -2179,14 +2181,22 @@ int main(int argc, char** argv) {
     // decoder; the last picture stays up half a second, then live video.
     if (pb.active) {
       const uint64_t now = mono_us();
-      while (pb.have_next && pb.pacer.due(now, pb.next.pts_us)) {
-        backend->submit_au(pb.next.annexb.data(), pb.next.annexb.size(),
-                           static_cast<uint32_t>(pb.next.pts_us));
-        ++pb.samples;
-        const uint32_t dur = pb.next.dur_us;
-        pb.have_next = pb.demux->next(&pb.next);
-        if (!pb.have_next) pb.end_us = now + dur + 500000;
-      }
+      // A full decoder keeps the sample for the next loop (~2 ms): never
+      // dropped (gs18 dropped it -- the feed is parked -- and went green).
+      uint32_t last_dur = 0;
+      const maburplay::PumpResult r = maburplay::pump_due(
+          pb.pacer, now, &pb.next, &pb.have_next,
+          [&](const mabur::DvrDemux::Sample& smp) {
+            return backend->try_submit_au(smp.annexb.data(), smp.annexb.size(),
+                                          static_cast<uint32_t>(smp.pts_us));
+          },
+          [&](mabur::DvrDemux::Sample* smp) {
+            last_dur = smp->dur_us;
+            return pb.demux->next(smp);
+          });
+      pb.samples += r.taken;
+      if (r.full) ++pb.full_waits;
+      if (r.ended) pb.end_us = now + last_dur + 500000;
       if (!pb.have_next && !pb.pacer.paused() && now >= pb.end_us) {
         pb_stop("Playback finished: back to live video");
         gs_needs_render = true;

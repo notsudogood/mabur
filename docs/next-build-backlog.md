@@ -808,11 +808,12 @@ the probe's measured loss.
 
 Gaps found while building gs8 / d8. Ask before scheduling.
 
-- **VHT rates in the calibrated power table.** With `power_mode =
-  "offset"`, devourer's custom table leaves every VHT rate at MCS7's level
-  (`devourer/src/TxPower.h`), so the 80 MHz rungs fly 3-4 dB under stock.
-  maburd warns at boot. Fix: extend `TxRateDiffsQdb` to VHT1SS MCS0-7
-  (a devourer contract change across generations).
+- **VHT rates in the calibrated power table.** Done since d11: with
+  `power_mode = "offset"` devourer gives VHT 1SS MCS0-7 the HT MCS0-7 diffs
+  and MCS8/9 MCS7's (`devourer/src/TxPower.h`), so the 80 MHz rungs are
+  shaped like the 20/40 ones and no longer fly 3-4 dB under stock. Still
+  open: maburcal measures its walls on HT frames only, so a VHT frame's own
+  wall is unmeasured (a cal-sweep and cal-wire change, not scheduled).
 - **Channel 149 at 80 MHz.** The 149-161 block is non-DFS but carries an
   8812EU spur at 155 (notched). A 5-minute bench run on 149 before adding
   it to the default set `[36, 132]`.

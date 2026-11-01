@@ -123,11 +123,14 @@ bool DvrDemux::open(const std::string& path) {
   first_moof_ = pos;
   // Duration and start: every fragment's trun, without reading samples.
   duration_us_ = 0;
+  have_pts_ = false;
+  last_dur_us_ = 16667;
   bool first_frag = true;
   for (uint64_t p = first_moof_; load_fragment_(p);) {
     if (first_frag) start_pts_us_ = frag_pts_;
     first_frag = false;
     for (const Entry& e : frag_) duration_us_ += e.dur_us;
+    frag_pts_ += [&] { uint64_t t = 0; for (const Entry& e : frag_) t += e.dur_us; return t; }();
     p = next_box_;
   }
   // Back to the first fragment for reading.
@@ -135,6 +138,8 @@ bool DvrDemux::open(const std::string& path) {
   frag_i_ = 0;
   next_box_ = first_moof_;
   first_ = true;
+  have_pts_ = false;
+  last_dur_us_ = 16667;
   return true;
 }
 
@@ -151,7 +156,13 @@ bool DvrDemux::load_fragment_(uint64_t pos) {
   const uint8_t* tfdt = find_fourcc(s + 8, e, "tfdt");
   const uint8_t* trun = find_fourcc(s + 8, e, "trun");
   if (!tfdt || !trun || tfdt + 20 > e || trun + 20 > e) return false;
-  frag_pts_ = tfdt[8] == 1 ? be64(tfdt + 12) : be32(tfdt + 12);
+  const uint64_t tfdt_pts = tfdt[8] == 1 ? be64(tfdt + 12) : be32(tfdt + 12);
+  // Continue from where the last fragment ended unless this one starts
+  // there or a little later (a real gap in the recording); a jump back or
+  // past kMaxStepUs is a restart the recording spans (see the header).
+  if (!have_pts_ || (tfdt_pts >= frag_pts_ && tfdt_pts - frag_pts_ <= kMaxStepUs))
+    frag_pts_ = tfdt_pts;
+  have_pts_ = true;
   const uint32_t flags = be32(trun + 8) & 0xFFFFFF;
   if (flags != 0x000701) return false;   // DvrMux's: data offset, duration, size, flags
   const uint32_t count = be32(trun + 12);
@@ -162,6 +173,8 @@ bool DvrDemux::load_fragment_(uint64_t pos) {
   for (uint32_t i = 0; i < count; ++i, q += 12) {
     Entry en;
     en.dur_us = be32(q);
+    if (en.dur_us == 0 || en.dur_us > kMaxStepUs) en.dur_us = last_dur_us_;
+    else last_dur_us_ = en.dur_us;
     en.size = be32(q + 4);
     en.key = q[8] == 0x02;   // DvrMux: sample_depends_on = 2 (IRAP)
     en.offset = off;
@@ -192,19 +205,31 @@ bool DvrDemux::next(Sample* s) {
   s->pts_us = frag_pts_;
   s->dur_us = en.dur_us;
   frag_pts_ += en.dur_us;
-  if (en.key || first_) s->annexb = param_sets_;
-  first_ = false;
-  // Length-prefixed NALs -> start codes.
+  // Length-prefixed NALs -> start codes, noting which parameter sets the
+  // sample carries itself.
+  std::vector<uint8_t> nals;
+  bool vps = false, sps = false, pps = false;
   size_t i = 0;
   while (i + 4 <= raw.size()) {
     const uint32_t len = be32(raw.data() + i);
     i += 4;
     if (len == 0 || i + len > raw.size()) break;
+    const unsigned type = (raw[i] >> 1) & 0x3F;
+    vps |= type == 32;
+    sps |= type == 33;
+    pps |= type == 34;
     static const uint8_t kStart[4] = {0, 0, 0, 1};
-    s->annexb.insert(s->annexb.end(), kStart, kStart + 4);
-    s->annexb.insert(s->annexb.end(), raw.data() + i, raw.data() + i + len);
+    nals.insert(nals.end(), kStart, kStart + 4);
+    nals.insert(nals.end(), raw.data() + i, raw.data() + i + len);
     i += len;
   }
+  // The init segment's VPS/SPS/PPS go in front of the first sample, and of
+  // a key sample only when it lacks its own: a key that carries them has
+  // the encoder's CURRENT ones, and the hvcC's (from the recording's start)
+  // ahead of them would be stale wherever the encoder re-sent changed ones.
+  if (first_ || (en.key && !(vps && sps && pps))) s->annexb = param_sets_;
+  first_ = false;
+  s->annexb.insert(s->annexb.end(), nals.begin(), nals.end());
   return true;
 }
 

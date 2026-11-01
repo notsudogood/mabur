@@ -1402,7 +1402,12 @@ int main(int argc, char** argv) {
   std::string osd_next_path;
   uint64_t osd_files_seen = 0;
   uint64_t osd_t0_ms = 0;
+  // The last pts the raw recorder was given: a step back means the drone's
+  // encoder restarted mid-recording (gs19, see process_note).
+  uint32_t dvr_last_pts = 0;
+  bool dvr_have_pts = false;
   auto start_raw = [&]() {
+    dvr_have_pts = false;
     const std::string path = dvr_filename(cfg.dvr.dir, cfg.dvr.folders);
     dvr.start(path, bcfg.width, bcfg.height, cfg.dvr.fragment_ms);
     ++rec_starts;
@@ -1555,6 +1560,15 @@ int main(int argc, char** argv) {
       if (osd_rec_on && osd_t0_ms == 0 && n.decodable &&
           mabur::au_is_irap(n.au.data(), n.au.size()))
         osd_t0_ms = mono_ms();
+      // A step back in pts: the drone's video restarted (a camera switch
+      // reboot, a power cycle) while we recorded. Its first frame is a
+      // keyframe, so the recording continues in a new file from there, one
+      // clock per file (record-0008 spanned one and listed as 1:10:03).
+      if (dvr_have_pts && dvr.files() > 0 &&
+          static_cast<int32_t>(n.meta.pts_us - dvr_last_pts) < 0)
+        roll_raw("the drone's video restarted");
+      dvr_last_pts = n.meta.pts_us;
+      dvr_have_pts = true;
       dvr.feed(n.au.data(), n.au.size(), n.meta.pts_us, n.decodable);
     }
   };
@@ -1967,7 +1981,21 @@ int main(int argc, char** argv) {
     bool have_next = false;
     std::string name;
     uint64_t dur_us = 0, line_ms = 0, end_us = 0;
+    // The decoder's error and concealed-frame counts when play started:
+    // their growth is logged at the end, the evidence for a picture that
+    // breaks up during playback (operator video 2026-11-01: green from
+    // 0:13 to 0:28 of record-0012).
+    uint64_t err0 = 0, conc0 = 0, samples = 0;
   } pb;
+  auto dec_counts = [&](uint64_t* err, uint64_t* conc) {
+    *err = *conc = 0;
+#ifdef MABUR_PLAYER_MPP
+    if (auto* mpp = dynamic_cast<maburplay::MppBackend*>(backend.get())) {
+      *err = mpp->errors();
+      *conc = mpp->concealed();
+    }
+#endif
+  };
   std::vector<maburplay::Recording> pb_list;
   // With no stats sideport (osd.gs off) nothing reports the drone's arm
   // state: playback is then not blocked on it.
@@ -1992,7 +2020,14 @@ int main(int argc, char** argv) {
     core_ctl.send_line("refresh playback");
     pb.active = false;
     pb.demux.reset();
-    std::fprintf(stderr, "maburplay: playback ended (%s), back to live video\n", msg.c_str());
+    uint64_t err = 0, conc = 0;
+    dec_counts(&err, &conc);
+    std::fprintf(stderr,
+                 "maburplay: playback ended (%s) after %llu samples, decoder errors %llu, "
+                 "concealed frames %llu; back to live video\n",
+                 msg.c_str(), static_cast<unsigned long long>(pb.samples),
+                 static_cast<unsigned long long>(err - pb.err0),
+                 static_cast<unsigned long long>(conc - pb.conc0));
     if (menu_model) {
       menu_model->set_banner("");
       menu_model->set_status(msg, mono_ms());
@@ -2029,6 +2064,8 @@ int main(int argc, char** argv) {
     pb.dur_us = r.duration_us;
     pb.end_us = 0;
     pb.line_ms = 0;
+    pb.samples = 0;
+    dec_counts(&pb.err0, &pb.conc0);
     pb.pacer.start(mono_us(), pb.next.pts_us);
     std::fprintf(stderr, "maburplay: playback of %s (%s) started; live feed parked\n",
                  r.path.c_str(), maburplay::clock_text(r.duration_us).c_str());
@@ -2071,7 +2108,7 @@ int main(int argc, char** argv) {
         const maburplay::GsMenuModel::Action act = menu_model->key(p.k, mnow);
         // Playback tab (gs18): the list on opening, a recording on a press.
         if (menu_model->take_list_request()) {
-          pb_list = maburplay::list_recordings(cfg.dvr.dir);
+          pb_list = maburplay::list_recordings(cfg.dvr.dir, maburplay::GsMenuModel::kMaxRecordings);
           std::vector<maburplay::GsMenuModel::RecItem> items;
           for (const auto& r : pb_list) items.push_back({r.name, r.duration_us});
           menu_model->set_recordings(items);
@@ -2145,6 +2182,7 @@ int main(int argc, char** argv) {
       while (pb.have_next && pb.pacer.due(now, pb.next.pts_us)) {
         backend->submit_au(pb.next.annexb.data(), pb.next.annexb.size(),
                            static_cast<uint32_t>(pb.next.pts_us));
+        ++pb.samples;
         const uint32_t dur = pb.next.dur_us;
         pb.have_next = pb.demux->next(&pb.next);
         if (!pb.have_next) pb.end_us = now + dur + 500000;

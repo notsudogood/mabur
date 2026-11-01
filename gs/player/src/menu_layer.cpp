@@ -17,7 +17,13 @@ constexpr uint32_t kActiveRgb = 0x8E9194u;
 constexpr uint32_t kOutlineRgb = 0xFFFFFFu;
 constexpr uint32_t kKnobOffRgb = 0x1A1C1Eu;
 constexpr uint32_t kTextRgb = 0xF2F3F5u;
-constexpr int kMaxCellRows = 2;   // radio.channels holds at most 8, 4 per row
+// The tallest tab's cell rows: the Channel tab's two (radio.channels holds
+// at most 8, 4 per row) or the Playback tab's list, whichever is more. The
+// box the layer clears is sized from it, so nothing a tab draws can fall
+// outside it (gs18 used 2 here and left the Playback tab's help strip on
+// screen).
+constexpr int kMaxCellRows =
+    std::max(2, (GsMenuModel::kMaxRecordings + GsMenuModel::kRecCols - 1) / GsMenuModel::kRecCols);
 constexpr int kHelpLines = 2;
 
 int scaled(int v1080, int screen_h) { return std::max(1, v1080 * screen_h / 1080); }

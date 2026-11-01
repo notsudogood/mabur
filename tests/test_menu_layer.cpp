@@ -95,4 +95,51 @@ TEST(menu_box_draws_with_no_rect_list) {
   model->key(GsMenuModel::Key::Center, 2);   // Close
   ml.update(snap, false, ps, s, nullptr);
 }
+
+// gs18: the Playback tab (8 recordings, four rows) is the tallest; the box
+// the layer clears was sized for the Channel tab's two rows, so the list's
+// lower rows and the help strip were drawn below it and stayed on screen
+// after a tab switch, through playback and back to live (operator video,
+// 2026-11-01). Everything a tab draws must lie inside the box, so closing
+// leaves no pixel behind. Revert (kMaxCellRows 2): pixels remain after close.
+TEST(menu_box_covers_the_playback_tab) {
+  GsFont font;
+  std::string err;
+  REQUIRE(font.load(GSFONT_SCALED, &err));
+  auto model = std::make_shared<GsMenuModel>(std::vector<uint8_t>{36, 100, 116, 132}, true,
+                                             GsMenuSettings{true, 36, true});
+  MenuLayer ml(std::make_unique<StubLayer>(), font, model);
+  REQUIRE(ml.layout(1920, 1080, &err));
+  std::vector<uint32_t> px(1920 * 1080, 0);
+  const Surface s{px.data(), 1920, 1080, 1920};
+  GsSnapshot snap;
+  GsPlayerState ps;
+  std::vector<GsMenuModel::RecItem> recs;
+  for (int i = 0; i < GsMenuModel::kMaxRecordings + 2; ++i)   // more than fit: capped
+    recs.push_back({"record-00" + std::to_string(10 + i), 60000000});
+  model->set_playback_allowed(true, "");
+  model->key(GsMenuModel::Key::Center, 0);   // open, on the tab row
+  model->key(GsMenuModel::Key::Left, 1);     // Channel -> Playback
+  model->set_recordings(recs);
+  std::vector<DirtyRect> out;
+  REQUIRE(ml.update(snap, false, ps, s, &out) == 1);
+  REQUIRE(out.size() == 1);
+  const DirtyRect box = out[0];
+  for (int y = 0; y < 1080; ++y)
+    for (int x = 0; x < 1920; ++x)
+      if (px[static_cast<size_t>(y) * 1920 + x] != 0) {
+        CHECK(x >= box.x && x < box.x + box.w && y >= box.y && y < box.y + box.h);
+        if (!(x >= box.x && x < box.x + box.w && y >= box.y && y < box.y + box.h)) {
+          y = 1080;
+          break;
+        }
+      }
+  model->key(GsMenuModel::Key::Right, 2);    // Playback -> Channel: a shorter tab
+  out.clear();
+  ml.update(snap, false, ps, s, &out);
+  model->tick(10 * 60 * 1000);               // idle: the menu closes
+  REQUIRE(!model->open());
+  ml.update(snap, false, ps, s, &out);
+  CHECK(!any_pixel(px, DirtyRect{0, 0, 1920, 1080}, 1920));
+}
 MTEST_MAIN

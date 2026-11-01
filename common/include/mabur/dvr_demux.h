@@ -47,6 +47,13 @@ class DvrDemux {
   int height() const { return height_; }
   // The whole file's duration (every fragment's sample durations) and the
   // first sample's pts, measured at open() without reading any sample.
+  //
+  // A step longer than kMaxStepUs is not played: a sample duration that
+  // long, or a fragment whose tfdt jumps that far from where the last one
+  // ended, comes from a recording that spans a drone restart (DvrMux before
+  // gs19 wrote the restart's backward pts as a ~71-min sample: record-0008
+  // listed as 1:10:03). The timeline carries on one frame later, so
+  // playback neither stalls there nor lists the file at an hour.
   uint64_t duration_us() const { return duration_us_; }
   uint64_t start_pts_us() const { return start_pts_us_; }
   const std::vector<uint8_t>& param_sets() const { return param_sets_; }
@@ -56,6 +63,8 @@ class DvrDemux {
   static std::optional<uint64_t> probe_duration_us(const std::string& path);
 
  private:
+  static constexpr uint32_t kMaxStepUs = 10000000;
+
   struct Entry {
     uint64_t offset = 0;   // absolute file offset of the sample's bytes
     uint32_t size = 0;
@@ -73,6 +82,8 @@ class DvrDemux {
   std::vector<Entry> frag_;
   size_t frag_i_ = 0;
   uint64_t frag_pts_ = 0;          // the next sample's pts
+  bool have_pts_ = false;          // frag_pts_ holds a real position to continue from
+  uint32_t last_dur_us_ = 16667;   // the last sane sample duration
   bool first_ = true;
   int width_ = 0, height_ = 0;
   uint64_t duration_us_ = 0;

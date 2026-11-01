@@ -382,6 +382,13 @@ uint64_t DvrMux::unwrap_pts(uint32_t pts_us) {
   // samples are within 2^31 us of each other, which holds for a
   // real-time capture stream.
   uint32_t d = pts_us - last_pts_raw_;
+  // A step back is not a wrap: the drone's encoder restarted mid-recording
+  // (a camera switch reboot, a power cycle) and its session-relative pts
+  // began again near zero. Read as a forward u32 delta it put one ~71-min
+  // sample in the file (operator's record-0008 listed as 1:10:03, and any
+  // player stalls there). The timeline continues one frame on instead; the
+  // player rolls to a new file at the restart's keyframe anyway.
+  if (d >= 0x80000000u) d = last_dur_us_ ? last_dur_us_ : 16667;
   last_pts64_ += static_cast<uint64_t>(d);
   last_pts_raw_ = pts_us;
   return last_pts64_;

@@ -36,6 +36,8 @@
 // camera preset, or starts / removes a calibration; Close, or kIdleMs
 // without a press, drops them.
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <optional>
@@ -305,8 +307,15 @@ class GsMenuModel {
     std::string name;
     uint64_t duration_us = 0;
   };
+  // The list is two to a row, at most kMaxRecordings: the tallest tab, so
+  // MenuLayer sizes the area it clears from these (kMaxRecordings /
+  // kRecCols rows). gs18 sized it for the Channel tab's two rows, and the
+  // Playback tab's lower rows and help strip stayed on screen after it.
+  static constexpr int kRecCols = 2;
+  static constexpr int kMaxRecordings = 8;
   void set_recordings(const std::vector<RecItem>& r) {
-    recs_ = r;
+    recs_.assign(r.begin(), r.begin() + static_cast<std::ptrdiff_t>(
+                                std::min(r.size(), static_cast<size_t>(kMaxRecordings))));
     ++version_;
   }
   // Whether a recording may play now, and why not ("" when it may).
@@ -527,7 +536,6 @@ class GsMenuModel {
                                                 : 1;
     return 1 + content + 1;
   }
-  static constexpr int kRecCols = 2;
   int rec_rows_() const {
     return recs_.empty() ? 1 : static_cast<int>((recs_.size() + kRecCols - 1) / kRecCols);
   }

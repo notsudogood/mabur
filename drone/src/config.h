@@ -281,6 +281,15 @@ struct LinkCfg {
   // more 2 s clean window before it lifts, so this is the 30 fps tail after
   // the queue empties: 3 = 6 s (the shipped guard), 1 = 2 s. [1,3].
   int shed_max_level = 3;
+  // Quick release (d20): a shed tripped by the TX queue alone -- the queue
+  // reached half full, no USB failure -- lifts after this long without
+  // pressure, at level 1, instead of 2 s per level. Only for a trip that
+  // starts >= 5 s after the previous shed ended; a repeat inside that
+  // gets the full 2 s-per-level guard above. 0 = off (every shed waits
+  // 2 s per level, d19 and before). 0 or [100,2000]; the tick (tick_ms)
+  // is the resolution. Operator flight 2026-11-01: four 2 s spells of
+  // 30 fps in ~12 min, each from a queue trip that cleared at once.
+  int shed_quick_ms = 500;
   // Pairing key: the key FILE path. The file is read at load; a missing file
   // means the compiled-in default (and a boot log line), a malformed one
   // fails boot naming the file.

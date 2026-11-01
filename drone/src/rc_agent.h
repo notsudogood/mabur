@@ -505,6 +505,11 @@ class RcAgent {
   int shed_level_ = 0;
   uint64_t last_drop_rise_ms_ = 0;
   bool have_last_drop_rise_ = false;
+  // The current episode lifts on link.shed_quick_ms (decided when it
+  // starts); when the last one ended, for the 5 s repeat rule.
+  bool shed_quick_ = false;
+  uint64_t last_shed_end_ms_ = 0;
+  bool have_last_shed_end_ = false;
   uint64_t last_tx_drops_ = 0;
   bool have_last_tx_drops_ = false;
 

@@ -101,12 +101,13 @@ roi_qp_normal      = 0
 mcs            = 4
 bw             = 80
 airtime_budget = 0.60
-max_kbps       = 45000     # top rung. Walks 2026-10-24 (drone 2, ch 132): at 50000, busy scenes made
+max_kbps       = 40000     # top rung. Walks 2026-10-24 (drone 2, ch 132): at 50000, busy scenes made
                            # 100-200 kB frames that backed the drone's queue up to 33 ms and shed to
                            # 30 fps 5-8 times in 3-4 min; at 40000, none in 5 min, median bitrate the
                            # same (33 vs 34 Mb/s), operator saw no softer picture. One walk each.
-                           # 45000 (operator's choice, 2026-10-26) is between them and unmeasured;
-                           # the encoder only goes past 40 on busy scenes
+                           # 45000 (d17-d19) flown 2026-11-01: camera bursts to 60-66 Mb/s and four
+                           # 2 s spells of 30 fps in ~12 min, so back to 40000 (operator, d20).
+                           # The encoder only goes past 40 on busy scenes
 
 [[encoder.rung]]
 mcs            = 3
@@ -171,6 +172,9 @@ move_confirm_ms = 2000     # after a channel move, hear the ground station withi
 tick_ms         = 100      # housekeeping interval (health checks, stats)
 shed_max_level  = 3        # how far the queue-full guard climbs: each level is 2 s more at 30 fps after the
                            # radio queue empties (3 = 6 s, the old behaviour; 1 = 2 s). Levels above 1 drop nothing more
+shed_quick_ms   = 500      # a queue-full trip that is not a repeat (none in the 5 s before) goes back to 60 fps
+                           # this long after the queue calms, instead of 2 s. USB failures and repeats keep the
+                           # 2 s-per-level guard above. 0 = off (d19 and before); else 100-2000
 key_file        = "/etc/mabur.key"   # pairing key; same file on the ground station (docs/deploy.md "Pairing"). Missing = built-in default
 
 [msp]

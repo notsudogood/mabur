@@ -1200,6 +1200,7 @@ TEST(congestion_shed_escalates_and_recovers) {
 TEST(shed_max_level_1_lifts_after_one_clean_window) {
   Config cfg = make_cfg();
   cfg.link.shed_max_level = 1;
+  cfg.link.shed_quick_ms = 0;   // the 2 s guard itself, without d20's quick release
   MockActuator act;
   RcAgent agent(cfg, act);
   agent.tick(0, RadioHealth{});
@@ -1228,6 +1229,85 @@ TEST(shed_max_level_1_lifts_after_one_clean_window) {
   CHECK(agent.state() == RcAgent::State::LINKED);
   CHECK(agent.current().shed[1] == false);
   CHECK(agent.congestion_shed() == false);
+}
+
+// 9c. d20 quick release (link.shed_quick_ms): a lone queue trip -- the
+// queue at half its cap for a few ticks, no USB failure, no shed in the 5 s
+// before -- stays at level 1 and lifts 500 ms after the last pressure tick,
+// not 2 s per level. Operator flight 2026-11-01: four 2 s spells of 30 fps
+// in ~12 min, each a one-tick queue trip that cleared at once. REVERT
+// CHECK: drop shed_quick_ in run_congestion_guard and the t=800 tick still
+// sheds (and with shed_max_level 3, three pressure ticks hold it 6 s).
+namespace {
+struct ShedRig {
+  Config cfg = make_cfg();
+  MockActuator act;
+  std::unique_ptr<RcAgent> agent;
+  uint8_t profile_byte = encode_profile(PhyMode::HT, 5, 20);
+  uint32_t vtx = 0;
+  uint32_t seq = 1;
+  uint64_t last_rcf = 0;
+  explicit ShedRig(int quick_ms) {
+    cfg.link.shed_quick_ms = quick_ms;
+    agent = std::make_unique<RcAgent>(cfg, act);
+    agent->tick(0, RadioHealth{});
+    vtx = ack_agent(*agent, act);
+    rcf(0);
+  }
+  void rcf(uint64_t t) {
+    auto w = make_rcf_wire(seq++, profile_byte, 8, vtx);
+    agent->on_rc_frame(w.data(), w.size(), t);
+    last_rcf = t;
+  }
+  // One housekeeping tick, keeping the link alive (failsafe_ms = 1000).
+  bool tick(uint64_t t, int depth, uint64_t drops = 0) {
+    if (t - last_rcf >= 800) rcf(t);
+    RadioHealth h;
+    h.tx_drops = drops;
+    h.txq_cap = 256;
+    h.txq_depth = static_cast<size_t>(depth);
+    agent->tick(t, h);
+    CHECK(agent->state() == RcAgent::State::LINKED);
+    return agent->current().shed[1];
+  }
+};
+}  // namespace
+
+TEST(quick_release_lifts_a_lone_queue_trip_in_half_a_second) {
+  ShedRig r(500);
+  for (uint64_t t = 100; t <= 300; t += 100) CHECK(r.tick(t, 200));   // three pressure ticks
+  CHECK(r.agent->congestion_shed());
+  CHECK(r.tick(700, 0));         // 400 ms calm: still 30 fps
+  CHECK(!r.tick(800, 0));        // 500 ms calm: 60 fps, one window despite three trips
+  CHECK(!r.agent->congestion_shed());
+}
+
+// A trip inside 5 s of the last shed ending is not a passing burst: the
+// full 2 s guard. One more 5 s later is quick again.
+TEST(quick_release_does_not_cover_a_repeat_within_five_seconds) {
+  ShedRig r(500);
+  CHECK(r.tick(100, 200));
+  CHECK(!r.tick(600, 0));        // quick: lifted at 500 ms
+  CHECK(r.tick(2000, 200));      // 1.4 s later: a repeat
+  CHECK(r.tick(2600, 0));        // 600 ms calm: still shed (2 s guard)
+  CHECK(r.tick(3900, 0));
+  CHECK(!r.tick(4000, 0));       // 2 s calm: lifted
+  for (uint64_t t = 4500; t <= 9000; t += 500) CHECK(!r.tick(t, 0));
+  CHECK(r.tick(9100, 200));      // 5.1 s after that end: quick again
+  CHECK(!r.tick(9600, 0));
+}
+
+// A USB failure is a sick dongle, not a burst: never quick, from the start
+// or mid-episode.
+TEST(quick_release_never_covers_usb_failures) {
+  ShedRig r(500);
+  CHECK(r.tick(100, 0, 5));      // drops rose: shed, full guard
+  CHECK(r.tick(700, 0, 5));      // 600 ms calm: still shed
+  CHECK(!r.tick(2100, 0, 5));    // 2 s: lifted (one level)
+  ShedRig q(500);
+  CHECK(q.tick(100, 200));       // a quick episode starts ...
+  CHECK(q.tick(200, 0, 3));      // ... and a USB failure lands in it
+  CHECK(q.tick(800, 0, 3));      // 600 ms calm: still shed
 }
 
 // 9a. TxQueue backpressure is congestion too. The guard's only trigger was

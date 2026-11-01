@@ -3,6 +3,13 @@
 What the operator has agreed goes into the next GS (and drone) build, in
 order. Each item names its evidence. Remove an item when it ships.
 
+**Queued for d20 (agreed 2026-11-01), drone only, not built yet.**
+
+| Change | Why | Counterpart |
+|---|---|---|
+| Quick release of the queue-full 30 fps: `link.shed_quick_ms = 500` (code and bundle). A shed the TX queue alone trips, with none in the 5 s before, lifts 0.5 s after the queue calms instead of 2 s; USB failures and repeats keep the 2 s-per-level guard | operator flight 2026-11-01 (gs18/d19, ch 116): four 2 s spells of 30 fps in ~12 min, each a queue trip on one 100 ms check (camera bursts to 60-66 Mb/s against 45; three of them on a step down MCS4/80 -> MCS3/80, which carries ~77 vs ~139 Mb/s of video at full air) | a burst that outlasts 0.5 s of calm and trips again inside 5 s now gets 30 fps twice (0.5 s, then the 2 s guard) instead of once. 15 bursts over 60 Mb/s and 24 step downs in that flight; only 4 tripped, so which ones trip is a race, unmeasured per tick |
+| Drone top-rung cap (MCS4/80 `max_kbps`) 45000 -> 40000 (bundle) | the same flight; at 40000 a 2026-10-24 walk had no 30 fps in 5 min and the same median bitrate | one walk at 40000. A slightly softer picture on busy scenes is possible; the operator saw none at 40 before. Can be set now on a d19 drone in `/etc/mabur.toml` |
+
 **Queued for the build after gs15 + d16 (agreed 2026-10-25).**
 
 | Change | Why | Counterpart |

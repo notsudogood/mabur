@@ -1689,6 +1689,7 @@ TEST(igi_floor_auto_key_parses) {
 TEST(carrier_sense_and_shed_max_level_parse_and_validate) {
   CHECK(Config{}.radio.carrier_sense == "on");
   CHECK(Config{}.link.shed_max_level == 3);
+  CHECK(Config{}.link.shed_quick_ms == 500);
   for (const char* v : {"on", "off", "no_edcca", "no_primary"}) {
     auto p = write_temp_toml(std::string("[radio]\nchannels = [36]\ncarrier_sense = \"") + v + "\"\n");
     CHECK(load_config(p.string()).radio.carrier_sense == v);
@@ -1697,9 +1698,16 @@ TEST(carrier_sense_and_shed_max_level_parse_and_validate) {
   auto p = write_temp_toml("[link]\nshed_max_level = 1\n");
   CHECK(load_config(p.string()).link.shed_max_level == 1);
   std::filesystem::remove(p);
+  for (int v : {0, 100, 2000}) {
+    auto q = write_temp_toml("[link]\nshed_quick_ms = " + std::to_string(v) + "\n");
+    CHECK(load_config(q.string()).link.shed_quick_ms == v);
+    std::filesystem::remove(q);
+  }
   for (const char* body : {"[radio]\nchannels = [36]\ncarrier_sense = \"edcca\"\n",
                            "[radio]\nchannels = [36]\ncarrier_sense = true\n",
-                           "[link]\nshed_max_level = 0\n", "[link]\nshed_max_level = 4\n"}) {
+                           "[link]\nshed_max_level = 0\n", "[link]\nshed_max_level = 4\n",
+                           "[link]\nshed_quick_ms = 50\n", "[link]\nshed_quick_ms = 2500\n",
+                           "[link]\nshed_quick_ms = -1\n"}) {
     bool threw = false;
     try { load_config(write_temp_toml(body).string()); } catch (const std::exception&) { threw = true; }
     CHECK(threw);

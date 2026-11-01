@@ -608,7 +608,8 @@ void parse_venc(const Value& j, VencSectionCfg& v) {
 
 void parse_link(const Value& j, LinkCfg& l) {
   check_known_keys(j, {"failsafe_ms", "rendezvous_ms", "tick_ms",
-                       "rc_drain_ms", "move_confirm_ms", "key_file", "shed_max_level"}, "link");
+                       "rc_drain_ms", "move_confirm_ms", "key_file", "shed_max_level",
+                       "shed_quick_ms"}, "link");
   assign_if_present(j, "failsafe_ms", l.failsafe_ms, "link");
   assign_if_present(j, "rendezvous_ms", l.rendezvous_ms, "link");
   assign_if_present(j, "move_confirm_ms", l.move_confirm_ms, "link");
@@ -618,6 +619,9 @@ void parse_link(const Value& j, LinkCfg& l) {
   assign_if_present(j, "shed_max_level", l.shed_max_level, "link");
   if (l.shed_max_level < 1 || l.shed_max_level > 3)
     fail("link.shed_max_level", "must be in [1,3]");
+  assign_if_present(j, "shed_quick_ms", l.shed_quick_ms, "link");
+  if (l.shed_quick_ms != 0 && (l.shed_quick_ms < 100 || l.shed_quick_ms > 2000))
+    fail("link.shed_quick_ms", "must be 0 (off) or in [100,2000]");
 
   if (l.move_confirm_ms < 200 || l.move_confirm_ms > 30000)
     fail("link.move_confirm_ms", "must be in [200,30000]");

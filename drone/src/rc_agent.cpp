@@ -583,6 +583,17 @@ void RcAgent::run_bitrate_policy(uint64_t now_ms, bool force) {
 //    at any rung, so a false shed costs one 2 s enh gap, a late one costs
 //    the cascade. TxQueue drop-oldest (txq.drops) and RadioTx::drops()
 //    stay telemetry-only: by the time either moves the damage is done.
+//
+// Quick release (link.shed_quick_ms, d20): an episode the queue alone
+// starts, >= kShedRepeatMs after the previous one ended, stays at level 1
+// and lifts after shed_quick_ms without pressure instead of 2 s. Operator
+// flight 2026-11-01 (MCS4/80 at 45 Mb/s): four 2 s spells of 30 fps in
+// ~12 min, each a queue trip on one tick -- a camera burst to 60-66 Mb/s,
+// three of them landing on a step down to MCS3/80 -- after which the
+// queue was calm and the 2 s were pure tail. A USB failure, or a trip
+// soon after the last episode, is not a passing burst: those keep the
+// 2 s-per-level climb. Shedding and un-shedding costs no keyframe (the
+// encoder keeps its two-layer GOP; only the enh bodies stop).
 void RcAgent::run_congestion_guard(uint64_t now_ms, const RadioHealth& health) {
   bool drops_rose = have_last_tx_drops_ && health.tx_drops > last_tx_drops_;
   if (!have_last_tx_drops_) drops_rose = health.tx_drops > 0;
@@ -594,19 +605,33 @@ void RcAgent::run_congestion_guard(uint64_t now_ms, const RadioHealth& health) {
       health.txq_cap > 0 &&
       health.txq_depth * kTxqShedDen >= health.txq_cap * kTxqShedNum;
 
+  static constexpr uint64_t kShedRepeatMs = 5000;
   bool changed = false;
   if (drops_rose || txq_pressure) {
+    if (shed_level_ == 0) {
+      shed_quick_ = cfg_.link.shed_quick_ms > 0 && !drops_rose &&
+                    (!have_last_shed_end_ || now_ms - last_shed_end_ms_ >= kShedRepeatMs);
+    } else if (drops_rose) {
+      shed_quick_ = false;   // a USB failure mid-episode: the full guard
+    }
     last_drop_rise_ms_ = now_ms;
     have_last_drop_rise_ = true;
-    if (shed_level_ < cfg_.link.shed_max_level) {
+    const int cap = shed_quick_ ? 1 : cfg_.link.shed_max_level;
+    if (shed_level_ < cap) {
       ++shed_level_;
       changed = true;
     }
-  } else if (have_last_drop_rise_ && now_ms - last_drop_rise_ms_ >= 2000) {
+  } else if (have_last_drop_rise_ &&
+             now_ms - last_drop_rise_ms_ >=
+                 (shed_quick_ ? static_cast<uint64_t>(cfg_.link.shed_quick_ms) : 2000)) {
     if (shed_level_ > 0) {
       --shed_level_;
       changed = true;
       last_drop_rise_ms_ = now_ms;  // restart the 2s window for the next step-down
+      if (shed_level_ == 0) {
+        last_shed_end_ms_ = now_ms;
+        have_last_shed_end_ = true;
+      }
     }
   }
 
@@ -614,12 +639,17 @@ void RcAgent::run_congestion_guard(uint64_t now_ms, const RadioHealth& health) {
     reapply_with_shed();
     // Edges only: the 0 <-> 1 transitions are the ones that change the
     // picture (30 <-> 60 fps); the climb above 1 only lengthens the tail.
-    if (shed_level_ == 1 && (drops_rose || txq_pressure))
-      std::fprintf(stderr, "rc: congestion shed ON (%s), 30 fps until up to %d s after it clears\n",
-                   txq_pressure ? "tx queue half full" : "tx drops rose",
-                   2 * cfg_.link.shed_max_level);
-    else if (shed_level_ == 0)
+    if (shed_level_ == 1 && (drops_rose || txq_pressure)) {
+      if (shed_quick_)
+        std::fprintf(stderr, "rc: congestion shed ON (tx queue half full), 30 fps until %d ms "
+                             "after it clears\n", cfg_.link.shed_quick_ms);
+      else
+        std::fprintf(stderr, "rc: congestion shed ON (%s), 30 fps until up to %d s after it clears\n",
+                     txq_pressure ? "tx queue half full" : "tx drops rose",
+                     2 * cfg_.link.shed_max_level);
+    } else if (shed_level_ == 0) {
       std::fprintf(stderr, "rc: congestion shed OFF\n");
+    }
   }
 }
 

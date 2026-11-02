@@ -40,10 +40,13 @@ inline bool module_live(const std::string& sysfs_module_root, const std::string&
   return std::strcmp(buf, "live") == 0;
 }
 
-// True when mi_venc is live and at least one sensor_* driver (not
-// sensor_config) is live.
+// True when the MI encoder module is live and at least one sensor_* driver
+// (not sensor_config) is live. The encoder module is mi_venc on the
+// SSC338Q (infinity6e: one .ko per MI module) and the unified `mi` on the
+// SSC378QE (infinity6c: OpenIPC ships a single mi.ko), so either counts.
 inline bool mi_modules_live(const std::string& sysfs_module_root) {
-  if (!module_live(sysfs_module_root, "mi_venc")) return false;
+  if (!module_live(sysfs_module_root, "mi_venc") && !module_live(sysfs_module_root, "mi"))
+    return false;
   DIR* d = opendir(sysfs_module_root.c_str());
   if (!d) return false;
   bool sensor = false;

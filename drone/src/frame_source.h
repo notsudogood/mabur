@@ -43,6 +43,9 @@ class FrameSource {
 
   bool attached() const;
   uint64_t reattach_count() const;
+  // The attached ring's header version (venc_frame_ring.h: 1 from the
+  // in-process encoder, 2 from upstream waybeam_venc), 0 when unattached.
+  uint32_t ring_version() const;
 
   // Forwards to venc_frame_ring_get_fill when attached; false (out
   // untouched) when unattached.

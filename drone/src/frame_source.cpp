@@ -145,6 +145,10 @@ int FrameSource::read(uint8_t* buf, size_t buf_size, int timeout_ms,
     }
     if (meta) {
       std::memcpy(meta, buf, VENC_FRAME_META_SIZE);
+      // A version-2 producer (upstream waybeam_venc, the SSC378QE image)
+      // carries gdr_pos/gdr_len in bytes 6-7, where this header has
+      // enc_us: never let a GDR counter pose as an encode time.
+      if (venc_frame_ring_version(ring_) >= 2) meta->enc_us = 0;
     }
     return static_cast<int>(out_len - VENC_FRAME_META_SIZE);
   }
@@ -165,6 +169,10 @@ int FrameSource::read(uint8_t* buf, size_t buf_size, int timeout_ms,
 }
 
 bool FrameSource::attached() const { return ring_ != nullptr; }
+
+uint32_t FrameSource::ring_version() const {
+  return ring_ ? venc_frame_ring_version(ring_) : 0u;
+}
 
 uint64_t FrameSource::reattach_count() const { return reattach_count_; }
 

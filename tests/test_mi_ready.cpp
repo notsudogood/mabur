@@ -86,4 +86,18 @@ TEST(wait_returns_once_the_sensor_driver_goes_live) {
   CHECK(w.waited_ms < 1000);
 }
 
+// The SSC378QE (infinity6c) image: OpenIPC ships the whole MI stack as one
+// mi.ko, so there is no mi_venc module to wait for -- `mi` live plus the
+// sensor driver is the same milestone. mi_common alone (the SSC338Q's
+// first module) is still not enough.
+TEST(live_with_the_infinity6c_unified_module) {
+  TmpRoot r;
+  r.module("mi", "live");
+  r.module("sensor_imx415_mipi", "live");
+  CHECK(mabur::mi_modules_live(r.path));
+  TmpRoot s;
+  s.module("mi_common", "live");
+  s.module("sensor_imx415_mipi", "live");
+  CHECK(!mabur::mi_modules_live(s.path));
+}
 MTEST_MAIN

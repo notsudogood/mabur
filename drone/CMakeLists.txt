@@ -12,6 +12,7 @@ add_library(mabur_drone_core STATIC
   src/cal_sweep.cpp
   src/camera_switch.cpp
   src/camera_ctl.cpp
+  src/ext_venc.cpp
   vendor/venc_frame_ring.c
   # venc_cfg.c is dependency-free C99 (string.h only), so it compiles on
   # host too — config.cpp's parse_venc() needs venc_cfg_defaults() at
@@ -44,7 +45,15 @@ target_link_libraries(maburd PRIVATE mabur_drone_core mabur_common devourer pthr
 # Venc core: waybeam_venc star6e encoder folded in (spec
 # docs/superpowers/specs/2026-08-28-venc-foldin-design.md). ARM-only: it
 # drives SigmaStar MI via dlopen and has no host-runnable pipeline.
-if(CMAKE_CROSSCOMPILING)
+#
+# MABUR_INPROC_VENC=OFF (the SSC378QE image, docs/ssc378qe-target.md): the
+# venc core is left out, because it is the SSC338Q's (infinity6e) pipeline
+# and the infinity6c SDK has no VPE and a different MI ABI. maburd then
+# reads whole frames from the frame-shm ring upstream waybeam_venc's Maruko
+# backend publishes, and drives that encoder over its local HTTP API
+# (src/ext_venc.cpp) -- the arrangement the fold-in replaced on the SSC338Q.
+option(MABUR_INPROC_VENC "Fold the SigmaStar venc into maburd (SSC338Q only)" ON)
+if(CMAKE_CROSSCOMPILING AND MABUR_INPROC_VENC)
   # CONFIGURE_DEPENDS: without it the glob is evaluated once at configure
   # time, so adding or deleting a drone/venc/*.c between builds silently
   # keeps the stale file list until someone re-runs cmake by hand — on a
@@ -100,4 +109,6 @@ if(CMAKE_CROSSCOMPILING)
   # object in first.
   target_link_libraries(venc_core PUBLIC mabur_drone_core)
   target_compile_definitions(mabur_drone_core PUBLIC MABUR_HAVE_VENC)
+elseif(CMAKE_CROSSCOMPILING)
+  target_compile_definitions(mabur_drone_core PUBLIC MABUR_EXT_VENC)
 endif()

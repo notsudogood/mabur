@@ -73,6 +73,7 @@ Two kinds of doc, two rules:
 | ladder rungs, promote/demote, s3 probes, fade, attribution, RCF drain, RcAgent's encoder verbs + IDR pacing | `docs/link-adaptation.md` |
 | the disarmed low-power mode, arm state over MSP, the live fps verb | `docs/link-adaptation.md` ("Low-power (disarmed) mode") |
 | the stats sideport, maburtop, the debug-log session directory (ctl/probe/au/flight/lat), ausniff, capture tools, player OSD/DVR/record button | `docs/observability.md` |
+| the SSC378QE (Infinity6C) air unit: maburd without its in-process encoder (`MABUR_INPROC_VENC=OFF`), waybeam_venc as a separate process over the frame-shm ring + `ext_venc`, the i6c unified `mi` module | `docs/ssc378qe-target.md` |
 | colortrans (CRTC 3D LUT, OSD inverse, burned-DVR GPU stage), the Buildroot glibc build of maburplay | `docs/colortrans.md` |
 | auto channel selection over a shared channel set, remembered channel, boot hop, pinned mode (static: never hops), which knob drives which piece (search/measure/relocate/verdict/hop), scan.log | `docs/channel-select.md` |
 | in-flight channel hop, verdict, dwells, hop_restore | `docs/inflight-channel-hop.md` |

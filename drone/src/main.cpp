@@ -87,6 +87,7 @@
 #ifdef MABUR_HAVE_VENC
 #include "venc_core.h"  // ARM only: drone/venc is not compiled on host builds
 #endif
+#include "ext_venc.h"  // the encoder as its own process (MABUR_EXT_VENC builds)
 
 #if defined(MABUR_DRY_RUN_ONLY)
 // Not used; real mode is always compiled in, guarded at runtime by --dry-run
@@ -340,6 +341,10 @@ struct RealActuator : mabur::Actuator {
   std::atomic<bool>* rate_change = nullptr;
   IRtlRadio* dev = nullptr;  // nullptr in dry-run
   bool dry_run = false;
+  // The encoder as its own process (MABUR_EXT_VENC builds, ext_venc.h):
+  // the verbs below go to it over HTTP instead of the in-process core.
+  // Null on in-process builds and in dry-run.
+  mabur::ExtVenc* ext = nullptr;
   // Per-rung A-MPDU (ampdu_policy.h): the aggregation mode follows the
   // op's MCS. Programmed here, on the agent thread, only when the derived
   // mode differs from what the chip holds — SetAmpduMode is one 0x455
@@ -471,11 +476,16 @@ struct RealActuator : mabur::Actuator {
       std::fprintf(stderr, "[dry-run] set_bitrate_kbps(%d)\n", k);
       return true;
     }
-#ifdef MABUR_HAVE_VENC
+#if defined(MABUR_HAVE_VENC)
     if (venc_set_bitrate_kbps(k) != 0) {
       ++venc_verb_failures;
       std::fprintf(stderr, "venc: set_bitrate(%d) FAILED (retry next tick)\n", k);
       return false;
+    }
+#elif defined(MABUR_EXT_VENC)
+    if (ext && !ext->set_live("video0.bitrate", std::to_string(k))) {
+      ++venc_verb_failures;
+      return false;  // waybeam not up yet, or refused: RcAgent retries
     }
 #endif
     return true;
@@ -487,10 +497,15 @@ struct RealActuator : mabur::Actuator {
       std::fprintf(stderr, "[dry-run] set_roi_qp(%d)\n", q);
       return true;
     }
-#ifdef MABUR_HAVE_VENC
+#if defined(MABUR_HAVE_VENC)
     if (venc_set_roi_qp(q) != 0) {
       ++venc_verb_failures;
       std::fprintf(stderr, "venc: set_roi_qp(%d) FAILED (retry next tick)\n", q);
+      return false;
+    }
+#elif defined(MABUR_EXT_VENC)
+    if (ext && !ext->set_live("fpv.roi_qp", std::to_string(q))) {
+      ++venc_verb_failures;
       return false;
     }
 #endif
@@ -502,10 +517,15 @@ struct RealActuator : mabur::Actuator {
       std::fprintf(stderr, "[dry-run] set_fps(%d)\n", f);
       return true;
     }
-#ifdef MABUR_HAVE_VENC
+#if defined(MABUR_HAVE_VENC)
     if (venc_set_fps(f) != 0) {
       ++venc_verb_failures;
       std::fprintf(stderr, "venc: set_fps(%d) FAILED (retry next tick)\n", f);
+      return false;
+    }
+#elif defined(MABUR_EXT_VENC)
+    if (ext && !ext->set_live("video0.fps", std::to_string(f))) {
+      ++venc_verb_failures;
       return false;
     }
 #endif
@@ -518,11 +538,13 @@ struct RealActuator : mabur::Actuator {
       std::fprintf(stderr, "[dry-run] request_idr()\n");
       return;
     }
-#ifdef MABUR_HAVE_VENC
+#if defined(MABUR_HAVE_VENC)
     if (venc_request_idr() != 0) {
       ++venc_verb_failures;
       std::fprintf(stderr, "venc: request_idr FAILED\n");
     }
+#elif defined(MABUR_EXT_VENC)
+    if (ext && !ext->request_idr()) ++venc_verb_failures;
 #endif
   }
 
@@ -1818,6 +1840,18 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   // book the new deltas as holes. Same shape as link_up_discont below.
   std::atomic<bool> fps_rate_change{false};
 
+#ifdef MABUR_EXT_VENC
+  // The encoder is waybeam_venc, its own process on this board: whole
+  // frames arrive over the frame-shm ring (the hot thread attaches lazily
+  // and reattaches across its restarts), and the rate-control verbs go to
+  // its HTTP API. MABUR_EXT_VENC=host:port in the environment moves that
+  // API off waybeam's default of 127.0.0.1:80. Outlives `actuator`.
+  mabur::ExtVenc ext_venc(mabur::ExtVenc::parse_spec(std::getenv("MABUR_EXT_VENC")));
+  std::fprintf(stderr,
+               "video: external encoder -- frames from frame-shm %s, control at "
+               "http://%s:%d (waybeam_venc); no in-process venc on this image\n",
+               VENC_RING_NAME, ext_venc.cfg().host.c_str(), ext_venc.cfg().port);
+#endif
   RealActuator actuator;
   actuator.tx = &tx;
   actuator.sink = &dev_sink;
@@ -1825,6 +1859,9 @@ int run_real_mode(const Config& cfg, uint8_t start_ch, const std::string& cfg_pa
   actuator.rate_change = &fps_rate_change;
   actuator.dev = rtl_device.get();
   actuator.dry_run = false;
+#ifdef MABUR_EXT_VENC
+  actuator.ext = &ext_venc;
+#endif
   actuator.ampdu = cfg.ampdu;
   actuator.tx_gate = &tx_gate;
   actuator.retune_waiting = &retune_waiting;

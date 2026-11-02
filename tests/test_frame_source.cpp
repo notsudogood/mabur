@@ -100,4 +100,66 @@ TEST(consumer_fill_reports_only_consumer_side_counters) {
   venc_frame_ring_destroy(prod);
 }
 
+// Upstream waybeam_venc (0.69+) writes a version-2 ring: same 192-byte
+// header, health counters carved out of its pad, and in the per-frame meta
+// bytes 6-7 are gdr_pos/gdr_len where this header has enc_us. maburd on
+// the SSC378QE image reads that ring (the encoder is waybeam's own
+// process), so the consumer attaches to v2 and must not read a GDR
+// counter as an encode time. REVERT CHECK: with `!= VENC_FRAME_RING_VERSION`
+// back in venc_frame_ring_attach the first read returns 0 forever.
+TEST(attaches_a_version_2_ring_and_zeroes_enc_us) {
+  venc_frame_ring_t* prod = venc_frame_ring_create(kName, 16, 64 * 1024);
+  REQUIRE(prod != nullptr);
+  prod->hdr->version = 2;  // what waybeam's producer stamps
+  FrameSource src(kName, 10);
+  VencFrameMeta meta{};
+  meta.pts = 777;
+  meta.codec = VENC_FRAME_CODEC_H265;
+  meta.flags = VENC_FRAME_FLAG_IDR | VENC_FRAME_FLAG_GDR;
+  meta.enc_us = 0x0304;  // = gdr_pos 4, gdr_len 3 in the v2 meta
+  uint8_t payload[64] = {0x11};
+  REQUIRE(venc_frame_ring_write(prod, &meta, payload, sizeof payload) == 0);
+  std::vector<uint8_t> buf(VENC_FRAME_META_SIZE + 64 * 1024);
+  VencFrameMeta got{};
+  REQUIRE(src.read(buf.data(), buf.size(), 200, &got) == 64);
+  CHECK(src.ring_version() == 2u);
+  CHECK(got.pts == 777u);
+  CHECK(got.flags == (VENC_FRAME_FLAG_IDR | VENC_FRAME_FLAG_GDR));
+  CHECK(got.enc_us == 0);
+  CHECK(buf[VENC_FRAME_META_SIZE] == 0x11);
+  venc_frame_ring_destroy(prod);
+}
+
+// The in-process encoder's own ring reports its enc_us as before.
+TEST(a_version_1_ring_keeps_enc_us) {
+  venc_frame_ring_t* prod = venc_frame_ring_create(kName, 16, 64 * 1024);
+  REQUIRE(prod != nullptr);
+  FrameSource src(kName, 10);
+  VencFrameMeta meta{};
+  meta.enc_us = 1234;
+  uint8_t payload[8] = {0};
+  REQUIRE(venc_frame_ring_write(prod, &meta, payload, sizeof payload) == 0);
+  std::vector<uint8_t> buf(VENC_FRAME_META_SIZE + 64 * 1024);
+  VencFrameMeta got{};
+  REQUIRE(src.read(buf.data(), buf.size(), 200, &got) == 8);
+  CHECK(src.ring_version() == 1u);
+  CHECK(got.enc_us == 1234);
+  venc_frame_ring_destroy(prod);
+}
+
+// A version this consumer has never seen is refused, as before: a silent
+// misread of a changed layout is the failure the version field exists for.
+TEST(an_unknown_ring_version_is_refused) {
+  venc_frame_ring_t* prod = venc_frame_ring_create(kName, 16, 64 * 1024);
+  REQUIRE(prod != nullptr);
+  prod->hdr->version = 3;
+  FrameSource src(kName, 10);
+  VencFrameMeta meta{};
+  uint8_t payload[8] = {0};
+  REQUIRE(venc_frame_ring_write(prod, &meta, payload, sizeof payload) == 0);
+  std::vector<uint8_t> buf(VENC_FRAME_META_SIZE + 64 * 1024);
+  CHECK(src.read(buf.data(), buf.size(), 30, nullptr) == 0);
+  CHECK(!src.attached());
+  venc_frame_ring_destroy(prod);
+}
 MTEST_MAIN

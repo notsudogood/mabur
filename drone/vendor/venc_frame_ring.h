@@ -32,6 +32,15 @@
 
 #define VENC_FRAME_RING_MAGIC   0x5646524D  /* "VFRM" */
 #define VENC_FRAME_RING_VERSION 1
+/* What a CONSUMER accepts on attach: version 1 (this producer, and the
+ * in-process venc_core) or 2 (upstream waybeam_venc 0.69+, which maburd
+ * reads from when the encoder runs as its own process -- the SSC378QE
+ * image, docs/ssc378qe-target.md). The two share the 192-byte header
+ * layout and every field this consumer touches; v2 only carves producer
+ * health counters out of the header's pad, and in the per-frame meta its
+ * bytes 6-7 are gdr_pos/gdr_len where v1 has enc_us. FrameSource zeroes
+ * enc_us for a v2 ring. The producer side still writes version 1. */
+#define VENC_FRAME_RING_VERSION_MAX 2
 
 /* Metadata prepended to each frame in the slot's data[] */
 #define VENC_FRAME_META_SIZE    8
@@ -113,6 +122,12 @@ typedef struct {
 	uint32_t               write_offset;
 	int                    write_active;
 } venc_frame_ring_t;
+
+/* The attached ring's header version (1 or 2), 0 for a null handle. */
+static inline uint32_t venc_frame_ring_version(const venc_frame_ring_t *r)
+{
+	return (r && r->hdr) ? r->hdr->version : 0u;
+}
 
 /* ── Create / attach / destroy ───────────────────────────────────────── */
 

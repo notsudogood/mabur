@@ -147,7 +147,8 @@ venc_frame_ring_t *venc_frame_ring_attach(const char *shm_name)
 	}
 
 	if (tmp.magic != VENC_FRAME_RING_MAGIC ||
-	    tmp.version != VENC_FRAME_RING_VERSION ||
+	    tmp.version < VENC_FRAME_RING_VERSION ||
+	    tmp.version > VENC_FRAME_RING_VERSION_MAX ||
 	    !is_power_of_2(tmp.slot_count) ||
 	    tmp.slot_data_size < VENC_FRAME_META_SIZE ||
 	    tmp.init_complete != 1) {
@@ -176,7 +177,7 @@ venc_frame_ring_t *venc_frame_ring_attach(const char *shm_name)
 
 	hdr = (venc_frame_ring_hdr_t *)map;
 	if (hdr->magic != VENC_FRAME_RING_MAGIC ||
-	    hdr->version != VENC_FRAME_RING_VERSION ||
+	    hdr->version != tmp.version ||
 	    hdr->slot_count != tmp.slot_count ||
 	    hdr->slot_data_size != tmp.slot_data_size ||
 	    hdr->total_size != (uint32_t)expected_total ||

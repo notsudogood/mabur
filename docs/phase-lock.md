@@ -124,7 +124,7 @@ the camera there (~3 lines, centre near −50 mfps). It logs
 
 The drone has no phase-lock config.
 
-## Display actuator (`display.phase_actuator = "display"`, gs22, opt-in)
+## Display actuator (`display.phase_actuator = "display"`, the default since gs23)
 
 The same controller can move the GS's HDMI pixel clock instead of the
 camera: the panel follows the camera, and the RCF's `snr_off` stays 0, so
@@ -133,17 +133,40 @@ is their nominal rate, which the sensor steer can only slow down: the
 Camera tab's Crop 60 (2816x1584 crop, ceiling 60.000 fps) and 1728x972@100.
 Flights 0019-0021 flew Crop 60: the lock held 2-3 % of armed seconds,
 gave up (`oor`) for 20-45 %, and its offset sat at the +200 mfps limit.
+It was opt-in in gs22 and is the default in code and bundle since gs23;
+wherever it cannot run, the sensor steer runs instead, as before gs22.
+
+At start and after every display hotplug maburplay names the attached
+sink from its EDID (`edid.h`: the connector's EDID property, else sysfs)
+and logs it with the mode:
+
+    maburplay: display sink: "<monitor name>" <MFR>-<product>, HDMI, 1080p60 also as YCbCr 4:2:0 (at start, 60.000 Hz, 148500 kHz)
+
+The name is the EDID's monitor-name descriptor, the id its maker code and
+product code (present even without a name), then HDMI or DVI, then what
+the EDID's 4:2:0 blocks say about 1080p60. A sink listed in
+`display.trim_skip_sinks` (name or id, any case) stays on the sensor
+steer; every other sink gets the trim. That list is the per-sink escape
+for a display that blanks or flickers under the trim, which the GS cannot
+see itself.
 
 How it works (`hdmi_trim.h`; evidence in
 `docs/findings/2026-10-22-hdmi-clock-trim-spike.md` and
 `2026-10-24-display-trim-servo-spike.md`):
 
 - HPLL in the RK3566's PMUCRU clocks only the HDMI port and the HDMI PHY.
-  Right after each presenter modeset, maburplay moves it from the kernel's
+  Right after each presenter init, maburplay moves it from the kernel's
   integer 148.5 MHz setting (fbdiv 99, postdivs 4x4) to the same rate at
-  postdivs 4x3, fbdiv 74 + 0.25. The display re-syncs once (the modeset
-  has just re-synced it anyway). A PLL already at that point (a player
-  restart) is kept, with no re-sync.
+  postdivs 4x3, fbdiv 74 + 0.25, just before the presenter's own modeset
+  (so the sink's one re-sync rides the modeset's). A PLL already at that
+  point (a player restart) is kept, with no re-sync.
+- Once that first modeset is in (splash or first frame), the trim is
+  checked again: the PLL now holds the kernel's setting for the mode
+  actually set. Still at the point: nothing happens. Reprogrammed by the
+  modeset (the boot or parked mode differed, e.g. the 123.75 MHz mode the
+  kernel parks the port on while the player is down): it moves now (one
+  more re-sync) or is refused, and the log says
+  `... after the first modeset`.
 - Some sinks get the same 1080p60 mode with HPLL at half that rate,
   74.25 MHz (the kernel's setting with refdiv 2); HDZero goggles do. The
   video port then runs at half the pixel clock, which is how the kernel
@@ -158,15 +181,18 @@ How it works (`hdmi_trim.h`; evidence in
 - offset (mfps of camera rate) -> ppm of pixel clock = -offset x 1e6 /
   (panel Hz x 1000): a faster panel moves the phase like a slower camera.
   16.7 ppm per mfps at 60 Hz.
-- Bounded by `display.trim_max_ppm` (1000 = +-60 mfps at 60 Hz). A
+- Bounded by `display.trim_max_ppm` (2000 = +-120 mfps at 60 Hz; 1000
+  in gs22, raised because a bench lock against Crop 60 needed -1050). A
   clamped request is fed back to the lock (`PhaseLock::set_applied`), so
   the window is read against what is in force and the centre settles on
   the real need instead of winding up (the 10-24 spike's 22 s clamp wound
   it to 139 mfps); `maburplay: display trim at its bound` on stderr.
-- Refused, with the sensor steer kept and the reason on stderr: not an
-  RK3566, `/dev/mem` unavailable, a mode other than 148.5 MHz
-  (1920x1080@60), a PLL setting other than the kernel's two (148.5 and
-  74.25 MHz) or their trim points. A trim point the PLL does not take is
+- 720p60/50 modes (74.25 MHz pixel clock) use the 74.25 MHz point at
+  full rate; 1080p50 shares 1080p60's 148.5 MHz clock and points.
+- Refused, with the sensor steer kept and the reason on stderr: a sink
+  in `display.trim_skip_sinks`, not an RK3566, `/dev/mem` unavailable, a
+  mode other than 148.5 or 74.25 MHz (100 Hz, 59.94 Hz), a PLL setting
+  other than the kernel's two (148.5 and 74.25 MHz) or their trim points. A trim point the PLL does not take is
   undone to the kernel's setting it came from and not retried.
 - Rate mismatch, playback or a lost source: back to 0 ppm. Exit: 0 ppm
   at the trim point (the same rate as the kernel's setting).
@@ -177,12 +203,21 @@ Against it:
   1080p60 held a 164 s run at -70..-300 ppm with no blank beyond the one
   at the point move. At 100 Hz the same goggles blanked repeatedly after
   excursions of -1000..-1800 ppm, cause never found; 100 Hz modes have no
-  trim point here. If a display blanks, set `phase_actuator = "sensor"`.
+  trim point here. If a display blanks, add its name or id from the
+  `display sink:` line to `trim_skip_sinks`, or set
+  `phase_actuator = "sensor"` for every display.
+- Default on means every GS display gets the trim, including ones never
+  tested with it. The bound doubled to 2000 ppm; Avatar Goggles X at 60 Hz
+  were only ever run at -70..-300 ppm.
+- The EDID can be missing (the Avatar Goggles X's sysfs `edid` read back
+  empty in the 10-22 spike); the line then says `no EDID` and the skip
+  list cannot name that sink. The trim itself does not need the EDID.
 - The 74.25 MHz point has not run on hardware. Its arithmetic is the
   148.5 MHz point's (unit-tested on the register values the HDZero
   goggles read), but nothing on the bench has shown how a 4:2:0 sink
   takes a moving clock. The bench lock (an HDMI capture card, full rate)
-  needed -1050 ppm against Crop 60, past the default 1000 bound.
+  needed -1050 ppm against Crop 60. The 720p point is the same setting,
+  untested at 720p.
 - How far Crop 60 sits from the panel is unmeasured: the drone's
   `[sensor] cal:` line gives its trim, and `steer: offset ... clamped to N`
   how much room the sensor had. A need past the bound leaves the lock
@@ -253,9 +288,12 @@ each frame on the spot.
   `burn_in= burn_enc= burn_drop=`, and `act=<sensor|display> trim=<ppm>`
   (plus `trim_sat=1` while the display trim is at its bound)
   (docs/observability.md "Regulator line").
+- maburplay stderr: `maburplay: display sink: ...` once per presenter
+  init (start and each hotplug), whatever the actuator.
 - maburplay stderr: `maburplay: phase lock actuator: display|sensor -- ...`
   once per presenter init, with the reason when the display trim is
-  refused.
+  refused or skipped, and again `after the first modeset` when that
+  modeset changed the outcome.
 - maburplay stderr: `phase-lock: <state> err= off= centre=` on each state
   change.
 - Drone stats line: `snr_off=` (the offset on the sensor); `/tmp/mabur.log`

@@ -28,6 +28,7 @@ add_library(mabur_player_core STATIC
   src/frame_regulator.cpp
   src/phase_lock.cpp
   src/hdmi_trim.cpp
+  src/edid.cpp
   src/lat_tracker.cpp
   src/lat_log.cpp
   src/splash_image.cpp

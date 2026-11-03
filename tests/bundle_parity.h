@@ -74,7 +74,9 @@ inline bool same(const mabur::toml::Value& b, const std::string& code) {
     if (end == code.c_str()) return false;
     return std::fabs(c - b.get<double>()) < 1e-9;
   }
-  return false;  // arrays and tables: the caller lists them as known differences
+  // An empty list against a loader that notes an empty default as "[]".
+  if (b.is_array()) return code == "[]" && b.empty();
+  return false;  // other arrays and tables: the caller lists them as known differences
 }
 
 // "key=code" entries whose code default differs from the bundle's value,

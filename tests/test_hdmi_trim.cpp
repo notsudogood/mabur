@@ -136,7 +136,7 @@ TEST(engage_refuses_other_modes_and_unknown_settings_untouched) {
   q.con1 = (1u << 12) | (7u << 6) | 12u;
   auto u = trim_on(&q);
   CHECK(!u->engage(148500, &why, &moved));
-  CHECK(why.find("neither of the kernel's") != std::string::npos);
+  CHECK(why.find("not a kernel setting") != std::string::npos);
   CHECK(p.writes.empty() && q.writes.empty());
   CHECK(!t->engaged() && !u->engaged());
   CHECK(t->set_ppm(500.0) == 0.0 && p.writes.empty());   // never writes unengaged
@@ -277,6 +277,45 @@ TEST(a_half_rate_point_that_does_not_take_goes_back_to_refdiv_2) {
   CHECK((con1 & 0x3fu) == 2u);               // refdiv 2
   CHECK(((con1 >> 6) & 0x7u) == 4u);         // postdiv2 4
   CHECK((con1 & (1u << 12)) != 0);           // integer
+}
+
+TEST(a_720p_mode_uses_the_74_point_at_full_rate) {
+  FakePll p = kernel74_pll();
+  auto t = trim_on(&p);
+  std::string why;
+  bool moved = false;
+  REQUIRE(t->engage(74250, &why, &moved));
+  CHECK(moved && !t->half_rate());
+  CHECK(std::fabs(t->pll_mhz() - 74.25) < 1e-6);
+  CHECK(hp::same_point(hp::decode(p.con0, p.con1, p.con2), hp::point_74()));
+  // A 720p mode over a PLL at the 148.5 MHz setting is not a setting for it.
+  FakePll q = kernel_pll();
+  auto u = trim_on(&q);
+  CHECK(!u->engage(74250, &why, &moved));
+  CHECK(why.find("not a kernel setting") != std::string::npos && q.writes.empty());
+  FakePll r = kernel_pll();
+  r.con0 = (4u << 12) | 74u;   // the 148.5 MHz point: still not for a 720p mode
+  r.con1 = (3u << 6) | 1u;
+  r.con2 = hp::kFracOne / 4;
+  auto w = trim_on(&r);
+  CHECK(!w->engage(74250, &why, &moved) && r.writes.empty());
+}
+
+TEST(pll_mhz_names_the_point_and_disengage_returns_to_0_ppm) {
+  FakePll p = kernel_pll();
+  auto t = trim_on(&p);
+  CHECK(t->pll_mhz() == 0.0);
+  std::string why;
+  bool moved = false;
+  REQUIRE(t->engage(148500, &why, &moved));
+  CHECK(std::fabs(t->pll_mhz() - 148.5) < 1e-6 && !t->half_rate());
+  t->set_ppm(-700.0);
+  t->disengage();
+  CHECK(!t->engaged() && t->pll_mhz() == 0.0);
+  const hp::Setting s = hp::decode(p.con0, p.con1, p.con2);
+  CHECK(hp::same_point(s, hp::point_148()) && s.frac == hp::kFracOne / 4);
+  p.writes.clear();
+  CHECK(t->set_ppm(300.0) == 0.0 && p.writes.empty());   // no writes once disengaged
 }
 
 // --- PhaseLock::set_applied: a bounded actuator must not wind the centre up.

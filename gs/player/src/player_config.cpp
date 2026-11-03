@@ -263,7 +263,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
     check_keys(d, "display",
                {"regulate_ms", "vsync_lock", "vsync_lead_ms", "chain_budget", "sched_cap_ms",
                 "phase_lock", "phase_margin_ms", "rt_priority",
-                "phase_actuator", "trim_max_ppm",
+                "phase_actuator", "trim_max_ppm", "trim_skip_sinks",
                 "rec_vsync_lead_ms", "genlock", "genlock_miss_pct"});
     c.display.regulate_ms =
         static_cast<int>(get_int(d, "regulate_ms", 12, 0, 100, "display"));
@@ -291,6 +291,19 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
       fail("display.phase_actuator", "must be \"sensor\" or \"display\"");
     c.display.trim_max_ppm = static_cast<int>(
         get_int(d, "trim_max_ppm", c.display.trim_max_ppm, 50, 3000, "display"));
+    if (d.contains("trim_skip_sinks")) {
+      g_line = d["trim_skip_sinks"].line();
+      if (!d["trim_skip_sinks"].is_array()) fail("display.trim_skip_sinks", "not an array");
+      int i = 0;
+      for (const Value& v : d["trim_skip_sinks"]) {
+        const std::string where = "display.trim_skip_sinks[" + std::to_string(i++) + "]";
+        if (v.line() > 0) g_line = v.line();
+        if (!v.is_string() || v.get<std::string>().empty()) fail(where, "not a non-empty string");
+        c.display.trim_skip_sinks.push_back(v.get<std::string>());
+      }
+    } else {
+      note_default("display", "trim_skip_sinks", "[]");
+    }
     // genlock / genlock_miss_pct: our older camera steering, retired
     // 2026-10-18 for phase_lock. rec_vsync_lead_ms: the recording-time
     // release lead, retired with the release thread (its lead covers

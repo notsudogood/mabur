@@ -1,9 +1,11 @@
 #ifndef MABUR_PLAYER_DRM_PRESENTER_H_
 #define MABUR_PLAYER_DRM_PRESENTER_H_
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "colortrans.h"  // CubicLut
 #include "osd_raster.h"  // Surface (host-buildable; pulls in no DRM headers)
@@ -247,6 +249,12 @@ class DrmPresenter : public PresentSink {
   // The committed mode's pixel clock, kHz (148500 at 1920x1080@60). Valid
   // after init() succeeds; the display trim (hdmi_trim.h) keys on it.
   int mode_clock_khz() const;
+  // The connected sink's EDID as init() read it (the connector's EDID
+  // property, else sysfs); empty when neither had one. edid.h parses it.
+  std::vector<uint8_t> edid() const;
+  // The first modeset (splash or first frame) has gone through: the mode,
+  // and the kernel's clock setting for it, are in force. Any thread.
+  bool display_live() const;
 
   // --- colortrans: CRTC 3D LUT (docs/colortrans.md) -------------------
   // True when init() found the CRTC's CUBIC_LUT property with

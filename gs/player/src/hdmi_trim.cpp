@@ -143,24 +143,32 @@ bool HdmiTrim::engage(int clock_khz, std::string* why, bool* moved) {
   *moved = false;
   engaged_ = false;
   half_rate_ = false;
-  if (clock_khz != kClock148Khz) {
-    char b[120];
+  if (clock_khz != kClock148Khz && clock_khz != kClock74Khz) {
+    char b[140];
     std::snprintf(b, sizeof(b),
-                  "pixel clock %d kHz: only 148500 kHz (1920x1080@60) has a trim point",
+                  "pixel clock %d kHz: only 148500 kHz (1080p60/50) and 74250 kHz (720p60/50) "
+                  "have trim points",
                   clock_khz);
     *why = b;
     return false;
   }
   const Setting now = decode(io_->read(kCon0), io_->read(kCon1), io_->read(kCon2));
-  // Full rate or half rate, by what the PLL reads: its point or its
-  // kernel setting. The four settings are pairwise distinct.
-  const bool half = same_point(now, point_74()) || same_point(now, kernel_74());
-  const Setting point = half ? point_74() : point_148();
-  const Setting kern = half ? kernel_74() : kernel_148();
+  // HPLL at 74.25 or 148.5 MHz, by what the PLL reads: its point or its
+  // kernel setting (the four settings are pairwise distinct). A 74.25 MHz
+  // mode has HPLL at 74.25; a 148.5 MHz mode at either (half = 4:2:0).
+  const bool at74 = same_point(now, point_74()) || same_point(now, kernel_74());
+  const Setting point = at74 ? point_74() : point_148();
+  const Setting kern = at74 ? kernel_74() : kernel_148();
+  const std::string not_ours =
+      "HPLL reads " + describe(now) +
+      ", not a kernel setting for this mode (148.5 or 74.25 MHz); left alone";
+  if (clock_khz == kClock74Khz && !at74) {
+    *why = not_ours;
+    return false;
+  }
   if (!same_point(now, point)) {
     if (!same_point(now, kern)) {
-      *why = "HPLL reads " + describe(now) +
-             ", neither of the kernel's 1080p60 settings (148.5 or 74.25 MHz); left alone";
+      *why = not_ours;
       return false;
     }
     io_->write(kCon2, con2_value(io_->read(kCon2), point.frac));
@@ -184,7 +192,8 @@ bool HdmiTrim::engage(int clock_khz, std::string* why, bool* moved) {
   frac_ = decode(io_->read(kCon0), io_->read(kCon1), io_->read(kCon2)).frac;
   applied_ppm_ = ppm_for_frac(frac_);
   engaged_ = true;
-  half_rate_ = half;
+  half_rate_ = at74 && clock_khz == kClock148Khz;
+  pll_mhz_ = rate_hz(point) / 1e6;
   set_ppm(0.0);
   return true;
 }

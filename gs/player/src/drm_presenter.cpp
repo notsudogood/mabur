@@ -286,6 +286,7 @@ struct DrmPresenter::Impl {
   ReleaseFn release;
 
   uint32_t connector_id = 0;
+  std::vector<uint8_t> edid;   // the chosen connector's, read at init()
   uint32_t crtc_id = 0;
   int crtc_index = -1;
   drmModeModeInfo mode{};
@@ -406,6 +407,8 @@ struct DrmPresenter::Impl {
   // anything -- gating the standalone OSD path on that would freeze the OSD
   // exactly when on-screen link telemetry matters most.
   bool crtc_active = false;
+  // crtc_active for other threads (display_live()): the first modeset is in.
+  std::atomic<bool> live{false};
   bool flip_pending = false;  // a NONBLOCK|PAGE_FLIP_EVENT commit is outstanding
   uint64_t flip_since_ms = 0;  // when flip_pending was set (watchdog)
   // Events the kernel still owes us for flips that were force-completed or
@@ -792,6 +795,32 @@ bool DrmPresenter::Impl::init(const std::string& screen_mode, bool want_osd, Rel
                  chosen->connector_id, chosen->connector_type);
   }
   connector_id = chosen->connector_id;
+  // The sink's EDID, for the log and display.trim_skip_sinks (edid.h): the
+  // connector's EDID blob, else sysfs. Absent on neither is fine.
+  edid.clear();
+  {
+    uint64_t blob_id = 0;
+    if (find_property(fd, connector_id, DRM_MODE_OBJECT_CONNECTOR, "EDID", &blob_id) &&
+        blob_id != 0) {
+      drmModePropertyBlobPtr b = drmModeGetPropertyBlob(fd, static_cast<uint32_t>(blob_id));
+      if (b) {
+        const auto* p = static_cast<const uint8_t*>(b->data);
+        edid.assign(p, p + b->length);
+        drmModeFreePropertyBlob(b);
+      }
+    }
+    if (edid.empty() && is_hdmi) {
+      char path[96];
+      std::snprintf(path, sizeof(path), "/sys/class/drm/card0-HDMI-A-%u/edid",
+                    chosen->connector_type_id);
+      if (FILE* f = std::fopen(path, "rb")) {
+        uint8_t buf[1024];
+        const size_t n = std::fread(buf, 1, sizeof(buf), f);
+        std::fclose(f);
+        edid.assign(buf, buf + n);
+      }
+    }
+  }
 
   // Mode select (mode_pick.h): the closest exact rate among modes of the
   // wanted size; the preferred mode (or the first) when none fits.
@@ -1377,6 +1406,7 @@ bool DrmPresenter::Impl::splash_show() {
     return false;
   }
   crtc_active = true;
+  live.store(true, std::memory_order_release);
   needs_modeset = false;
   splash_active = true;
   std::fprintf(stderr, "DrmPresenter: splash up on plane %u at %ux%u -- display live before video\n",
@@ -1748,6 +1778,7 @@ bool DrmPresenter::Impl::present(const DmaFrame& frame) {
     on_screen = new_slot;
     needs_modeset = false;
     crtc_active = true;  // latched: the CRTC stays active for the rest of the session
+    live.store(true, std::memory_order_release);
   } else {
     pending = new_slot;
     flip_pending = true;
@@ -1973,6 +2004,10 @@ void DrmPresenter::set_flip_sink(FlipSink sink) { impl_->flip_sink = std::move(s
 bool DrmPresenter::vsync_ts_exact() const { return impl_->ts_exact; }
 
 int DrmPresenter::mode_clock_khz() const { return static_cast<int>(impl_->mode.clock); }
+
+std::vector<uint8_t> DrmPresenter::edid() const { return impl_->edid; }
+
+bool DrmPresenter::display_live() const { return impl_->live.load(std::memory_order_acquire); }
 
 double DrmPresenter::mode_period_us() const {
   return maburplay::mode_period_us(impl_->mode.clock, impl_->mode.htotal,

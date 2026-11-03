@@ -642,16 +642,29 @@ TEST(display_phase_lock_keys) {
 }
 
 TEST(display_phase_actuator_keys) {
-  // gs22: "sensor" (default, code and bundle) or "display"; the trim bound
-  // 1000 ppm, 50..3000.
+  // gs23: "display" (default, code and bundle) or "sensor"; the trim bound
+  // 2000 ppm, 50..3000; no sink skipped.
   const auto bare = maburplay::load_config(write_tmp_play(""));
-  CHECK(bare.display.phase_actuator == "sensor" && bare.display.trim_max_ppm == 1000);
-  const auto on = maburplay::load_config(
-      write_tmp_play("[display]\nphase_actuator = \"display\"\ntrim_max_ppm = 600\n"));
-  CHECK(on.display.phase_actuator == "display" && on.display.trim_max_ppm == 600);
+  CHECK(bare.display.phase_actuator == "display" && bare.display.trim_max_ppm == 2000);
+  CHECK(bare.display.trim_skip_sinks.empty());
+  const auto off = maburplay::load_config(
+      write_tmp_play("[display]\nphase_actuator = \"sensor\"\ntrim_max_ppm = 600\n"));
+  CHECK(off.display.phase_actuator == "sensor" && off.display.trim_max_ppm == 600);
   CHECK(load_throws("[display]\nphase_actuator = \"panel\"\n"));
   CHECK(load_throws("[display]\ntrim_max_ppm = 49\n"));
   CHECK(load_throws("[display]\ntrim_max_ppm = 3001\n"));
+}
+
+TEST(display_trim_skip_sinks_key) {
+  const auto two = maburplay::load_config(
+      write_tmp_play("[display]\ntrim_skip_sinks = [\"HDZero\", \"ABC-1234\"]\n"));
+  REQUIRE(two.display.trim_skip_sinks.size() == 2);
+  CHECK(two.display.trim_skip_sinks[0] == "HDZero" && two.display.trim_skip_sinks[1] == "ABC-1234");
+  const auto none = maburplay::load_config(write_tmp_play("[display]\ntrim_skip_sinks = []\n"));
+  CHECK(none.display.trim_skip_sinks.empty());
+  CHECK(load_throws("[display]\ntrim_skip_sinks = \"HDZero\"\n"));   // not a list
+  CHECK(load_throws("[display]\ntrim_skip_sinks = [3]\n"));
+  CHECK(load_throws("[display]\ntrim_skip_sinks = [\"\"]\n"));
 }
 
 TEST(display_rt_priority_key) {

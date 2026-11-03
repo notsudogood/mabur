@@ -65,9 +65,11 @@ constexpr uint32_t kPointFbdiv = 74;
 inline Setting kernel_148() { return Setting{99, 4, 4, 1, true, 0}; }
 inline Setting point_148() { return Setting{kPointFbdiv, 4, 3, 1, false, kFracOne / 4}; }
 // ... or at half of it, 74.25 MHz (a 4:2:0 link, see above).
+// The same pair is the full-rate setting of a 74.25 MHz mode (720p60/50).
 inline Setting kernel_74() { return Setting{99, 4, 4, 2, true, 0}; }
 inline Setting point_74() { return Setting{kPointFbdiv, 6, 4, 1, false, kFracOne / 4}; }
-constexpr int kClock148Khz = 148500;
+constexpr int kClock148Khz = 148500;   // 1920x1080 at 60 or 50 Hz
+constexpr int kClock74Khz = 74250;     // 1280x720 at 60 or 50 Hz
 
 // The fraction for `ppm` at a trim point, kept 1/64 away from either
 // integer edge (-3157..+9906 ppm). False outside that.
@@ -101,8 +103,9 @@ class HdmiTrim {
   HdmiTrim& operator=(const HdmiTrim&) = delete;
 
   // Takes the PLL to the trim point for a mode of pixel clock `clock_khz`
-  // and sets 0 ppm. Only 148.5 MHz has points: one for HPLL at the full
-  // clock, one at half (half_rate()), picked by what the PLL reads. A PLL
+  // and sets 0 ppm. A 148.5 MHz mode has two points, HPLL at the full
+  // clock or at half (half_rate()), picked by what the PLL reads; a
+  // 74.25 MHz mode has the 74.25 MHz point at full rate. A PLL
   // already at a point (a previous run, a modeset at the same rate) is
   // kept; one at the matching kernel setting is moved (*moved = true: the
   // sink re-syncs once); anything else is refused untouched. A move the
@@ -110,8 +113,18 @@ class HdmiTrim {
   // retried (a retry loop held the goggles blank for 30 s in the spike).
   bool engage(int clock_khz, std::string* why, bool* moved);
   bool engaged() const { return engaged_; }
-  // Engaged at the 74.25 MHz point (HPLL at half the mode's pixel clock).
+  // Back to 0 ppm (the PLL stays at its point) and no longer engaged: the
+  // sensor steer takes over. For a sink the trim must leave alone.
+  void disengage() {
+    if (engaged_) set_ppm(0.0);
+    engaged_ = false;
+    half_rate_ = false;
+  }
+  // Engaged with HPLL at half the mode's pixel clock (a 148.5 MHz mode at
+  // the 74.25 MHz point).
   bool half_rate() const { return half_rate_; }
+  // The trim point's HPLL rate, MHz (148.5 or 74.25); 0 when not engaged.
+  double pll_mhz() const { return engaged_ ? pll_mhz_ : 0.0; }
 
   // Writes the fraction for `ppm`, clamped to +-max_ppm; nothing when it is
   // already in force. Returns the ppm in force afterwards.
@@ -127,6 +140,7 @@ class HdmiTrim {
   const int max_ppm_;
   bool engaged_ = false;
   bool half_rate_ = false;
+  double pll_mhz_ = 0.0;
   bool saturated_ = false;
   uint32_t frac_ = 0;
   double applied_ppm_ = 0.0;

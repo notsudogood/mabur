@@ -61,6 +61,7 @@
 #include "frame_regulator.h"  // phase-aware pts+D display release
 #include "phase_lock.h"  // PhaseLock, the sensor-rate controller for the phase lock
 #include "hdmi_trim.h"   // HdmiTrim, the phase lock's display-side actuator (gs22)
+#include "edid.h"        // SinkInfo: who the HDMI port drives (log, display.trim_skip_sinks)
 #include "rate_match.h"  // RateMatch: is the panel within the phase lock's reach
 #include "recorder_tap.h"  // the burned DVR's hook on the display's flip
 #include "release_loop.h"  // the release thread: regulator decisions and every present()
@@ -765,13 +766,18 @@ int main(int argc, char** argv) {
     regulator.set_phase_lock_mode(true);
   }
   uint64_t phase_disconts_seen = 0;
-  // Display actuator (display.phase_actuator = "display", gs22): the phase
-  // lock trims this GS's HDMI pixel clock instead of steering the camera,
-  // and the RCF's snr_off stays 0. Engaged after each presenter init
-  // (engage_display_trim below); while it is not engaged the sensor steer
-  // runs as before. trim_last_mfps = the offset last put in force.
+  // Display actuator (display.phase_actuator = "display", the default since
+  // gs23): the phase lock trims this GS's HDMI pixel clock instead of
+  // steering the camera, and the RCF's snr_off stays 0. Engaged after each
+  // presenter init (engage_display_trim below) and checked again once that
+  // presenter's first modeset is in (confirm_display_trim); while it is not
+  // engaged the sensor steer runs as before. trim_last_mfps = the offset
+  // last put in force; trim_skipped = this sink is in
+  // display.trim_skip_sinks.
   std::unique_ptr<maburplay::HdmiTrim> hdmi_trim;
   int32_t trim_last_mfps = INT32_MIN;
+  bool trim_confirm_pending = false;
+  bool trim_skipped = false;
   const bool want_display_trim = phase_lock && cfg.display.phase_actuator == "display";
   if (cfg.display.phase_actuator == "display" && !phase_lock)
     std::fprintf(stderr,
@@ -854,12 +860,35 @@ int main(int argc, char** argv) {
     }
   };
   std::unique_ptr<maburplay::DrmPresenter> presenter;
-  // Takes the HDMI PLL to its trim point right after a presenter's modeset
-  // (the one sink re-sync rides the modeset's). Refused -- not an RK3566,
-  // no /dev/mem, a mode without a trim point, a PLL setting this code did
-  // not expect -- leaves the sensor steer in charge and says why.
+  // Names the attached sink (EDID), then takes the HDMI PLL to its trim
+  // point right after a presenter's modeset (the one sink re-sync rides the
+  // modeset's). Runs at start and after every display hotplug. Refused --
+  // a sink in display.trim_skip_sinks, not an RK3566, no /dev/mem, a mode
+  // without a trim point, a PLL setting this code did not expect -- leaves
+  // the sensor steer in charge and says why.
   auto engage_display_trim = [&](const char* when) {
-    if (!want_display_trim || !presenter) return;
+    if (!presenter) return;
+    const std::vector<uint8_t> edid = presenter->edid();
+    const maburplay::SinkInfo sink = maburplay::parse_edid(edid.data(), edid.size());
+    std::fprintf(stderr, "maburplay: display sink: %s (%s, %.3f Hz, %d kHz)\n",
+                 sink.describe().c_str(), when, 1e6 / presenter->mode_period_us(),
+                 presenter->mode_clock_khz());
+    if (!want_display_trim) return;
+    trim_confirm_pending = !presenter->display_live();
+    trim_skipped = false;
+    if (hdmi_trim && hdmi_trim->engaged()) hdmi_trim->set_ppm(0.0);   // a previous sink's trim
+    for (const std::string& skip : cfg.display.trim_skip_sinks) {
+      if (sink.matches(skip)) {
+        if (hdmi_trim) hdmi_trim->disengage();
+        trim_skipped = true;
+        trim_confirm_pending = false;
+        std::fprintf(stderr,
+                     "maburplay: phase lock actuator: sensor -- display trim skipped %s: this "
+                     "sink matches display.trim_skip_sinks entry \"%s\"\n",
+                     when, skip.c_str());
+        return;
+      }
+    }
     std::string why;
     if (!hdmi_trim) {
       std::unique_ptr<maburplay::RegIo> io;
@@ -881,10 +910,37 @@ int main(int argc, char** argv) {
     }
     std::fprintf(stderr,
                  "maburplay: phase lock actuator: display -- HDMI PLL trim within +-%d ppm %s, "
-                 "HPLL %s%s\n",
-                 cfg.display.trim_max_ppm, when,
-                 hdmi_trim->half_rate() ? "74.25 MHz (half rate: a 4:2:0 link, likely)"
-                                        : "148.5 MHz",
+                 "HPLL %.2f MHz%s%s\n",
+                 cfg.display.trim_max_ppm, when, hdmi_trim->pll_mhz(),
+                 hdmi_trim->half_rate() ? " (half the pixel clock: a 4:2:0 link, likely)" : "",
+                 moved ? " (trim point set: the display re-syncs once)" : "");
+  };
+  // Once per presenter, when its first modeset (splash or first frame) is
+  // in: the mode's clock setting is now the kernel's final word. A PLL the
+  // modeset left at the trim point stays engaged silently; one the modeset
+  // reprogrammed (or one engage_display_trim found in a parked mode, as
+  // after a player restart) is engaged now, or refused with the reason.
+  auto confirm_display_trim = [&]() {
+    trim_confirm_pending = false;
+    if (!want_display_trim || !presenter || trim_skipped || !hdmi_trim) return;
+    const bool was = hdmi_trim->engaged();
+    const double was_mhz = hdmi_trim->pll_mhz();
+    std::string why;
+    bool moved = false;
+    trim_last_mfps = INT32_MIN;
+    if (!hdmi_trim->engage(presenter->mode_clock_khz(), &why, &moved)) {
+      std::fprintf(stderr,
+                   "maburplay: phase lock actuator: sensor -- display trim refused after the "
+                   "first modeset: %s\n",
+                   why.c_str());
+      return;
+    }
+    if (was && !moved && hdmi_trim->pll_mhz() == was_mhz) return;
+    std::fprintf(stderr,
+                 "maburplay: phase lock actuator: display -- HDMI PLL trim within +-%d ppm after "
+                 "the first modeset, HPLL %.2f MHz%s%s\n",
+                 cfg.display.trim_max_ppm, hdmi_trim->pll_mhz(),
+                 hdmi_trim->half_rate() ? " (half the pixel clock: a 4:2:0 link, likely)" : "",
                  moved ? " (trim point set: the display re-syncs once)" : "");
   };
   // Puts the phase lock's offset (mfps of camera rate) in force on the
@@ -2358,6 +2414,7 @@ int main(int argc, char** argv) {
                      rate_match.mismatch() && phase_lock ? " -- phase lock paused" : "");
     }
     if (phase_lock) {
+      if (trim_confirm_pending && presenter && presenter->display_live()) confirm_display_trim();
       const uint64_t now = mono_us();
       const auto before = phase_lock->state();
       if (regulator.discont_count() != phase_disconts_seen) {

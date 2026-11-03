@@ -283,6 +283,18 @@ double rung_goodput_mbps(const Rung& r) {
 }
 }  // namespace
 
+int LadderController::cap_mcs(int from, int to) const {
+  if (!cfg_.down_mcs_cap || from <= 0) return to;
+  const int mcs = cfg_.ladder[static_cast<size_t>(from)].mcs;
+  while (to > 0 && cfg_.ladder[static_cast<size_t>(to)].mcs > mcs) --to;
+  return to;
+}
+
+int LadderController::step_below(int from) const {
+  if (from <= 0) return 0;
+  return cap_mcs(from, from - 1);
+}
+
 int LadderController::fall_target(int from, double pre, double resid) const {
   if (from <= 0) return 0;
   auto fit = [&](double loss) {
@@ -292,20 +304,37 @@ int LadderController::fall_target(int from, double pre, double resid) const {
       if (rung_goodput_mbps(cfg_.ladder[static_cast<size_t>(r)]) <= fits) return r;
     return 0;
   };
-  int to = from - 1;
+  int to = step_below(from);
   if (cfg_.fast_fall_pre > 0.0 && pre >= cfg_.fast_fall_pre) to = std::min(to, fit(pre));
   if (cfg_.fast_fall_resid > 0.0 && resid >= cfg_.fast_fall_resid) to = std::min(to, fit(resid));
-  return to;
+  return cap_mcs(from, to);
 }
 
 int LadderController::loss_fall(int from, double pre, double resid) {
   const int to = fall_target(from, pre, resid);
-  if (to < from - 1) {
+  if (to < step_below(from)) {
     ++counters_.fast_falls;
     char b[96];
     std::snprintf(b, sizeof(b), "fast_fall pre=%.2f resid=%.2f skipped=%d", pre, resid,
                   from - 1 - to);
     pending_detail_ = b;
+  } else if (to < from - 1) {
+    ++counters_.mcs_cap_skips;
+    char b[48];
+    std::snprintf(b, sizeof(b), "mcs_cap skipped=%d", from - 1 - to);
+    pending_detail_ = b;
+  }
+  return to;
+}
+
+int LadderController::step_down(int from) {
+  const int to = step_below(from);
+  if (to < from - 1) {
+    ++counters_.mcs_cap_skips;
+    char b[48];
+    std::snprintf(b, sizeof(b), "mcs_cap skipped=%d", from - 1 - to);
+    if (!pending_detail_.empty()) pending_detail_ += ' ';
+    pending_detail_ += b;
   }
   return to;
 }
@@ -517,7 +546,13 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
           now_ms - last_change_ms_ >= cfg_.min_between_changes_ms) {
         const int from = idx_;
         probation_active_ = false;  // cleared, but NO probation-fail booked
-        idx_ = from - 1;
+        if (edge) {
+          char b[96];
+          std::snprintf(b, sizeof(b), "edge_per dsnr=%.1f snr=%.1f worst_card=%.1f%%",
+                        fade_snr_.delta(), h.rf_snr_db, h.card_loss_max * 100.0);
+          pending_detail_ = b;
+        }
+        idx_ = step_down(from);   // appends its mcs_cap detail after edge_per's
         last_down_ms_ = now_ms;
         last_change_ms_ = now_ms;
         reset_windows();
@@ -525,12 +560,6 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
         fade_until_ms_ = now_ms + cfg_.fade.hold_ms;  // enter the regime
         ++counters_.demotes_fade;
         note_loss_demote(from, now_ms);
-        if (edge) {
-          char b[96];
-          std::snprintf(b, sizeof(b), "edge_per dsnr=%.1f snr=%.1f worst_card=%.1f%%",
-                        fade_snr_.delta(), h.rf_snr_db, h.card_loss_max * 100.0);
-          pending_detail_ = b;
-        }
         set_event(now_ms, from, idx_, CtlReason::Fade, u_, snr_now_);
         fade_trig_start_ms_ = -1.0;
         fade_latched_ = true;  // one fire per fade event
@@ -645,7 +674,7 @@ bool LadderController::update(const LinkHealth& h, double now_ms) {
       ++counters_.probation_fails;
       penalize_rung(from, now_ms);
       probation_active_ = false;
-      idx_ = from - 1;
+      idx_ = step_down(from);
       last_down_ms_ = now_ms;
       last_change_ms_ = now_ms;
       reset_windows();

@@ -1415,14 +1415,16 @@ TEST(link_controls_default_on_for_an_older_config) {
   CHECK(l.fade.mode == maburgs::FadeCfg::Mode::EdgePer);
   CHECK(l.fast_fall_resid == 0.2);
   CHECK(l.penalty_clear_on_climb);
+  CHECK(l.down_mcs_cap);
   CHECK(l.recover.enable);
   auto off = maburgs::load_config(write_tmp(
-      "[link]\nfast_fall_resid = 0\npenalty_clear_on_climb = false\n"
+      "[link]\nfast_fall_resid = 0\npenalty_clear_on_climb = false\ndown_mcs_cap = false\n"
       "[link.fade]\nmode = \"rssi_snr\"\n[link.recover]\nenable = false\n"));
   const auto& o = off.link.ladder_cfg;
   CHECK(o.fade.mode == maburgs::FadeCfg::Mode::RssiSnr);
   CHECK(o.fast_fall_resid == 0.0);
   CHECK(!o.penalty_clear_on_climb);
+  CHECK(!o.down_mcs_cap);
   CHECK(!o.recover.enable);
 }
 

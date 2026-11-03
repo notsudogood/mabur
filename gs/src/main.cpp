@@ -2153,6 +2153,7 @@ static int run_radio(const maburgs::Config& cfg) {
         ci.demotes_s3_util = cnt.demotes_s3_util;
         ci.demotes_fade = cnt.demotes_fade;
         ci.fast_falls = cnt.fast_falls;
+        ci.mcs_cap_skips = cnt.mcs_cap_skips;
         ci.demotes_latency = cnt.demotes_latency;
         ci.fade_active = c.fade_active(now_ms);
         ci.fade_drssi = c.fade_drssi();

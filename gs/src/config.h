@@ -299,9 +299,10 @@ struct LinkCfg {
   // (promote_lat_guard_ms 100) are on in code and bundle alike since gs15;
   // the edge_per fade rule, the residual-keyed drop (fast_fall_resid 0.2),
   // penalty_clear_on_climb and link.recover since the build after gs15
-  // (operator's choice 2026-10-30, unflown), so a GS config written before
-  // those keys existed runs them too. LadderCfg's own defaults stay off for
-  // the controller's unit tests.
+  // (operator's choice 2026-10-30, unflown), and down_mcs_cap since gs20
+  // (flights 0019-0021), so a GS config written before those keys existed
+  // runs them too. LadderCfg's own defaults stay off for the controller's
+  // unit tests.
   LadderCfg ladder_cfg = [] {
     LadderCfg l{{{0, 2.0, 2.0},
                  {2, 1.0, 1.0},
@@ -314,6 +315,7 @@ struct LinkCfg {
     l.fade.mode = FadeCfg::Mode::EdgePer;
     l.fast_fall_resid = 0.2;
     l.penalty_clear_on_climb = true;
+    l.down_mcs_cap = true;
     l.recover.enable = true;
     return l;
   }();

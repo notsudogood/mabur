@@ -1749,6 +1749,124 @@ TEST(fast_fall_resid_on_a_residual_demote_logs_why) {
   }
 }
 
+// --- link.down_mcs_cap -----------------------------------------------------
+
+namespace {
+// The bundle's ladder shape: 20 MHz MCS0-4, then MCS3/4 at 40 and at 80.
+const std::vector<Rung> kWidthLadder = {
+    {0, 1.0, 0.75, 20}, {1, 0.75, 0.5, 20}, {2, 0.5, 0.25, 20},
+    {3, 0.5, 0.25, 20}, {4, 0.5, 0.25, 20}, {3, 0.5, 0.25, 40},
+    {4, 0.5, 0.25, 40}, {3, 0.5, 0.25, 80}, {4, 0.25, 0.25, 80}};
+LadderCfg width_cfg(bool cap) {
+  LadderCfg cfg = make_cfg_noprobe();
+  cfg.ladder = kWidthLadder;
+  cfg.down_mcs_cap = cap;
+  return cfg;
+}
+}  // namespace
+
+TEST(mcs_cap_steps_never_raise_the_mcs) {
+  LadderController off(width_cfg(false));
+  for (int r = 1; r <= 8; ++r) CHECK(off.step_below(r) == r - 1);
+  LadderController on(width_cfg(true));
+  const int want[9] = {0, 0, 1, 2, 3, 3, 5, 5, 7};   // 7 -> 5 and 5 -> 3 skip the MCS4 rungs
+  for (int r = 0; r <= 8; ++r) CHECK(on.step_below(r) == want[r]);
+  CHECK(on.fall_target(7, 0.0, 0.0) == 5);
+  CHECK(on.fall_target(6, 0.0, 0.0) == 5);   // MCS4/40 -> MCS3/40: lower MCS, allowed
+}
+
+TEST(mcs_cap_a_slow_residual_walk_skips_the_mcs4_rungs) {
+  for (bool cap : {false, true}) {
+    LadderController ctl(width_cfg(cap));
+    double t = 0;
+    promote_to(ctl, t, 8);
+    feed_for(ctl, t, 4000, 0.3);   // past rung 8's probation
+    std::vector<int> walk;
+    LinkHealth h = ok(0.0);
+    h.residual_loss = 0.01;        // a little loss after repair: one step per sample
+    for (int i = 0; i < 12 && ctl.rung() > 0; ++i, t += 200) {
+      REQUIRE(ctl.update(h, t));
+      walk.push_back(ctl.rung());
+    }
+    if (cap) {
+      CHECK((walk == std::vector<int>{7, 5, 3, 2, 1, 0}));
+      CHECK(ctl.counters().mcs_cap_skips == 2u);
+    } else {
+      CHECK((walk == std::vector<int>{7, 6, 5, 4, 3, 2, 1, 0}));
+      CHECK(ctl.counters().mcs_cap_skips == 0u);
+    }
+    CHECK(ctl.counters().fast_falls == 0u);
+  }
+}
+
+TEST(mcs_cap_residual_demote_logs_why) {
+  LadderController ctl(width_cfg(true));
+  double t = 0;
+  promote_to(ctl, t, 7);
+  feed_for(ctl, t, 4000, 0.3);
+  LinkHealth h = ok(0.0);
+  h.residual_loss = 0.01;
+  CHECK(ctl.update(h, t));
+  CHECK(ctl.rung() == 5);
+  CHECK(ctl.last_event().reason == CtlReason::Residual);
+  CHECK(ctl.last_event().detail == "mcs_cap skipped=1");
+}
+
+TEST(mcs_cap_applies_to_a_failed_promote) {
+  for (bool cap : {false, true}) {
+    LadderController ctl(width_cfg(cap));
+    double t = 0;
+    promote_to(ctl, t, 7);   // 6 -> 7, rung 7 on probation
+    CHECK(ctl.update(ok(0.7 * ctl.budget_base()), t));
+    CHECK(ctl.last_event().reason == CtlReason::Probation);
+    CHECK(ctl.rung() == (cap ? 5 : 6));
+  }
+}
+
+TEST(mcs_cap_caps_a_fast_fall_target) {
+  LadderCfg cfg = width_cfg(false);
+  cfg.fast_fall_resid = 0.2;
+  LadderController off(cfg);
+  const int fit = off.fall_target(7, 0.0, 0.6);
+  REQUIRE(fit < 6);
+  cfg.down_mcs_cap = true;
+  LadderController on(cfg);
+  const int capped = on.fall_target(7, 0.0, 0.6);
+  CHECK(capped <= fit);
+  CHECK(kWidthLadder[static_cast<size_t>(capped)].mcs <= 3);
+  if (kWidthLadder[static_cast<size_t>(fit)].mcs <= 3) CHECK(capped == fit);
+}
+
+TEST(mcs_cap_applies_to_the_fade_demote) {
+  LadderCfg cfg = width_cfg(true);
+  cfg.fade.mode = FadeCfg::Mode::EdgePer;
+  cfg.fade.edge_min_bw = 20;
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 7);
+  edge_baseline(ctl, t, 30.0);
+  CHECK(edge_fires(ctl, t, 2000, 20.0, 0.05) == 1);
+  CHECK(ctl.rung() == 5);
+  CHECK(ctl.last_event().reason == CtlReason::Fade);
+  CHECK(ctl.last_event().detail.rfind("edge_per ", 0) == 0u);
+  CHECK(ctl.last_event().detail.find(" mcs_cap skipped=1") != std::string::npos);
+}
+
+TEST(mcs_cap_leaves_the_latency_guard_alone) {
+  LadderCfg cfg = width_cfg(true);
+  cfg.promote_lat_guard_ms = 100;
+  LadderController ctl(cfg);
+  double t = 0;
+  promote_to(ctl, t, 7);   // came from 6
+  LinkHealth h = ok(0.0);
+  h.transit_ms = 150.0;
+  bool fired = false;
+  for (int i = 0; i < 40 && !fired; ++i, t += 50)
+    fired = ctl.update(h, t) && ctl.last_event().reason == CtlReason::Latency;
+  CHECK(fired);
+  CHECK(ctl.rung() == 6);   // back to the rung it came from, MCS4/40 or not
+}
+
 // --- link.penalty_clear_on_climb --------------------------------------------
 
 TEST(climbing_past_a_rung_forgets_its_failures) {

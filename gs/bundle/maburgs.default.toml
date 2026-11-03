@@ -122,6 +122,12 @@ fast_fall_resid        = 0.2    # the same skip, keyed on loss AFTER error corre
                                 # extra rung once. On since the build after gs15, unflown
 penalty_clear_on_climb = true   # climbing past a rung forgets its earlier failures (flight 0007: rung 4 got a
                                 # 10 s block for a failure 150 s before); false = the old memory. Unflown
+down_mcs_cap           = true   # gs20: a step down never lands on a higher MCS than the rung it leaves, so
+                                # mcs 3 / 80 steps to mcs 3 / 40 and mcs 3 / 40 to mcs 3 / 20, skipping the mcs 4
+                                # rungs (climbs still use them). Flights 0019-0021: 18 of 18 steps 3/80 -> 4/40
+                                # and 12 of 16 steps 3/40 -> 4/20 failed again within 1 s, and all six large
+                                # glitches began with the first. Unflown; costs the 25 and 13.8 Mb/s rungs on
+                                # the way down, so a fade that would have held there flies one rung slower
 
 # A second loss check on the droppable enhance-layer frames, which show
 # trouble earlier than the base layer.
@@ -142,8 +148,12 @@ static_overhead_enh    = 0.5    # ...and on the enhance layer
 #
 # Slow rungs at 20 MHz, 40 MHz only at the top: at the same MCS a 40 MHz
 # signal reaches less far (4-6 dB less at MCS0), while 40 MHz MCS3 and MCS4
-# reach as far as 20 MHz MCS5 and MCS6 with more capacity. Putting the slow
+# reach as far as 20 MHz MCS5 and MCS6 with more capacity (bench). Putting the slow
 # rungs at 40 MHz buys a faster slowest rung by giving up that range.
+#
+# In flight the mcs 4 rungs were no sturdier than the mcs 3 rung above them
+# (mcs 4 / 40 vs mcs 3 / 80, mcs 4 / 20 vs mcs 3 / 40): link.down_mcs_cap
+# skips them on the way down and keeps them for climbing.
 #
 # The two slowest rungs carry more repair data: at the edge of range the
 # loss comes in bursts, and MCS0's video is capped at 500 kb/s ([[encoder.rung]]

@@ -421,6 +421,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
                 "clean_ms", "probation_ms", "penalty_base_ms", "penalty_max_ms",
                 "hold_after_down_ms", "min_between_changes_ms", "feedback_timeout_ms",
                 "starved_confirm_ms", "fast_fall_pre", "fast_fall_resid", "penalty_clear_on_climb",
+                "down_mcs_cap",
                 "recover", "promote_lat_guard_ms", "s3_demote", "s3_down_util",
                 "s3_settle_ms", "s3_min_syms",
                 "rung_stats", "fade", "probe",
@@ -534,6 +535,8 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
         get_num(r, "fast_fall_resid", c.link.ladder_cfg.fast_fall_resid, 0.0, 1.0, "link");
     c.link.ladder_cfg.penalty_clear_on_climb = get_bool(
         r, "penalty_clear_on_climb", c.link.ladder_cfg.penalty_clear_on_climb, "link");
+    c.link.ladder_cfg.down_mcs_cap =
+        get_bool(r, "down_mcs_cap", c.link.ladder_cfg.down_mcs_cap, "link");
     // Faster climb back after a dip (RecoverCfg). Optional, off when absent.
     if (r.contains("recover")) {
       const Value& rj = r["recover"];

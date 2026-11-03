@@ -164,6 +164,8 @@ struct StatsCtlIn {
   // fast_fall_pre demotes that skipped rungs, and promote latency guard
   // demotes (LadderCfg::promote_lat_guard_ms).
   uint64_t fast_falls = 0, demotes_latency = 0;
+  // Demotes that skipped a higher-MCS rung (LadderCfg::down_mcs_cap).
+  uint64_t mcs_cap_skips = 0;
   bool fade_active = false;          // regime state (raw, cascade-independent)
   double fade_drssi = 0.0;           // baseline-minus-fast deltas; NaN -> null
   double fade_dsnr = 0.0;

@@ -434,6 +434,53 @@ What the replay says (0007/0008, the residual each step actually saw):
   (0.2-1 s) but landed one rung lower than needed in 7 of the 12
   multi-step slides, each a longer climb back. Not built.
 
+## A step down never raises the MCS (`link.down_mcs_cap`, on)
+
+On in code and bundle alike since gs20, so an older GS config runs it too.
+Unflown.
+
+A loss-driven step down (residual, s3, util, fade, and a probation failure
+on residual or util) skips any rung whose MCS is higher than the rung it
+leaves. On the bundle ladder that is two skips: MCS3/80 steps to MCS3/40
+(not MCS4/40), and MCS3/40 to MCS3/20 (not MCS4/20). A fast-fall target
+gets the same cap. Climbs still stop on every rung, and two drops are left
+alone: the promote latency guard (it returns to the rung it came from,
+because what it reacts to is a transmit stall at the new width, not a weak
+signal) and the starved/timeout drops to rung 0. A capped step adds
+`mcs_cap skipped=N` to the `ctl: rung` line (after `edge_per ...` on a fade
+step), and `mcs_cap_skips` counts them in the stats.
+
+Why: halving the width gains about 3 dB, while MCS3 -> MCS4 (16-QAM 1/2 ->
+3/4) costs about as much or more. MCS4 at width W therefore needs at least
+the signal MCS3 at 2W needs, and carries less video. Flights 0019-0021 (one
+drone, one field, channel 132 mostly), one-rung steps whose landing rung
+failed again within 1 s:
+
+| Step down | Failed again |
+|---|---|
+| MCS4/80 -> MCS3/80 | 8 of 22 |
+| MCS3/80 -> MCS4/40 | 18 of 18 |
+| MCS4/40 -> MCS3/40 | 7 of 12 |
+| MCS3/40 -> MCS4/20 | 12 of 16 |
+| MCS4/20 -> MCS3/20 | 5 of 15 |
+| MCS3/20 -> MCS2/20 | 3 of 18 |
+| MCS2 -> MCS1, MCS1 -> MCS0 | 0 of 9 each |
+
+All six glitches of 16-28 frames in those flights began with MCS3/80 ->
+MCS4/40 on a slow or medium fade (2.6-5 dB/s at the GS is "slow"). Fast
+falls (10-14 dB/s) set off the multi-rung drop, which already jumped past
+MCS4/40, and lost 21 frames over 45 steps, against 187 and 198 for medium
+and slow. Probes agreed: an MCS4/40 probe failed 92-93 % of the time at
+12-17 dB SNR.
+
+Against it: a fade that keeps deepening also fails the next rung, so part
+of each "failed again" count is just the fade; the steps that lower the MCS
+fail far less, which is what the rule rests on. The cost is the 25 and
+13.8 Mb/s rungs on the way down: a fade that would have levelled off there
+now flies one rung slower until the probe-gated climb puts it back. The
+bundle ladder's note that 40 MHz MCS3 and MCS4 reach as far as 20 MHz MCS5
+and MCS6 (a bench result) does not hold for MCS4/40 in these flights.
+
 ## Climbing past a rung forgets its failures (`link.penalty_clear_on_climb`, on)
 
 `fail_count_` (the k in `penalty_base_ms << (k - 1)`) resets only when a

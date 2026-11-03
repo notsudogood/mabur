@@ -161,6 +161,21 @@ struct LadderCfg {
   // target is the same goodput fit, with the residual as the loss. The two
   // combine: the deeper target wins. 0 = off.
   double fast_fall_resid = 0.0;
+  // A loss-driven step down never lands on a rung with a HIGHER MCS than the
+  // one it leaves: it skips that rung for the next one below. On the bundle
+  // ladder that is MCS3/80 -> MCS3/40 (not MCS4/40) and MCS3/40 -> MCS3/20
+  // (not MCS4/20). Halving the width gains ~3 dB; MCS3 -> MCS4 costs about
+  // as much or more, so the skipped rung needs as much signal as the one
+  // the link is leaving, at a lower bitrate. Flights 0019-0021: of the
+  // one-rung steps 7 -> 6 and 5 -> 4, 18 of 18 and 12 of 16 landed on a rung
+  // that failed again within 1 s (3 -> 2: 3 of 18), and all six multi-frame
+  // glitches started with 7 -> 6. Applies to the residual, s3, util and
+  // fade demotes, probation failures included, and to a fast-fall target;
+  // not to the promote latency guard (it returns to the rung it came from)
+  // nor the starved/timeout drops (rung 0). Climbs still stop on every
+  // rung. MCS numbers compare across widths because rungs are single-stream
+  // (mcs 0-7). false = one rung at a time.
+  bool down_mcs_cap = false;
   // Climbing past a rung clears its consecutive-failure count, and every
   // rung's below it. Off, fail_count_ resets only when a rung survives its
   // whole probation, which a quick climb never lets it do: log 0007 at
@@ -333,6 +348,7 @@ struct CtlCounters {
   uint64_t demotes_s3_residual = 0, demotes_s3_util = 0;
   uint64_t demotes_fade = 0;
   uint64_t fast_falls = 0;  // loss-driven demotes that skipped rungs (fast_fall_pre)
+  uint64_t mcs_cap_skips = 0;  // demotes that skipped a higher-MCS rung (down_mcs_cap)
   uint64_t demotes_latency = 0;  // promote latency guard (promote_lat_guard_ms)
 };
 
@@ -373,11 +389,15 @@ class LadderController {
 
   int rung() const { return idx_; }
   // Where a loss-driven demote from `from` lands at pre-FEC loss `pre` and
-  // residual (post-FEC) loss `resid`: from - 1, or with fast_fall_pre /
-  // fast_fall_resid on and reached, the highest rung below whose goodput
-  // fits goodput(from) x (1 - loss); the deeper of the two targets; 0 at
-  // the floor.
+  // residual (post-FEC) loss `resid`: step_below(from), or with
+  // fast_fall_pre / fast_fall_resid on and reached, the highest rung below
+  // whose goodput fits goodput(from) x (1 - loss); the deeper of the two
+  // targets; 0 at the floor. With down_mcs_cap, never a rung whose MCS is
+  // higher than from's.
   int fall_target(int from, double pre, double resid = 0.0) const;
+  // The one-rung step down from `from`: from - 1, or with down_mcs_cap the
+  // first rung below whose MCS is not higher than from's; 0 at the floor.
+  int step_below(int from) const;
   // The rung the last VALID feedback sample was measured on, stamped before
   // any decision block runs. rung() is live and has already stepped down by
   // the time a demote returns, so anything that pairs a rung with the loss
@@ -455,6 +475,11 @@ class LadderController {
                  double snr);
   // fall_target() plus the event detail for a residual-keyed jump.
   int loss_fall(int from, double pre, double resid);
+  // down_mcs_cap applied to a target `to` below `from`.
+  int cap_mcs(int from, int to) const;
+  // step_below() with its counter and event detail, for the demote paths
+  // that never jump (fade, util probation failure).
+  int step_down(int from);
 
   // --- link.recover ---
   // Every loss-driven demote except a failed promote: opens an episode, or

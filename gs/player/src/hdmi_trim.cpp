@@ -55,20 +55,20 @@ uint32_t con2_value(uint32_t old_con2, uint32_t frac) {
 }
 
 namespace {
-constexpr double kNominalN = 74.25;   // point_148(): fbdiv 74 + 0.25
+constexpr double kNominalN = 74.25;   // every trim point: fbdiv 74 + 0.25
 constexpr uint32_t kEdge = kFracOne / 64;
 }  // namespace
 
 bool frac_for_ppm(double ppm, uint32_t* frac) {
   const double n = kNominalN * (1.0 + ppm * 1e-6);
-  const double f = std::round((n - static_cast<double>(point_148().fbdiv)) * kFracOne);
+  const double f = std::round((n - static_cast<double>(kPointFbdiv)) * kFracOne);
   if (!(f >= kEdge && f <= kFracOne - kEdge)) return false;
   *frac = static_cast<uint32_t>(f);
   return true;
 }
 
 double ppm_for_frac(uint32_t frac) {
-  const double n = static_cast<double>(point_148().fbdiv) + static_cast<double>(frac) / kFracOne;
+  const double n = static_cast<double>(kPointFbdiv) + static_cast<double>(frac) / kFracOne;
   return (n / kNominalN - 1.0) * 1e6;
 }
 
@@ -142,6 +142,7 @@ bool HdmiTrim::engage(int clock_khz, std::string* why, bool* moved) {
   using namespace hpll;
   *moved = false;
   engaged_ = false;
+  half_rate_ = false;
   if (clock_khz != kClock148Khz) {
     char b[120];
     std::snprintf(b, sizeof(b),
@@ -150,12 +151,16 @@ bool HdmiTrim::engage(int clock_khz, std::string* why, bool* moved) {
     *why = b;
     return false;
   }
-  const Setting point = point_148();
-  const Setting kern = kernel_148();
   const Setting now = decode(io_->read(kCon0), io_->read(kCon1), io_->read(kCon2));
+  // Full rate or half rate, by what the PLL reads: its point or its
+  // kernel setting. The four settings are pairwise distinct.
+  const bool half = same_point(now, point_74()) || same_point(now, kernel_74());
+  const Setting point = half ? point_74() : point_148();
+  const Setting kern = half ? kernel_74() : kernel_148();
   if (!same_point(now, point)) {
     if (!same_point(now, kern)) {
-      *why = "HPLL reads " + describe(now) + ", not the kernel's 148.5 MHz setting; left alone";
+      *why = "HPLL reads " + describe(now) +
+             ", neither of the kernel's 1080p60 settings (148.5 or 74.25 MHz); left alone";
       return false;
     }
     io_->write(kCon2, con2_value(io_->read(kCon2), point.frac));
@@ -179,6 +184,7 @@ bool HdmiTrim::engage(int clock_khz, std::string* why, bool* moved) {
   frac_ = decode(io_->read(kCon0), io_->read(kCon1), io_->read(kCon2)).frac;
   applied_ppm_ = ppm_for_frac(frac_);
   engaged_ = true;
+  half_rate_ = half;
   set_ppm(0.0);
   return true;
 }

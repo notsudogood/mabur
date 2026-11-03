@@ -880,8 +880,11 @@ int main(int argc, char** argv) {
       return;
     }
     std::fprintf(stderr,
-                 "maburplay: phase lock actuator: display -- HDMI PLL trim within +-%d ppm %s%s\n",
+                 "maburplay: phase lock actuator: display -- HDMI PLL trim within +-%d ppm %s, "
+                 "HPLL %s%s\n",
                  cfg.display.trim_max_ppm, when,
+                 hdmi_trim->half_rate() ? "74.25 MHz (half rate: a 4:2:0 link, likely)"
+                                        : "148.5 MHz",
                  moved ? " (trim point set: the display re-syncs once)" : "");
   };
   // Puts the phase lock's offset (mfps of camera rate) in force on the

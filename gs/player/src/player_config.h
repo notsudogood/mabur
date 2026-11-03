@@ -168,7 +168,8 @@ struct DisplayCfg {
   // "display" = this GS's HDMI pixel clock (RK3566 HPLL fractional trim,
   // hdmi_trim.h), with snr_off held at 0 so the camera runs on its own boot
   // trim. "display" engages only on an RK3566 at a 148.5 MHz mode
-  // (1920x1080@60) whose PLL reads as the kernel or a previous run left it;
+  // (1920x1080@60) whose PLL reads as the kernel (HPLL at 148.5 MHz, or at
+  // 74.25 MHz on a half-rate 4:2:0 link) or a previous run left it;
   // anything else logs why and steers the sensor instead. A camera mode
   // whose ceiling is its nominal rate (Crop 60, 1728x972@100) cannot be
   // steered faster; the display can follow it.

@@ -136,7 +136,7 @@ TEST(engage_refuses_other_modes_and_unknown_settings_untouched) {
   q.con1 = (1u << 12) | (7u << 6) | 12u;
   auto u = trim_on(&q);
   CHECK(!u->engage(148500, &why, &moved));
-  CHECK(why.find("not the kernel's") != std::string::npos);
+  CHECK(why.find("neither of the kernel's") != std::string::npos);
   CHECK(p.writes.empty() && q.writes.empty());
   CHECK(!t->engaged() && !u->engaged());
   CHECK(t->set_ppm(500.0) == 0.0 && p.writes.empty());   // never writes unengaged
@@ -190,6 +190,93 @@ TEST(destruction_returns_to_0_ppm_at_the_point) {
   }
   const hp::Setting s = hp::decode(p.con0, p.con1, p.con2);
   CHECK(hp::same_point(s, hp::point_148()) && s.frac == hp::kFracOne / 4);
+}
+
+// --- Half rate: HPLL at 74.25 MHz under a 148.5 MHz mode (HDZero goggles).
+
+namespace {
+// What the HDZero goggles' log read: fbdiv 99 (integer), postdivs 4x4,
+// refdiv 2 = 74.250 MHz. Same unrelated bits as kernel_pll().
+FakePll kernel74_pll() {
+  FakePll p = kernel_pll();
+  p.con1 = (1u << 13) | (1u << 12) | (4u << 6) | 2u;
+  return p;
+}
+}  // namespace
+
+TEST(the_four_settings_are_distinct_and_the_points_share_n) {
+  const hp::Setting all[] = {hp::kernel_148(), hp::point_148(), hp::kernel_74(), hp::point_74()};
+  for (int i = 0; i < 4; ++i)
+    for (int j = i + 1; j < 4; ++j) CHECK(!hp::same_point(all[i], all[j]));
+  CHECK(std::fabs(hp::rate_hz(hp::kernel_74()) - 74.25e6) < 1.0);
+  CHECK(std::fabs(hp::rate_hz(hp::point_74()) - 74.25e6) < 1.0);
+  for (const hp::Setting& p : {hp::point_148(), hp::point_74()}) {
+    CHECK(p.fbdiv == hp::kPointFbdiv && p.frac == hp::kFracOne / 4 && p.refdiv == 1);
+    // VCO 1782 MHz at both points: only the post-dividers differ.
+    CHECK(std::fabs(hp::rate_hz(p) * p.postdiv1 * p.postdiv2 - 1782e6) < 10.0);
+  }
+}
+
+TEST(half_rate_engages_from_the_kernel_setting_and_trims_alike) {
+  FakePll p = kernel74_pll();
+  CHECK(hp::same_point(hp::decode(p.con0, p.con1, p.con2), hp::kernel_74()));
+  auto t = trim_on(&p);
+  std::string why;
+  bool moved = false;
+  REQUIRE(t->engage(148500, &why, &moved));
+  CHECK(moved && t->engaged() && t->half_rate());
+  REQUIRE(p.writes.size() >= 3);
+  CHECK(p.writes[0].first == hp::kCon2);
+  CHECK(p.writes[1].first == hp::kCon0);
+  CHECK(p.writes[2].first == hp::kCon1);
+  hp::Setting s = hp::decode(p.con0, p.con1, p.con2);
+  CHECK(hp::same_point(s, hp::point_74()) && s.frac == hp::kFracOne / 4);
+  CHECK((p.con1 & (1u << 13)) != 0);
+  CHECK((p.con2 & 0xff000000u) == 0x05000000u);
+  CHECK(std::fabs(t->applied_ppm()) < 0.05);
+  // A trim moves the half-rate clock by the same ppm, fraction only.
+  p.writes.clear();
+  CHECK(std::fabs(t->set_ppm(-800.0) + 800.0) < 0.05);
+  REQUIRE(p.writes.size() == 1);
+  CHECK(p.writes[0].first == hp::kCon2);
+  s = hp::decode(p.con0, p.con1, p.con2);
+  CHECK(std::fabs(hp::rate_hz(s) / 74.25e6 - 1.0 + 800e-6) < 1e-8);
+}
+
+TEST(half_rate_point_is_kept_on_restart) {
+  FakePll p = kernel74_pll();
+  {
+    auto t = trim_on(&p);
+    std::string why;
+    bool moved = false;
+    REQUIRE(t->engage(148500, &why, &moved));
+    t->set_ppm(500.0);
+  }   // exit: 0 ppm, still at the half-rate point
+  p.writes.clear();
+  auto t = trim_on(&p);
+  std::string why;
+  bool moved = true;
+  REQUIRE(t->engage(148500, &why, &moved));
+  CHECK(!moved && t->half_rate());
+  CHECK(p.writes.empty());   // already at 0 ppm: nothing to write
+}
+
+TEST(a_half_rate_point_that_does_not_take_goes_back_to_refdiv_2) {
+  FakePll p = kernel74_pll();
+  p.refuse = true;
+  auto t = trim_on(&p);
+  std::string why;
+  bool moved = false;
+  CHECK(!t->engage(148500, &why, &moved));
+  CHECK(!t->engaged() && !t->half_rate());
+  REQUIRE(p.writes.size() == 6);
+  // The undo restores this sink's kernel setting, not the full-rate one.
+  CHECK(hp::decode(p.writes[4].second, 0, 0).fbdiv == 99);
+  CHECK((p.writes[4].second >> 12 & 0x7u) == 4u);
+  const uint32_t con1 = p.writes[5].second & 0xffffu;
+  CHECK((con1 & 0x3fu) == 2u);               // refdiv 2
+  CHECK(((con1 >> 6) & 0x7u) == 4u);         // postdiv2 4
+  CHECK((con1 & (1u << 12)) != 0);           // integer
 }
 
 // --- PhaseLock::set_applied: a bounded actuator must not wind the centre up.

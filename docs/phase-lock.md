@@ -144,6 +144,14 @@ How it works (`hdmi_trim.h`; evidence in
   postdivs 4x3, fbdiv 74 + 0.25. The display re-syncs once (the modeset
   has just re-synced it anyway). A PLL already at that point (a player
   restart) is kept, with no re-sync.
+- Some sinks get the same 1080p60 mode with HPLL at half that rate,
+  74.25 MHz (the kernel's setting with refdiv 2); HDZero goggles do. The
+  video port then runs at half the pixel clock, which is how the kernel
+  drives a YCbCr 4:2:0 link (not confirmed on those goggles). The refresh
+  still follows HPLL 1:1, so the same trim applies at a second point:
+  fbdiv 74 + 0.25 (the same VCO, 1782 MHz) over postdivs 6x4. Which point
+  is used follows what the PLL reads; the engage line on stderr names it
+  (`HPLL 74.25 MHz (half rate ...)`).
 - Every trim after that writes the 24-bit fraction alone: a step inside
   one feedback divider does not make the sink re-sync (bench: up to
   2500 ppm in one write); crossing a divider does.
@@ -157,9 +165,9 @@ How it works (`hdmi_trim.h`; evidence in
   it to 139 mfps); `maburplay: display trim at its bound` on stderr.
 - Refused, with the sensor steer kept and the reason on stderr: not an
   RK3566, `/dev/mem` unavailable, a mode other than 148.5 MHz
-  (1920x1080@60), a PLL setting other than the kernel's or the trim
-  point. A trim point the PLL does not take is undone to the kernel's
-  setting and not retried.
+  (1920x1080@60), a PLL setting other than the kernel's two (148.5 and
+  74.25 MHz) or their trim points. A trim point the PLL does not take is
+  undone to the kernel's setting it came from and not retried.
 - Rate mismatch, playback or a lost source: back to 0 ppm. Exit: 0 ppm
   at the trim point (the same rate as the kernel's setting).
 
@@ -170,6 +178,11 @@ Against it:
   at the point move. At 100 Hz the same goggles blanked repeatedly after
   excursions of -1000..-1800 ppm, cause never found; 100 Hz modes have no
   trim point here. If a display blanks, set `phase_actuator = "sensor"`.
+- The 74.25 MHz point has not run on hardware. Its arithmetic is the
+  148.5 MHz point's (unit-tested on the register values the HDZero
+  goggles read), but nothing on the bench has shown how a 4:2:0 sink
+  takes a moving clock. The bench lock (an HDMI capture card, full rate)
+  needed -1050 ppm against Crop 60, past the default 1000 bound.
 - How far Crop 60 sits from the panel is unmeasured: the drone's
   `[sensor] cal:` line gives its trim, and `steer: offset ... clamped to N`
   how much room the sensor had. A need past the bound leaves the lock

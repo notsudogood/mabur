@@ -23,6 +23,14 @@ namespace maburplay {
 // first moves to the same rate at postdivs 4 x 3, fbdiv 74 + 0.25 (one
 // blank, right after the player's own modeset, which blanks anyway), and
 // every later change writes the fraction alone.
+//
+// Some sinks get the same 1080p60 mode with HPLL at half that, 74.25 MHz
+// (refdiv 2, otherwise the same integer setting): HDZero goggles did. The
+// video port then runs at half the mode's pixel clock, which is how the
+// kernel drives a YCbCr 4:2:0 link (two pixels per clock); the refresh
+// still scales 1:1 with HPLL. Its trim point keeps the 148.5 MHz point's
+// VCO (1782 MHz) and N (74 + 0.25) and divides by 6 x 4 instead, so the
+// ppm arithmetic is shared.
 namespace hpll {
 
 constexpr uint32_t kPmucruBase = 0xfdd00000;  // 4 KiB page
@@ -48,12 +56,20 @@ uint32_t con0_write(uint32_t postdiv1, uint32_t fbdiv);
 uint32_t con1_write(bool integer, uint32_t postdiv2, uint32_t refdiv);
 uint32_t con2_value(uint32_t old_con2, uint32_t frac);
 
-// 148.5 MHz (1920x1080@60): the kernel's setting and the trim point.
+// Every trim point runs N = kPointFbdiv + 1/4 = 74.25 from the 24 MHz
+// reference (VCO 1782 MHz); only the post-dividers differ.
+constexpr uint32_t kPointFbdiv = 74;
+
+// A 1920x1080@60 mode (pixel clock 148.5 MHz): HPLL at the full clock, the
+// kernel's setting and the trim point ...
 inline Setting kernel_148() { return Setting{99, 4, 4, 1, true, 0}; }
-inline Setting point_148() { return Setting{74, 4, 3, 1, false, kFracOne / 4}; }
+inline Setting point_148() { return Setting{kPointFbdiv, 4, 3, 1, false, kFracOne / 4}; }
+// ... or at half of it, 74.25 MHz (a 4:2:0 link, see above).
+inline Setting kernel_74() { return Setting{99, 4, 4, 2, true, 0}; }
+inline Setting point_74() { return Setting{kPointFbdiv, 6, 4, 1, false, kFracOne / 4}; }
 constexpr int kClock148Khz = 148500;
 
-// The fraction for `ppm` at the trim point, kept 1/64 away from either
+// The fraction for `ppm` at a trim point, kept 1/64 away from either
 // integer edge (-3157..+9906 ppm). False outside that.
 bool frac_for_ppm(double ppm, uint32_t* frac);
 double ppm_for_frac(uint32_t frac);
@@ -85,14 +101,17 @@ class HdmiTrim {
   HdmiTrim& operator=(const HdmiTrim&) = delete;
 
   // Takes the PLL to the trim point for a mode of pixel clock `clock_khz`
-  // and sets 0 ppm. Only 148.5 MHz has a point. A PLL already at the point
-  // (a previous run, a modeset at the same rate) is kept; one at the
-  // kernel's setting is moved (*moved = true: the sink re-syncs once);
-  // anything else is refused untouched. A move the PLL does not take is
-  // undone to the kernel's setting and refused, never retried (a retry
-  // loop held the goggles blank for 30 s in the spike).
+  // and sets 0 ppm. Only 148.5 MHz has points: one for HPLL at the full
+  // clock, one at half (half_rate()), picked by what the PLL reads. A PLL
+  // already at a point (a previous run, a modeset at the same rate) is
+  // kept; one at the matching kernel setting is moved (*moved = true: the
+  // sink re-syncs once); anything else is refused untouched. A move the
+  // PLL does not take is undone to the kernel's setting and refused, never
+  // retried (a retry loop held the goggles blank for 30 s in the spike).
   bool engage(int clock_khz, std::string* why, bool* moved);
   bool engaged() const { return engaged_; }
+  // Engaged at the 74.25 MHz point (HPLL at half the mode's pixel clock).
+  bool half_rate() const { return half_rate_; }
 
   // Writes the fraction for `ppm`, clamped to +-max_ppm; nothing when it is
   // already in force. Returns the ppm in force afterwards.
@@ -107,6 +126,7 @@ class HdmiTrim {
   std::unique_ptr<RegIo> io_;
   const int max_ppm_;
   bool engaged_ = false;
+  bool half_rate_ = false;
   bool saturated_ = false;
   uint32_t frac_ = 0;
   double applied_ppm_ = 0.0;

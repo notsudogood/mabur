@@ -70,11 +70,13 @@ struct RadioCfg {
   // docs/experiments/8822c-ht40-tx-stall.md there): a raised receiver-gain
   // floor while tuned to 40/80 MHz, armed by the first >= 40 MHz frame. On a
   // quiet channel without it the first 40 MHz frame can wait forever for the
-  // secondary 20 MHz to read idle. -1 = the image's default (off on an
-  // 8812EU image, 0x35 on an 8812CU one), 0 = off, 1..127 = the floor.
-  // Cost: ~1 dB of idle-channel RX sensitivity per step at 40/80 MHz
-  // (estimated, not measured).
-  int wide_igi_floor = -1;
+  // secondary 20 MHz to read idle. -1 = not fixed here (igi_floor_auto
+  // decides), 0 = off, 1..127 = the floor. Cost: ~1 dB of idle-channel RX
+  // sensitivity per step at 40/80 MHz (estimated, not measured). 0x35 in
+  // code and bundle since d21: in flights 0019-0021 the learner below never
+  // stepped (its 250 ms rule missed 30-88 ms stutters on 7.8 % of the
+  // strong-signal MCS3/40 frames).
+  int wide_igi_floor = 0x35;
   // d18: with wide_igi_floor = -1, learn the floor per unit instead of
   // taking the image's 0x35 (igi_floor_learn.h): start where this unit last
   // needed it (off on a unit with nothing saved), step 0x24 -> 0x2c -> 0x35

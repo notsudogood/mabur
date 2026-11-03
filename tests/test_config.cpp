@@ -1645,9 +1645,10 @@ TEST(radio_width_step_keys_parse_and_validate) {
   }
 }
 
-// radio.wide_igi_floor: -1 (image default) .. 127, validated.
+// radio.wide_igi_floor: -1 (igi_floor_auto decides) .. 127, validated;
+// 0x35 by default since d21.
 TEST(wide_igi_floor_key_parses_and_validates) {
-  CHECK(Config{}.radio.wide_igi_floor == -1);
+  CHECK(Config{}.radio.wide_igi_floor == 0x35);
   auto p = write_temp_toml("[radio]\nchannels = [36]\nwide_igi_floor = 53\n");
   CHECK(load_config(p.string()).radio.wide_igi_floor == 53);
   std::filesystem::remove(p);

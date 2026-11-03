@@ -71,8 +71,9 @@ same() {
 # $BACKUP_DIR/mabur.toml.oldN, the image's default replaces it, and what
 # belongs to this drone's own radio is carried over: the TX-power
 # calibration (maburcal's four [radio] lines) when it is in use, and a
-# wide_igi_floor set by hand (the 40 MHz stall fix is per radio unit: one
-# 8812EU needs it, another never stalls), and the camera preset (the GS
+# wide_igi_floor set by hand -- one that differs from the old image's own
+# value (the 40 MHz stall fix is per radio unit: one 8812EU needs it,
+# another never stalls), and the camera preset (the GS
 # menu's Camera tab: [venc] size/fps/slices/sensor_crop and the [record]
 # size that follows the picture's shape) when it differs from the old
 # image's default -- kept only if the new maburd's --check-config takes it,
@@ -108,6 +109,11 @@ sect_lines() {
 # Their values alone (comment and spacing dropped), for comparing.
 sect_values() {
   sect_lines "$@" | awk -F'\t' '{ v = $2; sub(/^[^=]*=/, "", v); sub(/#.*/, "", v); gsub(/[[:space:]]/, "", v); print v }'
+}
+# The first wide_igi_floor value in $1 ("" when the file or the key is missing).
+floor_of() {
+  [ -f "$1" ] || return 0
+  sed -n 's/^[[:space:]]*wide_igi_floor[[:space:]]*=[[:space:]]*\([-0-9]*\).*/\1/p' "$1" | head -1
 }
 # The image default ($IMAGE_CONF) with each carried line of $1 in place of
 # the first line of the same key in the same section ("*": any section),
@@ -156,12 +162,20 @@ refresh_config() {
       | awk '{ print "*\t" $0 }' >> "$CONF.carry"
     kept="TX-power calibration"
   fi
-  # A set floor: 0 (off) or 1..127. -1 is "the image's default", so the new
-  # image decides.
-  if grep -qE '^[[:space:]]*wide_igi_floor[[:space:]]*=[[:space:]]*[0-9]' "$old"; then
-    grep -E '^[[:space:]]*wide_igi_floor[[:space:]]*=' "$old" | head -1 | awk '{ print "*\t" $0 }' >> "$CONF.carry"
-    kept="${kept:+$kept and }wide_igi_floor"
-  fi
+  # A set floor: 0 (off) or 1..127 that is not the old image's own value (its
+  # stamp), so a floor an image shipped is not mistaken for a hand-set one
+  # and a later image's default still reaches that drone. -1 is "the image's
+  # default", never carried. No stamp: any 0..127 counts as set.
+  of=$(floor_of "$old"); sf=$(floor_of "$STAMP")
+  case "$of" in
+    ''|*[!0-9]*) ;;
+    *)
+      if [ ! -f "$STAMP" ] || [ "$of" != "$sf" ]; then
+        grep -E '^[[:space:]]*wide_igi_floor[[:space:]]*=' "$old" | head -1 | awk '{ print "*\t" $0 }' >> "$CONF.carry"
+        kept="${kept:+$kept and }wide_igi_floor"
+      fi
+      ;;
+  esac
   # The camera preset: carried when the picture differs from the old image's
   # default, and only if the new image's maburd takes the result.
   cam_keys='size|fps|sensor_crop'

@@ -45,11 +45,15 @@ spur_warn  = true      # warn at start for each member where this radio, if an 8
 spur_ext   = false     # notch the 5880 MHz spur too (177 at 20 MHz, the 173+177 pair at 40) and, since d19, the
                        # second spur of each upper 80 MHz block (5800 in 149-161, 5880 in 165-177): not a vendor
                        # setting, untested on air (173 at 40 stalled and 149 at 80 lost frames without it)
-wide_igi_floor = -1    # receiver-gain floor at 40/80 MHz (devourer's 40 MHz stall fix): -1 = not set by hand
-                       # (igi_floor_auto decides), 0 = off, else 1..127 fixed. drone 1's 8812EU: 0 of 11 40 MHz
-                       # promotes stalled at 0x35 = 53, 7 of 20 with it off; drone 2 never stalled. Costs ~1 dB
-                       # of uplink sensitivity per step at 40/80 (estimate, unmeasured at a weak uplink);
-                       # home_width = 20 keeps it off on the 20 MHz rungs
+wide_igi_floor = 53    # receiver-gain floor at 40/80 MHz (devourer's 40 MHz stall fix): -1 = not fixed here
+                       # (igi_floor_auto decides), 0 = off, else 1..127 fixed. 53 (0x35) since d21: in flights
+                       # 0019-0021 the learner below stayed off (0 stalls counted) while 7.8 % of the strong-signal
+                       # MCS3/40 frames left the drone 30-88 ms late, against 0 of 20850 at 80 MHz -- stutters
+                       # too short for its 250 ms rule. Bench, drone 1's 8812EU: 0 of 11 40 MHz promotes stalled
+                       # at 53, 7 of 20 with it off; drone 2 never stalled. Costs ~1 dB of uplink sensitivity
+                       # per step at 40/80 (estimate, unmeasured at a weak uplink) on every drone, the ones that
+                       # never stall included, and a fixed floor turns the GS's first-boot floor test off;
+                       # home_width = 20 keeps it off on the 20 MHz rungs. -1 = learn it per drone (d18-d20)
 igi_floor_auto = true  # d18, with wide_igi_floor = -1: learn this drone's floor. Starts off (or where it was
                        # saved), steps 0x24 -> 0x2c -> 0x35 on each 40/80 MHz stall (frames waiting, none sent,
                        # 250 ms of the last 1 s) and saves it to /etc/mabur.igi_floor; never steps down (delete that file to

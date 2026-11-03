@@ -50,6 +50,21 @@ sed -i 's/^wide_igi_floor *=.*/wide_igi_floor = -1/' "$T/mabur.toml"
 sed -i 's/^channels = .*/channels = [157]/' "$T/mabur.toml"
 run
 grep -q '^wide_igi_floor = -1    # the image default$' "$T/mabur.toml" || fail "image-default floor was carried"
+# 6b. An image that ships a floor (53): a drone takes it; a value set by hand
+# under that image (0) carries; the shipped 53 itself is not "hand-set", so
+# the next image's own value replaces it.
+sed -i -e 's/36, 112/36, 120/' -e 's/^wide_igi_floor *=.*/wide_igi_floor = 53    # the image default/' "$T/rom.toml"
+run
+grep -q '^wide_igi_floor = 53    # the image default$' "$T/mabur.toml" || fail "the image's floor not taken"
+sed -i 's/^wide_igi_floor *=.*/wide_igi_floor = 0/' "$T/mabur.toml"
+sed -i 's/36, 120/36, 121/' "$T/rom.toml"
+run
+grep -q '^wide_igi_floor = 0$' "$T/mabur.toml" || fail "hand-set 0 under a floor-shipping image not carried"
+sed -i -e 's/^wide_igi_floor *=.*/wide_igi_floor = 53/' -e 's/^channels = .*/channels = [157]/' "$T/mabur.toml"
+sed -i -e 's/36, 121/36, 112/' -e 's/^wide_igi_floor *=.*/wide_igi_floor = -1    # the image default/' "$T/rom.toml"
+run
+grep -q '^wide_igi_floor = -1    # the image default$' "$T/mabur.toml" || fail "the shipped floor was carried as hand-set"
+grep -q 'channels = \[36, 112, 116, 132\]' "$T/mabur.toml" || fail "the rest is not the new default (shipped floor)"
 # 7. Opt-out: a new image leaves the edited file alone.
 sed -i 's/channels = .*/channels = [157]/' "$T/mabur.toml"
 sed -i 's/36, 112/36, 113/' "$T/rom.toml"

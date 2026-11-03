@@ -3,12 +3,12 @@
 What the operator has agreed goes into the next GS (and drone) build, in
 order. Each item names its evidence. Remove an item when it ships.
 
-**Queued for d20 (agreed 2026-11-01), drone only, not built yet.**
+**gs20 + d21 (agreed 2026-11-03).** No wire change: gs20 pairs with d20 and d21, d21 with gs19 and gs20.
 
 | Change | Why | Counterpart |
 |---|---|---|
-| Quick release of the queue-full 30 fps: `link.shed_quick_ms = 500` (code and bundle). A shed the TX queue alone trips, with none in the 5 s before, lifts 0.5 s after the queue calms instead of 2 s; USB failures and repeats keep the 2 s-per-level guard | operator flight 2026-11-01 (gs18/d19, ch 116): four 2 s spells of 30 fps in ~12 min, each a queue trip on one 100 ms check (camera bursts to 60-66 Mb/s against 45; three of them on a step down MCS4/80 -> MCS3/80, which carries ~77 vs ~139 Mb/s of video at full air) | a burst that outlasts 0.5 s of calm and trips again inside 5 s now gets 30 fps twice (0.5 s, then the 2 s guard) instead of once. 15 bursts over 60 Mb/s and 24 step downs in that flight; only 4 tripped, so which ones trip is a race, unmeasured per tick |
-| Drone top-rung cap (MCS4/80 `max_kbps`) 45000 -> 40000 (bundle) | the same flight; at 40000 a 2026-10-24 walk had no 30 fps in 5 min and the same median bitrate | one walk at 40000. A slightly softer picture on busy scenes is possible; the operator saw none at 40 before. Can be set now on a d19 drone in `/etc/mabur.toml` |
+| GS: a loss-driven step down never lands on a higher MCS (`link.down_mcs_cap`, code and bundle): MCS3/80 steps to MCS3/40, MCS3/40 to MCS3/20; climbs still use MCS4/40 and MCS4/20 | flights 0019-0021 (gs19/d20, ch 132): one-rung steps MCS3/80 -> MCS4/40 failed again within 1 s 18 of 18 times and MCS3/40 -> MCS4/20 12 of 16 (MCS3/20 -> MCS2/20: 3 of 18); all six 16-28 frame glitches began with the first, on slow or medium fades | part of each count is a fade that kept deepening; costs the 25 and 13.8 Mb/s rungs on the way down. Unflown |
+| Drone: `radio.wide_igi_floor = 53` in the bundle (was -1 = learn per drone); the config refresh carries a floor only when it differs from the old image's own value | the same flights: the learner stayed off (0 stalls) while 7.8 % of strong-signal MCS3/40 frames left the drone 30-88 ms late (e2e peaks 98-131 ms), 0 of 20850 at 80 MHz; bench, drone 1: 0 of 11 40 MHz promotes stalled at 53, 7 of 20 off | every drone pays ~1 dB of uplink sensitivity at 40/80 (estimate), drone 2 included; the GS's first-boot floor test no longer runs; that 53 removes these partial stalls is not yet flown |
 
 **Queued for the build after gs15 + d16 (agreed 2026-10-25).**
 

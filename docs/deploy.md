@@ -103,8 +103,11 @@ image's default:
   it was last refreshed from) is copied to `/root/mabur.toml.oldN` and
   replaced, with what belongs to this drone's own radio carried over:
   maburcal's four `[radio]` calibration lines when `power_mode = "offset"`,
-  and `radio.wide_igi_floor` when it is set (0..127, not the image's -1),
-  because the 40 MHz stall fix is per radio unit; and since d19 the camera
+  and `radio.wide_igi_floor` when it was set by hand (0..127 and not the
+  old image's own value, read from `/etc/mabur.toml.image`; never -1),
+  because the 40 MHz stall fix is per radio unit -- so the bundle's 53
+  (since d21) is not carried as if hand-set, and a later image's default
+  still reaches the drone; and since d19 the camera
   preset (`[venc]` `size`/`fps`/`slices`/`sensor_crop` and `[record]`
   `size`) when its picture differs from the old image's default, kept only
   if the new image's `maburd -c <file> --check-config` loads the result
@@ -180,9 +183,17 @@ is per radio unit: drone 1's 8812EU stalled on 7 of 20 promotes onto
 40 MHz with no floor and 0 of 11 at `0x35`; drone 2's never stalled. How
 `maburd` picks the value, first match wins:
 
-- **`radio.wide_igi_floor` set by hand** (0..127): that value, fixed, and
-  carried across image refreshes.
-- **`radio.igi_floor_auto = true`** (d18 default): learned per unit
+- **`radio.wide_igi_floor` set** (0..127): that value, fixed. The bundle
+  sets 53 (`0x35`) since d21; a different value set by hand is carried
+  across image refreshes. Why fixed again: in flights 0019-0021 the learner
+  below stayed off with 0 stalls counted while 7.8 % of the strong-signal
+  MCS3/40 frames left the drone 30-88 ms late (0 of 20850 at 80 MHz),
+  stutters too short for its 250 ms rule; that the floor removes them is
+  the bench result above, not yet a flight result. A fixed floor also
+  turns the GS's first-boot floor test off (it runs only while a drone is
+  learning).
+- **`radio.igi_floor_auto = true`** with `wide_igi_floor = -1` (the
+  d18-d20 bundle): learned per unit
   (`drone/src/igi_floor_learn.h`). It starts at the value in
   `/etc/mabur.igi_floor` (off when there is none) and a watcher thread
   steps it `0x24` → `0x2c` → `0x35` each time it sees a stall: tuned

@@ -263,6 +263,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
     check_keys(d, "display",
                {"regulate_ms", "vsync_lock", "vsync_lead_ms", "chain_budget", "sched_cap_ms",
                 "phase_lock", "phase_margin_ms", "rt_priority",
+                "phase_actuator", "trim_max_ppm",
                 "rec_vsync_lead_ms", "genlock", "genlock_miss_pct"});
     c.display.regulate_ms =
         static_cast<int>(get_int(d, "regulate_ms", 12, 0, 100, "display"));
@@ -284,6 +285,12 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted)
         static_cast<int>(get_int(d, "phase_margin_ms", 4, 1, 10, "display"));
     c.display.rt_priority =
         static_cast<int>(get_int(d, "rt_priority", c.display.rt_priority, 0, 50, "display"));
+    c.display.phase_actuator =
+        get_str(d, "phase_actuator", c.display.phase_actuator, "display");
+    if (c.display.phase_actuator != "sensor" && c.display.phase_actuator != "display")
+      fail("display.phase_actuator", "must be \"sensor\" or \"display\"");
+    c.display.trim_max_ppm = static_cast<int>(
+        get_int(d, "trim_max_ppm", c.display.trim_max_ppm, 50, 3000, "display"));
     // genlock / genlock_miss_pct: our older camera steering, retired
     // 2026-10-18 for phase_lock. rec_vsync_lead_ms: the recording-time
     // release lead, retired with the release thread (its lead covers

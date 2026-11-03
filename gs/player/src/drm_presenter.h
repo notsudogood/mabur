@@ -244,6 +244,9 @@ class DrmPresenter : public PresentSink {
   // init() succeeds; main.cpp seeds the FrameRegulator's vblank estimator
   // with it so the servo can lock non-60 Hz panels.
   double mode_period_us() const;
+  // The committed mode's pixel clock, kHz (148500 at 1920x1080@60). Valid
+  // after init() succeeds; the display trim (hdmi_trim.h) keys on it.
+  int mode_clock_khz() const;
 
   // --- colortrans: CRTC 3D LUT (docs/colortrans.md) -------------------
   // True when init() found the CRTC's CUBIC_LUT property with

@@ -1972,6 +1972,8 @@ void DrmPresenter::set_flip_sink(FlipSink sink) { impl_->flip_sink = std::move(s
 
 bool DrmPresenter::vsync_ts_exact() const { return impl_->ts_exact; }
 
+int DrmPresenter::mode_clock_khz() const { return static_cast<int>(impl_->mode.clock); }
+
 double DrmPresenter::mode_period_us() const {
   return maburplay::mode_period_us(impl_->mode.clock, impl_->mode.htotal,
                                    impl_->mode.vtotal);

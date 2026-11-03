@@ -124,6 +124,60 @@ the camera there (~3 lines, centre near −50 mfps). It logs
 
 The drone has no phase-lock config.
 
+## Display actuator (`display.phase_actuator = "display"`, gs22, opt-in)
+
+The same controller can move the GS's HDMI pixel clock instead of the
+camera: the panel follows the camera, and the RCF's `snr_off` stays 0, so
+the drone runs on its boot trim. It exists for camera modes whose ceiling
+is their nominal rate, which the sensor steer can only slow down: the
+Camera tab's Crop 60 (2816x1584 crop, ceiling 60.000 fps) and 1728x972@100.
+Flights 0019-0021 flew Crop 60: the lock held 2-3 % of armed seconds,
+gave up (`oor`) for 20-45 %, and its offset sat at the +200 mfps limit.
+
+How it works (`hdmi_trim.h`; evidence in
+`docs/findings/2026-10-22-hdmi-clock-trim-spike.md` and
+`2026-10-24-display-trim-servo-spike.md`):
+
+- HPLL in the RK3566's PMUCRU clocks only the HDMI port and the HDMI PHY.
+  Right after each presenter modeset, maburplay moves it from the kernel's
+  integer 148.5 MHz setting (fbdiv 99, postdivs 4x4) to the same rate at
+  postdivs 4x3, fbdiv 74 + 0.25. The display re-syncs once (the modeset
+  has just re-synced it anyway). A PLL already at that point (a player
+  restart) is kept, with no re-sync.
+- Every trim after that writes the 24-bit fraction alone: a step inside
+  one feedback divider does not make the sink re-sync (bench: up to
+  2500 ppm in one write); crossing a divider does.
+- offset (mfps of camera rate) -> ppm of pixel clock = -offset x 1e6 /
+  (panel Hz x 1000): a faster panel moves the phase like a slower camera.
+  16.7 ppm per mfps at 60 Hz.
+- Bounded by `display.trim_max_ppm` (1000 = +-60 mfps at 60 Hz). A
+  clamped request is fed back to the lock (`PhaseLock::set_applied`), so
+  the window is read against what is in force and the centre settles on
+  the real need instead of winding up (the 10-24 spike's 22 s clamp wound
+  it to 139 mfps); `maburplay: display trim at its bound` on stderr.
+- Refused, with the sensor steer kept and the reason on stderr: not an
+  RK3566, `/dev/mem` unavailable, a mode other than 148.5 MHz
+  (1920x1080@60), a PLL setting other than the kernel's or the trim
+  point. A trim point the PLL does not take is undone to the kernel's
+  setting and not retried.
+- Rate mismatch, playback or a lost source: back to 0 ppm. Exit: 0 ppm
+  at the trim point (the same rate as the kernel's setting).
+
+Against it:
+
+- Sink tolerance is per sink and invisible to the GS. Avatar Goggles X at
+  1080p60 held a 164 s run at -70..-300 ppm with no blank beyond the one
+  at the point move. At 100 Hz the same goggles blanked repeatedly after
+  excursions of -1000..-1800 ppm, cause never found; 100 Hz modes have no
+  trim point here. If a display blanks, set `phase_actuator = "sensor"`.
+- How far Crop 60 sits from the panel is unmeasured: the drone's
+  `[sensor] cal:` line gives its trim, and `steer: offset ... clamped to N`
+  how much room the sensor had. A need past the bound leaves the lock
+  saturated and acquiring, as unlocked as before.
+- The controller's gains are sized for a sensor that steps in whole lines;
+  on the continuous panel they dither +-170..400 ppm second to second
+  (bench: nothing visible).
+
 ## Threads
 
 maburplay runs four loops, so the release deadline never waits on
@@ -180,11 +234,15 @@ each frame on the spot.
 
 ## Observability
 
-- `reg.log` (`# reglog 4`) regulator line: `lock=<off|wait|acq|lock|oor>
-  lerr=<ms>ms loff=<mfps> lctr=<mfps>`, and the release thread's
-  `rlate= hand= rt= flushes= recstarts=` plus the burned recorder's
-  `burn_in= burn_enc= burn_drop=` (docs/observability.md
-  "Regulator line").
+- `reg.log` (`# reglog 5`) regulator line: `lock=<off|wait|acq|lock|oor>
+  lerr=<ms>ms loff=<mfps> lctr=<mfps>`, the release thread's
+  `rlate= hand= rt= flushes= recstarts=`, the burned recorder's
+  `burn_in= burn_enc= burn_drop=`, and `act=<sensor|display> trim=<ppm>`
+  (plus `trim_sat=1` while the display trim is at its bound)
+  (docs/observability.md "Regulator line").
+- maburplay stderr: `maburplay: phase lock actuator: display|sensor -- ...`
+  once per presenter init, with the reason when the display trim is
+  refused.
 - maburplay stderr: `phase-lock: <state> err= off= centre=` on each state
   change.
 - Drone stats line: `snr_off=` (the offset on the sensor); `/tmp/mabur.log`

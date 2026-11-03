@@ -641,6 +641,19 @@ TEST(display_phase_lock_keys) {
   CHECK(load_throws("[display]\nphase_lock = true\nsched_cap_ms = 16\nregulate_ms = 0\n"));
 }
 
+TEST(display_phase_actuator_keys) {
+  // gs22: "sensor" (default, code and bundle) or "display"; the trim bound
+  // 1000 ppm, 50..3000.
+  const auto bare = maburplay::load_config(write_tmp_play(""));
+  CHECK(bare.display.phase_actuator == "sensor" && bare.display.trim_max_ppm == 1000);
+  const auto on = maburplay::load_config(
+      write_tmp_play("[display]\nphase_actuator = \"display\"\ntrim_max_ppm = 600\n"));
+  CHECK(on.display.phase_actuator == "display" && on.display.trim_max_ppm == 600);
+  CHECK(load_throws("[display]\nphase_actuator = \"panel\"\n"));
+  CHECK(load_throws("[display]\ntrim_max_ppm = 49\n"));
+  CHECK(load_throws("[display]\ntrim_max_ppm = 3001\n"));
+}
+
 TEST(display_rt_priority_key) {
   // display.rt_priority: the release thread's SCHED_FIFO priority, 10 in
   // code and bundle, 0 = ordinary scheduling, at most 50.

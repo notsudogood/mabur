@@ -163,6 +163,22 @@ struct DisplayCfg {
   // Smaller is lower latency but lets allowance changes push frames across
   // the edge into the next refresh.
   int phase_margin_ms = 4;
+  // What the phase lock moves (gs22, docs/phase-lock.md "Display actuator"):
+  // "sensor" = the drone's camera rate, through RCF snr_off (as before);
+  // "display" = this GS's HDMI pixel clock (RK3566 HPLL fractional trim,
+  // hdmi_trim.h), with snr_off held at 0 so the camera runs on its own boot
+  // trim. "display" engages only on an RK3566 at a 148.5 MHz mode
+  // (1920x1080@60) whose PLL reads as the kernel or a previous run left it;
+  // anything else logs why and steers the sensor instead. A camera mode
+  // whose ceiling is its nominal rate (Crop 60, 1728x972@100) cannot be
+  // steered faster; the display can follow it.
+  std::string phase_actuator = "sensor";
+  // The display trim's bound, ppm of the pixel clock (1000 = 0.1 %, 60
+  // mfps of camera rate at 60 Hz). Avatar Goggles X ran -70..-300 ppm
+  // steady at 60 Hz with no blank; at 100 Hz they blanked after excursions
+  // of -1000..-1800 ppm (cause unknown). A saturated trim is logged and fed
+  // back to the lock (no wind-up).
+  int trim_max_ppm = 1000;
   // SCHED_FIFO priority of the release thread (release_loop.h), the thread
   // that hands each frame to the display at its release time; real-time
   // so a busy CPU cannot make it wake late. 0 = ordinary scheduling. A

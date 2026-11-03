@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cmath>
 #include <csignal>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -59,6 +60,7 @@
 #include "drm_presenter.h"  // KMS atomic NV12 presenter, the default display path
 #include "frame_regulator.h"  // phase-aware pts+D display release
 #include "phase_lock.h"  // PhaseLock, the sensor-rate controller for the phase lock
+#include "hdmi_trim.h"   // HdmiTrim, the phase lock's display-side actuator (gs22)
 #include "rate_match.h"  // RateMatch: is the panel within the phase lock's reach
 #include "recorder_tap.h"  // the burned DVR's hook on the display's flip
 #include "release_loop.h"  // the release thread: regulator decisions and every present()
@@ -763,6 +765,18 @@ int main(int argc, char** argv) {
     regulator.set_phase_lock_mode(true);
   }
   uint64_t phase_disconts_seen = 0;
+  // Display actuator (display.phase_actuator = "display", gs22): the phase
+  // lock trims this GS's HDMI pixel clock instead of steering the camera,
+  // and the RCF's snr_off stays 0. Engaged after each presenter init
+  // (engage_display_trim below); while it is not engaged the sensor steer
+  // runs as before. trim_last_mfps = the offset last put in force.
+  std::unique_ptr<maburplay::HdmiTrim> hdmi_trim;
+  int32_t trim_last_mfps = INT32_MIN;
+  const bool want_display_trim = phase_lock && cfg.display.phase_actuator == "display";
+  if (cfg.display.phase_actuator == "display" && !phase_lock)
+    std::fprintf(stderr,
+                 "maburplay: display.phase_actuator = \"display\" needs display.phase_lock "
+                 "-- ignored\n");
   // The drone's measured frame rate (the decode pump's) against the
   // panel's: a pair too far apart for the phase lock pauses it and warns on
   // the OSD fps cell.
@@ -840,6 +854,60 @@ int main(int argc, char** argv) {
     }
   };
   std::unique_ptr<maburplay::DrmPresenter> presenter;
+  // Takes the HDMI PLL to its trim point right after a presenter's modeset
+  // (the one sink re-sync rides the modeset's). Refused -- not an RK3566,
+  // no /dev/mem, a mode without a trim point, a PLL setting this code did
+  // not expect -- leaves the sensor steer in charge and says why.
+  auto engage_display_trim = [&](const char* when) {
+    if (!want_display_trim || !presenter) return;
+    std::string why;
+    if (!hdmi_trim) {
+      std::unique_ptr<maburplay::RegIo> io;
+      if (maburplay::soc_is_rk3566(&why)) io = maburplay::open_pmucru(&why);
+      if (!io) {
+        std::fprintf(stderr,
+                     "maburplay: phase lock actuator: sensor -- display trim unavailable (%s)\n",
+                     why.c_str());
+        return;
+      }
+      hdmi_trim = std::make_unique<maburplay::HdmiTrim>(std::move(io), cfg.display.trim_max_ppm);
+    }
+    bool moved = false;
+    trim_last_mfps = INT32_MIN;
+    if (!hdmi_trim->engage(presenter->mode_clock_khz(), &why, &moved)) {
+      std::fprintf(stderr, "maburplay: phase lock actuator: sensor -- display trim refused %s: %s\n",
+                   when, why.c_str());
+      return;
+    }
+    std::fprintf(stderr,
+                 "maburplay: phase lock actuator: display -- HDMI PLL trim within +-%d ppm %s%s\n",
+                 cfg.display.trim_max_ppm, when,
+                 moved ? " (trim point set: the display re-syncs once)" : "");
+  };
+  // Puts the phase lock's offset (mfps of camera rate) in force on the
+  // panel: a faster panel moves the phase like a slower camera, so the sign
+  // flips; 1 mfps = 16.7 ppm at 60 Hz. Writes only on a change. A clamped
+  // trim tells the lock what is in force.
+  auto apply_display_trim = [&](int32_t mfps) {
+    if (mfps == trim_last_mfps || !presenter) return;
+    const double hz = 1e6 / presenter->mode_period_us();
+    const bool was_sat = hdmi_trim->saturated();
+    const double asked = -static_cast<double>(mfps) * 1e6 / (hz * 1000.0);
+    const double got = hdmi_trim->set_ppm(asked);
+    int32_t in_force = mfps;
+    if (hdmi_trim->saturated()) {
+      in_force = static_cast<int32_t>(std::lround(-got * hz * 1000.0 / 1e6));
+      if (phase_lock) phase_lock->set_applied(in_force);
+    }
+    trim_last_mfps = in_force;
+    if (hdmi_trim->saturated() != was_sat)
+      std::fprintf(stderr,
+                   hdmi_trim->saturated()
+                       ? "maburplay: display trim at its bound: %+.0f ppm in force, %+.0f asked "
+                         "(display.trim_max_ppm)\n"
+                       : "maburplay: display trim back inside its bound: %+.0f ppm (%+.0f asked)\n",
+                   got, asked);
+  };
   if (!decode_only) {
     presenter = std::make_unique<maburplay::DrmPresenter>();
     // Frames the presenter is done with go to the release queue, never
@@ -859,6 +927,7 @@ int main(int argc, char** argv) {
       // to k=0 and are all dropped, so the servo would never engage.
       const double panel_us = presenter->mode_period_us();
       regulator.set_panel_period(panel_us);
+      engage_display_trim("at start");
       if (cfg.display.vsync_lock && cfg.display.vsync_lead_ms * 1000.0 >= panel_us)
         std::fprintf(stderr,
                      "maburplay: display.vsync_lead_ms %d >= the "
@@ -1048,7 +1117,7 @@ int main(int argc, char** argv) {
   // there is no presenter (decode-only, or init failed). Every call closes
   // the release thread's stats window (rlate=, hand=, present_jitter=).
   auto log_regulator_line = [&regulator, &presenter, &release, &reg_log, &phase_lock,
-                             &output_parks, &rec_starts, &burn_counts]() {
+                             &output_parks, &rec_starts, &burn_counts, &hdmi_trim]() {
     char line[768];
     const maburplay::ReleaseLoop::Stats st = release.take_stats();
     if (regulator.enabled()) {
@@ -1126,6 +1195,15 @@ int main(int argc, char** argv) {
                     static_cast<unsigned long long>(bc.in),
                     static_cast<unsigned long long>(bc.enc),
                     static_cast<unsigned long long>(bc.drop));
+    }
+    {
+      // reglog 5: what the phase lock moves (display.phase_actuator) and the
+      // display trim in force, ppm of the HDMI pixel clock (0 on the sensor).
+      const size_t used = std::strlen(line);
+      const bool disp = hdmi_trim && hdmi_trim->engaged();
+      std::snprintf(line + used, sizeof(line) - used, " act=%s trim=%.0f%s",
+                    disp ? "display" : "sensor", disp ? hdmi_trim->applied_ppm() : 0.0,
+                    disp && hdmi_trim->saturated() ? " trim_sat=1" : "");
     }
     std::fprintf(stderr, "%s\n", line);
     reg_log.write(mono_us(), line);
@@ -2291,10 +2369,16 @@ int main(int argc, char** argv) {
         if (phase_lock->state() != maburplay::PhaseLock::State::Waiting)
           phase_lock->on_discontinuity(now);
         regulator.set_capture_placement(false);
+        if (hdmi_trim && hdmi_trim->engaged()) apply_display_trim(0);   // panel back to nominal
       } else {
         phase_lock->tick(now);
         regulator.set_capture_placement(phase_lock->locked());
-        core_ctl.tick_phase(phase_lock->offset_mfps(), now / 1000);
+        if (hdmi_trim && hdmi_trim->engaged()) {
+          apply_display_trim(phase_lock->offset_mfps());
+          core_ctl.tick_phase(0, now / 1000);   // the camera runs on its own boot trim
+        } else {
+          core_ctl.tick_phase(phase_lock->offset_mfps(), now / 1000);
+        }
       }
       gs_ps.phase_oor = phase_lock->state() == maburplay::PhaseLock::State::OutOfRange;
       if (phase_lock->state() != before) {
@@ -2344,6 +2428,7 @@ int main(int argc, char** argv) {
           // Same pre-first-flip reseed as the startup path: a hotplugged
           // panel may run a different mode/refresh than the one configured.
           regulator.set_panel_period(presenter->mode_period_us());
+          engage_display_trim("after a display hotplug");
           // Unlike the startup path, the lock may already be locked or
           // acquiring against the OLD panel's grid here: restart it so the
           // new mode gets a fresh window instead of up to 2 s of capture

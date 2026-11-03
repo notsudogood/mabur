@@ -76,6 +76,12 @@ chain_budget  = 0          # 0 = never drop a frame to cut a one-refresh-late ru
 sched_cap_ms  = 16         # a frame may arrive up to this many ms late and keep its capture-time slot; 0 = time frames by arrival; with phase_lock on, capture-time placement itself runs only while the lock holds
 phase_lock    = true       # steer the drone camera's frame rate so frames land a fixed margin before the screen refresh (flat latency, no judder)
 phase_margin_ms = 4        # that margin, ms: smaller is lower latency but less room for late frames
+phase_actuator = "sensor"  # what the phase lock moves: "sensor" = the drone camera's rate; "display" (gs22) = this
+                           # GS's HDMI clock, so the panel follows the camera -- for a camera mode that cannot run
+                           # faster than its nominal rate (Crop 60). RK3566 at 1920x1080@60 only; anything else
+                           # falls back to "sensor" and says why. The display re-syncs once when it engages
+trim_max_ppm = 1000        # display trim bound, ppm of the HDMI clock (1000 = 0.1 %). Avatar Goggles X ran -70..-300
+                           # steady with no blank at 60 Hz; untested beyond. Unflown
 rt_priority = 10  # SCHED_FIFO priority of the release thread; 0 = ordinary scheduling
 
 # Undo the drone camera's colour tuning (the "colortrans" sensor file in the

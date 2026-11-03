@@ -644,7 +644,7 @@ vsync-paced two-plane commit), `0x02` `PAGE_FLIP_ASYNC` was set, `0x04`
 parked, `0x08` the commit failed, `0x10` a blocking modeset commit.
 `framelog 2` and earlier rows end at `exact`.
 
-### `reg.log` (`# reglog 4`)
+### `reg.log` (`# reglog 5`)
 
 The 1 Hz `regulator:` line ("Regulator line" below), written by the same
 follow-the-marker writer as `lat.log`: `<mono_us> regulator: held= ...`.
@@ -654,7 +654,10 @@ instead, and zero with none running); difference adjacent rows for the
 per-second rate (the `present=`, `rlate=` and `hand=` windows are per line
 already). It exists because `pend`/`pdrop`/`heals` are the presenter's
 side of a missed latch, and `/tmp/maburplay.log` does not outlive a
-power-off. reglog 4 appends the burned recorder's counters `burn_in=
+power-off. reglog 5 appends what the phase lock moves and the display
+trim in force, `act=<sensor|display> trim=<ppm>`, plus `trim_sat=1` while
+that trim sits at `display.trim_max_ppm` (docs/phase-lock.md "Display
+actuator"); reglog 4 rows end at the burned recorder's counters `burn_in=
 burn_enc= burn_drop=`; reglog 3 rows end at `recstarts=` and carry the
 release thread's fields `rlate= hand= rt=` and the event counters
 `flushes= recstarts=`; reglog 2 rows end at `ioctl=` and carry the

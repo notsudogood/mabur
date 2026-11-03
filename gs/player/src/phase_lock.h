@@ -60,6 +60,16 @@ class PhaseLock {
   // Closes the window when due and runs the state machine. True when the
   // state or the offset changed.
   bool tick(uint64_t now_us);
+  // The actuator could not apply offset_mfps() in full (the display trim's
+  // bound, display.trim_max_ppm): record what is in force. Call it in the
+  // same loop pass as the tick() that produced the offset -- the window
+  // that tick opened then runs, and is read, against the applied value, so
+  // the centre settles on the real need instead of winding up to the range
+  // (the 2026-10-24 spike: a 22 s clamp wound it to 139 mfps).
+  void set_applied(int32_t mfps) {
+    offset_ = mfps;
+    window_offset_ = mfps;
+  }
 
   State state() const { return state_; }
   bool locked() const { return state_ == State::Locked; }

@@ -24,13 +24,17 @@ namespace maburplay {
 // blank, right after the player's own modeset, which blanks anyway), and
 // every later change writes the fraction alone.
 //
-// Some sinks get the same 1080p60 mode with HPLL at half that, 74.25 MHz
-// (refdiv 2, otherwise the same integer setting): HDZero goggles did. The
-// video port then runs at half the mode's pixel clock, which is how the
-// kernel drives a YCbCr 4:2:0 link (two pixels per clock); the refresh
-// still scales 1:1 with HPLL. Its trim point keeps the 148.5 MHz point's
-// VCO (1782 MHz) and N (74 + 0.25) and divides by 6 x 4 instead, so the
-// ppm arithmetic is shared.
+// A sink driven over a YCbCr 4:2:0 link gets the same 1080p60 mode with
+// HPLL at half that, 74.25 MHz (refdiv 2, otherwise the same integer
+// setting): the video port runs at half the mode's pixel clock (two pixels
+// per clock), and the refresh still scales 1:1 with HPLL. No sink has been
+// seen doing it: the HDZero goggles' 74.25 MHz reading under gs22 was the
+// 720p60 mode the kernel had on the port before the player's modeset (their
+// EDID offers no 4:2:0 and the link reads RGB888); the re-check after the
+// first modeset (main.cpp) is what covers that case. The same setting is
+// the full-rate one of a 720p mode. Its trim point keeps the 148.5 MHz
+// point's VCO (1782 MHz) and N (74 + 0.25) and divides by 6 x 4 instead,
+// so the ppm arithmetic is shared.
 namespace hpll {
 
 constexpr uint32_t kPmucruBase = 0xfdd00000;  // 4 KiB page

@@ -167,14 +167,19 @@ How it works (`hdmi_trim.h`; evidence in
   kernel parks the port on while the player is down): it moves now (one
   more re-sync) or is refused, and the log says
   `... after the first modeset`.
-- Some sinks get the same 1080p60 mode with HPLL at half that rate,
-  74.25 MHz (the kernel's setting with refdiv 2); HDZero goggles do. The
-  video port then runs at half the pixel clock, which is how the kernel
-  drives a YCbCr 4:2:0 link (not confirmed on those goggles). The refresh
-  still follows HPLL 1:1, so the same trim applies at a second point:
-  fbdiv 74 + 0.25 (the same VCO, 1782 MHz) over postdivs 6x4. Which point
-  is used follows what the PLL reads; the engage line on stderr names it
-  (`HPLL 74.25 MHz (half rate ...)`).
+- A sink driven over a YCbCr 4:2:0 link gets the same 1080p60 mode with
+  HPLL at half that rate, 74.25 MHz (the kernel's setting with refdiv 2):
+  the video port runs at half the pixel clock, and the refresh still
+  follows HPLL 1:1, so the same trim applies at a second point: fbdiv
+  74 + 0.25 (the same VCO, 1782 MHz) over postdivs 6x4. Which point is
+  used follows what the PLL reads; the engage line on stderr names it
+  (`HPLL 74.25 MHz (half the pixel clock ...)`). No sink has been seen
+  doing this. The HDZero goggles' gs22 refusal (`refdiv 2 = 74.250 MHz`)
+  was the 720p60 mode the kernel had on the port before the player's
+  modeset: their EDID (`"ITE6802" ITE-6602`, HDMI, preferred 1080p50,
+  48-122 Hz) offers no 4:2:0, and debugfs shows the link at RGB888 with
+  `dclk_vop0` and `clk_hdmi_ref` on HPLL. The post-modeset check above is
+  the fix for that case.
 - Every trim after that writes the 24-bit fraction alone: a step inside
   one feedback divider does not make the sink re-sync (bench: up to
   2500 ppm in one write); crossing a divider does.
@@ -213,9 +218,9 @@ Against it:
   empty in the 10-22 spike); the line then says `no EDID` and the skip
   list cannot name that sink. The trim itself does not need the EDID.
 - The 74.25 MHz point has not run on hardware. Its arithmetic is the
-  148.5 MHz point's (unit-tested on the register values the HDZero
-  goggles read), but nothing on the bench has shown how a 4:2:0 sink
-  takes a moving clock. The bench lock (an HDMI capture card, full rate)
+  148.5 MHz point's (unit-tested on the register values gs22 read with
+  the HDZero goggles attached), but nothing on the bench has shown how a
+  4:2:0 sink takes a moving clock. The bench lock (an HDMI capture card, full rate)
   needed -1050 ppm against Crop 60. The 720p point is the same setting,
   untested at 720p.
 - How far Crop 60 sits from the panel is unmeasured: the drone's

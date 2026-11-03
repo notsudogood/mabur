@@ -122,7 +122,7 @@ fast_fall_resid        = 0.2    # the same skip, keyed on loss AFTER error corre
                                 # extra rung once. On since the build after gs15, unflown
 penalty_clear_on_climb = true   # climbing past a rung forgets its earlier failures (flight 0007: rung 4 got a
                                 # 10 s block for a failure 150 s before); false = the old memory. Unflown
-down_mcs_cap           = true   # gs20: a step down never lands on a higher MCS than the rung it leaves, so
+down_mcs_cap           = true   # gs21: a step down never lands on a higher MCS than the rung it leaves, so
                                 # mcs 3 / 80 steps to mcs 3 / 40 and mcs 3 / 40 to mcs 3 / 20, skipping the mcs 4
                                 # rungs (climbs still use them). Flights 0019-0021: 18 of 18 steps 3/80 -> 4/40
                                 # and 12 of 16 steps 3/40 -> 4/20 failed again within 1 s, and all six large
@@ -313,6 +313,13 @@ rescue_ms     = 1500    # at 10: no drone frame on any card this long -> back to
 clean_ms      = 8000    # at 10: this long without loss before trying 20 again
 promote_margin_db = 3.0 # ... and the SNR must be this much above where 20 failed (plus the 3 dB 10 MHz gives)
 cooldown_ms   = 20000   # after leaving 10, wait this long before going back
+silence       = true    # gs21: a video stop on MCS0/20 counts too -- no video for silent_ms orders 10 at once,
+                        # a window of no video keeps enter_ms running instead of restarting it, and the
+                        # order is not cancelled when the GS loses the session. false = the old rule: a picture that
+                        # stopped completely never ordered 10 (flights 0019/0020: 17-18 s without a picture
+                        # on MCS0/20, 10 only after frames came back by themselves). Unflown
+silent_ms     = 400     # ... that long without video on MCS0/20 (100..900: the GS leaves the session at 1 s)
+retry_ms      = 5000    # ... a video-stop order the drone did not follow may be tried again after this long
 
 # Per-rung link history shown in the stats (it does not steer the link).
 [link.rung_stats]

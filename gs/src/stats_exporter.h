@@ -283,6 +283,14 @@ struct StatsHopIn {
   uint64_t sampler_dropped = 0;
 };
 
+// The 10 MHz bottom rung (narrow_mode.h), top-level `narrow10`: its state and
+// cumulative counters since maburgs started. silent_entries is the part of
+// entries ordered on a video stop (link.narrow10.silence).
+struct StatsNarrowIn {
+  const char* state = "off";        // off|entering|on|leaving
+  uint64_t entries = 0, silent_entries = 0, cancels = 0, rescues = 0, promotes = 0;
+};
+
 struct StatsInput {
   // radio.channel, straight from the GS config. Exported because the
   // player's compact OSD names the channel the rest of the line describes,
@@ -331,6 +339,7 @@ struct StatsInput {
   StatsProbeIn probe;
   // In-flight channel hop snapshot; unconditional (see StatsHopIn).
   StatsHopIn hop;
+  StatsNarrowIn narrow;
   uint64_t frames_clean = 0, frames_truncated = 0, frames_dropped = 0;
   uint64_t stall_resets = 0;
   // Slice salvage: FrameStream counters.

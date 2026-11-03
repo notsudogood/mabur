@@ -657,7 +657,7 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
       check_keys(nj, "link.narrow10",
                  {"enable", "overhead_base", "overhead_enh", "enter_ms", "enter_post_loss_pct",
                   "lead_ms", "confirm_ms", "rescue_ms", "clean_ms", "promote_margin_db",
-                  "cooldown_ms"});
+                  "cooldown_ms", "silence", "silent_ms", "retry_ms"});
       auto& n = c.link.narrow10;
       n.enable = get_bool(nj, "enable", n.enable, "link.narrow10");
       n.overhead_base = get_num(nj, "overhead_base", n.overhead_base, 0.0, 4.0, "link.narrow10");
@@ -675,6 +675,13 @@ Config load_config(const std::string& path, std::vector<std::string>* defaulted,
           get_num(nj, "promote_margin_db", n.promote_margin_db, -10.0, 30.0, "link.narrow10");
       n.cooldown_ms =
           static_cast<int>(get_int(nj, "cooldown_ms", n.cooldown_ms, 0, 600000, "link.narrow10"));
+      n.silence = get_bool(nj, "silence", n.silence, "link.narrow10");
+      // Under the 1 s after which the GS leaves the session (VrxController's
+      // fixed link_lost_ms): past it the order has no RCF to ride.
+      n.silent_ms =
+          static_cast<int>(get_int(nj, "silent_ms", n.silent_ms, 100, 900, "link.narrow10"));
+      n.retry_ms =
+          static_cast<int>(get_int(nj, "retry_ms", n.retry_ms, 0, 600000, "link.narrow10"));
     }  // absent = off; not a defaulted key (opt-in)
 
     if (r.contains("rung_stats")) {

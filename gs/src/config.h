@@ -259,7 +259,14 @@ struct LinkCfg {
   // NarrowCfg's own default stays off, so a ChannelCoreCfg built without
   // this config (the web GS) keeps it off. maburgs turns it off while
   // link.static_mcs pins the link (the ladder that feeds it is not ticked).
-  NarrowCfg narrow10 = [] { NarrowCfg n; n.enable = true; return n; }();
+  // Its gs21 video-stop rule (`silence`) is on here too, so a kept config
+  // without the key runs it.
+  NarrowCfg narrow10 = [] {
+    NarrowCfg n;
+    n.enable = true;
+    n.silence = true;
+    return n;
+  }();
   // Static-link mode: when static_mcs >= 0 the adaptive controller is
   // bypassed entirely and every RCF commands exactly this MCS/FEC overhead
   // (HT, 20 MHz). Rendezvous/keep-alive/failsafe machinery is unaffected.
@@ -299,7 +306,7 @@ struct LinkCfg {
   // (promote_lat_guard_ms 100) are on in code and bundle alike since gs15;
   // the edge_per fade rule, the residual-keyed drop (fast_fall_resid 0.2),
   // penalty_clear_on_climb and link.recover since the build after gs15
-  // (operator's choice 2026-10-30, unflown), and down_mcs_cap since gs20
+  // (operator's choice 2026-10-30, unflown), and down_mcs_cap since gs21
   // (flights 0019-0021), so a GS config written before those keys existed
   // runs them too. LadderCfg's own defaults stay off for the controller's
   // unit tests.

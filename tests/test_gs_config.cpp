@@ -731,6 +731,21 @@ TEST(narrow10_section_is_on_by_default_and_parses) {
   try { maburgs::load_config(write_tmp("[link.narrow10]\nbogus = 1\n")); }
   catch (const std::exception& e) { threw = std::string(e.what()).find("link.narrow10") != std::string::npos; }
   CHECK(threw);
+  // gs21's video-stop rule: on in GS config (a kept config without the keys
+  // runs it), off in the shared struct; silent_ms must stay under the 1 s
+  // after which the GS leaves the session.
+  c = maburgs::load_config(write_tmp("[radio]\nchannels = [36]\n"));
+  CHECK(c.link.narrow10.silence && c.link.narrow10.silent_ms == 400 &&
+        c.link.narrow10.retry_ms == 5000);
+  CHECK(!maburgs::NarrowCfg{}.silence);
+  c = maburgs::load_config(
+      write_tmp("[link.narrow10]\nsilence = false\nsilent_ms = 250\nretry_ms = 8000\n"));
+  CHECK(!c.link.narrow10.silence && c.link.narrow10.silent_ms == 250 &&
+        c.link.narrow10.retry_ms == 8000);
+  threw = false;
+  try { maburgs::load_config(write_tmp("[link.narrow10]\nsilent_ms = 1000\n")); }
+  catch (const std::exception& e) { threw = std::string(e.what()).find("silent_ms") != std::string::npos; }
+  CHECK(threw);
   // GS radio switches from this build.
   c = maburgs::load_config(write_tmp("[radio]\nnarrow_20 = true\nfast_hop_at_80 = true\nbatched_tune = false\n"));
   CHECK(c.radio.narrow_20 && c.radio.fast_hop_at_80 && !c.radio.batched_tune);

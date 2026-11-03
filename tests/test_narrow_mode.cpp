@@ -1,3 +1,5 @@
+#include <string>
+
 #include "mtest.h"
 #include "narrow_mode.h"
 using namespace maburgs;
@@ -171,3 +173,150 @@ TEST(one_card_gs_leads_with_the_tx_card_after_a_delay) {
   CHECK(o.lead_w == 10);
 }
 MTEST_MAIN
+
+// --- link.narrow10.silence (gs21): a video stop on MCS0/20 ------------------
+
+namespace {
+Rig silence_rig() {
+  Rig r;
+  r.cfg.silence = true;
+  r.nm = NarrowMode(r.cfg);
+  return r;
+}
+}  // namespace
+
+TEST(silence_off_a_video_stop_never_enters) {
+  // The old rule this replaces: no video is "no data", which resets the run.
+  Rig r;
+  for (double t = 0; t <= 5000; t += 50) {
+    r.in.video_silent_ms = t;
+    CHECK(r.at(t).state == NarrowState::Off);
+  }
+  CHECK(r.nm.entries() == 0);
+}
+
+TEST(silence_a_video_stop_enters_after_silent_ms) {
+  Rig r = silence_rig();
+  r.in.video_silent_ms = 0;
+  CHECK(r.at(0).state == NarrowState::Off);
+  r.in.video_silent_ms = 399;
+  CHECK(r.at(399).state == NarrowState::Off);
+  r.in.video_silent_ms = 400;
+  auto o = r.at(400);
+  CHECK(o.state == NarrowState::Entering && o.op_narrow);
+  CHECK(o.lead_card == 1 && o.lead_w == 10 && o.rest_w == 0);   // the TX card keeps sending at 20
+  CHECK(r.nm.entries() == 1 && r.nm.silent_entries() == 1);
+  CHECK(std::string(o.event).find("video stopped") != std::string::npos);
+}
+
+TEST(silence_needs_rung_0_a_session_and_no_block) {
+  for (int k = 0; k < 3; ++k) {
+    Rig r = silence_rig();
+    if (k == 0) r.in.rung = 1;
+    if (k == 1) r.in.in_session = false;
+    if (k == 2) r.in.blocked = true;
+    for (double t = 0; t <= 3000; t += 50) {
+      r.in.video_silent_ms = t;
+      CHECK(r.at(t).state == NarrowState::Off);
+    }
+  }
+}
+
+TEST(silence_a_quiet_window_keeps_the_distress_run_going) {
+  // Flickering video: partial-loss windows with short stops between them.
+  // The old rule restarted the 1.5 s run at every stop; with silence on a stop of a
+  // window or more counts as distress.
+  Rig r = silence_rig();
+  r.in.distress = true;
+  r.in.video_silent_ms = 0;
+  r.at(0);
+  r.in.distress = false;          // an empty window...
+  r.in.video_silent_ms = 300;     // ...because nothing arrived for 300 ms
+  CHECK(r.at(500).state == NarrowState::Off);
+  r.in.distress = true;
+  r.in.video_silent_ms = 0;
+  CHECK(r.at(1499).state == NarrowState::Off);
+  CHECK(r.at(1500).state == NarrowState::Entering);
+  CHECK(r.nm.silent_entries() == 0);
+  // A short gap (under a window) with no loss still restarts it.
+  Rig r2 = silence_rig();
+  r2.in.distress = true;
+  r2.at(0);
+  r2.in.distress = false;
+  r2.in.video_silent_ms = 100;
+  r2.at(500);
+  r2.in.distress = true;
+  r2.in.video_silent_ms = 0;
+  CHECK(r2.at(1500).state == NarrowState::Off);   // the run restarts here
+  CHECK(r2.at(2999).state == NarrowState::Off);
+  CHECK(r2.at(3000).state == NarrowState::Entering);
+}
+
+TEST(silence_entering_outlives_the_session) {
+  Rig r = silence_rig();
+  r.in.video_silent_ms = 400;
+  r.at(400);                      // Entering
+  r.in.in_session = false;        // the GS falls to beaconing 1 s after the last video
+  r.in.video_silent_ms = 1100;
+  CHECK(r.at(1100).state == NarrowState::Entering);
+  r.in.width[1] = 10;
+  CHECK(r.at(1200).state == NarrowState::Entering);   // baseline at 10
+  r.in.own[1] = 101;              // the drone, heard at 10
+  CHECK(r.at(1300).state == NarrowState::On);
+  // Off: the old rule cancels on the session loss.
+  Rig r0;
+  r0.in.distress = true;
+  r0.at(0);
+  r0.at(1500);
+  r0.in.in_session = false;
+  CHECK(r0.at(1600).state == NarrowState::Off && r0.nm.cancels() == 1);
+}
+
+TEST(silence_a_cancelled_stop_entry_retries_after_retry_ms) {
+  Rig r = silence_rig();
+  r.in.video_silent_ms = 400;
+  r.at(400);
+  r.in.width[1] = 10;
+  r.at(500);
+  CHECK(r.at(400 + 2001).state == NarrowState::Off);   // the drone never followed
+  CHECK(r.nm.cancels() == 1);
+  r.in.width[1] = 40;
+  r.in.in_session = true;
+  r.in.video_silent_ms = 5000;
+  CHECK(r.at(2401 + 4999).state == NarrowState::Off);
+  CHECK(r.at(2401 + 5000).state == NarrowState::Entering);
+  CHECK(r.nm.silent_entries() == 2);
+}
+
+TEST(silence_a_cancelled_distress_entry_keeps_the_long_cooldown) {
+  // The lead card left 20 MHz video behind for 2 s: not every 5 s.
+  Rig r = silence_rig();
+  r.in.distress = true;
+  r.at(0);
+  r.at(1500);                     // a distress entry
+  r.in.width[1] = 10;
+  r.at(1600);
+  CHECK(r.at(1500 + 2001).state == NarrowState::Off);
+  r.in.width[1] = 40;
+  r.in.video_silent_ms = 1000;    // now a full stop
+  CHECK(r.at(3501 + 5000).state == NarrowState::Off);
+  CHECK(r.at(3501 + 19999).state == NarrowState::Off);
+  CHECK(r.at(3501 + 20000).state == NarrowState::Entering);
+}
+
+TEST(silence_a_rescue_from_10_keeps_the_long_cooldown) {
+  Rig r = silence_rig();
+  r.in.video_silent_ms = 400;
+  r.at(400);
+  r.in.width[1] = 10;
+  r.at(500);
+  r.in.own[1] = 101;
+  r.at(600);                      // On
+  REQUIRE(r.nm.state() == NarrowState::On);
+  CHECK(r.at(600 + 1501).state == NarrowState::Off);   // nothing at 10 for 1.5 s
+  CHECK(r.nm.rescues() == 1);
+  r.in.width = {40, 40};
+  r.in.video_silent_ms = 3000;
+  CHECK(r.at(2101 + 5000).state == NarrowState::Off);
+  CHECK(r.at(2101 + 20000).state == NarrowState::Entering);
+}

@@ -436,7 +436,7 @@ What the replay says (0007/0008, the residual each step actually saw):
 
 ## A step down never raises the MCS (`link.down_mcs_cap`, on)
 
-On in code and bundle alike since gs20, so an older GS config runs it too.
+On in code and bundle alike since gs21, so an older GS config runs it too.
 Unflown.
 
 A loss-driven step down (residual, s3, util, fade, and a probation failure

@@ -656,6 +656,13 @@ bool StatsExporter::poll(uint64_t now_ms, const StatsInput& in) {
   hop["sweep_timeouts"] = in.hop.sweep_timeouts;
   hop["sampler_dropped"] = in.hop.sampler_dropped;
 
+  j["narrow10"] = {{"state", in.narrow.state},
+                   {"entries", in.narrow.entries},
+                   {"silent_entries", in.narrow.silent_entries},
+                   {"cancels", in.narrow.cancels},
+                   {"rescues", in.narrow.rescues},
+                   {"promotes", in.narrow.promotes}};
+
   if (in.telem) {
     const mabur::rc::Telem& t = *in.telem;
     // A new distinct snapshot (tlm_seq changed since the last one we kept)

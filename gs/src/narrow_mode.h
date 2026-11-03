@@ -26,6 +26,16 @@
 //   Leaving  -> On        nothing heard within confirm_ms: stay at 10.
 //   On       -> Off       rescue: no drone frame on any card for rescue_ms.
 //
+// With `silence` on (gs21), a stop of the video counts too: a window with no
+// base-layer video keeps the enter_ms run going instead of resetting it,
+// silent_ms of it on MCS0/20 enters at once, an Entering outlives the session
+// (the GS drops to beaconing 1 s after the last video, and that is the
+// expected state here, not a reason to give up), and a cancelled video-stop
+// entry may retry after retry_ms instead of cooldown_ms. Off, a no-video window reads
+// as "no data" and resets the run, so a picture that stopped completely
+// never ordered 10 MHz (flights 0019/0020: 17-18 s without a picture on
+// MCS0/20, 10 MHz only after frames came back by themselves).
+//
 // Pure decisions for the test; ChannelCore feeds it and applies the result.
 #include <cmath>
 #include <cstddef>
@@ -48,6 +58,12 @@ struct NarrowCfg {
   int clean_ms = 8000;              // at 10: clean this long before the blind promote
   double promote_margin_db = 3.0;   // over the 3 dB narrowband gain, vs the entry SNR
   int cooldown_ms = 20000;          // after leaving 10, no re-entry for this long
+  // gs21: a video stop on MCS0/20 orders 10 MHz (see the header comment).
+  // silent_ms must stay under the 1 s after which the GS leaves the session:
+  // the order rides the session's RCFs.
+  bool silence = false;
+  int silent_ms = 400;              // no base-layer video this long on MCS0/20 -> enter at once
+  int retry_ms = 5000;              // after a cancelled video-stop entry, instead of cooldown_ms
 };
 
 enum class NarrowState : uint8_t { Off, Entering, On, Leaving };
@@ -72,6 +88,8 @@ struct NarrowIn {
   double best_snr_db = std::numeric_limits<double>::quiet_NaN();
   int lead_candidate = -1;    // the card that would move first (-1 = none can switch)
   int tx_card = -1;
+  // ms since the last base-layer video symbol arrived; < 0 = unknown.
+  double video_silent_ms = -1;
   // Per card: tuned width now, a width switch in flight, drone frames heard
   // (monotonic).
   std::vector<uint8_t> width;
@@ -108,6 +126,7 @@ class NarrowMode {
   bool active() const { return state_ != NarrowState::Off; }
   double entry_snr_db() const { return entry_snr_; }
   uint64_t entries() const { return entries_; }
+  uint64_t silent_entries() const { return silent_entries_; }  // of entries(): on a video stop
   uint64_t cancels() const { return cancels_; }
   uint64_t rescues() const { return rescues_; }
   uint64_t promotes() const { return promotes_; }
@@ -123,18 +142,25 @@ class NarrowMode {
   void tick_off_(const NarrowIn& in) {
     const bool may = cfg_.enable && in.in_session && !in.blocked && in.rung == 0 &&
                      in.lead_candidate >= 0 && in.now_ms >= cooldown_until_ms_;
-    if (!may || !in.distress) {
+    // A window's worth of no video is the worst loss, not an empty window.
+    const bool quiet = cfg_.silence && in.video_silent_ms >= kQuietMs;
+    if (!may || !(in.distress || quiet)) {
       distress_since_ms_ = -1;
       return;
     }
     if (distress_since_ms_ < 0) distress_since_ms_ = in.now_ms;
-    if (in.now_ms - distress_since_ms_ < cfg_.enter_ms) return;
+    const bool stopped = cfg_.silence && in.video_silent_ms >= cfg_.silent_ms;
+    if (!stopped && in.now_ms - distress_since_ms_ < cfg_.enter_ms) return;
     distress_since_ms_ = -1;
     lead_ = in.lead_candidate;
     lead_is_tx_ = in.lead_candidate == in.tx_card;
     entry_snr_ = in.best_snr_db;
     ++entries_;
-    go_(NarrowState::Entering, in.now_ms, "enter: MCS0/20 in distress, ordering 10 MHz");
+    entry_silent_ = stopped;
+    if (stopped) ++silent_entries_;
+    go_(NarrowState::Entering, in.now_ms,
+        stopped ? "enter: MCS0/20 video stopped, ordering 10 MHz"
+                : "enter: MCS0/20 in distress, ordering 10 MHz");
   }
 
   static uint64_t sum_(const std::vector<uint64_t>& v) {
@@ -166,7 +192,7 @@ class NarrowMode {
   }
 
   void tick_entering_(const NarrowIn& in) {
-    if (!in.in_session) {
+    if (!in.in_session && !cfg_.silence) {
       fail_(in.now_ms, NarrowState::Off, "cancel: session lost while entering");
       return;
     }
@@ -221,8 +247,14 @@ class NarrowMode {
   }
 
   void fail_(double now_ms, NarrowState to, const char* why) {
-    if (state_ == NarrowState::Entering) ++cancels_;
-    cooldown_until_ms_ = now_ms + cfg_.cooldown_ms;
+    const bool cancel = state_ == NarrowState::Entering;
+    if (cancel) ++cancels_;
+    // A cancelled entry made on a video stop may retry soon: nothing reached
+    // the GS at 20 MHz either, so the lead card's 2 s at 10 costs no
+    // diversity. A cancelled distress entry (the lead card left 20 MHz video
+    // behind) and a rescue from 10 MHz keep the long cooldown.
+    const bool quick = cancel && cfg_.silence && entry_silent_;
+    cooldown_until_ms_ = now_ms + (quick ? cfg_.retry_ms : cfg_.cooldown_ms);
     go_(to, now_ms, why);
   }
 
@@ -260,6 +292,9 @@ class NarrowMode {
     return o;
   }
 
+  // One ChannelCore stats window (250 ms) of no video counts as distress.
+  static constexpr double kQuietMs = 250.0;
+
   NarrowCfg cfg_;
   NarrowState state_ = NarrowState::Off;
   double since_ms_ = 0;
@@ -272,9 +307,10 @@ class NarrowMode {
   uint64_t own_base_ = 0;
   int lead_ = -1;
   bool lead_is_tx_ = false;
+  bool entry_silent_ = false;   // the current/last entry was a video stop
   double entry_snr_ = std::numeric_limits<double>::quiet_NaN();
   const char* event_ = nullptr;
-  uint64_t entries_ = 0, cancels_ = 0, rescues_ = 0, promotes_ = 0;
+  uint64_t entries_ = 0, silent_entries_ = 0, cancels_ = 0, rescues_ = 0, promotes_ = 0;
 };
 
 }  // namespace maburgs

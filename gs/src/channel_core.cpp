@@ -169,6 +169,12 @@ ChannelSnapshot ChannelCore::snapshot(int tx_card) const {
   s.energy = energy_last_;
   s.dwell = dwell_stats_;
   s.scout_gated_sends = scout_gated_sends_;
+  s.narrow.state = to_string(narrow_.state());
+  s.narrow.entries = narrow_.entries();
+  s.narrow.silent_entries = narrow_.silent_entries();
+  s.narrow.cancels = narrow_.cancels();
+  s.narrow.rescues = narrow_.rescues();
+  s.narrow.promotes = narrow_.promotes();
   return s;
 }
 
@@ -869,9 +875,19 @@ void ChannelCore::step_narrow_(const ChannelTickIn& in) {
     narrow_exp_prev_ = exp;
     narrow_prev_ok_ = true;
   }
+  // Video silence for the gs21 rule: time since the base layer's arrival
+  // count last moved (any arrival, source or repair, on any card).
+  if (in.agg) {
+    const uint64_t arr_now = in.agg->decoder().stats(0).arr_arrived;
+    if (narrow_arr_ms_ < 0 || arr_now != narrow_arr_seen_) {
+      narrow_arr_seen_ = arr_now;
+      narrow_arr_ms_ = in.now_ms;
+    }
+  }
   NarrowIn ni;
   ni.now_ms = in.now_ms;
   ni.in_session = in.in_session;
+  ni.video_silent_ms = narrow_arr_ms_ < 0 ? -1.0 : in.now_ms - narrow_arr_ms_;
   ni.blocked = in.cal_running || plan_.hopping();
   ni.rung = vrx_.ctl().rung();
   ni.distress = narrow_distress_;
@@ -900,9 +916,10 @@ void ChannelCore::step_narrow_(const ChannelTickIn& in) {
                   in.now_ms);
   if (narrow_out_.event)
     sink_.log(logf_("maburgs narrow10: %s (lead card %d, post-FEC %.2f %%, pre-FEC %.1f %%, "
-                    "best snr %.1f dB, entry snr %.1f dB)",
+                    "best snr %.1f dB, entry snr %.1f dB, video silent %.0f ms, %s)",
                     narrow_out_.event, narrow_.lead_card(), narrow_post_pct_, narrow_pre_pct_, best,
-                    narrow_.entry_snr_db()));
+                    narrow_.entry_snr_db(), ni.video_silent_ms,
+                    in.in_session ? "in session" : "searching"));
 }
 
 void ChannelCore::step_width_resync_() {

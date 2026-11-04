@@ -29,7 +29,12 @@ radiotap; the halved sample clock narrows them (devourer
      250 ms window) for `enter_ms` without a break;
    - (gs21, `silence = true`) no base-layer video at all for `silent_ms`
      (400) on MCS0/20. A window with no video also counts as a losing one
-     for the first rule instead of breaking its run.
+     for the first rule instead of breaking its run. Silence counts only
+     once video has flowed in the current session (gs24): the drone links
+     about 10 s before its camera sends, and in gs21-gs23 that wait read as
+     a stop, so most power-ups went to 10 MHz (bench, gs23 + d21, ch 132,
+     hop off: 3 of 4 power-ups; GS log `video silent 10642 ms, in
+     session`).
 
    The RCF op then becomes MCS0/10, with its own FEC
    (`overhead_base` / `overhead_enh`). One spare card (not the TX card)
@@ -53,9 +58,22 @@ radiotap; the halved sample clock narrows them (devourer
    wider rung; the 3 s failsafe backs both up.
 4. **Leave (blind).** Nothing can probe 20 MHz from a 10 MHz radio, so the
    way back needs `clean_ms` without loss and the best card's SNR (read at
-   10) at least 3 dB (the narrowband gain) + `promote_margin_db` above
-   where 20 MHz failed. The spare card goes first again; if it does not
-   hear the drone at 20 within `confirm_ms`, the link stays at 10.
+   10, in dB) of:
+   - after a loss-driven entry: at least 3 dB (the narrowband gain) +
+     `promote_margin_db` above the SNR at the entry, where 20 MHz failed;
+   - after a video-stop entry: at least `silent_promote_snr_db` (15 dB, a
+     code constant, not a config key). The SNR at a video stop says
+     nothing about where 20 MHz fails: entered beside the GS at ~38 dB, the
+     entry-relative bar wanted ~44 dB at 10 MHz, which the same distance
+     only reaches by noise. 15 dB at 10 is ~12 dB at 20, about 7 dB over
+     what MCS0/20 needs.
+
+   The spare card goes first again; if it does not hear the drone at 20
+   within `confirm_ms`, the link stays at 10. Until gs24 the SNR here was
+   the radio's raw half-dB value read as dB, so both bars were half what
+   they say (the log's `best snr 75-83 dB` were 37-41 dB) and a climb
+   after a power-up entry came down to noise: 1 of 4 bench power-ups never
+   climbed back until the drone was power-cycled.
 
 While at 10 the ladder is frozen below its rung 0 (it resumes at rung 0),
 hops and spare-card scouting pause, and nothing is probed.
@@ -63,9 +81,10 @@ hops and spare-card scouting pause, and nothing is probed.
 ## What to read in the logs
 
 - GS: `maburgs narrow10: enter|on|cancel|rescue|leave|stay|off: ...` with
-  the lead card, post/pre-FEC loss, best and entry SNR, how long the video
-  had been silent and whether the GS was in session or searching; a
-  video-stop entry reads `enter: MCS0/20 video stopped, ordering 10 MHz`.
+  the lead card, post/pre-FEC loss, best and entry SNR (dB), how long the
+  video had been silent (`-1` before the session's first video) and
+  whether the GS was in session or searching; a video-stop entry reads
+  `enter: MCS0/20 video stopped, ordering 10 MHz`.
   Card switches log `maburgs radio: card N width -> 10 MHz ... (10 MHz rung)`.
 - GS stats (`flight.jsonl`): `narrow10` = `state`, `entries`,
   `silent_entries` (entries made on a video stop), `cancels`, `rescues`,
@@ -101,8 +120,16 @@ hops and spare-card scouting pause, and nothing is probed.
   17-18 s outages is unknown: there are no signal readings from inside
   them, and the fade may have been deeper than the ~3 dB 10 MHz gains.
 - A false trigger (a short full stop on MCS0/20) costs the climb, not the
-  picture: the bottom rung's video is capped at 500 kb/s either way, but
-  leaving 10 needs `clean_ms` and the SNR margin (the flown spells lasted
-  21-53 s). A drone switched off on MCS0/20 costs one attempt (the spare
+  picture: the bottom rung's video is capped at 500 kb/s either way, and
+  leaving 10 needs `clean_ms` and 15 dB, so at least ~8 s at 10 MHz (the
+  flown loss-driven spells lasted 21-53 s).
+- `silent_promote_snr_db` (15) is a judgement, not a measurement: where
+  MCS0/20 actually fails on these radios has not been measured. Too low and
+  a weak link bounces up to 20 and back (bounded by `cooldown_ms`); too
+  high and a recovered link stays at 10 longer.
+- The intermittent no-link at 20 MHz seen once (session 0022: 4.5 min, the
+  GS at 20 hearing only checksum-failed frames, fixed by power-cycling the
+  drone) is not explained by any of this and was not reproduced on the
+  bench. A drone switched off on MCS0/20 costs one attempt (the spare
   card at 10 for `confirm_ms`); after that the GS is searching and the
   rule needs a session. The TX card stays at 20 throughout.

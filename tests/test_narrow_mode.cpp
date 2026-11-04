@@ -320,3 +320,105 @@ TEST(silence_a_rescue_from_10_keeps_the_long_cooldown) {
   CHECK(r.at(2101 + 5000).state == NarrowState::Off);
   CHECK(r.at(2101 + 20000).state == NarrowState::Entering);
 }
+
+// --- VideoSilence: no stop before the session's first video (gs24).
+
+TEST(video_silence_waits_for_the_sessions_first_video) {
+  VideoSilence v;
+  // The drone links; its camera starts ~10 s later. No silence meanwhile.
+  CHECK(v.tick(0, true, 0) < 0);
+  CHECK(v.tick(5000, true, 0) < 0);
+  CHECK(v.tick(10500, true, 0) < 0);
+  // First video: silence counts from each arrival from now on.
+  CHECK(v.tick(10600, true, 40) == 0.0);
+  CHECK(v.tick(10900, true, 40) == 300.0);
+  CHECK(v.tick(11000, true, 41) == 0.0);
+  CHECK(v.tick(11450, true, 41) == 450.0);   // a real stop: the rule may enter
+  // The session ends and a new one forms: unseen again until its video.
+  CHECK(v.tick(12500, false, 41) == 1500.0);
+  CHECK(v.tick(20000, true, 41) < 0);
+  CHECK(v.tick(25000, true, 41) < 0);
+  CHECK(v.tick(25100, true, 60) == 0.0 && v.seen());
+}
+
+TEST(video_silence_ignores_arrivals_outside_a_session) {
+  VideoSilence v;
+  v.tick(0, false, 0);
+  CHECK(v.tick(100, false, 10) < 0);   // searching: not this session's video
+  CHECK(v.tick(200, true, 12) < 0);    // the session forms; its video not yet counted
+  CHECK(v.tick(300, true, 15) == 0.0);
+}
+
+// The power-up stall, end to end: the link waits for the camera with no
+// video. With the silence fed from VideoSilence nothing enters.
+TEST(silence_no_entry_while_the_camera_starts) {
+  Rig r = silence_rig();
+  VideoSilence v;
+  for (double t = 0; t <= 12000; t += 50) {
+    r.in.video_silent_ms = v.tick(t, true, 0);
+    CHECK(r.at(t).state == NarrowState::Off);
+  }
+  CHECK(r.nm.entries() == 0);
+}
+
+namespace {
+// A video-stop entry made at `entry_snr` dB, taken to On.
+void silent_to_on(Rig& r, double entry_snr) {
+  r.in.best_snr_db = entry_snr;
+  r.in.video_silent_ms = 400;
+  r.at(400);
+  r.in.width[1] = 10;
+  r.at(500);
+  r.in.own[1] += 1;
+  r.at(600);
+  r.in.width[0] = 10;
+  r.in.video_silent_ms = 0;
+}
+}  // namespace
+
+TEST(silent_entry_climbs_back_on_an_absolute_snr) {
+  // Entered at 38 dB (drone beside the GS). The entry-relative bar would
+  // need 44 dB at 10 MHz; the video-stop bar is silent_promote_snr_db.
+  Rig r = silence_rig();
+  silent_to_on(r, 38.0);
+  REQUIRE(r.nm.state() == NarrowState::On);
+  r.in.clean = true;
+  r.in.best_snr_db = 40.0;   // +2 dB at 10 MHz: short of 44
+  NarrowOut o;
+  for (double t = 700; t <= 8700; t += 100) {
+    r.in.own[0] += 1;
+    o = r.at(t);
+    if (o.state != NarrowState::On) break;
+  }
+  CHECK(o.state == NarrowState::Leaving);
+  CHECK(r.nm.silent_entries() == 1);
+}
+
+TEST(silent_entry_stays_at_10_on_a_weak_link) {
+  Rig r = silence_rig();
+  silent_to_on(r, 6.0);
+  r.in.clean = true;
+  r.in.best_snr_db = 12.0;   // under 15 dB: 20 MHz would not hold
+  for (double t = 700; t <= 30000; t += 100) {
+    r.in.own[0] += 1;
+    CHECK(r.at(t).state == NarrowState::On);
+  }
+  r.in.best_snr_db = 15.5;
+  r.in.own[0] += 1;
+  CHECK(r.at(30100).state == NarrowState::Leaving);
+}
+
+TEST(distress_entry_keeps_the_entry_relative_bar) {
+  // Unchanged for a loss-driven entry: entry + 3 + promote_margin_db.
+  Rig r = silence_rig();
+  to_on(r);                  // distress entry at 6 dB
+  r.in.clean = true;
+  r.in.best_snr_db = 11.0;   // under 6 + 3 + 3
+  for (double t = 1800; t < 12000; t += 100) {
+    r.in.own[0] += 1;
+    CHECK(r.at(t).state == NarrowState::On);
+  }
+  r.in.best_snr_db = 12.5;
+  r.in.own[0] += 1;
+  CHECK(r.at(12000).state == NarrowState::Leaving);
+}

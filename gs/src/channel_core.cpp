@@ -876,18 +876,17 @@ void ChannelCore::step_narrow_(const ChannelTickIn& in) {
     narrow_prev_ok_ = true;
   }
   // Video silence for the gs21 rule: time since the base layer's arrival
-  // count last moved (any arrival, source or repair, on any card).
-  if (in.agg) {
-    const uint64_t arr_now = in.agg->decoder().stats(0).arr_arrived;
-    if (narrow_arr_ms_ < 0 || arr_now != narrow_arr_seen_) {
-      narrow_arr_seen_ = arr_now;
-      narrow_arr_ms_ = in.now_ms;
-    }
-  }
+  // count last moved (any arrival, source or repair, on any card), and none
+  // before the session's first video -- the drone links ~10 s before its
+  // camera sends, and that wait must not read as a stop.
+  double silent_ms = -1.0;
+  if (in.agg)
+    silent_ms = narrow_silence_.tick(in.now_ms, in.in_session,
+                                     in.agg->decoder().stats(0).arr_arrived);
   NarrowIn ni;
   ni.now_ms = in.now_ms;
   ni.in_session = in.in_session;
-  ni.video_silent_ms = narrow_arr_ms_ < 0 ? -1.0 : in.now_ms - narrow_arr_ms_;
+  ni.video_silent_ms = silent_ms;
   ni.blocked = in.cal_running || plan_.hopping();
   ni.rung = vrx_.ctl().rung();
   ni.distress = narrow_distress_;
@@ -905,8 +904,9 @@ void ChannelCore::step_narrow_(const ChannelTickIn& in) {
     ni.switching[k] = width_job_ && width_job_card_ == i;
     ni.own[k] = fe.frames().own;
     if (in.agg && snr_ok_[k] && fe.ready()) {
-      const double snr = in.agg->card(i).snr_ema;
-      if (snr != 0.0 && (std::isnan(best) || snr > best)) best = snr;
+      const double raw = in.agg->card(i).snr_ema;   // devourer raw half-dB
+      const double snr = snr_raw_to_db(raw);
+      if (raw != 0.0 && (std::isnan(best) || snr > best)) best = snr;
     }
   }
   ni.best_snr_db = best;

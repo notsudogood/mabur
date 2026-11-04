@@ -16,11 +16,13 @@
 //                         follows.
 //   Entering -> Off       nothing heard within confirm_ms: cancel, cooldown.
 //   On       -> Leaving   clean for clean_ms, and the best card's SNR (read at
-//                         10) at least 3 dB (the narrowband gain) +
-//                         promote_margin_db above where 20 MHz failed: the RCF
-//                         op returns to rung 0 (20 MHz) -- a blind promote, as
-//                         nothing can probe 20 MHz from a 10 MHz radio; the
-//                         lead card switches back first.
+//                         10, dB) at least 3 dB (the narrowband gain) +
+//                         promote_margin_db above where 20 MHz failed -- or,
+//                         after a video-stop entry, at least
+//                         silent_promote_snr_db: the RCF op returns to rung 0
+//                         (20 MHz) -- a blind promote, as nothing can probe
+//                         20 MHz from a 10 MHz radio; the lead card switches
+//                         back first.
 //   Leaving  -> Off       the lead card hears the drone at 20: the rest
 //                         follow; cooldown.
 //   Leaving  -> On        nothing heard within confirm_ms: stay at 10.
@@ -31,7 +33,12 @@
 // silent_ms of it on MCS0/20 enters at once, an Entering outlives the session
 // (the GS drops to beaconing 1 s after the last video, and that is the
 // expected state here, not a reason to give up), and a cancelled video-stop
-// entry may retry after retry_ms instead of cooldown_ms. Off, a no-video window reads
+// entry may retry after retry_ms instead of cooldown_ms. A stop counts only
+// once video has flowed in the session (ChannelCore reports no silence
+// before that): the drone links about 10 s before its camera sends, and
+// that wait read as a stop sent every power-up to 10 MHz. A video-stop
+// entry climbs back on an absolute SNR, not on the SNR at the stop, which
+// says nothing about where 20 MHz fails. Off, a no-video window reads
 // as "no data" and resets the run, so a picture that stopped completely
 // never ordered 10 MHz (flights 0019/0020: 17-18 s without a picture on
 // MCS0/20, 10 MHz only after frames came back by themselves).
@@ -64,6 +71,39 @@ struct NarrowCfg {
   bool silence = false;
   int silent_ms = 400;              // no base-layer video this long on MCS0/20 -> enter at once
   int retry_ms = 5000;              // after a cancelled video-stop entry, instead of cooldown_ms
+  // After a video-stop entry: the best card's SNR at 10 MHz (dB) the blind
+  // promote needs, with clean_ms clean. 15 dB at 10 is ~12 dB at 20, about
+  // 7 dB over what MCS0/20 needs. Not a config key (the shipped GS config is
+  // left unchanged so a kept /config survives the image).
+  double silent_promote_snr_db = 15.0;
+};
+
+// NarrowIn::video_silent_ms from the base layer's arrival count: ms since it
+// last moved, or -1 until video has arrived in the current session. A new
+// session (in_session rising) starts unseen, so the wait between the drone
+// linking and its camera's first frame is not a stop.
+class VideoSilence {
+ public:
+  double tick(double now_ms, bool in_session, uint64_t arrived) {
+    if (!started_ || (in_session && !was_in_session_)) {
+      started_ = true;
+      seen_ = false;
+      arrived_ = arrived;
+      since_ms_ = now_ms;
+    } else if (arrived != arrived_) {
+      if (in_session) seen_ = true;
+      arrived_ = arrived;
+      since_ms_ = now_ms;
+    }
+    was_in_session_ = in_session;
+    return seen_ ? now_ms - since_ms_ : -1.0;
+  }
+  bool seen() const { return seen_; }
+
+ private:
+  bool started_ = false, seen_ = false, was_in_session_ = false;
+  uint64_t arrived_ = 0;
+  double since_ms_ = 0;
 };
 
 enum class NarrowState : uint8_t { Off, Entering, On, Leaving };
@@ -85,10 +125,11 @@ struct NarrowIn {
   int rung = 0;               // ladder rung (0 = MCS0/20, the bottom)
   bool distress = false;      // this window: post-FEC loss or s1 util over the bar
   bool clean = false;         // this window: no post-FEC loss, util under up_util
-  double best_snr_db = std::numeric_limits<double>::quiet_NaN();
+  double best_snr_db = std::numeric_limits<double>::quiet_NaN();   // dB, not raw half-dB
   int lead_candidate = -1;    // the card that would move first (-1 = none can switch)
   int tx_card = -1;
-  // ms since the last base-layer video symbol arrived; < 0 = unknown.
+  // ms since the last base-layer video symbol arrived; < 0 = unknown, and
+  // before the session's first video (a link waiting for its camera).
   double video_silent_ms = -1;
   // Per card: tuned width now, a width switch in flight, drone frames heard
   // (monotonic).
@@ -224,8 +265,12 @@ class NarrowMode {
     }
     if (clean_since_ms_ < 0) clean_since_ms_ = in.now_ms;
     if (in.now_ms - clean_since_ms_ < cfg_.clean_ms || in.blocked) return;
-    const bool snr_known = !std::isnan(in.best_snr_db) && !std::isnan(entry_snr_);
-    if (snr_known && in.best_snr_db < entry_snr_ + 3.0 + cfg_.promote_margin_db) return;
+    if (entry_silent_) {
+      if (!std::isnan(in.best_snr_db) && in.best_snr_db < cfg_.silent_promote_snr_db) return;
+    } else {
+      const bool snr_known = !std::isnan(in.best_snr_db) && !std::isnan(entry_snr_);
+      if (snr_known && in.best_snr_db < entry_snr_ + 3.0 + cfg_.promote_margin_db) return;
+    }
     if (in.lead_candidate >= 0) lead_ = in.lead_candidate;
     lead_is_tx_ = lead_ == in.tx_card;
     go_(NarrowState::Leaving, in.now_ms, "leave: clean at 10 MHz, ordering MCS0/20 (blind)");

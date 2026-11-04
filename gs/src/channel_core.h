@@ -372,8 +372,7 @@ class ChannelCore {
   double narrow_win_ms_ = -1;
   uint64_t narrow_ab_prev_ = 0, narrow_ex_prev_ = 0, narrow_arr_prev_ = 0, narrow_exp_prev_ = 0;
   bool narrow_prev_ok_ = false;
-  uint64_t narrow_arr_seen_ = 0;   // base-layer arrivals at the last change
-  double narrow_arr_ms_ = -1;      // when they last changed (-1 = not yet)
+  VideoSilence narrow_silence_;    // video_silent_ms for the gs21 stop rule
   bool narrow_distress_ = false, narrow_clean_ = false;
   double narrow_post_pct_ = 0, narrow_pre_pct_ = 0;
   void step_mechanical_retune_();
